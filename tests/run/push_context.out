@@ -3,18 +3,25 @@ set: changed
 c: changed
 after the place: heap
 temporary: temporary
+temporary defer: temporary
 after the temporary: heap
 in the block: returning
 inner defer: returning
 outer defer: heap
 7
 after return: heap
+guarded defer: heap
+after the if: guarded
+guarded defer: heap
 iteration: heap
 loop: loop
 after the block: heap
+loop defer: heap
 iteration: heap
+loop defer: heap
 iteration: heap
 loop: loop
+loop defer: heap
 after break: heap
 nested: inner
 back out: outer

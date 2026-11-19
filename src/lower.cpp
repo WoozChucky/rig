@@ -220,18 +220,19 @@
 // - defer (spec 6.12) is registered when it's reached, and emits nothing
 //   there: Lowering.defers lists the defers reached in the blocks being
 //   lowered, and each block that can be left (a block statement, an if's or
-//   an else's block, a loop's body, the body itself, each copy of deferred
-//   code) remembers where its own began, a mark. A body #if takes none: its
-//   defers are the enclosing block's. At each way out, a copy of every
-//   deferred statement it leaves is lowered there, the last registered
-//   first, down to the mark of the outermost block it leaves (lower_defers):
-//   at a block's end its own, down to its mark, if control gets there
-//   (leave_block); at a return all of them, down to mark 0, after its values
-//   are worked out and its aggregates copied into the caller's temporaries;
-//   and at a break or a continue those since its loop's body began, down to
-//   the body's mark. Then the block drops its registrations. So the code
-//   grows by a copy per way out, with no flag tested at run time, and the
-//   interpreter, which runs the same IR, runs a #run's defers as compiled.
+//   an else's block, a loop's body, a push_context's block, the body
+//   itself, each copy of deferred code) remembers where its own began, a
+//   mark. A body #if takes none: its defers are the enclosing block's. At
+//   each way out, a copy of every deferred statement it leaves is lowered
+//   there, the last registered first, down to the mark of the outermost
+//   block it leaves (lower_defers): at a block's end its own, down to its
+//   mark, if control gets there (leave_block); at a return all of them,
+//   down to mark 0, after its values are worked out and its aggregates
+//   copied into the caller's temporaries; and at a break or a continue
+//   those since its loop's body began, down to the body's mark. Then the
+//   block drops its registrations. So the code grows by a copy per way out,
+//   with no flag tested at run time, and the interpreter, which runs the
+//   same IR, runs a #run's defers as compiled.
 //   Each copy runs with the context where its defer was reached
 //   (Deferred.context, spec 6.13): a defer in a push_context's block with
 //   the block's, one outside it, run by a return, break or continue in the
@@ -259,17 +260,18 @@
 //   values are all at the statement holding the call, their failing checks
 //   too (emitted_at): a default may be written in another file. While
 //   compiling, a failure in them is at its own place still (fail_in_place).
-//   Each block that's a scope adds an Ir_Scope (lower_scoped_block, and the
-//   loops, which are one), and so does a declaration that hides a name a
-//   debugger shows, for the rest of its block (lower_statement); each
-//   declaration adds an Ir_Var (add_local_var, add_constant, and the
-//   parameters in lower_body), a top-level constant one in the module's
-//   constants (ir_lower), and so does the context, an artificial one: the
-//   hidden parameter, arg 1, or main's and a run's slot, a local
-//   (lower_body), or a push_context's slot, a local of its block's scope
-//   at its keyword (lower_push_context). __runtime_init has no debug information at all
-//   (Ir_Proc.no_debug_info), and main's call of it no position, so `break
-//   main` stops at main's first line with the context set up. Each copy of
+//   Each block that's a scope adds an Ir_Scope (lower_scoped_block,
+//   lower_push_context, and the loops, which are one), and so does a
+//   declaration that hides a name a debugger shows, for the rest of its
+//   block (lower_statement); each declaration adds an Ir_Var
+//   (add_local_var, add_constant, and the parameters in lower_body), a
+//   top-level constant one in the module's constants (ir_lower), and so
+//   does the context, an artificial one: the hidden parameter, arg 1, or
+//   main's and a run's slot, a local (lower_body), or a push_context's
+//   slot, a local of its block's scope at its keyword (lower_push_context).
+//   __runtime_init has no debug information at all (Ir_Proc.no_debug_info),
+//   and main's call of it no position, so `break main` stops at main's
+//   first line with the context set up. Each copy of
 //   deferred code is a scope of its own too, at the deferred statement,
 //   inside the scope the defer was reached in, its instructions at their
 //   own lines (lower_deferred); the ret or jump that leaves after the copies
@@ -458,8 +460,10 @@ struct Lowering {
     Type *context_type;        // Preload's Context
     Ast_Var *default_context;  // the global main and each run's procedure start with
     Ast_Proc *runtime_init;    // __runtime_init, which sets it up, called first by those
-    s32 context;               // the slot (an IR_LOCAL ptr) holding the current context's address;
-                               // -1 without one: a #c_call procedure, the compiler's own, no Preload
+    s32 context;               // the slot (an IR_LOCAL ptr) holding the current context's address:
+                               // the body's, or the innermost push_context block's (lower_push_context);
+                               // -1 without one: a #c_call procedure outside its pushes, the
+                               // compiler's own, no Preload
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
                                 // and the runs' (set_source, ir_lowering_source)

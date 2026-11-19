@@ -35,6 +35,16 @@ returns :: () -> int {
     return 0;
 }
 
+// Code after a way out in the block still runs with the block's context,
+// though the defer the return runs has its own.
+guarded :: (n: int) {
+    defer say("guarded defer");
+    push_context named("guarded") {
+        if n == 1 { return; }
+        say("after the if");
+    }
+}
+
 main :: () {
     // A place: the block runs with c itself, and what it sets is c's.
     c := named("place");
@@ -47,14 +57,23 @@ main :: () {
     printf("c: %s\n", c.allocator.data);
     say("after the place");
 
-    // Anything else is copied: here a call's result.
-    push_context named("temporary") { say("temporary"); }
+    // Anything else is copied: here a call's result. The block's own defer
+    // runs at its end, with its context, before what follows it.
+    push_context named("temporary") {
+        defer say("temporary defer");
+        say("temporary");
+    }
     say("after the temporary");
 
     printf("%lld\n", returns());
     say("after return");
+    guarded(1);
+    guarded(2);
 
+    // The body's defer, outside the push, runs with the body's context
+    // at the continue and the break, and at the body's end.
     for 1..3 {
+        defer say("loop defer");
         say("iteration");
         push_context named("loop") {
             if it == 2 { continue; }

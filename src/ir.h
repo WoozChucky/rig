@@ -137,12 +137,13 @@
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in
 //   a procedure the compiler makes, is in none, -1). They follow the
-//   checker's scopes: an if's or else's block, or a block statement, is a
-//   scope; a for's or while's body is the loop's scope, which starts at
-//   the keyword and holds the iterator and it_index. An #if's taken branch
-//   is no scope (spec 4.9): its statements are the enclosing block's, and
-//   the #if adds no code of its own, its taken statements being at their
-//   own positions (none at the '#if'). Each copy of a deferred statement is a
+//   checker's scopes: an if's or else's block, a block statement, or a
+//   push_context's block is a scope, starting at its '{'; a for's or
+//   while's body is the loop's scope, which starts at the keyword and holds
+//   the iterator and it_index. An #if's taken branch is no scope (spec
+//   4.9): its statements are the enclosing block's, and the #if adds no
+//   code of its own, its taken statements being at their own positions
+//   (none at the '#if'). Each copy of a deferred statement is a
 //   scope of its own, at the statement, inside the scope the defer was
 //   reached in, so what each copy declares is a variable of its own. And a
 //   declaration of a local or a constant that hides a name a debugger
@@ -163,10 +164,12 @@
 //   pointer it's passed as. And the context (spec 7.10), which the source
 //   doesn't declare, so it's artificial (Ir_Var.artificial): the hidden
 //   parameter, the first parameter after the result pointers (arg 1, the
-//   visible ones from 2), in its slot, at the procedure's name; and in main
-//   and a run's procedure, the slot holding default_context's address, a
-//   local of the body's scope. A #c_call procedure has none. Either is a
-//   *Context, and named context, so a debugger shows it and passes it to a
+//   visible ones from 2), in its slot, at the procedure's name; in main and
+//   a run's procedure, the slot holding default_context's address, a local
+//   of the body's scope; and in a push_context's block, the slot holding
+//   the pushed context's address, a local of the block's scope at the
+//   keyword (lower.cpp's lower_push_context). A #c_call procedure has one
+//   only inside its pushes. Each is a *Context, and named context, so a debugger shows it and passes it to a
 //   procedure it calls (gdb's `print twice(context, 4)`).
 //   Temporaries and hidden result pointers aren't variables here: the
 //   source has no name for them. (The backend still describes each hidden

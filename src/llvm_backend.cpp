@@ -1478,7 +1478,9 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 //   context, artificial too (Ir_Var.artificial): in a procedure that takes
 //   it, the hidden parameter after the result pointers, its ArgNo the one
 //   after theirs (arg 1 in lowering's count, which leaves them out); in
-//   main and a run's procedure, a local holding default_context's address.
+//   main and a run's procedure, a local holding default_context's address;
+//   in a push_context's block, a local of the block holding the pushed
+//   context's address.
 // - A constant that is a number, a bool or null (IR_VAR_CONSTANT) has no
 //   storage: it's a DILocalVariable whose value a value record
 //   (#dbg_value) at the same place gives, for the whole of its scope, so
@@ -1575,8 +1577,8 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
         // could drop a variable that's never read; a debugger still shows
         // it). One the compiler made, the context (spec 7.10: the hidden
-        // parameter, or main's slot holding it), is artificial,
-        // as result$ is.
+        // parameter, or a slot holding it: main's, a run's or a
+        // push_context's), is artificial, as result$ is.
         LLVMDIFlags flags = v->artificial ? LLVMDIFlagArtificial : LLVMDIFlagZero;
         LLVMMetadataRef variable =
             v->arg > 0 ? LLVMDIBuilderCreateParameterVariable(b->debug, scope, name, (size_t)v->name.count,
