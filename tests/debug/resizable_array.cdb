@@ -1,6 +1,10 @@
 l+t
 l+s
 l+l
+bp resizable_array!__array_add
+g
+k 2
+bc *
 bp `resizable_array.rig:14`
 g
 dv /t

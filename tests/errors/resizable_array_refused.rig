@@ -1,9 +1,17 @@
 // What a resizable array isn't (issue #158, spec 3.17): its members are
 // count, data, allocated and allocator, not reached through a pointer; a
 // literal, a view, an array or a cast doesn't make one; == doesn't compare one; a
-// spread of one passes a view of its own elements; C takes none.
+// spread of one passes a view of its own elements; C takes none, as a
+// parameter, a result or through its '...'; a constant holds one only as a
+// field its literal leaves out.
 takes :: (a: [..]int) #foreign libc "puts";
+gives :: () -> [..]int #foreign libc "malloc";
+called :: (a: [..]int) #c_call { }
+printf :: (format: *u8, ..) -> s32 #foreign libc;
 all :: (values: ..int) { }
+Holder :: struct { items: [..]int; n: int; }
+H :: Holder.{n = 2};
+E :: H.items;
 main :: () {
     a : [..]int;
     n := a.size;
@@ -20,4 +28,5 @@ main :: () {
     same := a == a;
     bytes : [..]u8;
     all(..bytes);
+    printf("%d", a);
 }

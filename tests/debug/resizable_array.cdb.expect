@@ -1,3 +1,6 @@
+resizable_array!__array_add [@ROOT@\modules\Preload\module.rig @
+resizable_array!main+
+[@ROOT@\tests\debug\resizable_array.rig @ 9]
 14:     count := numbers.count;
 struct [..]int numbers = struct [..]int
 struct [..]Point points = struct [..]Point

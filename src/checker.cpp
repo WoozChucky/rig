@@ -589,6 +589,11 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   literal of its elements (Ast_Literal.is_baked). A #run's array, baked
 //   too, is no view: a view of it is written, as a view of a written
 //   array is.
+// - A resizable array is never one: no literal makes one, and a constant
+//   holds one only as a struct literal's left-out field, zeroed, which is
+//   never checked here. A value in its slot, a constant's field included
+//   (E :: H.items), is "a constant can't hold a resizable array; no literal
+//   makes one" (spec 3.17).
 // - A string, a struct or an array is a literal whose values are checked in
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
@@ -633,6 +638,11 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
             return true;
         }
         diag_error(c->diag, value->start, "a constant can't hold a view; only a string or an array can be one");
+        return false;
+    }
+    if (t->kind == TYPE_RESIZABLE) {
+        if (!type_converts(value->type, t)) return false;  // reported
+        diag_error(c->diag, value->start, "a constant can't hold a resizable array; no literal makes one");
         return false;
     }
     if (t == &type_string || t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY) {

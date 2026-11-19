@@ -1,3 +1,7 @@
+__array_add (context=0x
+at @ROOT@/modules/Preload/module.rig:
+#1
+in main () at @ROOT@/tests/debug/resizable_array.rig:9
 resizable_array.rig:14
 = 3
 = 8

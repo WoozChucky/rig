@@ -1,5 +1,9 @@
-break resizable_array.rig:14
+break __array_add
 run
+bt 2
+delete
+break resizable_array.rig:14
+continue
 print numbers.count
 print numbers.allocated
 print *numbers.data@numbers.count

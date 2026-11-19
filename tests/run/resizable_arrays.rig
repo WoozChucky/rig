@@ -8,6 +8,8 @@
 // - reserve: a reserve grows to exactly what it asks, a smaller one does
 //   nothing, and a resize past the count adds zeroed elements; reset
 //   empties the array and keeps its memory.
+// - negative: a reserve below 0 does nothing either: a zeroed array stays
+//   zeroed, the context's allocator not taken.
 // - remembered: an array that first grows under a pushed context's
 //   allocator keeps that allocator: it grows there and is freed there
 //   once the context's allocator is another, which is never asked.
@@ -28,9 +30,18 @@
 //   string become Anys.
 // - free, again: array_free gives the memory back and empties the array,
 //   which grows again from the allocator it kept.
+// - constant, globals: a constant whose struct leaves its [..]int field
+//   out holds the empty array, which a copy of it grows, the constant's
+//   own staying empty; a global [..]int and a global's [..]int field grow
+//   as a local does.
 #import "Basic";
 
 Point :: struct { x: int; y: int; }
+
+Holder :: struct { items: [..]int; n: int; }
+H :: Holder.{n = 2};
+g : [..]int;
+gh := Holder.{n = 3};
 
 // The sum of v's elements.
 total :: (v: []int) -> int {
@@ -96,6 +107,9 @@ main :: () {
     print("reserve {} {} {}\n", n.allocated, n.count, n);
     array_reset(*n);
     print("reset {} {}\n", n.count, n.allocated);
+    z : [..]int;
+    array_reserve(*z, -5);
+    print("negative {} {} {} {}\n", z.count, z.allocated, z.data == null, z.allocator.proc == null);
 
     r : [..]int;
     push_context .{Allocator.{first_proc, null}, context.temporary_storage} {
@@ -167,4 +181,15 @@ main :: () {
     array_add(*n, 1);
     print("again {} {}\n", n.count, n.allocated);
     array_free(*n);
+
+    h := H;
+    array_add(*h.items, 1);
+    array_add(*h.items, 2);
+    array_add(*g, 7);
+    array_add(*gh.items, 9);
+    print("constant {} {} {}\n", h.items, h.n, H.items.count);
+    print("globals {} {} {}\n", g, gh.items, gh.n);
+    array_free(*h.items);
+    array_free(*g);
+    array_free(*gh.items);
 }
