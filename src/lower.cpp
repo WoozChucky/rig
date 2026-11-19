@@ -1059,12 +1059,40 @@ static s32 lower_view_of(Lowering *l, Ast *e) {
     return view_of_copy(l, e->type, lower_expr(l, e));
 }
 
+// The []T a [..]T converts to (spec 3.17): a view slot of its own holding
+// the array's count and data, read now. `array` is the [..]T's address
+// (its value, as every aggregate's). The elements lie elsewhere, so the
+// view sees them where they are, whatever the array is (a place, a call's
+// result, a parameter): nothing is copied but the two. The view is read
+// where the conversion is, as v[f()] reads v before f runs: it doesn't see
+// a later change of the array's count, and is invalid once the array grows
+// or is freed, its memory given back (a memory error, spec 8.6).
+//
+//     %v = local 16 align 8
+//     %n = load i64 %array             (its count, at 0)
+//     %8 = const i64 8
+//     %a = ptradd %array, %8
+//     %d = load ptr %a                 (its data, at 8)
+//     store i64 %n, %v
+//     %8b = const i64 8
+//     %vd = ptradd %v, %8b
+//     store ptr %d, %vd
+static s32 lower_view_of_resizable(Lowering *l, Type *resizable, s32 array) {
+    s32 view = emit_slot(l, type_view_of(resizable->element));
+    s32 count = load_view_count(l, array);
+    s32 data = load_view_data(l, array);
+    emit_store(l, IR_I64, count, emit_field_address(l, view, VIEW_COUNT_OFFSET));
+    emit_store(l, IR_PTR, data, emit_field_address(l, view, VIEW_DATA_OFFSET));
+    return view;
+}
+
 static s32 lower_any(Lowering *l, Ast *e, Type *any);
 
 // The value of `e`, of the type `to` its use wants (the checker said it
 // converts): an Any holding it (lower_any) where the checker converted it
 // to one, a constant made at that type, e's value widened to it, an
-// array's view (lower_view_of), or, where a string meets a *u8, the address
+// array's view (lower_view_of), a resizable array's, read here
+// (lower_view_of_resizable), or, where a string meets a *u8, the address
 // of the string literal's bytes it is (literal_address): a literal, or
 // constant data holding one, the only strings the checker lets become a
 // pointer (spec 3.8). Returns the value's number.
@@ -1075,6 +1103,9 @@ static s32 lower_value(Lowering *l, Ast *e, Type *to) {
     if (e->to_any != ANY_NONE && to != e->type) return lower_any(l, e, to);
     if (e->is_constant) return emit_constant(l, ir_type_of(to), e->constant);
     if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_ARRAY) return lower_view_of(l, e);
+    if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_RESIZABLE) {
+        return lower_view_of_resizable(l, e->type, lower_expr(l, e));
+    }
     if (to && type_is_pointer(to) && e->type == &type_string) return literal_bytes(l, literal_address(e));
     return resize(l, lower_expr(l, e), e->type, ir_type_of(to));
 }
@@ -1407,14 +1438,20 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //   unchecked (spec 3.14).
 // - cast(Any) e is e's conversion to Any (lower_any), as where it meets an
 //   Any without a cast (spec 3.14, 3.16), a constant e included.
+// - cast([]T) e of an array or a resizable array is its view, as where it
+//   meets a []T without a cast (lower_view_of, lower_view_of_resizable:
+//   a resizable array's count and data read at the cast, spec 3.17).
 // The value may be a constant even when the cast isn't (cast(*int) 4096):
 // it's made at its own type.
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
-    // A value to an Any, an array to a view, and a string literal, or a
-    // string constant, to *u8 convert as anywhere else.
+    // A value to an Any, an array or a resizable array to a view (its view
+    // read here, spec 3.17), and a string literal, or a string constant, to
+    // *u8 convert as anywhere else.
     if (cast->value->to_any != ANY_NONE) return lower_value(l, cast->value, to);
-    if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return lower_value(l, cast->value, to);
+    if ((from->kind == TYPE_ARRAY || from->kind == TYPE_RESIZABLE) && to->kind == TYPE_VIEW) {
+        return lower_value(l, cast->value, to);
+    }
     if (type_is_pointer(to) && from == &type_string) return lower_value(l, cast->value, to);
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_value(l, cast->value, from);
@@ -1569,17 +1606,21 @@ static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
 
 // The address of the field e.x. Through a pointer, p.x is p.*.x: p's value,
 // checked not to be null at the field's name (as p.* is at its '.'), before
-// anything is read or written. Otherwise e is a struct, whose value is its
+// anything is read or written. Otherwise e is a struct, or a view, a string
+// or a resizable array, laid out as one (types.h), whose value is its
 // address already: a variable's slot, a parameter's copy, a call's or a
 // literal's temporary, a constant's read-only global, a field of an outer
 // struct. Then x's offset is added.
 static s32 lower_member_address(Lowering *l, Ast_Member *m) {
     Ast *operand = m->operand;
     Type *t = operand->type;
-    if (type_is_view_or_string(t)) {
-        // A view's (or a string's) two fields, by name (the checker left
-        // m->index -1).
-        s64 offset = string_eq(m->name, str("count")) ? VIEW_COUNT_OFFSET : VIEW_DATA_OFFSET;
+    if (type_has_view_fields(t)) {
+        // A view's (or a string's) two fields, and a resizable array's
+        // four (spec 3.17), by name (the checker left m->index -1).
+        s64 offset = string_eq(m->name, str("count"))       ? VIEW_COUNT_OFFSET
+                     : string_eq(m->name, str("data"))      ? VIEW_DATA_OFFSET
+                     : string_eq(m->name, str("allocated")) ? RESIZABLE_ALLOCATED_OFFSET
+                                                            : RESIZABLE_ALLOCATOR_OFFSET;
         return emit_field_address(l, lower_expr(l, operand), offset);
     }
     s32 base;
@@ -1656,7 +1697,8 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
 //   index inside it, so that fails the check too. Then its data is checked
 //   for null, as a pointer is (a count set by hand, a failed allocation),
 //   with or without bounds checks. A string is a view of bytes, checked the
-//   same way.
+//   same way, and a resizable array starts as a view (spec 3.17): its
+//   count and data are read and checked as a view's.
 // - A pointer is checked for null, not bounds: p[i] is C's, p.* moved by i
 //   elements, which may be anywhere.
 // The check compares unsigned: i as an unsigned number is below the count
@@ -1677,7 +1719,8 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
     s32 base = pointer ? lower_value(l, operand, t) : lower_expr(l, operand);
     // A view's count and data are read before the index is worked out, as a
     // pointer's value is: v[f()] indexes v as it was, whatever f does to it.
-    bool view = type_is_view_or_string(t);
+    // A resizable array's are read the same way (spec 3.17).
+    bool view = type_has_view_fields(t);
     s32 count = -1, data = base;
     if (view) {
         count = load_view_count(l, base);
@@ -2496,12 +2539,13 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 // one, and %it + 1 is never computed for it. Testing it <= last after
 // adding instead would never end when last is the type's largest value
 // (for 0..255 on a u8: 255 + 1 wraps to 0, which is <= 255 again).
-// for a { B } over an array, a view or a string, `for * a` with it a
-// pointer to each element:
+// for a { B } over an array, a view, a string or a resizable array, `for *
+// a` with it a pointer to each element:
 //
 //     %a = ...                        a, once
-//     %data, %count                   an array's address and N; a view's or a string's, loaded
-//     (a view or a string: emit_data_check, its data null with a count above 0 fails)
+//     %data, %count                   an array's address and N; a view's, a string's or a
+//                                     resizable array's, loaded
+//     (but an array: emit_data_check, its data null with a count above 0 fails)
 //     it_index = 0
 //     jump test
 //   test:
@@ -2519,11 +2563,14 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 //
 // a is worked out once, before the first iteration, and its data and count
 // taken then: the body may change a view (or call what does), which the
-// loop doesn't see. it is a copy of each element, an aggregate one copied
-// whole, so the body reading it sees the element as it was when its
-// iteration began. A view's data is checked for null once, before the
-// loop, when its count says there are elements to read (emit_data_check),
-// at the sequence: a zeroed view runs no iteration and reads nothing.
+// loop doesn't see. It may grow a resizable array too (spec 3.17): the
+// loop goes on over the elements the array had, where they were, memory
+// that growing past the room it had gives back (a memory error, spec 8.6).
+// it is a copy of each element, an aggregate one copied whole, so the body
+// reading it sees the element as it was when its iteration began. A view's
+// data is checked for null once, before the loop, when its count says
+// there are elements to read (emit_data_check), at the sequence: a zeroed
+// view runs no iteration and reads nothing.
 //
 // Either for is at its `for`, and is a scope of its own starting there,
 // holding it (or the named iterator) and it_index, and the body's
@@ -2538,7 +2585,7 @@ static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     Type *t = sequence->type, *element = t->element;  // a string's element is u8
     s32 base = lower_expr(l, sequence);
     s32 data = base, count;
-    if (type_is_view_or_string(t)) {
+    if (type_has_view_fields(t)) {  // a resizable array's too (spec 3.17)
         count = load_view_count(l, base);
         data = load_view_data(l, base);
         emit_data_check(l, count, data, sequence->pos);
@@ -2706,9 +2753,14 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
         s32 address = lower_address(l, target);
         Type *from = call_result_type(call, i);
         // An array result going into a view: a view of a copy of it, never
-        // of the call's own temporary (view_of_copy).
+        // of the call's own temporary (view_of_copy). A resizable array
+        // result's view is read from the call's temporary, here, where it
+        // converts (lower_view_of_resizable): its elements lie elsewhere,
+        // so nothing more is copied (spec 3.17).
         s32 value = from->kind == TYPE_ARRAY && target->type->kind == TYPE_VIEW
                         ? view_of_copy(l, from, results[i])
+                    : from->kind == TYPE_RESIZABLE && target->type->kind == TYPE_VIEW
+                        ? lower_view_of_resizable(l, from, results[i])
                         : resize(l, results[i], from, ir_type_of(target->type));
         emit_put(l, target->type, value, address);
     }
@@ -3922,6 +3974,19 @@ static void release_lowering(Lowering *l) {
     array_free(&l->waiting);
 }
 
+// Preload's Allocator, the type of a [..]T's allocator field: that of the
+// last field of Resizable_Array, the layout every [..]T has (spec 3.17),
+// for the backend's debug type of one (Ir_Module.allocator_type). Null
+// without Preload, and while the checker hasn't finished laying the struct
+// out, when its fields are only some of them, or none: so for a world's
+// lowering made at a #run in the declarations pass (ir_lowering_new),
+// whose module the interpreter runs, with no debug information.
+static Type *allocator_type_of(Ast_File *f) {
+    Type *layout = f->resizable_array_type;
+    if (!layout || layout->decl->resolve != RESOLVE_DONE || !layout->fields.count) return nullptr;
+    return layout->fields[layout->fields.count - 1].type;
+}
+
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
@@ -3940,6 +4005,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.runtime_init = f->runtime_init;
     l.context = -1;
     m->context_type = f->context_type;
+    m->allocator_type = allocator_type_of(f);
 
     // The source files, for a debugger (ir.h), every one the program was
     // loaded from, in its order, so a position's file indexes them: the
@@ -4013,12 +4079,14 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->bounds_failed = -1;
     l->string_equal = -1;
     l->block = -1;
-    // The tree's context, as ir_lower takes it; none without a tree.
+    // The tree's context, and a [..]T's allocator type, as ir_lower takes
+    // them; none without a tree.
     if (file) {
         l->context_type = file->context_type;
         l->default_context = file->default_context;
         l->runtime_init = file->runtime_init;
         m->context_type = file->context_type;
+        m->allocator_type = allocator_type_of(file);
     }
     l->context = -1;
     // The longest prefix a bounds check can pass __rig_bounds_failed, from

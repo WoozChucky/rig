@@ -6294,3 +6294,78 @@ TEST(a_c_call_procedure_pushes_its_own) {
     CHECK(contains(debug, "; var context *Context slot %1 artificial in 1 at 3:5\n"));
     arena_free(&a);
 }
+
+// Issue #158: resizable arrays (spec 3.17).
+
+TEST(a_resizable_array_converts_to_a_view_of_its_count_and_data) {
+    // sum(a) passes the []int the [..]int converts to: a view slot of its
+    // own, %5, holding the array's count and data, loaded from %2, the
+    // array, where the conversion is; then copied, as any view argument is.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "sum :: (v: []int) -> int { return v.count; }\n"
+                                                              "main :: () {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    n := sum(a);\n"
+                                                              "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 40 align 8\n"
+              "  zero %2, 40\n"
+              "  %3 = local i64\n"
+              "  %4 = load ptr %0\n"
+              "  %5 = local 16 align 8\n"
+              "  %6 = load i64 %2\n"
+              "  %7 = const i64 8\n"
+              "  %8 = ptradd %2, %7\n"
+              "  %9 = load ptr %8\n"
+              "  store i64 %6, %5\n"
+              "  %10 = const i64 8\n"
+              "  %11 = ptradd %5, %10\n"
+              "  store ptr %9, %11\n"
+              "  %12 = local 16 align 8\n"
+              "  copy %12, %5, 16\n"
+              "  %13 = call @sum(%4, %12)\n"
+              "  store i64 %13, %3\n"
+              "  %14 = const i32 0\n"
+              "  ret %14\n"
+              "}\n");
+    arena_free(&a);
+}
+
+// The IR of main for a `TYPE = ---` local a, indexed and gone over.
+static String index_and_loop_ir(Arena *a, const char *type) {
+    String text = string_printf(a,
+                                "main :: () {\n"
+                                "    a : %s = ---;\n"
+                                "    i := 1;\n"
+                                "    x := a[i];\n"
+                                "    for a { }\n"
+                                "}\n",
+                                type);
+    return proc_ir(ir_print(a, lower_with_preload(a, string_cstr(a, text))), "main");
+}
+
+TEST(a_resizable_arrays_index_and_loop_are_a_views) {
+    // a[i] and for a over a [..]int read its count and data as a []int's
+    // (spec 3.17): the same loads, bounds check and null checks. Only the
+    // slots differ, the array's 40 bytes where the view has 16.
+    Arena a = arena_make();
+    String resizable = index_and_loop_ir(&a, "[..]int");
+    String view = index_and_loop_ir(&a, "[]int");
+    s64 at = index_of(resizable, "local 40 align 8\n");
+    CHECK(at >= 0 && contains(view, "local 16 align 8\n") && !contains(view, "local 40 align 8\n"));
+    if (at >= 0) {
+        s64 after = at + (s64)strlen("local 40 align 8\n");
+        resizable = string_printf(&a, STR_FMT "local 16 align 8\n" STR_FMT, STR_ARG(string_slice(resizable, 0, at)),
+                                  STR_ARG(string_slice(resizable, after, resizable.count - after)));
+    }
+    CHECK_STR(resizable, string_cstr(&a, view));
+    CHECK(contains(view, "call @__rig_bounds_failed("));
+    arena_free(&a);
+}

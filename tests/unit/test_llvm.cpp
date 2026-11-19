@@ -2836,3 +2836,45 @@ TEST(llvm_describes_the_context) {
     }
     arena_free(&a);
 }
+
+// Issue #158: resizable arrays (spec 3.17, 10.7).
+
+TEST(a_resizable_arrays_debug_type) {
+    // [..]int is a struct named as Rig names it, of 40 bytes: a view's
+    // count and data (a pointer to int), then allocated, an int, and
+    // allocator, Preload's Allocator struct, each at its offset.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "main :: () { a : [..]int; }\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        String array = struct_line(&a, text, "[..]int");
+        CHECK(contains(array, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[..]int\""));
+        CHECK(contains(array, ", size: 320, "));
+        String node = defined_node(array);
+        String integer = defined_node(line_with(text, "!DIBasicType(name: \"int\""));
+        String allocator = defined_node(struct_line(&a, text, "Allocator"));
+        String to_int = pointer_node(&a, text, integer);
+        CHECK(node.count > 0 && integer.count > 0 && allocator.count > 0 && to_int.count > 0);
+        struct Member {
+            const char *name;
+            s64 offset;  // in bits
+            String type;
+        };
+        Member members[] = {{"count", 0, integer}, {"data", 64, to_int}, {"allocated", 128, integer},
+                            {"allocator", 192, allocator}};
+        for (Member &member : members) {
+            String line = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                        "!DIDerivedType(tag: DW_TAG_member, name: "
+                                                                        "\"%s\", scope: " STR_FMT ",",
+                                                                        member.name, STR_ARG(node))));
+            CHECK(line.count > 0);
+            CHECK(string_eq(attached(&a, line, "baseType:"), member.type));
+            if (member.offset) {
+                CHECK(contains(line, string_cstr(&a, string_printf(&a, "offset: %lld)", (long long)member.offset))));
+            } else {
+                CHECK(!contains(line, "offset:"));
+            }
+        }
+    }
+    arena_free(&a);
+}
