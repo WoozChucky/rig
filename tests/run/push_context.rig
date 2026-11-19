@@ -89,6 +89,17 @@ main :: () {
         say("back out");
     }
 
+    // An untyped literal takes the type Context and is copied, into a
+    // temporary filled again each time round the loop.
+    for 1..2 {
+        lit : *u8 = "literal 1";
+        if it == 2 { lit = "literal 2"; }
+        push_context .{allocator = Allocator.{named_proc, lit}, temporary_storage = context.temporary_storage} {
+            say("literal");
+        }
+    }
+    say("after the literal");
+
     // context converts to Any by its address, main's and a pushed place's.
     printf("%d", is_context(context));
     push_context c { printf(" %d\n", is_context(context)); }

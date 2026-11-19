@@ -8291,7 +8291,12 @@ TEST(context_is_set_aside_with_the_scopes) {
     // own, and once it's done the #c_call body has none again: twice's call
     // after later's is refused. A global worked out inside a body is no
     // code of it: G's value can't read context, though f's body needs it.
+    // A signature worked out inside a #c_call body is none of its code
+    // either: X's run checks cb's body before late is declared, so late's
+    // signature is checked there, and its default may read context; only
+    // the call that leaves it out, outside every push, is refused.
     Arena a = arena_make();
+    Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "twice :: (n: int) -> int { return n * 2; }\n"
                                      "cb :: () #c_call {\n"
                                      "    x := #run later();\n"
@@ -8301,6 +8306,24 @@ TEST(context_is_set_aside_with_the_scopes) {
                                      "main :: () { }\n"),
               "4:10: 'twice' needs a context; a #c_call procedure has none until it pushes one, as in "
               "push_context default_context { ... }\n");
+    CHECK_STR(check_with_preload(&a,
+                                 "X :: #run cb();\n"
+                                 "cb :: () -> int #c_call {\n"
+                                 "    push_context default_context { return late(); }\n"
+                                 "}\n"
+                                 "late :: (n: int = context.temporary_storage.size) -> int #c_call { return n; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    CHECK(((Ast_Proc *)top_level_named(tree, "late"))->params[0]->default_needs_context);
+    CHECK_STR(check_with_preload(&a, "X :: #run cb();\n"
+                                     "cb :: () -> int #c_call {\n"
+                                     "    return late();\n"
+                                     "}\n"
+                                     "late :: (n: int = context.temporary_storage.size) -> int #c_call { return n; }\n"
+                                     "main :: () { }\n"),
+              "3:12: 'late' leaves out 'n', whose default value needs a context; a #c_call procedure has none "
+              "until it pushes one, as in push_context default_context { ... }\n");
     CHECK_STR(check_with_preload(&a, "X :: #run f();\n"
                                      "f :: () -> int { a := G; return 1; }\n"
                                      "G := context.allocator;\n"
