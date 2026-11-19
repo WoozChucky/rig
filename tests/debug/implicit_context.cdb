@@ -22,6 +22,7 @@ bp `implicit_context.rig:14`
 bp `implicit_context.rig:16`
 g
 dv /t
+dx context
 g
 dv /t
 ?? context == &default_context

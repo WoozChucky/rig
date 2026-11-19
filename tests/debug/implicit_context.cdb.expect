@@ -17,7 +17,8 @@ int64 n = 0n4
 bool true
 14:     y := 1;
 int64 y = 0n
+Unable to bind name 'context'
 16:         x := twice(y);
 struct Context * context = 0x
-int64 x = 0n8
+int64 x = 0n
 bool true
