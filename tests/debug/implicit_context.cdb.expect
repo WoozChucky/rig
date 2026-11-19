@@ -5,6 +5,8 @@ int64)
 struct Context * context = 0x
 struct Context other
 bool true
+struct Allocator
+implicit_context!heap_allocator_proc
 .call returns:
 int64 0n6
 23:         n := twice(4);
@@ -18,6 +20,10 @@ bool true
 14:     y := 1;
 int64 y = 0n
 Unable to bind name 'context'
+.call returns:
+int64 0n6
+.call returns:
+int64 0n4
 16:         x := twice(y);
 struct Context * context = 0x
 int64 x = 0n

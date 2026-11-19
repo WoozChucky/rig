@@ -25,3 +25,7 @@ loop defer: heap
 after break: heap
 nested: inner
 back out: outer
+1 1
+assigned: assigned
+assigned back: heap
+1

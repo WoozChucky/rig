@@ -7,6 +7,7 @@ bp `implicit_context.rig:23`
 g
 dv /t
 ?? context == &default_context
+?? context->allocator
 .call implicit_context!twice(context, 3)
 g
 g
@@ -23,6 +24,10 @@ bp `implicit_context.rig:16`
 g
 dv /t
 dx context
+.call implicit_context!twice(&default_context, 3)
+g
+.call implicit_context!halve(8)
+g
 g
 dv /t
 ?? context == &default_context

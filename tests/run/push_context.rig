@@ -88,4 +88,23 @@ main :: () {
         push_context named("inner") { say("nested"); }
         say("back out");
     }
+
+    // context converts to Any by its address, main's and a pushed place's.
+    printf("%d", is_context(context));
+    push_context c { printf(" %d\n", is_context(context)); }
+
+    // context is assigned whole: assigning a saved copy back puts the heap
+    // back in main's context, default_context, for callees too.
+    saved := context;
+    assigned : *u8 = "assigned";
+    context.allocator = Allocator.{named_proc, assigned};
+    say("assigned");
+    context = saved;
+    say("assigned back");
+    printf("%d\n", default_context.allocator.proc == heap_allocator_proc);
+}
+
+// Whether a holds the current context, by its address.
+is_context :: (a: Any) -> bool {
+    return a.value_pointer == cast(*void) *context;
 }

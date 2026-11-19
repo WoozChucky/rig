@@ -23,4 +23,10 @@ main :: () {
         n := twice(4);
     }
     callback();
+    h := halve(8);
 }
+
+// A #c_call procedure, which a debugger calls with its arguments alone. In
+// callback's frame, which has no context, a debugger passes a Rig procedure
+// &default_context.
+halve :: (n: int) -> int #c_call { return n / 2; }

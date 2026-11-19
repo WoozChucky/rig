@@ -12,6 +12,8 @@ n = 4
 = 1
 implicit_context.rig:14
 y =
+= 6
+= 4
 implicit_context.rig:16
 = 1
 No symbol "context" in current context.

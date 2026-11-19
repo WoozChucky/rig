@@ -18,6 +18,8 @@ break implicit_context.rig:14
 break implicit_context.rig:16
 continue
 info locals
+print twice(&default_context, 3)
+print halve(8)
 continue
 print context == &default_context
 next
