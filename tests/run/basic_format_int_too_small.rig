@@ -1,0 +1,14 @@
+// Basic's format_int given a buffer too small for its text: the digits
+// are written into the caller's own buffer, after the "-", so the bounds
+// check names that buffer's index and count, here index 64 of a 1-byte
+// buffer for int's most negative value in base 2. It stops at the line of
+// numbers.rig that basic_format_int_too_small.err names. Edit one, edit
+// the other.
+#import "Basic";
+
+main :: () {
+    print("before\n");
+    buffer : [1]u8;
+    format_int(buffer, -9223372036854775807 - 1, 2);
+    print("not reached\n");
+}

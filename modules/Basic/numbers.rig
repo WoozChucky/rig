@@ -92,6 +92,8 @@ format_u64_after :: (buffer: []u8, count: int, value: u64, base: int) -> string 
         buffer[count + digits - it] = DIGITS[left % radix];
         left /= radix;
     }
+    // A buffer too small stops at the write above, which
+    // tests/run/basic_format_int_too_small.err names: keep it on its line.
 
     text := cast(string) buffer;
     text.count = count + digits;

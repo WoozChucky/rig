@@ -18,15 +18,15 @@
 // how it is hashed, compared, kept and given back.
 //
 // A table's entries, a power of two of them, are one run of memory from its
-// allocator, the one its init is given, the context's unless another is. Each
-// is a header (the key's hash, the entry's state and the key) followed by the
-// value. A key's entry is found by open addressing with linear probing: the
-// probe starts at the entry the key's hash picks and steps one entry at a
-// time, wrapping at the end, until it finds the key or an empty entry. Keys
-// whose probes start at the same entry, or run into each other, sit one after
-// another: a chain. A set rehashes the table rather than leave more than three
-// quarters of its entries used or removed, so a probe meets an empty entry
-// soon.
+// allocator, the one its init is given, the context's unless another is.
+// Each is a header (the key's hash, the entry's state and the key) followed
+// by the value. A key's entry is found by open addressing with linear
+// probing: the probe starts at the entry the key's hash picks and steps one
+// entry at a time, wrapping at the end, until it finds the key or an empty
+// entry. Keys whose probes start at the same entry, or run into each other,
+// sit one after another: a chain. A set rehashes the table rather than
+// leave more than three quarters of its entries used or removed, so a probe
+// meets an empty entry soon.
 #load "allocators.rig";
 #load "memory.rig";
 #load "array.rig";
