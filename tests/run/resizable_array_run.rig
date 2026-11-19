@@ -2,7 +2,8 @@
 // constant's #run, before the procedures it calls, grows an array from
 // the compile-time world's heap and bakes its view; a run fills a global
 // of the world, which a later run sees; the program's own global is
-// still zeroed.
+// still zeroed. A built-in's argument may call a procedure declared after
+// the constant, whose body is checked before the run.
 #import "Basic";
 
 SQUARES :: #run squares(5);
@@ -13,9 +14,11 @@ seen : [..]int;
 
 squares :: (n: int) -> []int {
     table : [..]int;
-    for 1..n { array_add(*table, it * it); }
+    for 1..n { array_add(*table, square(it)); }
     return table;
 }
+
+square :: (n: int) -> int { return n * n; }
 
 fill :: () -> int {
     array_add(*seen, 7);

@@ -1,0 +1,9 @@
+// array_remove_ordered past a resizable array's end (issue #158, spec
+// 3.17, 8.1): the index of the element it removes is checked against the
+// count, as array_remove_unordered's is.
+main :: () {
+    a : [..]int;
+    array_add(*a, 1);
+    array_add(*a, 2);
+    array_remove_ordered(*a, a.count);
+}

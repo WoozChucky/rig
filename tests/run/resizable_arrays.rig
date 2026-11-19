@@ -13,7 +13,11 @@
 //   once the context's allocator is another, which is never asked.
 // - own element: an item that is the array's own element is copied before
 //   the array grows (an add when it's full) or its elements move up (an
-//   insert).
+//   insert). The array's allocator moves it when it grows and fills the
+//   block it left, and the element inserted is one whose place the element
+//   below it moves into, so an item read only after the change would
+//   differ.
+// - pop: array_pop of a struct, into a variable and as an argument.
 // - loop: a for whose body adds to the array it goes over, with room
 //   reserved, goes over the elements the array had when it started.
 // - view: a [..]T goes where a view goes, to Basic's join and to a []int
@@ -52,6 +56,21 @@ second_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *v
     return heap_allocator_proc(mode, size, old_size, old_memory, data);
 }
 
+// The heap, but a resize always moves: it takes new memory, copies the old
+// block's bytes there, and fills the old block with 0xEE bytes before it
+// frees it.
+moving_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode != RESIZE { return heap_allocator_proc(mode, size, old_size, old_memory, data); }
+    memory := heap_allocator_proc(ALLOCATE, size, 0, null, data);
+    if memory == null { return null; }
+    kept := old_size;
+    if size < kept { kept = size; }
+    copy_memory(memory, old_memory, kept);
+    set_memory(old_memory, 0xEE, old_size);
+    heap_allocator_proc(FREE, 0, old_size, old_memory, data);
+    return memory;
+}
+
 main :: () {
     squares : [..]int;
     for 0..19 { array_add(*squares, it * it); }
@@ -86,11 +105,18 @@ main :: () {
     print("remembered {} {} {} {}\n", first_allocations, first_resizes, first_frees, second_calls);
 
     points : [..]Point;
+    points.allocator = Allocator.{moving_proc, null};
     for 1..8 { array_add(*points, Point.{it, it}); }
     array_add(*points, points[7]);
-    array_insert(*points, 0, points[8]);
+    array_insert(*points, 0, points[3]);
     print("own element {} {} {} {}\n", points[9], points[0], points[1], points.count);
     array_free(*points);
+
+    pairs : [..]Point;
+    for 1..3 { array_add(*pairs, Point.{it, it * 10}); }
+    last := array_pop(*pairs);
+    print("pop {} {}\n", last, array_pop(*pairs));
+    array_free(*pairs);
 
     l : [..]int;
     array_reserve(*l, 16);

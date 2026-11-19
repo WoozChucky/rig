@@ -6458,12 +6458,16 @@ TEST(an_array_procedure_calls_its_preload_helper) {
     // array's address, the element's size and the address of a copy of the
     // item, then fails when it gave false. array_pop checks the pointer and
     // its last index, then calls __array_pop with the address its result
-    // goes to. #no_abc leaves the bounds check out, never the others.
+    // goes to. array_reserve fails when its helper gave false, as the add
+    // does; array_resize checks its count for below 0 first. #no_abc leaves
+    // the bounds check out, never the others.
     Arena a = arena_make();
     String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
                                                               "    a : [..]int;\n"
                                                               "    array_add(*a, 7);\n"
                                                               "    x := array_pop(*a);\n"
+                                                              "    array_reserve(*a, 4);\n"
+                                                              "    array_resize(*a, 2);\n"
                                                               "}\n")),
                           "main");
     // a is %2; each check's failure, a panic or __rig_bounds_failed, is a
@@ -6504,14 +6508,63 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                          "  call @__array_pop(%13, %2, %14, %15)\n"
                          "  %28 = load i64 %15\n"
                          "  store i64 %28, %12\n"));
+    CHECK(contains(main, "b10:\n"
+                         "  %34 = call @__array_reserve(%29, %2, %30, %31)\n"
+                         "  %35 = const i1 1\n"
+                         "  %36 = xor i1 %34, %35\n"
+                         "  branch %36, b11, b12\n"));
+    CHECK(contains(main, "b14:\n"
+                         "  %42 = const i64 0\n"
+                         "  %43 = cmp slt i64 %39, %42\n"
+                         "  branch %43, b15, b16\n"
+                         "b15:\n"
+                         "  panic @str.107\n"
+                         "b16:\n"
+                         "  %44 = call @__array_resize(%37, %2, %38, %39)\n"
+                         "  %45 = const i1 1\n"
+                         "  %46 = xor i1 %44, %45\n"
+                         "  branch %46, b17, b18\n"));
     String quiet = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () #no_abc {\n"
                                                                "    a : [..]int;\n"
                                                                "    array_add(*a, 7);\n"
                                                                "    x := array_pop(*a);\n"
+                                                               "    array_reserve(*a, 4);\n"
+                                                               "    array_resize(*a, 2);\n"
                                                                "}\n")),
                            "main");
-    CHECK(contains(quiet, "call @__array_pop(%"));
+    // Every check but array_pop's bounds check stays: the pointer's null
+    // checks, the no-memory ones and the resize's negative count's.
+    CHECK(contains(quiet, "  %8 = cmp eq ptr %2, %7\n"
+                          "  branch %8, b1, b2\n"
+                          "b1:\n"
+                          "  panic @str.100\n"
+                          "b2:\n"
+                          "  %9 = call @__array_add(%3, %2, %4, %5)\n"
+                          "  %10 = const i1 1\n"
+                          "  %11 = xor i1 %9, %10\n"
+                          "  branch %11, b3, b4\n"));
+    CHECK(contains(quiet, "  %17 = cmp eq ptr %2, %16\n"
+                          "  branch %17, b5, b6\n"
+                          "b5:\n"
+                          "  panic @str.102\n"
+                          "b6:\n"
+                          "  call @__array_pop(%13, %2, %14, %15)\n"));
+    CHECK(contains(quiet, "b8:\n"
+                          "  %24 = call @__array_reserve(%19, %2, %20, %21)\n"
+                          "  %25 = const i1 1\n"
+                          "  %26 = xor i1 %24, %25\n"
+                          "  branch %26, b9, b10\n"));
+    CHECK(contains(quiet, "b12:\n"
+                          "  %32 = const i64 0\n"
+                          "  %33 = cmp slt i64 %29, %32\n"
+                          "  branch %33, b13, b14\n"
+                          "b13:\n"
+                          "  panic @str.106\n"
+                          "b14:\n"
+                          "  %34 = call @__array_resize(%27, %2, %28, %29)\n"
+                          "  %35 = const i1 1\n"
+                          "  %36 = xor i1 %34, %35\n"
+                          "  branch %36, b15, b16\n"));
     CHECK(!contains(quiet, "__rig_bounds_failed"));
-    CHECK(contains(quiet, "panic @"));
     arena_free(&a);
 }

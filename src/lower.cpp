@@ -1652,9 +1652,10 @@ static s32 lower_member_address(Lowering *l, Ast_Member *m) {
 static s32 bounds_failed_proc(Lowering *l);
 
 // A bounds check (spec 6.5): when the i1 %fails is 1, a block of its own
-// calls __rig_bounds_failed with where the check is (at, the '['), the
-// index %index and the count %count, both i64s, and whether the index's
-// type is signed, which says how to write it; the call never returns.
+// calls __rig_bounds_failed with where the check is (at, an index's '[', or
+// a built-in procedure's name: lower_builtin_call), the index %index and
+// the count %count, both i64s, and whether the index's type is signed,
+// which says how to write it; the call never returns.
 // Otherwise the code goes on in a new block:
 //
 //     branch %fails, fail, ok
