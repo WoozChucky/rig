@@ -2349,23 +2349,46 @@ static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
     {"OS_LINUX", SYSTEM_LINUX, "Linux, one of the systems OS may be"},
 };
 
-// Whether `name` is a predeclared constant's; its entry through *entry.
-static bool is_predeclared(String name, const Predeclared_Constant **entry) {
+// The resizable arrays' procedures (spec 3.17), built into the language,
+// since Rig has no generics to write them in: no Rig procedure's parameter
+// takes both a *[..]int and a *[..]Vec2. Each call is typed by its array's
+// element type (check_expr.cpp's check_builtin_call), and calls the helper
+// of Preload's named here, which does the work, in Rig. The names and the
+// order of array_insert's arguments are Basic v0's, whose untyped Array
+// they replace.
+const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT] = {
+    {"array_add", BUILTIN_ARRAY_ADD, "__array_add", false, true, false},
+    {"array_insert", BUILTIN_ARRAY_INSERT, "__array_insert", true, true, false},
+    {"array_pop", BUILTIN_ARRAY_POP, "__array_pop", false, false, true},
+    {"array_remove_ordered", BUILTIN_ARRAY_REMOVE_ORDERED, "__array_remove_ordered", true, false, false},
+    {"array_remove_unordered", BUILTIN_ARRAY_REMOVE_UNORDERED, "__array_remove_unordered", true, false, false},
+    {"array_reserve", BUILTIN_ARRAY_RESERVE, "__array_reserve", true, false, false},
+    {"array_resize", BUILTIN_ARRAY_RESIZE, "__array_resize", true, false, false},
+    {"array_reset", BUILTIN_ARRAY_RESET, "__array_reset", false, false, false},
+    {"array_free", BUILTIN_ARRAY_FREE, "__array_free", false, false, false},
+};
+
+// What a predeclared name is, as the refusal of a top-level declaration of
+// it says: a predeclared constant's meaning, or a built-in procedure's;
+// null for any other name.
+static const char *predeclared_meaning(String name) {
     for (const Predeclared_Constant &constant : PREDECLARED_CONSTANTS) {
-        if (string_eq(name, str(constant.name))) {
-            *entry = &constant;
-            return true;
-        }
+        if (string_eq(name, str(constant.name))) return constant.meaning;
     }
-    return false;
+    for (const Builtin_Procedure &builtin : BUILTIN_PROCEDURES) {
+        if (string_eq(name, str(builtin.name))) return "built into the language, for resizable arrays";
+    }
+    return nullptr;
 }
 
-// Puts the predeclared constants in c->top_level, before the program's
-// names. Each is an Ast_Const as a checked `NAME :: 2;` would be: untyped,
-// folded, done, its value an integer literal of the same number (so
-// #run's walk, which reaches a constant's value, finds one). It's written
-// nowhere: its position is 0:0. OS's value is the program's system, the
-// host's when the tree names none.
+// Puts the predeclared names in c->top_level, before the program's. Each
+// predeclared constant is an Ast_Const as a checked `NAME :: 2;` would be:
+// untyped, folded, done, its value an integer literal of the same number
+// (so #run's walk, which reaches a constant's value, finds one). OS's
+// value is the program's system, the host's when the tree names none. Each
+// built-in procedure is an Ast_Builtin, which only a call's callee may
+// name (check_expr.cpp's check_callee). Both are written nowhere: their
+// position is 0:0.
 static void declare_predeclared(Checker *c, Ast_File *file) {
     for (const Predeclared_Constant &entry : PREDECLARED_CONSTANTS) {
         System value = entry.value;
@@ -2384,6 +2407,12 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
         constant->resolve = RESOLVE_DONE;
         table_put(&c->top_level, constant->name, (Ast *)constant);
     }
+    for (const Builtin_Procedure &entry : BUILTIN_PROCEDURES) {
+        Ast_Builtin *builtin = ast_new<Ast_Builtin>(c->arena, AST_BUILTIN, {0, 0, 0});
+        builtin->name = str(entry.name);
+        builtin->builtin = entry.builtin;
+        table_put(&c->top_level, builtin->name, (Ast *)builtin);
+    }
 }
 
 // The name a top-level declaration declares.
@@ -2399,10 +2428,11 @@ static String declared_name(Ast *decl) {
 
 // The top level's names, so procedures, globals, constants and structs can
 // be used before they're declared. They share one table: a global can't
-// have a procedure's name. The predeclared constants come first
-// (declare_predeclared): a top-level declaration of one of their names is
-// refused, at its name, and isn't declared, so every use means the
-// constant. (A local may hide one, as it may any of the top level's names.)
+// have a procedure's name. The predeclared names, the constants and the
+// built-in procedures, come first (declare_predeclared): a top-level
+// declaration of one of their names is refused, at its name, and isn't
+// declared, so every use means the predeclared one. (A local may hide one,
+// as it may any of the top level's names.)
 // Then the whole declarations of `declarations`, in order: a name declared
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
@@ -2440,12 +2470,9 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             }
         }
         String name = declared_name(decl);
-        const Predeclared_Constant *predeclared = nullptr;
-        if (is_predeclared(name, &predeclared)) {
-            if (report) {
-                diag_error(c->diag, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name),
-                           predeclared->meaning);
-            }
+        const char *meaning = predeclared_meaning(name);
+        if (meaning) {
+            if (report) diag_error(c->diag, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name), meaning);
             continue;
         }
         Ast **earlier = table_get(&c->top_level, name);
@@ -2487,6 +2514,13 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             if (decl->kind == AST_STRUCT && string_eq(name, str("Resizable_Array"))) {
                 c->file->resizable_array_type = ((Ast_Struct *)decl)->declared;
             }
+            // And the helpers the built-in procedures call, which lowering
+            // and the walk of a #run read.
+            if (decl->kind == AST_PROC) {
+                for (const Builtin_Procedure &builtin : BUILTIN_PROCEDURES) {
+                    if (string_eq(name, str(builtin.helper))) c->file->array_procs[builtin.builtin] = (Ast_Proc *)decl;
+                }
+            }
         }
     }
     // Then the broken ones (parser.h), the names of declarations the parser
@@ -2496,8 +2530,8 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
     // twice declared because of the syntax error, and calls are better
     // checked against the whole declaration, wherever it is. One with no
     // name could have declared anything, main included. One with a
-    // predeclared constant's name isn't declared either, silently: the
-    // name is the constant's.
+    // predeclared name isn't declared either, silently: the name is the
+    // predeclared constant's or built-in's.
     bool lost_a_name = false;
     for (s64 i = 0; i < declarations.count; i++) {
         if (declarations[i]->kind != AST_PROC) continue;

@@ -32,6 +32,10 @@
 //   is built for", at its name, and it isn't declared. A broken entry
 //   (below) of one of their names isn't declared either, and says nothing.
 //   A local may hide one, as it may any of the top level's names.
+// - So are the nine procedures of the resizable arrays (spec 3.17;
+//   Resizable arrays, below), array_add and the others, the same way:
+//   "'array_add' is predeclared: it's built into the language, for
+//   resizable arrays".
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
@@ -862,6 +866,43 @@
 //   element, always a place, of a parameter too; for a, for * a, a named
 //   iterator and it_index go over its elements. A for over a *[..]T is
 //   "'for' needs a range, an array, a view or a string, not '*[..]int'".
+// - Nine procedures grow and shrink one: array_add(array, item),
+//   array_insert(array, index, item), array_pop(array) -> T,
+//   array_remove_ordered(array, index), array_remove_unordered(array,
+//   index), array_reserve(array, count), array_resize(array, count),
+//   array_reset(array) and array_free(array), each array a *[..]T. They're
+//   the language's, not Basic's, because Rig has no generics: a
+//   parameter has one type, so no procedure written in Rig takes both a
+//   *[..]int and a *[..]Vec2; a '..T' gathers values of the one T its
+//   procedure names; and an Any says a value's type only at run time, so
+//   array_add(*numbers, "x") would compile, and 3 added to a [..]u8 would
+//   be an int. So the checker types each call. Each is predeclared
+//   (checker.cpp's BUILTIN_PROCEDURES, declare_predeclared), an Ast_Builtin
+//   at 0:0 in the top level, refused as a top-level declaration's name, as
+//   the predeclared constants are; a local may hide one. It's no value:
+//   "'array_add' can't be a value: it's built into the language". Its name
+//   is a procedure's where a place is wanted: "can't assign to
+//   'array_reset': it's a procedure".
+// - A call of one (check_expr.cpp's check_builtin_call) checks its
+//   arguments as values first, as any call's, and refuses a spread among
+//   them ("only the arguments of a '..' parameter can be spread, as in
+//   f(..values)"). Their count is the procedure's ("'array_add' takes 2
+//   arguments, but 1 was given"). Then argument 1 must be a *[..]T:
+//   "argument 1 of 'array_add' must be a pointer to a resizable array
+//   (*[..]T), not '[..]int'", at it; one with no type, its own mistake
+//   ("can't take the address of 'p': it's a parameter"), says nothing
+//   more, and the call has no type. Its T makes the call's signature
+//   (Ast_Call.builtin, callee_type), (*[..]T, item: T), (*[..]T, index:
+//   int, item: T), (*[..]T) -> T, ..., never #c_call: the other arguments
+//   convert to it as a call through a value's do ("argument 2 of
+//   'array_add' has type 'string', which can't be converted to 'int'",
+//   "300 doesn't fit in 'u8'"), the call needs a context ("'array_add'
+//   needs a context; a #c_call procedure has none until it pushes one, as
+//   in push_context default_context { ... }"), and one that returns
+//   nothing has no value ("'array_add' returns nothing, so it has no
+//   value"). Each calls the helper of Preload's that does the work, in Rig
+//   (__array_add, ...), which the checker keeps on the tree
+//   (Ast_File.array_procs), and a #run's walk reaches.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

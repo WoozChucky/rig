@@ -1,0 +1,8 @@
+// array_insert past a resizable array's end (issue #158, spec 3.17, 8.1):
+// an index may be the count, inserting at the end, but not past it, so the
+// count it's checked against is one more than the array's.
+main :: () {
+    a : [..]int;
+    for 1..3 { array_add(*a, it); }
+    array_insert(*a, 4, 9);
+}

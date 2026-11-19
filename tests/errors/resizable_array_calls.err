@@ -1,0 +1,30 @@
+tests/errors/resizable_array_calls.rig:6:5: error: 'array_add' takes 2 arguments, but 1 was given
+        array_add(*a);
+        ^
+tests/errors/resizable_array_calls.rig:7:15: error: argument 1 of 'array_add' must be a pointer to a resizable array (*[..]T), not '[..]int'
+        array_add(a, 1);
+                  ^
+tests/errors/resizable_array_calls.rig:9:16: error: argument 1 of 'array_free' must be a pointer to a resizable array (*[..]T), not '*[]int'
+        array_free(*v);
+                   ^
+tests/errors/resizable_array_calls.rig:10:19: error: argument 2 of 'array_add' has type 'string', which can't be converted to 'int'
+        array_add(*a, "one");
+                      ^
+tests/errors/resizable_array_calls.rig:12:23: error: 300 doesn't fit in 'u8'
+        array_add(*bytes, 300);
+                          ^
+tests/errors/resizable_array_calls.rig:13:10: error: 'array_add' returns nothing, so it has no value
+        x := array_add(*a, 1);
+             ^
+tests/errors/resizable_array_calls.rig:14:19: error: only the arguments of a '..' parameter can be spread, as in f(..values)
+        array_add(*a, ..v);
+                      ^
+tests/errors/resizable_array_calls.rig:16:35: error: can't take the address of 'p': it's a parameter
+    grow :: (p: [..]int) { array_add(*p, 1); }
+                                      ^
+tests/errors/resizable_array_calls.rig:17:39: error: 'array_add' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }
+    callback :: () #c_call { a : [..]int; array_add(*a, 1); }
+                                          ^
+tests/errors/resizable_array_calls.rig:18:1: error: 'array_reset' is predeclared: it's built into the language, for resizable arrays
+    array_reset :: (n: int) { }
+    ^

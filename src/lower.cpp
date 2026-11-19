@@ -186,7 +186,11 @@
 //   (an argument, a spread, an assignment, a cast, a multi-assign), its
 //   count and data are read there, into a view slot of its own
 //   (lower_view_of_resizable); its elements lie elsewhere, so unlike an
-//   array's view (view_of_copy) nothing more is copied.
+//   array's view (view_of_copy) nothing more is copied. A call of a
+//   built-in procedure (array_add, ...) is a call of Preload's helper
+//   (__array_add, ...), given the element's size and an item by the address
+//   of a copy, with the checks that need the call's T or place around it,
+//   at the built-in's name (lower_builtin_call).
 // - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal's bytes are a constant global of
 //   their own, str.N, one per literal however often it's reached
@@ -479,6 +483,9 @@ struct Lowering {
                                // the body's, or the innermost push_context block's (lower_push_context);
                                // -1 without one: a #c_call procedure outside its pushes, the
                                // compiler's own, no Preload
+    Ast_Proc **array_procs;    // Preload's helpers the built-in procedures call (spec 3.17), by
+                               // Array_Builtin: the tree's Ast_File.array_procs (lower_builtin_call);
+                               // null without a tree
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
                                 // and the runs' (set_source, ir_lowering_source)
@@ -2027,8 +2034,122 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
     return emit_view(l, view, array->count, temporary);
 }
 
+// A built-in procedure's call (spec 3.17): a call of the helper of
+// Preload's it stands for (Lowering.array_procs), which does the work in
+// Rig, with the checks that need the call's T or its place around it. In
+// this order:
+// - The caller's current context, which the helper takes as any Rig
+//   procedure does; then the arguments, left to right, as a call's: the
+//   array's pointer, then an index or a count, an int, then an item,
+//   converted to T and put into a temporary of its own, whose address goes.
+//   The item is always a copy, so one that is the array's own element is
+//   read before the helper grows the array or moves its elements, and the
+//   helper takes any T by its address and size. array_pop's result gets a
+//   temporary of T, whose address goes where an item's would.
+// - The checks, each at the built-in's name, the place its message names
+//   (emit_runtime_check, emit_bounds_check): the pointer, for null, always.
+//   When bounds are checked (not under #no_abc or --no-bounds-checks, spec
+//   7.7), the index, as a view's is (lower_index_address): array_insert's
+//   against the count plus one, since it may insert at the end; the
+//   removes' against the count; array_pop's last index, the count less one,
+//   against the count, so an empty array's is -1. A count below 0 (set by
+//   hand) fails them too. Then array_resize's count below 0, always: the
+//   helper would make a count no array has.
+// - The call of the helper, at the statement, as any call is: the
+//   context, the pointer, the element's size, an i64 constant, then the
+//   rest. The helpers index nothing themselves, so #no_abc changes nothing
+//   in them.
+// - For array_add, array_insert, array_reserve and array_resize, whose
+//   helpers say whether the allocator gave the memory they needed: false
+//   is a runtime error at the name, "the array's allocator has no memory to
+//   give".
+// - array_pop's value, into `results`: its temporary's, loaded when T is a
+//   scalar.
+//
+//     array_add(*a, 7);          %3 = load ptr %0          (the context; a, a [..]int, in %2)
+//                                %4 = const i64 8          (an int's size)
+//                                %5 = local i64            (the item's copy)
+//                                %6 = const i64 7
+//                                store i64 %6, %5
+//                                %7 = const ptr 0
+//                                %8 = cmp eq ptr %2, %7
+//                                branch %8, fail, ok       (emit_null_check)
+//                              ok:
+//                                %9 = call @__array_add(%3, %2, %4, %5)
+//                                %10 = const i1 1
+//                                %11 = xor i1 %9, %10      (false: no memory given)
+//                                branch %11, fail, ok      (emit_runtime_check)
+//
+//     x := array_pop(*a);        %13 = load ptr %0         (x in %12)
+//                                %14 = const i64 8
+//                                %15 = local i64           (the result's temporary)
+//                                ...                       (the null check)
+//                                %18 = load i64 %2         (the count)
+//                                %19 = const i64 1
+//                                %20 = sub i64 %18, %19    (the last index)
+//                                %21 = cmp uge i64 %20, %18
+//                                %22 = const i64 0
+//                                %23 = cmp slt i64 %18, %22
+//                                %24 = or i1 %21, %23
+//                                branch %24, fail, ok      (emit_bounds_check)
+//                              ok:
+//                                call @__array_pop(%13, %2, %14, %15)
+//                                %28 = load i64 %15
+//                                store i64 %28, %12
+static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results) {
+    Array_Builtin builtin = call->builtin->builtin;
+    Type *signature = call->callee_type;
+    Type *element = signature->params[0]->pointee->element;
+    Ast_Proc *helper = l->array_procs[builtin];
+    Position at = call->callee->pos;
+    bool takes_item = builtin == BUILTIN_ARRAY_ADD || builtin == BUILTIN_ARRAY_INSERT;
+    Array<s32> args = {};  // the call instruction keeps it
+    if (takes_context(l, helper)) array_add(&args, load_context(l));
+    s32 array = lower_value(l, call->args[0], signature->params[0]);
+    array_add(&args, array);
+    array_add(&args, emit_constant(l, IR_I64, (u64)element->size));
+    s32 index = -1;  // the index or the count, an i64
+    for (s64 i = 1; i < call->args.count; i++) {
+        if (takes_item && i == call->args.count - 1) {
+            s32 copy = emit_slot(l, element);
+            emit_put(l, element, lower_value(l, call->args[i], element), copy);
+            array_add(&args, copy);
+        } else {
+            index = lower_value(l, call->args[i], signature->params[i]);
+            array_add(&args, index);
+        }
+    }
+    s32 popped = -1;
+    if (builtin == BUILTIN_ARRAY_POP) {
+        popped = emit_slot(l, element);
+        array_add(&args, popped);
+    }
+    emit_null_check(l, array, at);
+    bool indexes = builtin == BUILTIN_ARRAY_INSERT || builtin == BUILTIN_ARRAY_POP ||
+                   builtin == BUILTIN_ARRAY_REMOVE_ORDERED || builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
+    if (indexes && l->checking_bounds) {
+        s32 count = load_view_count(l, array), bound = count;
+        if (builtin == BUILTIN_ARRAY_INSERT) bound = emit_binary(l, IR_ADD, IR_I64, count, emit_constant(l, IR_I64, 1));
+        if (builtin == BUILTIN_ARRAY_POP) index = emit_binary(l, IR_SUB, IR_I64, count, emit_constant(l, IR_I64, 1));
+        s32 fails = emit_compare(l, IR_UGE, IR_I64, index, bound);
+        s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
+        emit_bounds_check(l, emit_binary(l, IR_OR, IR_I1, fails, negative), at, index, bound, true);
+    }
+    if (builtin == BUILTIN_ARRAY_RESIZE) {
+        s32 negative = emit_compare(l, IR_SLT, IR_I64, index, emit_constant(l, IR_I64, 0));
+        emit_runtime_check(l, negative, at, str("'array_resize' was given a negative count"));
+    }
+    s32 result = emit_call(l, proc_index_of(l, helper), args)->result;
+    if (takes_item || builtin == BUILTIN_ARRAY_RESERVE || builtin == BUILTIN_ARRAY_RESIZE) {
+        s32 failed = emit_binary(l, IR_XOR, IR_I1, result, emit_constant(l, IR_I1, 1));
+        emit_runtime_check(l, failed, at, str("the array's allocator has no memory to give"));
+    }
+    if (popped >= 0) array_add(results, emit_get(l, element, popped));
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
-// scalar's IR value, or an aggregate's address.
+// scalar's IR value, or an aggregate's address. A built-in procedure's is
+// lower_builtin_call's.
 // - A call through a procedure value works the value out first, the
 //   procedure called.
 // - Then a temporary for each aggregate result, passed as the hidden
@@ -2127,6 +2248,10 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                              ok:
 //                                call %1(%2)
 static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results) {
+    if (call->builtin) {
+        lower_builtin_call(l, call, results);
+        return;
+    }
     Ast_Proc *proc = call->proc;
     Type *callee = call->callee_type;  // through a value
     s32 function = callee ? lower_value(l, call->callee, callee) : -1;
@@ -4016,6 +4141,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.context_type = f->context_type;
     l.default_context = f->default_context;
     l.runtime_init = f->runtime_init;
+    l.array_procs = f->array_procs;
     l.context = -1;
     m->context_type = f->context_type;
     m->allocator_type = allocator_type_of(f);
@@ -4098,6 +4224,7 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
         l->context_type = file->context_type;
         l->default_context = file->default_context;
         l->runtime_init = file->runtime_init;
+        l->array_procs = file->array_procs;
         m->context_type = file->context_type;
         m->allocator_type = allocator_type_of(file);
     }

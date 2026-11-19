@@ -520,6 +520,13 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump(buffer, ((Ast_Spread *)node)->operand);
         out(buffer, ")");
         break;
+    case AST_BUILTIN:
+        // (builtin array_add): a built-in procedure, which the checker
+        // predeclares; no file holds one, but a name may mean one.
+        out(buffer, "(builtin ");
+        out(buffer, ((Ast_Builtin *)node)->name);
+        out(buffer, ")");
+        break;
     }
 }
 

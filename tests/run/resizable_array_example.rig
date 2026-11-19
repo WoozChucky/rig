@@ -1,0 +1,12 @@
+// Issue #158's example of a resizable array: a zeroed [..]int grows from
+// the context's allocator as numbers are added, is gone over as a view is,
+// and gives its memory back.
+#import "Basic";
+
+main :: () {
+    numbers : [..]int;
+    array_add(*numbers, 3);
+    array_add(*numbers, 5);
+    for numbers { print("{}\n", it); }
+    array_free(*numbers);
+}

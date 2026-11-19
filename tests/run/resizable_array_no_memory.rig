@@ -1,0 +1,13 @@
+// A resizable array whose allocator gives no memory when it must grow
+// (issue #158, spec 3.17, 8.1): the program stops at the built-in's name.
+
+// An allocator that never has any memory to give.
+nothing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+main :: () {
+    a : [..]int;
+    a.allocator = Allocator.{nothing_proc, null};
+    array_add(*a, 1);
+}

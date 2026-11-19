@@ -8943,3 +8943,49 @@ TEST(preload_declares_the_array_helpers) {
     }
     arena_free(&a);
 }
+
+TEST(the_array_procedures_are_predeclared) {
+    // The nine built-ins are predeclared, as OS is: a top-level declaration
+    // of one's name is refused, and a local may hide one, silently. A
+    // built-in is no value, and its name, a procedure's, is no place.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "array_add :: () { }\n"
+                                 "main :: () {\n"
+                                 "    array_free := 1;\n"
+                                 "    f := array_pop;\n"
+                                 "    array_reset = 2;\n"
+                                 "}\n"),
+              "1:1: 'array_add' is predeclared: it's built into the language, for resizable arrays\n"
+              "4:10: 'array_pop' can't be a value: it's built into the language\n"
+              "5:5: can't assign to 'array_reset': it's a procedure\n");
+    arena_free(&a);
+}
+
+TEST(array_procedure_calls_are_typed_by_their_array) {
+    // A built-in's call is checked against the signature its first
+    // argument's element type makes: an item converts to that type, and
+    // array_pop returns one. The call's callee_type is that signature.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    a : [..]u8;\n"
+                                 "    array_add(*a, 3);\n"
+                                 "    array_insert(*a, 0, 255);\n"
+                                 "    b := array_pop(*a);\n"
+                                 "    array_reserve(*a, 10);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    CHECK_STR(type_of_main_local(&a, tree, "b"), "u8");
+    Ast *add = ((Ast_Proc *)top_level_named(tree, "main"))->body->statements[1];
+    CHECK_EQ(add->kind, AST_CALL);
+    if (add->kind == AST_CALL) {
+        Ast_Call *call = (Ast_Call *)add;
+        CHECK(call->builtin != nullptr && call->proc == nullptr);
+        CHECK(call->callee_type != nullptr);
+        if (call->callee_type) CHECK_STR(type_name(&a, call->callee_type), "(*[..]u8, u8)");
+    }
+    arena_free(&a);
+}

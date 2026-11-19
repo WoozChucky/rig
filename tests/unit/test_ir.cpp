@@ -6452,3 +6452,66 @@ TEST(a_resizable_arrays_index_and_loop_are_a_views) {
     CHECK(contains(view, "call @__rig_bounds_failed("));
     arena_free(&a);
 }
+
+TEST(an_array_procedure_calls_its_preload_helper) {
+    // array_add(*a, 7) calls Preload's __array_add with the context, the
+    // array's address, the element's size and the address of a copy of the
+    // item, then fails when it gave false. array_pop checks the pointer and
+    // its last index, then calls __array_pop with the address its result
+    // goes to. #no_abc leaves the bounds check out, never the others.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    array_add(*a, 7);\n"
+                                                              "    x := array_pop(*a);\n"
+                                                              "}\n")),
+                          "main");
+    // a is %2; each check's failure, a panic or __rig_bounds_failed, is a
+    // block of its own.
+    CHECK(contains(main, "  %3 = load ptr %0\n"
+                         "  %4 = const i64 8\n"
+                         "  %5 = local i64\n"
+                         "  %6 = const i64 7\n"
+                         "  store i64 %6, %5\n"
+                         "  %7 = const ptr 0\n"
+                         "  %8 = cmp eq ptr %2, %7\n"
+                         "  branch %8, b1, b2\n"));
+    CHECK(contains(main, "b2:\n"
+                         "  %9 = call @__array_add(%3, %2, %4, %5)\n"
+                         "  %10 = const i1 1\n"
+                         "  %11 = xor i1 %9, %10\n"
+                         "  branch %11, b3, b4\n"));
+    CHECK(contains(main, "b4:\n"
+                         "  %12 = local i64\n"
+                         "  %13 = load ptr %0\n"
+                         "  %14 = const i64 8\n"
+                         "  %15 = local i64\n"
+                         "  %16 = const ptr 0\n"
+                         "  %17 = cmp eq ptr %2, %16\n"
+                         "  branch %17, b5, b6\n"));
+    CHECK(contains(main, "b6:\n"
+                         "  %18 = load i64 %2\n"
+                         "  %19 = const i64 1\n"
+                         "  %20 = sub i64 %18, %19\n"
+                         "  %21 = cmp uge i64 %20, %18\n"
+                         "  %22 = const i64 0\n"
+                         "  %23 = cmp slt i64 %18, %22\n"
+                         "  %24 = or i1 %21, %23\n"
+                         "  branch %24, b7, b8\n"));
+    CHECK(contains(main, "  call @__rig_bounds_failed(%25, %26, %20, %18, %27)\n"
+                         "  unreachable\n"
+                         "b8:\n"
+                         "  call @__array_pop(%13, %2, %14, %15)\n"
+                         "  %28 = load i64 %15\n"
+                         "  store i64 %28, %12\n"));
+    String quiet = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () #no_abc {\n"
+                                                               "    a : [..]int;\n"
+                                                               "    array_add(*a, 7);\n"
+                                                               "    x := array_pop(*a);\n"
+                                                               "}\n")),
+                           "main");
+    CHECK(contains(quiet, "call @__array_pop(%"));
+    CHECK(!contains(quiet, "__rig_bounds_failed"));
+    CHECK(contains(quiet, "panic @"));
+    arena_free(&a);
+}

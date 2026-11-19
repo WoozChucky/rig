@@ -880,6 +880,7 @@ check('the grammar colours resizable array types', () => {
         a: null,
     });
     assertScopes('array_add(*numbers, 3);', { array_add: 'entity.name.function.call.rig', numbers: null });
+    assertScopes('array_reserve(*numbers, 8);', { array_reserve: 'entity.name.function.call.rig' });
 });
 
 // A default parameter value (issue #155) is an expression after the

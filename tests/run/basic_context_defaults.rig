@@ -6,9 +6,11 @@
 // during the call; free and free_all, which give memory back, print
 // whether the count of what was given back grew. What each
 // gave is freed with the allocator left out too, so it goes back to the
-// allocator that gave it. Last, a #c_call procedure, which has no context
-// until it pushes one, pushes the default context and leaves the
-// allocator out inside the push. The other basic_* tests, which pass their
+// allocator that gave it. The built-in array_add (issue #158, spec 3.17)
+// grows a zeroed resizable array from context.allocator too, and
+// array_free gives its memory back there. Last, a #c_call procedure,
+// which has no context until it pushes one, pushes the default context
+// and leaves the allocator out inside the push. The other basic_* tests, which pass their
 // allocators, still pass as they are.
 #import "Basic";
 
@@ -98,7 +100,12 @@ main :: () {
         free(s.data);
         builder_free(*b);
 
+        numbers : [..]int;
         n := 7;
+        before = count;
+        array_add(*numbers, n);
+        grew("array_add", before);
+        array_free(*numbers);
         t : Table;
         before = count;
         table_init(*t, size_of(int));

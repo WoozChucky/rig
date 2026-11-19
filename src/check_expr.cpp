@@ -659,7 +659,9 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
 // procedure type can say". Nor is main a value: "'main' can't be a value:
 // it's where the program starts"; nor a #compiler one: "'create_workspace'
 // can't be a value: the compiler does it". In a default value, a
-// parameter is "a default value can't use the parameter 'times'".
+// parameter is "a default value can't use the parameter 'times'". Nor is a
+// built-in procedure a value: "'array_add' can't be a value: it's built
+// into the language".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -712,6 +714,13 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         return proc->type;  // null when a part of its signature was an error, reported
     }
     case AST_STRUCT: report_type_as_value(c, name); return nullptr;
+    // A built-in procedure (spec 3.17) has no procedure type, each call
+    // being typed by its array, nor any code to point at: only a call names
+    // it.
+    case AST_BUILTIN:
+        diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: it's built into the language",
+                   STR_ARG(name->name));
+        return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;
     }
 }
@@ -874,10 +883,13 @@ static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, Type
     call->gathered = check_array_type(c, t, (u64)(given - fixed), at);
 }
 
-// What a call's callee is (spec 5.10), filling in call->proc or
-// call->callee_type; false when it's unknown or no procedure (reported):
+// What a call's callee is (spec 5.10), filling in call->proc,
+// call->builtin or call->callee_type; false when it's unknown or no
+// procedure (reported):
 // - a procedure's name, or a constant's that names one (OP :: add;): a call
 //   of the procedure itself, call->proc;
+// - a built-in procedure's name (spec 3.17): call->builtin, its signature
+//   still to make from its arguments (check_builtin_call);
 // - a value of a procedure type, a variable's or a parameter's (which hide
 //   a procedure of their name), a field, an element, a call's result: a
 //   call through the value, call->callee_type, checked as a call of the
@@ -905,6 +917,11 @@ static bool check_callee(Checker *c, Ast_Call *call) {
         if (decl->kind == AST_PROC) {
             name->decl = decl;
             call->proc = (Ast_Proc *)decl;
+            return true;
+        }
+        if (decl->kind == AST_BUILTIN) {
+            name->decl = decl;
+            call->builtin = (Ast_Builtin *)decl;
             return true;
         }
         t = check_expression(c, name);  // a variable's, a parameter's or a constant's value
@@ -1023,9 +1040,62 @@ static void check_call_context(Checker *c, Ast_Call *call, String name, bool mor
     }
 }
 
+// A call of a built-in procedure (spec 3.17), call->builtin, whose
+// arguments check_call has checked as values. A built-in has no '..'
+// parameter, so a spread among them is refused (refuse_spread). They're
+// counted against its parameters, as a procedure's are ("'array_add' takes
+// 2 arguments, but 1 was given", at the callee). Then argument 1 must be a
+// pointer to a resizable array: anything else is "argument 1 of
+// 'array_add' must be a pointer to a resizable array (*[..]T), not
+// '[..]int'", at it (an untyped one takes its default type first), and one
+// with no type, its own mistake, says nothing more. Its T makes the call's
+// signature, call->callee_type, never #c_call: the *[..]T, then an int
+// when the built-in takes an index or a count, then a T when it takes an
+// item, and a T result for array_pop (BUILTIN_PROCEDURES). From there the
+// call is checked as a call through a value of that type would be: each
+// other argument converts to its parameter's type (check_argument), and
+// the call needs a context (check_call_context), the helper of Preload's it
+// calls taking one. Its type is array_pop's T, void for the others, null
+// after a mistake.
+static Type *check_builtin_call(Checker *c, Ast_Call *call) {
+    const Builtin_Procedure *entry = &BUILTIN_PROCEDURES[call->builtin->builtin];
+    String name = call->builtin->name;
+    s64 given = call->args.count;
+    for (s64 i = 0; i < given; i++) {
+        if (call->args[i]->kind == AST_SPREAD) refuse_spread(c, call->args[i]);
+    }
+    s64 n = 1 + (entry->takes_int ? 1 : 0) + (entry->takes_item ? 1 : 0);
+    if (given != n) {
+        diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %lld argument%s, but %lld %s given",
+                   STR_ARG(name), (long long)n, n == 1 ? "" : "s", (long long)given, given == 1 ? "was" : "were");
+        return nullptr;
+    }
+    Ast *array = call->args[0];
+    check_default_type(c, array);
+    Type *t = array->type;
+    if (!t) return nullptr;
+    if (!type_is_pointer(t) || t->pointee->kind != TYPE_RESIZABLE) {
+        diag_error(c->diag, array->start,
+                   "argument 1 of '" STR_FMT "' must be a pointer to a resizable array (*[..]T), not '" STR_FMT "'",
+                   STR_ARG(name), STR_ARG(type_name(c->arena, t)));
+        return nullptr;
+    }
+    Type *element = t->pointee->element;
+    Type *params[3];
+    s64 count = 0;
+    params[count++] = t;
+    if (entry->takes_int) params[count++] = &type_int;
+    if (entry->takes_item) params[count++] = element;
+    call->callee_type = type_proc_of(params, count, &element, entry->returns_item ? 1 : 0, false, false);
+    for (s64 i = 1; i < given; i++) check_argument(c, call->args[i], params[i], i, name);
+    check_call_context(c, call, name, false);
+    return entry->returns_item ? element : &type_void;
+}
+
 // A call: the callee (check_callee), then the arguments, whose own mistakes
 // are reported even when the callee is wrong, after its: in source order (a
-// spread argument's operand by check_spread_argument). Then the arguments
+// spread argument's operand by check_spread_argument). A built-in's call
+// goes on in check_builtin_call. Then the arguments
 // against the parameters, the same for a procedure and for a value of a
 // procedure type, named in the messages by callee_name: as many as there are
 // ("'f' takes 2 arguments, but 1 was given", at the callee; a foreign
@@ -1060,6 +1130,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
         }
     }
     if (!known) return nullptr;
+    if (call->builtin) return check_builtin_call(c, call);
     Ast_Proc *proc = call->proc;
     // A broken callee's parameters and return type are unknown: any
     // arguments may be right, and the call's type is unknown too. So is a
@@ -1939,6 +2010,7 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         if (((Ast_Proc *)decl)->is_broken) return false;  // whatever it was, the syntax error said so
         what = "a procedure";
         break;
+    case AST_BUILTIN: what = "a procedure"; break;  // built into the language (spec 3.17)
     case AST_STRUCT: report_type_as_value(c, name); return false;
     default: RIG_ASSERT(!"not a declaration");
     }

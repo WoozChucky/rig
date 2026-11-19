@@ -11,7 +11,8 @@
 //
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values, a
-// reached procedure's default values, which its callers' code holds), and
+// reached procedure's default values, which its callers' code holds), the
+// helper of Preload's a built-in procedure's call calls (spec 3.17), and
 // Preload's __runtime_init, which every run's procedure calls first (spec
 // 7.10), so whatever the #run's code is lowered with is checked, whether or
 // not it runs. A type's description (type_info(T), a value converted to Any) is
@@ -215,6 +216,15 @@ static bool walk_expression(Reach *r, Ast *e) {
     }
     case AST_CALL: {
         Ast_Call *call = (Ast_Call *)e;
+        if (call->builtin) {
+            // A built-in's call (spec 3.17) is a call of Preload's helper,
+            // which lowering makes: it's reached, and its body checked
+            // before the run is lowered, as __runtime_init's is. The
+            // callee's name has no type, and isn't walked.
+            for (s64 i = call->args.count - 1; i >= 0; i--) array_add(&r->nodes, call->args[i]);
+            reach_decl(r, r->c->file->array_procs[call->builtin->builtin]);
+            return true;
+        }
         if (!call->proc) break;  // through a procedure value: its callee is walked as any value
         if (string_eq(call->proc->name, str("main"))) {
             diag_error(r->c->diag, r->run->pos, "main is where the program starts; #run can't call it");

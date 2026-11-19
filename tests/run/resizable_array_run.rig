@@ -1,0 +1,30 @@
+// Resizable arrays while compiling (issue #158, spec 7.8, 3.17): a
+// constant's #run, before the procedures it calls, grows an array from
+// the compile-time world's heap and bakes its view; a run fills a global
+// of the world, which a later run sees; the program's own global is
+// still zeroed.
+#import "Basic";
+
+SQUARES :: #run squares(5);
+FILLED :: #run fill();
+SEEN :: #run seen_count();
+
+seen : [..]int;
+
+squares :: (n: int) -> []int {
+    table : [..]int;
+    for 1..n { array_add(*table, it * it); }
+    return table;
+}
+
+fill :: () -> int {
+    array_add(*seen, 7);
+    array_add(*seen, 8);
+    return seen.count;
+}
+
+seen_count :: () -> int { return seen.count + seen[1]; }
+
+main :: () {
+    print("{} {} {} {}\n", SQUARES, FILLED, SEEN, seen.count);
+}

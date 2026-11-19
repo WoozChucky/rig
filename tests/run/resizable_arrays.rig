@@ -1,0 +1,118 @@
+// Resizable arrays and their built-in procedures (issue #158, spec 3.17),
+// a line of output per case, each on arrays of its own:
+// - adds: twenty adds to a zeroed [..]int, which grows to 8, 16 and 32
+//   elements, doubling when it's full.
+// - ops: an insert at the start and one at the end, an ordered remove, an
+//   unordered one, which moves the last element into the gap, and a pop,
+//   which returns the last element.
+// - reserve: a reserve grows to exactly what it asks, a smaller one does
+//   nothing, and a resize past the count adds zeroed elements; reset
+//   empties the array and keeps its memory.
+// - remembered: an array that first grows under a pushed context's
+//   allocator keeps that allocator: it grows there and is freed there
+//   once the context's allocator is another, which is never asked.
+// - own element: an item that is the array's own element is copied before
+//   the array grows (an add when it's full) or its elements move up (an
+//   insert).
+// - loop: a for whose body adds to the array it goes over, with room
+//   reserved, goes over the elements the array had when it started.
+// - view: a [..]T goes where a view goes, to Basic's join and to a []int
+//   parameter.
+// - free, again: array_free gives the memory back and empties the array,
+//   which grows again from the allocator it kept.
+#import "Basic";
+
+Point :: struct { x: int; y: int; }
+
+// The sum of v's elements.
+total :: (v: []int) -> int {
+    sum := 0;
+    for v { sum += it; }
+    return sum;
+}
+
+// What first_proc was asked, by mode, and how often second_proc was asked
+// anything.
+first_allocations : int;
+first_resizes : int;
+first_frees : int;
+second_calls : int;
+
+// The heap, counting what it's asked by mode.
+first_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { first_allocations += 1; }
+    if mode == RESIZE { first_resizes += 1; }
+    if mode == FREE { first_frees += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+// The heap, counting each time it's asked anything.
+second_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    second_calls += 1;
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+main :: () {
+    squares : [..]int;
+    for 0..19 { array_add(*squares, it * it); }
+    print("adds {} {} {}\n", squares.count, squares.allocated, squares[19]);
+    array_free(*squares);
+
+    n : [..]int;
+    for 1..5 { array_add(*n, it); }
+    array_insert(*n, 0, 0);
+    array_insert(*n, n.count, 6);
+    array_remove_ordered(*n, 1);
+    array_remove_unordered(*n, 0);
+    p := array_pop(*n);
+    print("ops {} {}\n", n, p);
+
+    array_reserve(*n, 100);
+    array_reserve(*n, 3);
+    array_resize(*n, 6);
+    print("reserve {} {} {}\n", n.allocated, n.count, n);
+    array_reset(*n);
+    print("reset {} {}\n", n.count, n.allocated);
+
+    r : [..]int;
+    push_context .{Allocator.{first_proc, null}, context.temporary_storage} {
+        array_add(*r, 0);
+    }
+    saved := context.allocator;
+    context.allocator = Allocator.{second_proc, null};
+    for 1..20 { array_add(*r, it); }
+    array_free(*r);
+    context.allocator = saved;
+    print("remembered {} {} {} {}\n", first_allocations, first_resizes, first_frees, second_calls);
+
+    points : [..]Point;
+    for 1..8 { array_add(*points, Point.{it, it}); }
+    array_add(*points, points[7]);
+    array_insert(*points, 0, points[8]);
+    print("own element {} {} {} {}\n", points[9], points[0], points[1], points.count);
+    array_free(*points);
+
+    l : [..]int;
+    array_reserve(*l, 16);
+    for 0..2 { array_add(*l, it); }
+    for l { array_add(*l, it + 10); }
+    print("loop {}\n", l);
+    array_free(*l);
+
+    names : [..]string;
+    array_add(*names, "a");
+    array_add(*names, "b");
+    m : [..]int;
+    for 1..3 { array_add(*m, it); }
+    joined := join(names, ",");
+    print("view {} {}\n", joined, total(m));
+    free(joined.data);
+    array_free(*names);
+    array_free(*m);
+
+    array_free(*n);
+    print("free {} {} {}\n", n.count, n.allocated, n.data == null);
+    array_add(*n, 1);
+    print("again {} {}\n", n.count, n.allocated);
+    array_free(*n);
+}
