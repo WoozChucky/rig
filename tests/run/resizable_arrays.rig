@@ -22,6 +22,10 @@
 //   reserved, goes over the elements the array had when it started.
 // - view: a [..]T goes where a view goes, to Basic's join and to a []int
 //   parameter.
+// - converts: an item converts to the element's type, and an index to
+//   int: an s32 item and index are widened, an untyped 2 becomes a
+//   float64, a [2]int and a [..]int become []int views, and an int and a
+//   string become Anys.
 // - free, again: array_free gives the memory back and empties the array,
 //   which grows again from the allocator it kept.
 #import "Basic";
@@ -135,6 +139,28 @@ main :: () {
     free(joined.data);
     array_free(*names);
     array_free(*m);
+
+    c : [..]int;
+    small : s32 = -5;
+    array_add(*c, small);
+    array_insert(*c, cast(s32) 0, small);
+    f : [..]float64;
+    array_add(*f, 2);
+    fixed := int.[1, 2];
+    nine : [..]int;
+    array_add(*nine, 9);
+    views : [..][]int;
+    array_add(*views, fixed);
+    array_add(*views, nine);
+    anys : [..]Any;
+    array_add(*anys, 5);
+    array_add(*anys, "x");
+    print("converts {} {} {} {} {}\n", c, f, views, anys[0], anys[1]);
+    array_free(*c);
+    array_free(*f);
+    array_free(*nine);
+    array_free(*views);
+    array_free(*anys);
 
     array_free(*n);
     print("free {} {} {}\n", n.count, n.allocated, n.data == null);

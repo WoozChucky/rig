@@ -8946,19 +8946,24 @@ TEST(preload_declares_the_array_helpers) {
 
 TEST(the_array_procedures_are_predeclared) {
     // The nine built-ins are predeclared, as OS is: a top-level declaration
-    // of one's name is refused, and a local may hide one, silently. A
-    // built-in is no value, and its name, a procedure's, is no place.
+    // of one's name is refused, and a local may hide one, silently: the
+    // local is what its name then finds, assigned to or called. A built-in
+    // is no value, and its name, a procedure's, is no place.
     Arena a = arena_make();
     CHECK_STR(check_with_preload(&a,
                                  "array_add :: () { }\n"
                                  "main :: () {\n"
                                  "    array_free := 1;\n"
+                                 "    array_free += 1;\n"
+                                 "    array_insert := g;\n"
+                                 "    array_insert(1);\n"
                                  "    f := array_pop;\n"
                                  "    array_reset = 2;\n"
-                                 "}\n"),
+                                 "}\n"
+                                 "g :: (n: int) { }\n"),
               "1:1: 'array_add' is predeclared: it's built into the language, for resizable arrays\n"
-              "4:10: 'array_pop' can't be a value: it's built into the language\n"
-              "5:5: can't assign to 'array_reset': it's a procedure\n");
+              "7:10: 'array_pop' can't be a value: it's built into the language\n"
+              "8:5: can't assign to 'array_reset': it's a procedure\n");
     arena_free(&a);
 }
 

@@ -7,5 +7,6 @@ own element {x = 8, y = 8} {x = 4, y = 4} {x = 1, y = 1} 10
 pop {x = 3, y = 30} {x = 2, y = 20}
 loop [0, 1, 2, 10, 11, 12]
 view a,b 6
+converts [-5, -5] [2.0] [[1, 2], [9]] 5 x
 free 0 0 true
 again 1 8

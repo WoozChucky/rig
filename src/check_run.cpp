@@ -220,7 +220,11 @@ static bool walk_expression(Reach *r, Ast *e) {
             // A built-in's call (spec 3.17) is a call of Preload's helper,
             // which lowering makes: it's reached, and its body checked
             // before the run is lowered, as __runtime_init's is. The
-            // callee's name has no type, and isn't walked.
+            // callee's name has no type, and isn't walked. Lowering passes
+            // the element's size, so the array type the first argument
+            // points at is reached: an element struct is laid out even
+            // when nothing in the run holds one by value.
+            reach_type(r, call->callee_type->params[0]->pointee);
             for (s64 i = call->args.count - 1; i >= 0; i--) array_add(&r->nodes, call->args[i]);
             reach_decl(r, r->c->file->array_procs[call->builtin->builtin]);
             return true;

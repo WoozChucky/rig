@@ -6471,7 +6471,9 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                                                               "}\n")),
                           "main");
     // a is %2; each check's failure, a panic or __rig_bounds_failed, is a
-    // block of its own.
+    // block of its own. A panic's message is a string global numbered after
+    // all of Preload's, so its number isn't matched: the run tests pin the
+    // messages.
     CHECK(contains(main, "  %3 = load ptr %0\n"
                          "  %4 = const i64 8\n"
                          "  %5 = local i64\n"
@@ -6518,8 +6520,8 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                          "  %43 = cmp slt i64 %39, %42\n"
                          "  branch %43, b15, b16\n"
                          "b15:\n"
-                         "  panic @str.107\n"
-                         "b16:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb16:\n"
                          "  %44 = call @__array_resize(%37, %2, %38, %39)\n"
                          "  %45 = const i1 1\n"
                          "  %46 = xor i1 %44, %45\n"
@@ -6537,8 +6539,8 @@ TEST(an_array_procedure_calls_its_preload_helper) {
     CHECK(contains(quiet, "  %8 = cmp eq ptr %2, %7\n"
                           "  branch %8, b1, b2\n"
                           "b1:\n"
-                          "  panic @str.100\n"
-                          "b2:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb2:\n"
                           "  %9 = call @__array_add(%3, %2, %4, %5)\n"
                           "  %10 = const i1 1\n"
                           "  %11 = xor i1 %9, %10\n"
@@ -6546,8 +6548,8 @@ TEST(an_array_procedure_calls_its_preload_helper) {
     CHECK(contains(quiet, "  %17 = cmp eq ptr %2, %16\n"
                           "  branch %17, b5, b6\n"
                           "b5:\n"
-                          "  panic @str.102\n"
-                          "b6:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb6:\n"
                           "  call @__array_pop(%13, %2, %14, %15)\n"));
     CHECK(contains(quiet, "b8:\n"
                           "  %24 = call @__array_reserve(%19, %2, %20, %21)\n"
@@ -6559,8 +6561,8 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                           "  %33 = cmp slt i64 %29, %32\n"
                           "  branch %33, b13, b14\n"
                           "b13:\n"
-                          "  panic @str.106\n"
-                          "b14:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb14:\n"
                           "  %34 = call @__array_resize(%27, %2, %28, %29)\n"
                           "  %35 = const i1 1\n"
                           "  %36 = xor i1 %34, %35\n"

@@ -3,12 +3,15 @@
 // the compile-time world's heap and bakes its view; a run fills a global
 // of the world, which a later run sees; the program's own global is
 // still zeroed. A built-in's argument may call a procedure declared after
-// the constant, whose body is checked before the run.
+// the constant, whose body is checked before the run. A run's array_reserve
+// on an array of a struct declared after the constant, which the run holds
+// only through a pointer, asks for the struct's bytes, as the program would.
 #import "Basic";
 
 SQUARES :: #run squares(5);
 FILLED :: #run fill();
 SEEN :: #run seen_count();
+RESERVED :: #run reserved();
 
 seen : [..]int;
 
@@ -28,6 +31,29 @@ fill :: () -> int {
 
 seen_count :: () -> int { return seen.count + seen[1]; }
 
+// The bytes the last ALLOCATE asked for.
+asked := 0;
+
+// The heap, remembering the bytes each ALLOCATE asks for.
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { asked = size; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+// The bytes array_reserve asks for room for two Nodes, 32. The array is a
+// zeroed [..]Node reached only through pointers to its bytes, so nothing
+// in the run holds a Node by value.
+reserved :: () -> int {
+    bytes : [40]u8;
+    nodes := cast(*[..]Node) *bytes[0];
+    array := cast(*Resizable_Array) *bytes[0];
+    array.allocator = Allocator.{counting_proc, null};
+    array_reserve(nodes, 2);
+    return asked;
+}
+
+Node :: struct { a: int; b: int; }
+
 main :: () {
-    print("{} {} {} {}\n", SQUARES, FILLED, SEEN, seen.count);
+    print("{} {} {} {} {}\n", SQUARES, FILLED, SEEN, seen.count, RESERVED);
 }
