@@ -2262,14 +2262,14 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 // around: a place's own, so the block's changes to its context are the
 // place's, or a copy's, a temporary of the procedure's frame filled each
 // time the push runs (lower_value_address, as converting to Any does).
-// Then the block is a scope of its own (lower_scoped_block), starting at
-// its '{', and a new slot there holds that address, the current context
-// (Lowering.context) while the block is lowered: for a debugger, a
-// variable context of the block's scope, artificial, at the keyword. A
-// #c_call procedure's only context is such a slot. The block's defers run
-// at its end with the block's context (leave_block, lower_deferred). Then
-// the context is the one around again, however the block is left: the
-// push is lexical, so nothing is undone at run time.
+// Then the block is a scope of its own, starting at its '{', as
+// lower_scoped_block makes one, and a new slot there holds that address,
+// the current context (Lowering.context) while the block is lowered: for
+// a debugger, a variable context of the block's scope, artificial, at the
+// keyword. A #c_call procedure's only context is such a slot. The block's
+// defers run at its end with the block's context (leave_block,
+// lower_deferred). Then the context is the one around again, however the
+// block is left: the push is lexical, so nothing is undone at run time.
 //
 //     push_context c { use(); }      (c a local, its slot %2; main's context %0)
 //     %4 = local ptr

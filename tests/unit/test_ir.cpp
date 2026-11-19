@@ -6122,6 +6122,18 @@ TEST(the_context_is_an_artificial_variable) {
     arena_free(&a);
 }
 
+// The procedure `name`'s instruction n in its entry block, counting from
+// 0, or null when there's none.
+static Ir_Instr *instr_of(Ir_Module *m, const char *name, s64 n) {
+    for (s64 i = 0; i < m->procs.count; i++) {
+        Ir_Proc *p = m->procs[i];
+        if (!string_eq(p->name, str(name)) || p->blocks.count == 0) continue;
+        Ir_Block *entry = p->blocks[0];
+        return n < entry->instrs.count ? &entry->instrs[n] : nullptr;
+    }
+    return nullptr;
+}
+
 TEST(push_context_pushes_an_address) {
     // A place's own address is pushed: the block's slot, %4, holds c's
     // slot, %2, and use is given a load of it, with no copy of c. Anything
@@ -6173,6 +6185,23 @@ TEST(push_context_pushes_an_address) {
     CHECK(contains(main, "; scope 2 in 0 at 5:25\n"));
     CHECK(contains(main, "; var context *Context slot %4 artificial in 1 at 4:5\n"));
     CHECK(contains(main, "; var context *Context slot %9 artificial in 2 at 5:5\n"));
+    // All of a push's instructions are at its keyword: make's call and its
+    // copy in the scope around, each block's slot and its store in the
+    // block's own, so a debugger doesn't show the block's context before
+    // its slot is filled. Each is named by its index in b0 above, from 0.
+    struct { s64 n; s32 scope, line, col; } where[] = {
+        {7, 1, 4, 5},  {8, 1, 4, 5},   // %4 = local ptr; store ptr %2, %4
+        {14, 0, 5, 5}, {15, 0, 5, 5},  // call @make(%7, %8); copy %6, %7, 24
+        {16, 2, 5, 5}, {17, 2, 5, 5},  // %9 = local ptr; store ptr %6, %9
+    };
+    for (s64 i = 0; i < (s64)(sizeof where / sizeof where[0]); i++) {
+        Ir_Instr *instr = instr_of(m, "main", where[i].n);
+        CHECK(instr != nullptr);
+        if (!instr) continue;
+        CHECK_EQ(instr->scope, where[i].scope);
+        CHECK_EQ(instr->pos.line, where[i].line);
+        CHECK_EQ(instr->pos.col, where[i].col);
+    }
     arena_free(&a);
 }
 
