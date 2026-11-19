@@ -376,12 +376,13 @@ Resizable_Array :: struct {
 // allocator rule are the same compiled and interpreted, and while
 // compiling. Each takes the untyped array, which every [..]T is laid out
 // as, and its element's size in bytes, which only the caller's T says;
-// lowering passes the size as a constant, and an item by the address of a
-// copy of its own, so an item that is one of the array's own elements is
-// read before the array grows or its elements move. Lowering checks the
-// pointer, the index and the count first, at the built-in's name, so the
-// helpers check none of them, and a program that calls one by hand gets
-// no check.
+// lowering passes the size as a constant, add's and insert's item by the
+// address of a copy of its own, so an item that is one of the array's own
+// elements is read before the array grows or its elements move, and pop
+// the address its last element is copied to, the built-in's result.
+// Lowering checks the pointer, the index and the count first, at the
+// built-in's name, so the helpers check none of them, and a program that
+// calls one by hand gets no check.
 //
 // The allocator: an array whose allocator's procedure is null, a zeroed
 // one, takes the caller's context.allocator when it first grows, and keeps
@@ -452,15 +453,17 @@ __array_grow :: (array: *Resizable_Array, size: int, room: int) -> bool {
 
 // array_add: a copy of the size bytes at item as the new last element.
 // False when the array was full and its allocator had no memory to give,
-// the array as it was.
+// or its count is int's largest (__array_insert): the array is as it was,
+// but for the allocator it took.
 __array_add :: (array: *Resizable_Array, size: int, item: *void) -> bool {
     return __array_insert(array, size, array.count, item);
 }
 
 // array_insert: a copy of the size bytes at item as element index, from 0
 // to the count, the elements from index on moving up one. False when the
-// array was full and its allocator had no memory to give, the array as it
-// was.
+// array was full and its allocator had no memory to give, or its count is
+// int's largest (below): the array is as it was, but for the allocator it
+// took.
 //
 // A full array, its count at least allocated, grows to the larger of 8
 // and twice allocated: doubling, rather than growing by one, means n
@@ -520,7 +523,8 @@ __array_remove_unordered :: (array: *Resizable_Array, size: int, index: int) {
 // array_reserve: makes allocated at least count, growing to exactly count
 // when it is more, so that many elements are added without growing again.
 // A count within allocated, or below 0, does nothing. False when the
-// allocator had no memory to give, the array as it was.
+// allocator had no memory to give: the array is as it was, but for the
+// allocator it took.
 __array_reserve :: (array: *Resizable_Array, size: int, count: int) -> bool {
     if count <= array.allocated { return true; }
     return __array_grow(array, size, count);
@@ -529,7 +533,8 @@ __array_reserve :: (array: *Resizable_Array, size: int, count: int) -> bool {
 // array_resize: makes count the array's count, growing to exactly count
 // when it's past allocated. The elements it adds are zeroed; shrinking
 // keeps the memory. The count isn't below 0: lowering checks. False when
-// the allocator had no memory to give, the array as it was.
+// the allocator had no memory to give: the array is as it was, but for the
+// allocator it took.
 __array_resize :: (array: *Resizable_Array, size: int, count: int) -> bool {
     if count > array.allocated {
         if !__array_grow(array, size, count) { return false; }

@@ -8912,8 +8912,9 @@ TEST(resizable_array_members_and_views_are_exact) {
 TEST(preload_declares_the_array_helpers) {
     // What the built-in procedures call (spec 3.17): Preload's nine helpers,
     // each taking the untyped array and its element's size, then what the
-    // built-in takes after the array, an item by its address. Those that can
-    // grow the array say whether the allocator gave memory.
+    // built-in takes after the array, an item by its address; __array_pop
+    // takes the address its last element is copied to. Those that can grow
+    // the array say whether the allocator gave memory.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
