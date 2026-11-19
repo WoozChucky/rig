@@ -3455,6 +3455,35 @@ TEST(broken_struct_behind_a_view_says_nothing_more) {
     arena_free(&a);
 }
 
+TEST(broken_struct_in_a_resizable_array_says_nothing_more) {
+    // So too for one held in a resizable array. A global before the struct
+    // takes [..]Bad then, and so does a late field a body a #run reaches
+    // needs then; made again (made_again), the [..]Bad has no type, and
+    // converting it says nothing (a stale [..]Bad would say it doesn't
+    // convert).
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "g : [..]Bad;\n"
+                                 "Good :: struct { r: [..]Bad; }\n"
+                                 "x : Good;\n"
+                                 "j : [..]Big;\n"
+                                 "Holder :: struct { r: [..]Big; }\n"
+                                 "y : Holder;\n"
+                                 "f :: () -> int { k := x.r; l := y.r; return 1; }\n"
+                                 "C :: #run f();\n"
+                                 "Bad :: struct { n: int; again: Bad; }\n"
+                                 "Big :: struct { x: [1099511627776]u8; y: u8; }\n"
+                                 "main :: () {\n"
+                                 "    k : [..]int = x.r;\n"
+                                 "    m : [..]int = g;\n"
+                                 "    n : int = j;\n"
+                                 "    z : int = y.r;\n"
+                                 "}\n"),
+              "9:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "10:1: 'Big' is too big\n");
+    arena_free(&a);
+}
+
 TEST(array_count_rules) {
     // [N]T: N an integer known while compiling, from 0 up; the type at most
     // 2^40 bytes.
@@ -8728,6 +8757,7 @@ TEST(a_resizable_array_type) {
     CHECK_EQ(node->align, 8);
     CHECK_EQ(node->fields.count, 2);
     CHECK_EQ(node->fields[1].offset, 16);
+    CHECK(((Ast_Struct *)top_level_named(tree, "Node"))->fields[1]->is_late);
     CHECK(node->fields[1].type == type_resizable_of(node));
     CHECK_STR(type_name(&a, ((Ast_Var *)top_level_named(tree, "g"))->type), "[..]int");
     CHECK(tree->resizable_array_type == ((Ast_Struct *)top_level_named(tree, "Resizable_Array"))->declared);
@@ -8736,9 +8766,11 @@ TEST(a_resizable_array_type) {
 
 TEST(a_resizable_array_needs_preload) {
     // Its allocator is Preload's: without Preload (a test's single file),
-    // the type is refused, at its '['.
+    // the type is refused, at its '['. Its element is resolved first: one
+    // that's wrong says so, and nothing more.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "main :: () {\n    a : [..]int;\n}\n"),
               "2:9: a resizable array needs Preload's 'Resizable_Array', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n    a : [..]Nope;\n}\n"), "2:13: unknown type 'Nope'\n");
     arena_free(&a);
 }

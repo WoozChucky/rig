@@ -1712,6 +1712,21 @@ TEST(types_nest_at_most_max_depth) {
     arena_free(&a);
 }
 
+TEST(resizable_array_types_nest_at_most_max_depth) {
+    // So is each [..]: a global of 1000 levels checks (with Preload, which
+    // a resizable array needs); 1001 is one message, at the '[' one too
+    // many, from the parser.
+    Arena a = arena_make();
+    const char *after = "int;\nmain :: () { }\n";
+    CHECK_STR(check_with_preload(&a, nested_source(&a, "g : ", "[..]", MAX_DEPTH, after, "", "")), "");
+    CHECK_STR(check_with_preload(&a, nested_source(&a, "g : ", "[..]", MAX_DEPTH + 1, after, "", "")),
+              types_too_deep(&a, 1, 5 + 4 * MAX_DEPTH));
+    String errors = {};
+    parse_src(&a, nested_source(&a, "g : ", "[..]", MAX_DEPTH + 1, after, "", ""), &errors);
+    CHECK_STR(errors, types_too_deep(&a, 1, 5 + 4 * MAX_DEPTH));
+    arena_free(&a);
+}
+
 TEST(types_and_expressions_share_max_depth) {
     // A type holds an expression (an array's count) and an expression a
     // type (size_of's, a cast's, type_info's), so the two nest inside each
