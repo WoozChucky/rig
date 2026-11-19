@@ -145,11 +145,12 @@ The three constants are the top level's, visible everywhere, and a top-level dec
 These words are keywords and cannot be used as identifiers:
 
 ```text
-break     cast      continue  defer     else      enum      false     for
-if        null      return    struct    true      union     using     while
+break         cast          context       continue      defer         else
+enum          false         for           if            null          push_context
+return        struct        true          union         using         while
 ```
 
-`enum`, `union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears. `defer` is a keyword in use: it runs a statement when its block is left (section 6.12).
+`enum`, `union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears. `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), and `push_context`, which runs a block with another context (section 6.13).
 
 ### 2.7 Directives
 
@@ -327,7 +328,7 @@ Hello from Basic
 - **An `#import` that fails**, with one of the errors above, leaves the program without the module, as a `#load` that fails leaves it without its file: while one has failed, no name anywhere in the program is reported as unknown, nor `main` as missing (section 2.13).
 - **One top level.** For now a module's declarations join the program's one top level, as a loaded file's do (section 4.6): a program that imports Basic can't declare a procedure, struct or constant of a name Basic declares, and no program can declare one of a name Preload declares (below). Modules with scopes of their own come later, with `#import` of a program's own modules and of modules fetched from elsewhere.
 - **The modules that ship with rig** are three. `Preload` is what the language itself refers to, and every program imports it (below). `Basic` is Rig's first library, written in Rig over a thin layer of C. `Compiler` is what a build program uses to build other programs (section 7.9). The `README.md` in the directories of `Preload` and `Basic` lists what each declares.
-- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`, and type information and `Any` (section 3.16). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags, `ARRAY_FIXED` and `ARRAY_VIEW`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
+- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`, type information and `Any` (section 3.16), and the context: `Context`, the default context, and the temporary storage with its allocator (section 7.10). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`, and `__runtime_init`, which sets the default context up, section 7.10), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags, `ARRAY_FIXED` and `ARRAY_VIEW`; `Context`, `default_context`, `Temporary_Storage`, `Temporary_Storage_Page`, `TEMPORARY_STORAGE_SIZE`, `temporary_allocator_proc` and `TEMPORARY_ALLOCATOR`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
 
 So a program that imports nothing has Preload's allocator:
 
@@ -619,7 +620,7 @@ A procedure value may be **null**, naming no procedure: `null` converts to every
 
 **Conversions.** A procedure value converts implicitly only to its own type (section 3.13). A value of another signature is `a value of type '(int, int) -> int' doesn't convert to '(int) -> int' implicitly`, and as an argument `argument 1 of 'apply' has type '(int) -> int', which can't be converted to '(int, int) -> int'`: a procedure is only ever called as its own signature says. The one explicit conversion is to and from `*void`, the address as C stores a callback: `cast(*void) f` and `cast((int) -> int) p` (section 3.14). Without the cast, the message says to write it: `a value of type '(int, int) -> int' doesn't convert to '*void' implicitly; cast it with cast(*void)`, and the other way `...; cast it with cast((int, int) -> int)`. Every other cast with a procedure type is an error, between two procedure types included: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`. Through `*void`, the program must cast back to the procedure's own type before calling it.
 
-**`#c_call`.** A procedure declared with `#c_call` is one that C can call (section 7.6), and its type is marked `#c_call` too: `compare :: (a: *void, b: *void) -> s32 #c_call { ... }` has the type `(*void, *void) -> s32 #c_call`. That type is not the type without the mark, and neither converts to the other: `a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is part of the type, as in '(*u8) -> s32 #c_call'`, and, the other way, a Rig procedure passed where C expects a callback is `argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it`. A `#c_call` type's parameters and result are what C takes, as a foreign procedure's are (section 7.6), so it takes no `..T`, whose view C can't pass: `a #c_call procedure can't take '..int'`, at the `..`.
+**`#c_call`.** A procedure declared with `#c_call` is one that C can call (section 7.6), and its type is marked `#c_call` too: `compare :: (a: *void, b: *void) -> s32 #c_call { ... }` has the type `(*void, *void) -> s32 #c_call`. That type is not the type without the mark, and neither converts to the other: `a value of type '(*u8) -> s32 #c_call' doesn't convert to '(*u8) -> s32' implicitly; #c_call is part of the type, as in '(*u8) -> s32 #c_call'`, and, the other way, a Rig procedure passed where C expects a callback is `argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it`. A `#c_call` type's parameters and result are what C takes, as a foreign procedure's are (section 7.6), so it takes no `..T`, whose view C can't pass: `a #c_call procedure can't take '..int'`, at the `..`. The mark also says whether the procedure takes the context (section 7.10): a type without it is one of a Rig procedure that is given its caller's context, which a call through a value of it passes as a direct call does, and a `#c_call` type's procedure is given none, as C passes none.
 
 A procedure value holds no data besides the address: Rig has no closures. Procedures are declared only at the top level and capture nothing; a procedure that needs some state takes it as a parameter, as C passes a `void *user_data` beside a callback.
 
@@ -940,7 +941,7 @@ Every top-level declaration is visible everywhere in the program, in every one o
 
 ### 4.7 Scope
 
-A **block** is a sequence of statements in braces (section 6.1). A procedure's body is a block, and so is each body of an `if`, `else`, `while` and `for`. A `defer`'s statement is a scope of its own too, even when it isn't written in braces (section 6.12). An `#if`'s branch is written as a block but makes no scope: in a body, the taken branch's statements are the enclosing block's (section 4.9), which is the deferred statement's when the `#if` is one (`defer #if c { x := 1; }`).
+A **block** is a sequence of statements in braces (section 6.1). A procedure's body is a block, and so is each body of an `if`, `else`, `while` and `for`, and a `push_context`'s (section 6.13). A `defer`'s statement is a scope of its own too, even when it isn't written in braces (section 6.12). An `#if`'s branch is written as a block but makes no scope: in a body, the taken branch's statements are the enclosing block's (section 4.9), which is the deferred statement's when the `#if` is one (`defer #if c { x := 1; }`).
 
 - A name declared in a block, a local variable or a local constant, is visible from the end of its declaration to the end of the block, including in blocks nested inside it.
 - A procedure's parameters are declared in its body's block. They are in scope in its default values too, hiding the top level's names of theirs there as in the body, but can't be used (section 7.2).
@@ -1095,11 +1096,12 @@ Each system takes its own branches, and the program prints the same on both: `11
 
 ### 5.1 Operands and places
 
-The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), and an expression in parentheses, which only groups.
+The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups.
 
 Some expressions denote memory. These are **places**: they can be assigned to (section 6.4) and their address can be taken (section 5.13). The places are:
 
 - a variable, local or global, by its name;
+- `context`, the context the code runs with (section 7.10);
 - `p.*`, what a pointer points at;
 - a field of a struct that is a place, and a field reached through a pointer (`p.x`);
 - an element of an array that is a place, and an element of a view, a pointer or a string (`v[i]`, `p[i]`, `s[i]`), unless the string is part of a constant;
@@ -1245,7 +1247,7 @@ Call = Postfix "(" [ Expression { "," Expression } ] ")" .
 
 A call of a name declared as something that is not a procedure value, a struct included, is `'x' isn't a procedure, so it can't be called`; a call of any other expression that is not a procedure value is `a value of type 'int' isn't a procedure, so it can't be called`, at the callee.
 
-There must be one argument per parameter (`'puts' takes 1 argument, but 2 were given`), and each argument's value converts implicitly to its parameter's type (`argument 1 of 'f' has type 'int', which can't be converted to 'u8'`). But a direct call may leave out the last parameters that have default values (section 7.2), each of which then passes its default: it gives at least the parameters up to the last one without a default, and at most all of them. Too few or too many is `'repeat' takes 1 to 3 arguments, but 4 were given`, or, when the two counts differ by one, `'pair' takes 1 or 2 arguments, but 3 were given` (`'maybe' takes 0 or 1 arguments, but 2 were given`); a procedure with no default values keeps the exact count's message. A procedure type carries no default values (section 3.15), so a call through a value gives every argument: with `f := repeat;`, `f("ho")` is `'f' takes 3 arguments, but 1 was given`. A call through a value is named in these messages by the name of the variable or parameter called, and otherwise by its type: `'(int, int) -> int' takes 2 arguments, but 3 were given`. A variadic foreign procedure, declared with C's bare `..`, takes at least one argument per parameter (`'printf' takes at least 1 argument, but 0 were given`) and any number more, each passed as section 7.6 says. The arguments are evaluated left to right, then the default values of the parameters left out, in parameter order, then the procedure runs; in a call through a value, the callee is evaluated first, before the arguments, and checked not to be null after them, just before the call (section 5.18). Section 7 describes parameters and results.
+There must be one argument per parameter (`'puts' takes 1 argument, but 2 were given`), and each argument's value converts implicitly to its parameter's type (`argument 1 of 'f' has type 'int', which can't be converted to 'u8'`). But a direct call may leave out the last parameters that have default values (section 7.2), each of which then passes its default: it gives at least the parameters up to the last one without a default, and at most all of them. Too few or too many is `'repeat' takes 1 to 3 arguments, but 4 were given`, or, when the two counts differ by one, `'pair' takes 1 or 2 arguments, but 3 were given` (`'maybe' takes 0 or 1 arguments, but 2 were given`); a procedure with no default values keeps the exact count's message. A procedure type carries no default values (section 3.15), so a call through a value gives every argument: with `f := repeat;`, `f("ho")` is `'f' takes 3 arguments, but 1 was given`. A call through a value is named in these messages by the name of the variable or parameter called, and otherwise by its type: `'(int, int) -> int' takes 2 arguments, but 3 were given`. A variadic foreign procedure, declared with C's bare `..`, takes at least one argument per parameter (`'printf' takes at least 1 argument, but 0 were given`) and any number more, each passed as section 7.6 says. The arguments are evaluated left to right, then the default values of the parameters left out, in parameter order, then the procedure runs; in a call through a value, the callee is evaluated first, before the arguments, and checked not to be null after them, just before the call (section 5.18). Besides its arguments, every call of a procedure with a body that isn't `#c_call`, direct or through a value of a type that isn't `#c_call`, passes the caller's current context, which the callee's `context` then names (section 7.10); a call of `main`, of a `#c_call` procedure or of a foreign one passes none. Section 7 describes parameters and results.
 
 ```rig error
 repeat :: (s: *u8, times: int = 2, separator: *u8 = " ") { }
@@ -1408,7 +1410,7 @@ array literals
 ### 5.18 Order of evaluation
 
 - The operands of a binary operator are evaluated left to right; `&&` and `||` evaluate their right operand only when needed (section 5.7).
-- A call's arguments are evaluated left to right, before the call. A call through a procedure value evaluates the callee first (`table[next()]` before any argument), then the arguments, then checks that the value is not null (section 8.4), so the arguments' effects happen even when the call fails. The default values of the parameters a direct call leaves out are evaluated after its arguments, in parameter order, all before the call, every time the call runs (section 7.2). A call's `..` arguments are evaluated in order with the others, each put into the call's temporary array as it is worked out, all before the call; a spread's operand is evaluated where it is written, last (section 5.10).
+- A call's arguments are evaluated left to right, before the call. A call through a procedure value evaluates the callee first (`table[next()]` before any argument), then the arguments, then checks that the value is not null (section 8.4), so the arguments' effects happen even when the call fails. The default values of the parameters a direct call leaves out are evaluated after its arguments, in parameter order, all before the call, every time the call runs (section 7.2). The context a call passes (section 7.10) is the one current at the call: an argument may change its fields, but never which context is current, so it is the same before the arguments and after them. A call's `..` arguments are evaluated in order with the others, each put into the call's temporary array as it is worked out, all before the call; a spread's operand is evaluated where it is written, last (section 5.10).
 - A compound literal's values are evaluated in the order written.
 - Indexing evaluates what is indexed (an array's address, a view's or a string's count and data, a pointer's value) before the index, so `v[f()]` indexes `v` as it was before `f` ran.
 - For `==` and `!=` on strings, the left operand's count and data are read before the right operand is evaluated.
@@ -1445,7 +1447,7 @@ main :: () {
 ```ebnf
 Statement = VarDecl | ConstDecl | MultiVarDecl | Assignment | MultiAssignment
           | ReturnStmt | Block | IfStmt | IfDirective | WhileStmt | ForStmt
-          | "break" ";" | "continue" ";" | DeferStmt | Expression ";" .
+          | "break" ";" | "continue" ";" | DeferStmt | PushContextStmt | Expression ";" .
 ```
 
 Statements appear only in procedure bodies, and run in order. Every statement that does not end with a block ends with `;`. An `IfDirective`, `#if`, is decided while compiling, and its taken branch's statements are the enclosing block's (section 4.9).
@@ -1609,7 +1611,7 @@ A procedure with no results returns when it reaches the `}` of its body. A proce
 A block reaches its end unless its last statement is one of:
 
 - a `return`;
-- a block that does not reach its own end;
+- a block that does not reach its own end, or a `push_context` whose block does not (section 6.13);
 - an `if` with an `else`, neither of whose blocks reaches its end;
 - an `#if` whose taken branch does not reach its end (section 4.9): one that took no branch reaches it;
 - a `while` whose condition is the constant `true` and that has no `break` of its own.
@@ -1640,7 +1642,7 @@ DeferStmt = "defer" Statement .
 - A loop's body is a block, left at the end of every iteration: a `defer` in it runs once per iteration, before the next test or step, and a `continue` or `break` runs it too.
 - An `#if` in a body makes no scope (section 4.9): a `defer` in its taken branch belongs to the enclosing block.
 
-**What it sees.** The deferred statement is worked out when it runs, not when the `defer` is reached: `defer print_int(n);` prints `n` as it is when the block ends. It names what is in scope at the `defer` (section 4.7), all of which is still there when it runs, since the `defer` is in the block being left.
+**What it sees.** The deferred statement is worked out when it runs, not when the `defer` is reached: `defer print_int(n);` prints `n` as it is when the block ends. It names what is in scope at the `defer` (section 4.7), all of which is still there when it runs, since the `defer` is in the block being left, and it runs with the context current where the `defer` is written (section 6.13).
 
 **Return values first.** `return e1, e2;` works out its values in order and copies each aggregate one into the caller's temporary (section 10.4); then the deferred statements run, then the procedure returns (section 6.10). So a deferred statement that changes a local the `return` named doesn't change what is returned: in `x := 1; defer x = 2; return x;` the result is 1. Returning a view of memory a deferred statement frees is a dangling view, a memory error no check catches (section 8.6).
 
@@ -1699,6 +1701,70 @@ main :: () {}
 example.rig:2:11: error: can't return from a deferred statement
         defer return 1;
               ^
+```
+
+### 6.13 push_context
+
+```ebnf
+PushContextStmt = "push_context" Expression Block .
+```
+
+`push_context e { ... }` runs its block with `e` as the context (section 7.10): inside it, `context` is `e`, and every call of a procedure that takes the context passes `e`. So the code the block calls, at any depth, takes its memory from `e`'s allocator and its temporary storage without being handed them. Once the block is left, the context is the one before it again.
+
+- **The expression** is a `Context`, converted as a typed variable's value is (section 4.3), so `.{...}`, a compound literal without its type (section 5.17), is one. Anything else is `push_context needs a 'Context', not 'Allocator'`, at the expression's start, naming its type, a `*Context` too: a pointer `p` is pushed as `p.*`. It is worked out once, where the `push_context` is, before the block runs and with the context around it: `push_context context { }` pushes the current context itself.
+- **A place** (section 5.1), such as a variable, a field or `p.*`, is pushed by its address, as converting it to `Any` takes its address (section 3.16): the block's `context` is that place, so the block's assignments to `context`'s fields change it, and it is the context of everything the block calls. Any other value, such as a call's result or a literal, is copied into a temporary of the procedure, made anew each time the `push_context` runs, and the block's `context` is that copy, which ends with the block: keeping its address (`*context`) past the block is a memory error no check catches (section 8.6).
+- **Leaving the block**, by its end, by a `return`, or by a `break` or `continue` that leaves it, goes back to the context before it. The push is lexical: the block's code runs with the pushed context and the code around it with its own, and nothing is undone at run time, so no way out can miss it. A `push_context` may be in any block, another `push_context`'s, a loop's body and deferred code included.
+- **Deferred code** runs with the context where its `defer` is written (section 6.12): a `defer` in the block runs with the block's context, whichever way the block is left, and one outside it, run by a `return`, `break` or `continue` inside it, with the context outside.
+- **The block** is a block and a scope as any other (sections 6.1, 4.7). A `push_context` reaches its end when its block does (section 6.11), and a `break` or `continue` in the block leaves the loop around it, as from any block (section 6.9).
+- **The top level.** Only a body runs code: at the top level, a top-level `#if`'s branch included, `push_context` is `push_context can only be in a body`, at the keyword. In a top-level `#run { ... }`, whose block is a procedure's body (section 7.8), it works as in any body.
+- **A `#c_call` procedure** has no context of its own, since C calls it with none, and inside a `push_context` it has the one pushed (sections 7.6, 7.10).
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// The heap, counting what it gives: data is the count.
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// Deep in a program: memory from the context, whichever it is.
+make_room :: (size: int) -> *void {
+    a := context.allocator;
+    return a.proc(ALLOCATE, size, 0, null, a.data);
+}
+
+main :: () {
+    count := 0;
+    counted := context;
+    counted.allocator = Allocator.{counting_proc, *count};
+    p : *void;
+    push_context counted {
+        p = make_room(64);
+    }
+    q := make_room(64);
+    printf("%lld\n", count);
+    heap_allocator_proc(FREE, 0, 0, p, null);
+    heap_allocator_proc(FREE, 0, 0, q, null);
+}
+```
+
+```text
+1
+```
+
+`counted` is a copy of `main`'s context with another allocator, which counts what it gives. `make_room` is handed no allocator: in the block it is given `counted`, and its memory is counted, and after the block it is given `main`'s context again, whose allocator is the heap.
+
+```rig error
+main :: () {
+    push_context context.allocator { }
+}
+```
+
+```text
+example.rig:2:18: error: push_context needs a 'Context', not 'Allocator'
+        push_context context.allocator { }
+                     ^
 ```
 
 ## 7. Procedures
@@ -1788,7 +1854,7 @@ forwarded: 9
 
 **Default values.** A parameter written `name: Type = Expression` has a **default value**, which a direct call that leaves the parameter out passes in its place (section 5.10): with `repeat :: (s: *u8, times: int = 2, separator: *u8 = " ")`, `repeat("ho")` is `repeat("ho", 2, " ")`. Only a parameter written with its type has one: `n := 0` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`, for now. A call's arguments go to the first parameters, in order, so it can leave out only the last ones, and once a parameter has a default value every parameter after it has one too: `'separator' needs a default value, since a parameter before it has one`, at the name of each one that has none. Named arguments are left for later.
 
-A default value is any expression whose value converts implicitly to its parameter's type, and it is converted as a typed variable's value is (sections 3.13, 4.3): an untyped constant takes the parameter's type (`b: u8 = 300` is `300 doesn't fit in 'u8'`), `.{1, 2}` is a struct of that type and `null` a null pointer, and a value of a type that doesn't convert is `a value of type 'string' doesn't convert to 'int' implicitly`, at the default. It is checked with the procedure's declaration, as part of its signature (section 4.8), not at its calls. Its names are the top level's, Preload's and the predeclared ones included (sections 2.14, 4.9), whichever procedure's call leaves it out: a caller's locals are not in scope there. The procedure's own parameters don't exist where a default is worked out, but they are in scope there as in the body (section 4.7), hiding the top level's names of theirs, and can't be used: in `(times: int, count: int = times)` it is `a default value can't use the parameter 'times'`, at the name, even when a global `times` exists. A default that needs its own procedure's signature, by calling the procedure or through another procedure's default, is a cycle (section 4.8).
+A default value is any expression whose value converts implicitly to its parameter's type, and it is converted as a typed variable's value is (sections 3.13, 4.3): an untyped constant takes the parameter's type (`b: u8 = 300` is `300 doesn't fit in 'u8'`), `.{1, 2}` is a struct of that type and `null` a null pointer, and a value of a type that doesn't convert is `a value of type 'string' doesn't convert to 'int' implicitly`, at the default. It is checked with the procedure's declaration, as part of its signature (section 4.8), not at its calls. Its names are the top level's, Preload's and the predeclared ones included (sections 2.14, 4.9), whichever procedure's call leaves it out: a caller's locals are not in scope there. It may use `context`, which is the caller's there, the context current at the call: `allocator: Allocator = context.allocator` takes the caller's allocator (section 7.10). The procedure's own parameters don't exist where a default is worked out, but they are in scope there as in the body (section 4.7), hiding the top level's names of theirs, and can't be used: in `(times: int, count: int = times)` it is `a default value can't use the parameter 'times'`, at the name, even when a global `times` exists. A default that needs its own procedure's signature, by calling the procedure or through another procedure's default, is a cycle (section 4.8).
 
 A default value is worked out at each call that leaves it out, every time the call runs, not once when the procedure is declared: in the caller, after the arguments given, in parameter order, all before the procedure runs (section 5.18). So a default with effects has them at each such call, and one that reads a global reads it as it is then; a `#run` in a default still runs once, while compiling (section 7.8). Its code is the caller's: the procedure always receives every argument, as if the call had written them out, so its type and its code are what they would be without default values, and so is its debug information (section 10.7). The default values a call fills in, with those their own calls fill in, nest at most 1000 levels (section 9.4). A runtime error in a default value still names the operation that failed, in the file that declares the default (section 8.1), and its bounds checks are those of the procedure that declares it (section 7.7).
 
@@ -1826,7 +1892,7 @@ A procedure returns zero, one or several results, given by `return` (section 6.1
 
 The program must have a procedure called `main` (`a procedure called 'main' is needed`), with a body (`'main' must have a body: it's where the program starts`), taking no parameters and returning nothing (`'main' must take no arguments and return nothing`). A build program is the exception: it builds other programs and is no executable itself, and it is a build program because it reaches the Compiler module and declares no procedure called `main` (section 7.9), so it is never told that one is needed. `main` can be called, but it is not a procedure value (section 3.15): `me := main;` is `'main' can't be a value: it's where the program starts`, since C calls it as a function returning an `int` (section 10.4), which its type does not say.
 
-The program starts by calling `main`, once the C runtime has started. When `main` returns, its deferred statements run (section 6.12), then the C runtime flushes its output streams and the program exits with status 0. A program ends with another status by calling the C library's `exit`, which runs no deferred statement:
+The program starts by calling `main`, once the C runtime has started. C passes `main` no context (section 7.10): before its first line `main` calls Preload's `__runtime_init`, which sets `default_context` up, and its body runs with `default_context` as its `context`. A Rig call of `main` passes none either, and `main` runs with `default_context` again, whatever context its caller has; `__runtime_init` sets it up only the first time. When `main` returns, its deferred statements run (section 6.12), then the C runtime flushes its output streams and the program exits with status 0. A program ends with another status by calling the C library's `exit`, which runs no deferred statement:
 
 ```rig exit=3
 exit :: (status: s32) #foreign libc;
@@ -1838,7 +1904,7 @@ A runtime error ends the program with status 101 (section 8.1).
 
 ### 7.5 Global initialisation
 
-Global variables hold their initial values when the program starts: the values are written into the program's file (section 4.3). No code of the program runs before `main` when the program runs. Code of it may have run while it was compiled (section 7.8), and a global's initial value may come from there, a `#run`'s value written into the file as any other is.
+Global variables hold their initial values when the program starts: the values are written into the program's file (section 4.3). No code of the program runs before `main` when the program runs. The first code `main` runs is Preload's set-up of the default context, `__runtime_init`, before its own first line (sections 7.4, 7.10): it sets the pointers a global's value can't hold, since a global's initial value can't be another global's address (section 4.3). Code of it may have run while it was compiled (section 7.8), and a global's initial value may come from there, a `#run`'s value written into the file as any other is.
 
 ### 7.6 Foreign procedures
 
@@ -1946,7 +2012,9 @@ main :: () {
 
 A `#c_call` procedure's parameters and result follow the rules above for a foreign procedure's, so that C can pass and take them: `a #c_call procedure can't take a 'Vec2' yet; pass a pointer to it`, `a #c_call procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, `a #c_call procedure can return at most one value`, and the same for a `#c_call` procedure type written anywhere. It takes no `..`, as only a foreign procedure does, and no `..T`, whose view C can't pass: `a #c_call procedure can't take '..int'`, at the `..`, for a `#c_call` procedure type too (section 7.2). A procedure type given to C, as a foreign procedure's parameter or result, or as a `#c_call` procedure's, must be `#c_call` too: `a foreign procedure can't take a '(int) -> int', which isn't #c_call; C can call a '(int) -> int #c_call'`. A variadic procedure type, which can't be `#c_call`, is not given to C at all: `a foreign procedure can't take a '(int, ..int) -> int': C can't pass the view a '..' parameter takes` (`a #c_call procedure can't take ...`, `... can't return ...`), at the type. A procedure without the mark doesn't convert to a `#c_call` type, nor the other way (section 3.15): passing one to `qsort` is `argument 4 of 'qsort' has type '(*void, *void) -> s32', which can't be converted to '(*void, *void) -> s32 #c_call'; mark 'compare' #c_call for C to call it`.
 
-Rig calls a `#c_call` procedure as it calls any other, directly or through a value. A foreign procedure is C's already, so its value has a `#c_call` type (`puts` is a `(*u8) -> s32 #c_call`), and it takes no `#c_call` of its own: `a foreign procedure is C's already: it takes no '#c_call'`. Today every Rig procedure follows C's calling convention (section 10.4), so the mark changes no code yet: it says which procedures C may call, so that when Rig procedures come to take more than C passes them, a `#c_call` procedure is the one that sets that up before running Rig code, and code written now keeps working.
+Rig calls a `#c_call` procedure as it calls any other, directly or through a value. A foreign procedure is C's already, so its value has a `#c_call` type (`puts` is a `(*u8) -> s32 #c_call`), and it takes no `#c_call` of its own: `a foreign procedure is C's already: it takes no '#c_call'`.
+
+**No context.** Every other Rig procedure is given its caller's context, which C doesn't have to give, so a `#c_call` procedure takes none (sections 7.10, 10.4), and has none until it pushes one, as in Jai. Outside every `push_context` of its body (section 6.13), the body can't use `context`, call a procedure that takes the context (one with a body that isn't `#c_call`, directly or through a value of a type that isn't `#c_call`), or leave out a parameter whose default value needs a context: each is an error that says to push one (section 7.10). It pushes Preload's `default_context`, `push_context default_context { ... }`, or the context its caller gave C as user data beside the callback, as a C function that takes a callback often passes a `void *` back to it: `push_context (cast(*Context) data).* { ... }`. Inside the push, its body is as any other: it uses `context`, and calls Rig procedures, which are given the one pushed. Outside, it may call `#c_call` and foreign procedures, which take none, and take a procedure's value without calling it (`f := twice;`): `by_value` above, which calls nothing, needs no context at all. `main` marked `#c_call` is still `main`, which starts with `default_context` (section 7.4).
 
 **Variadic foreign procedures.** A C function declared with `...`, such as `printf`, takes arguments beyond its named parameters. Its foreign procedure says so with `..` as the last element of its parameter list, after at least one parameter, as C requires one before its `...`:
 
@@ -2089,6 +2157,8 @@ main :: () {
 - The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. That is the load order with only the taken branches of the top-level `#if`s written, a taken branch's `#run`s running in the `#if`'s place, and a branch not taken's never (section 4.9). `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them. A build program's top-level `#run`s make the workspaces it builds, and come before them: the workspaces are built once the last `#run` has run, and none is when one of them failed (section 7.9).
 
 **One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, Preload's among them (section 2.14), which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
+
+**The context.** Every `#run`'s code, an expression's and a top-level one's, starts with the compile-time world's `default_context` as its `context` (section 7.10), not with the context of the procedure the `#run` is written in, which doesn't exist while compiling, as its locals don't: `context` in a `#run`'s operand is the run's own, and so is the context a default value its calls leave out reads (`G :: #run f(context);` and `x := #run make();`, for a `make` whose allocator defaults to `context.allocator`, are fine in any body or at the top level). Each run calls Preload's `__runtime_init` first, which sets the world's `default_context` up the first time only, so every run shares it: its allocator, the heap, and its temporary storage, which nothing resets but the runs' own code. A `#run` in a `#c_call` procedure's body needs no push, since its code has a context of its own (section 7.6).
 
 **Type information.** The compile-time world has descriptions of its own (section 3.16), made in the interpreter's memory, laid out as the program's, the first time a `#run`'s code needs each, and once per type for every `#run` of the compilation: two `#run`s that describe one type get the same address, so one may keep a description in a global for a later one to compare. So code that reads type information, or takes an `Any`, runs in a `#run` as it runs compiled, a struct declared after the `#run` included. A description's address is the compiler's, and can't be baked into the program (below).
 
@@ -2267,6 +2337,124 @@ The other errors, said of the build program as diagnostics (section 9.1) once it
 
 **`rig check`** of a build program checks it as `rig build` does: it needs no `main`, and its expression `#run`s run, as in any program (section 7.8), and may make workspaces, but it never runs the top-level `#run`s and builds nothing. So it says none of the errors of steps 4, 5 and 7, which come after the top-level `#run`s: a build program that makes no workspace checks with none.
 
+### 7.10 The context
+
+The **context** is what code deep in a call chain needs without every caller handing it down, as in Jai: for now, the allocator code takes its memory from when it is handed none, and the temporary storage. Every Rig procedure but `main` and a `#c_call` one is given its caller's context without naming it, and `context` names it there. So a procedure allocates from `context.allocator`, and its callers decide where that memory comes from, the heap, an arena or the temporary storage, without passing it down: they push another context (section 6.13), or change the current one's allocator.
+
+The context is a struct of Preload's (section 2.14), with two fields for now:
+
+```text
+Context :: struct {
+    allocator: Allocator;                    // HEAP_ALLOCATOR in the default context
+    temporary_storage: *Temporary_Storage;   // Preload's one storage in the default context
+}
+```
+
+**`context`** is a keyword: the current context, a place (section 5.1) of type `Context`. Its fields are read and assigned as any struct's, it may be copied (`saved := context;`) and assigned whole, `*context` is its address, a `*Context`, and it converts to `Any` by its address (section 3.16). It is the context itself, not a copy: assigning `context.allocator = a;` changes the context that is current, which the code that pushed it and every callee given it share, and the change outlasts the block it is made in, as a push doesn't. `context` exists where code runs:
+
+- in a procedure's body, a top-level `#run { ... }`'s block included (section 7.8), where it is the context the body runs with;
+- in a `#run`'s operand, where it is the run's own, not that of the procedure the `#run` is written in (section 7.8);
+- in a default value, where it is the caller's, the context current at each call that leaves the default out (section 7.2).
+
+Anywhere else, a global's value, a top-level constant's, an array's count outside a body or a top-level `#if`'s condition, it is `'context' is only in a body, where a procedure runs`, at the `context`. In a body it is never known while compiling, as a variable isn't: a local constant's value or an array's count that uses it is `the value of constant 'C' isn't known while compiling` (`an array's count must be known while compiling`).
+
+**Where a context comes from.**
+
+- **`main`** is given none, since C calls it (section 7.4): before its first line it calls Preload's `__runtime_init`, and its body runs with `default_context`, Preload's global `Context`. `__runtime_init` sets `default_context` up the first time it is called, and does nothing after: its allocator is the heap's, `HEAP_ALLOCATOR`, and its temporary storage Preload's one storage, whose first block is `TEMPORARY_STORAGE_SIZE` bytes, 32768, of a global array of Preload's. It sets them while the program runs, since a global's value can't hold another global's address (section 4.3).
+- **Every other procedure with a body** but a `#c_call` one is given the context current at its call (section 5.10): the caller's own, or the one a `push_context` around the call pushed. A call through a procedure value of a type that isn't `#c_call` passes it too, since every procedure of such a type takes one (section 3.15). Allocator procedures are ordinary procedures, so they are given it too: the temporary allocator's works on `context.temporary_storage`. Foreign and `#compiler` procedures take none.
+- **A `#c_call` procedure** is given none, since C calls it with none (section 7.6), and has none until it pushes one, as in Jai. Outside every `push_context` of its body, three things need one, and each is an error that ends with the push to write:
+  - `context` itself: `a #c_call procedure has no context until it pushes one, as in push_context default_context { ... }`, at the `context`;
+  - a call of a procedure that takes the context, directly or through a value: `'twice' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }`, at the callee, which a call through a value names as section 5.10's counts do, by the variable or parameter called, and otherwise by its type (`'(int) -> int' needs a context; ...`);
+  - a direct call of a procedure that takes none, a `#c_call` or a foreign one, that leaves out a parameter whose default value needs a context, because it uses `context`, calls a procedure that takes the context, or leaves out such a default itself: `'sized' leaves out 'n', whose default value needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }`, at the callee, naming the first such parameter.
+
+  A call of a `#c_call` or foreign procedure that leaves out no such default needs none, and neither does a procedure's value (`f := twice;`), a local constant's value, worked out while compiling, or a `#run`, whose code has its own context (section 7.8). Deferred code is checked where its `defer` is written: a `defer` inside a push has the one pushed (section 6.13), and one outside every push has none. A `push_context`'s expression is outside its block, so `push_context context { }` is the first error, and `push_context default_context { }` is fine.
+- **A `#run`'s code** starts with the compile-time world's own `default_context`, which every run shares (section 7.8).
+
+```rig error
+twice :: (n: int) -> int { return n * 2; }
+
+callback :: () #c_call {
+    n := twice(1);
+}
+
+main :: () {}
+```
+
+```text
+example.rig:4:10: error: 'twice' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }
+        n := twice(1);
+             ^
+```
+
+Pushed, the default context is the one `twice` is given:
+
+```rig fragment
+twice :: (n: int) -> int { return n * 2; }
+
+callback :: () #c_call {
+    push_context default_context {
+        n := twice(1);
+    }
+}
+```
+
+**Changing the allocator.** Code takes its memory from another allocator for a stretch in either of two ways: by pushing a copy of the context whose allocator is the other one (section 6.13), which ends with the push's block, or by assigning `context.allocator` and putting it back when the block is left:
+
+```text
+old := context.allocator;
+context.allocator = arena_allocator(*arena);
+defer context.allocator = old;
+```
+
+Either way every call in the stretch, and in what it calls, that takes its memory from `context.allocator` takes it from there. Memory goes back to the allocator that gave it: giving it back to the current context's allocator when another gave it, because the context changed in between, is the program's mistake, as in Jai, and no check catches it.
+
+**Temporary storage.** `context.temporary_storage` is memory handed out one allocation after another and given back all at once, Jai's temporary storage, which suits memory a program is done with by a point it knows: a frame's end, a request's, a command's. Preload holds it (`Temporary_Storage`, with its pages, `Temporary_Storage_Page`), and its allocator, `TEMPORARY_ALLOCATOR`, `Allocator.{temporary_allocator_proc, null}`, which allocates from the storage of the context it is called with, so its `data` is unused and a context pushed with another storage makes it allocate from that one. Preload's `README.md` has the details:
+
+- An allocation comes from the storage's first block, `data`'s `size` bytes, which in Preload's storage lie in the program, then from pages asked of `overflow_allocator`, the heap's in Preload's storage, each the larger of `TEMPORARY_STORAGE_SIZE` bytes and the request with the page's 24-byte header. Each allocation starts at a multiple of 8. When `overflow_allocator` has no page to give, the result is null.
+- `RESIZE` grows or shrinks the last allocation in place when the space it is in holds the new size, and otherwise allocates anew and copies. `FREE` does nothing. `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, and the first block is handed out again from its start.
+- `occupied` is how far into the storage allocations reach, counted from the first block's start through the pages, and `high_water_mark` the most it has ever been, which a reset keeps, for choosing a size.
+- Nothing is given back until the program resets the storage, at a point of its choosing. Basic (section 2.14) has `talloc(size)`, memory from it; `tprint(format, ..args)`, formatted text in it; `reset_temporary_storage()`; and `get_temporary_storage_mark()` and `set_temporary_storage_mark(mark)`, which go back to a mark, giving back the pages made since.
+- Memory used after a reset, or after going back to a mark made before it was allocated, is a memory error no check catches (section 8.6), and so is going back to a mark of another storage, or to one made before a reset since.
+
+**Callbacks.** A procedure value called from Rig passes the caller's context, as a direct call does. C passes none to a `#c_call` callback, which has none until it pushes one (above): `default_context`, or its caller's, given to C as the user data that a C function taking a callback often passes back to it. The caller passes `*context` as the data, and the callback pushes it: `push_context (cast(*Context) data).* { ... }`, a place, so the callback runs with the caller's context itself.
+
+```rig
+#import "Basic";
+
+greeting :: (name: string) -> string {
+    b : String_Builder;
+    builder_init(*b);                         // allocator = context.allocator
+    append_string(*b, "hello, ");
+    append_string(*b, name);
+    s := builder_to_string(*b);               // context.allocator too
+    builder_free(*b);
+    return s;
+}
+
+main :: () {
+    arena : Arena;
+    arena_init(*arena, 4096);                 // its blocks from the heap: main's context
+    with_arena := context;
+    with_arena.allocator = arena_allocator(*arena);
+    push_context with_arena {
+        print_line(greeting("Ada"));          // every allocation from the arena
+    }
+    free_all(arena_allocator(*arena));
+
+    print_line(tprint("{} + {} = {}", 1, 2, 3));   // temporary storage
+    reset_temporary_storage();
+}
+```
+
+```text
+hello, Ada
+1 + 2 = 3
+```
+
+`greeting` allocates its builder's memory and its string without being handed an allocator: Basic's allocator parameters default to `context.allocator` (section 7.2), so every allocation it makes comes from the arena `main` pushed, which `free_all` gives back at once. `tprint` formats into the temporary storage, which `reset_temporary_storage` empties.
+
+**Left for later:** fields a program adds to the context (Jai's `#add_context`), a logger and an assertion handler in it, threads and a context for each, and a `push_allocator` that needs no block.
+
 ## 8. Runtime checks
 
 Some operations are checked while the program runs. A check that fails is a **runtime error**: it stops the program.
@@ -2376,6 +2564,7 @@ Bounds checks are turned off for a procedure by `#no_abc`, and for a whole progr
 These are memory errors, which the program must avoid and no check catches:
 
 - using a pointer or a view to memory that is no longer valid: a local or a temporary of a procedure that has returned (section 5.17), the temporary array a call's `..` arguments are gathered into once the statement holding the call has ended (a callee mustn't keep a view of it past that, section 5.10), the temporary copy an `Any` of a value that isn't a place points at once the statement holding the conversion has ended (an `Any` returned or kept in a global, section 3.16), or memory given back to the C library;
+- using memory the temporary storage gave (section 7.10) after a reset, or after going back to a mark made before it was given; going back to a mark of another storage, or to one made before a reset since; and using the address of a context pushed as a copy, `*context` in a `push_context` of a value that isn't a place, after its block (section 6.13);
 - moving a pointer outside the memory it points into and using it, and indexing a pointer outside its memory;
 - writing the bytes of a string literal or a constant's data, which are read-only, through a view or a pointer to them (sections 3.8, 5.17): `cast([]u8) NAME`, a view of an array constant, or a string constant's `.data`; and so the data a `#run` baked, its views' elements and its strings' bytes, wherever the program uses it (a constant, a local's value, an argument, an operand), but in a global variable's declared value, which gets a writable copy of its own (sections 4.3, 7.8): a `#run`'s value assigned to a global later is read-only data still;
 - writing a type's description, its name's bytes or the arrays its views see, which are read-only data too (section 3.16), through a `*Type_Info` or a view;
@@ -2511,6 +2700,11 @@ The sections defining each construct give its messages. Some of those met most o
 | `a deferred statement can't declare anything: its block ends when it runs` | 6.12 |
 | `can't return from a deferred statement` | 6.12 |
 | `'break' can't leave a deferred statement`, `'continue' can't leave a deferred statement` | 6.12 |
+| `'context' is only in a body, where a procedure runs` | 7.10 |
+| `push_context needs a 'Context', not 'Allocator'` | 6.13 |
+| `push_context can only be in a body` | 6.13 |
+| `a #c_call procedure has no context until it pushes one, as in push_context default_context { ... }` | 7.6, 7.10 |
+| `'twice' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }` | 7.10 |
 | `only the arguments of a '..' parameter can be spread, as in f(..values)` | 5.10 |
 | `'..' spreads a '[]int' into 'rest', which needs a '[]Any'` | 5.10 |
 | `a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)` | 7.6 |
@@ -2674,6 +2868,7 @@ Rig follows the platform's C calling convention, as clang implements it: the Mic
 - **Scalar parameters and results** (integers, floats, bools, pointers) are passed as C passes values of the C types in section 7.6. On Linux an `s8`, `u8`, `s16` or `u16` argument or result is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
 - **Variadic calls**, of a foreign procedure declared with C's bare `..` (section 7.6), follow C's convention for a call of a function declared with `...`, as clang makes it: the arguments after the named ones are passed after C's default argument promotions, as an `int`, a `long long`, a `double` or a pointer, so none is narrower than 32 bits. On Linux the caller also sets `al` to the number of vector registers the arguments use (at most 8), which the callee's `va_start` reads to know which to save. On Windows a `double` among the first four arguments goes in its integer register as well as its vector register, since the callee reads its arguments from the integer registers and the stack, as one list. A call of a Rig procedure with a `..T` parameter (section 7.2) is no variadic call: it passes one argument for that parameter, its view (below).
 - **Aggregates** (structs, arrays, views and strings) are never passed in registers. An aggregate argument is passed as a pointer to a copy the caller makes; the callee only reads it. A `..T` parameter's view is one such argument, a pointer to the caller's copy of the 16-byte view: for gathered arguments, the view the caller builds over its temporary array is that copy; for a spread, the view is copied as any view argument is, and the elements never (section 5.10). An aggregate result is returned through a hidden pointer parameter: there is one per aggregate result, in result order, before the visible parameters, each pointing at a temporary of the caller's that `return` copies the value into, and that the caller copies to its destination after the call. When the aggregate is the procedure's only result, its pointer is the one C passes for a struct returned in memory (LLVM's `sret`), so the procedure also returns it, in `rax`, as C's convention says such a function does.
+- **The context** (section 7.10) is a hidden parameter too, a pointer to the current `Context`, after the hidden result pointers and before the visible parameters, so a lone aggregate result's pointer stays first, where C's convention has it. Every procedure with a body takes it but `main`, which C calls (section 7.4), and a `#c_call` procedure, which C may call: neither has a parameter for it. `main` keeps `default_context`'s address in a slot of its own, set before its first line, and a `#c_call` procedure has a slot only in each of its `push_context` blocks, which holds the address of what the block pushes, as every `push_context` block's does (section 6.13). A call through a value of a type that isn't `#c_call` passes the context, as a direct call does. Foreign and `#compiler` procedures take none. Each `#run`'s code is a procedure of its own, which takes none and starts as `main` does, with the compile-time world's `default_context` (section 7.8).
 - **Calls through procedure values** (section 5.10) are indirect calls, of the address the value holds, made exactly as a direct call of a procedure of the value's type is: the same parameters, extensions, hidden result pointers and results. Every procedure of that type expects that call, so a value holding any of them calls it correctly. A procedure value is the address of the procedure's own code, the one a direct call reaches, and C receives it as a function pointer. A `#c_call` type has no aggregates (section 7.6), so a call through one is C's call of a function pointer, plainly.
 - **Several results**: when a procedure has more than one scalar result, they are returned together as one LLVM structure value, whose passing LLVM decides; a single scalar result is returned as itself. Only Rig's own procedures have several results, so no C code sees it.
 - **Frame pointers** are kept in every procedure (LLVM's `"frame-pointer"="all"`): each frame begins by saving the caller's `rbp` and pointing `rbp` at it, so debuggers and profilers can walk the stack through the chain of frames.
@@ -2686,6 +2881,8 @@ A program contains no runtime library of Rig's own beyond a few internal procedu
 - `__rig_panic`, which ends the program with a runtime error: it calls `fflush(NULL)`, writes the message with `write` (`_write` on Windows) to file descriptor 2, and calls `exit(101)`;
 - `__rig_bounds_failed`, which writes a failed bounds check's message, with its two numbers, and calls `__rig_panic`;
 - `__rig_string_equal`, which compares two strings' counts and then their bytes, for `==` and `!=`.
+
+Preload's `__runtime_init`, which `main` and each `#run`'s code call first to set the default context up (section 7.10), is a procedure of Preload's, written in Rig, not one the compiler adds, but it has no debug information either, as these have none (section 10.7): a debugger steps over it, and `break main` stops at `main`'s first line with the context already set up.
 
 Besides those, generated code calls the C library's `memmove`, `memset` and `memcpy` (to copy and zero memory) and, on Windows, `__chkstk`. A program's own procedures may have any of these names: Rig's procedures are internal to the program, and the compiler's calls still reach the C library's functions.
 
@@ -2749,13 +2946,13 @@ The debug information holds:
 
 - **A file entry for each source file** of the program, the main file, Preload's `module.rig` and every file they load or import (sections 2.13, 2.14), named by its absolute path (made from the path diagnostics name it by, section 9.1, and the directory the compiler ran in, which on Linux is named as the shell names it, `$PWD`, when that is the directory: reached through a symlink, it keeps the symlink's name, as the editor that sets a breakpoint knows it), with that directory and the MD5 checksum of the file's bytes, so a debugger finds each file and can tell when it has changed. On Windows a file on a network share (a UNC path, `\\server\share\dir\x.rig`) is named `/\server\share\dir\x.rig`: LLVM's CodeView writer keeps a name that starts with `/` as it is, where it would put the share after the directory's drive, and Windows reads `/\` as the `\\` that starts a UNC path, so a debugger finds the file on the share and takes a breakpoint on it by the share's name, the file's name alone or a drive path to it. Each procedure, struct and global variable below is in the file that declares it, so a breakpoint on a line of a loaded file is found there, and a backtrace names each frame's own file.
 - **A compile unit** for the program, whose file is the main file's entry, as a C compiler's unit is the `.c` file it was given, not the headers that file includes. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)`: the compiler's version and commit as `rig version` gives them (section 10.1), without the date, `-dirty` after the hash when it was dirty and `unknown` without one, and X.Y.Z the version of the LLVM the compiler is built with.
-- **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and a debugger steps over them.
-- **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local or a constant that hides a name a debugger shows (a global, a parameter, an outer local, a constant, a procedure), from the declaration to the end of the block (rustc starts one at every `let`), but a constant's after code that can't go on in its block, as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one (**Constants** below). An `#if` makes none, since it makes no scope (section 4.9): the taken branch's locals are in the block around it. Each copy of a deferred statement (section 6.12, and the line table below) is a block of its own, at the deferred statement, inside the block where the `defer` was reached, so what each copy declares is a variable of its own (and a name a block it leaves hides is, inside the copy, the one the deferred code reads); on Windows the blocks such a copy leaves can lose theirs (below).
+- **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, Preload's `__runtime_init` included, and a debugger steps over them.
+- **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else`, `push_context` and standalone block, and each loop's body, which starts at its `for` or `while`; and one inside its block for each declaration of a local or a constant that hides a name a debugger shows (a global, a parameter, an outer local, a constant, a procedure), from the declaration to the end of the block (rustc starts one at every `let`), but a constant's after code that can't go on in its block, as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one (**Constants** below). An `#if` makes none, since it makes no scope (section 4.9): the taken branch's locals are in the block around it. Each copy of a deferred statement (section 6.12, and the line table below) is a block of its own, at the deferred statement, inside the block where the `defer` was reached, so what each copy declares is a variable of its own (and a name a block it leaves hides is, inside the copy, the one the deferred code reads); on Windows the blocks such a copy leaves can lose theirs (below).
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. A parameter's default value that a call leaves out (section 7.2) is the caller's code, so all of its instructions, a failing check's included, are at the statement holding the call, as the call's own are, whatever file the default is written in, and so are those of the defaults its own calls leave out: stepping never stops at a default's own line, and only a failing check's message names the default's own place (section 8.1). An `#if` adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{`, or only a branch's `}`, has none, and neither does the branch not taken (section 4.9). A deferred statement is compiled at each way out of its block, a copy for each (section 6.12), each copy's instructions at their own statements' positions, and the `defer` adds no code of its own, so its line has code only where the copies are. After the copies, the instruction that leaves is where it would be with no `defer`: a `return`'s, `break`'s or `continue`'s at its keyword, the jump out of an `if`'s block at that block's `}`, a loop body's jump to its test or step at the loop's keyword, and the return at the end of a body at its `}`. So stepping out of a block stops at the deferred lines, in the order they run, then at the place that leaves when it has code of its own there (a `return`'s, `break`'s or `continue`'s line, an `if` block's `}`, the loop's keyword, the body's `}`), and goes on. Only a `return` whose values take code to work out (a variable read, a call, an aggregate copied) stops at its line before the deferred lines too: a `return;`, a `return` of a constant, a `break` or a `continue` has none before them. A jump to the code laid out right after it has no instruction, with a `defer` or without, so a `break` at the end of a `while` body can go from the deferred lines straight on after the loop. A standalone block has no jump at its `}`, so after its deferred lines a debugger goes on to the statement after it. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
-- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a name a debugger shows (a variable, a procedure, or a constant below), in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string, a `..T` parameter's view included: a `..T` parameter is shown as the `[]T` it is, section 7.2) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there.
+- **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a name a debugger shows (a variable, a procedure, or a constant below), in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view or string, a `..T` parameter's view included: a `..T` parameter is shown as the `[]T` it is, section 7.2) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. The context a procedure is given (sections 7.10, 10.4) is a parameter after them, before the visible ones, named `context`, a `*Context` marked artificial, as clang marks C++'s `this`: so gdb's `print context->allocator` and cdb's `?? context->allocator` show the current allocator, and a frame line shows it (`twice (context=0x..., n=4)`). `main`'s is a local `context`, holding `default_context`'s address, set before its first line, so `break main` already shows it. A `push_context` block's is a local `context` in the block's lexical block, the address of what it pushed, hiding the one around it. A `#c_call` procedure has one only in its `push_context` blocks: outside them, gdb's `print context` is `No symbol "context" in current context.`, and cdb's `dx context` can't bind the name.
 - **Constants:** every constant the program declares (section 4.2), at the top level or in a body, used or not, by its Rig name and with its type, but one naming a procedure (`OP :: add;`: a debugger knows the procedure by its own name) unless it hides a name a debugger shows, the predeclared `OS`, `OS_WINDOWS` and `OS_LINUX` (section 4.9), which the program doesn't declare, one in a nested block that can't run, after code that can't go on in the block around it (as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one: section 4.2), which has no code for a debugger to stop in, and one that hides a name, after such code in its own block, which would hide it only where there is no code. An untyped integer constant is shown as an `int`, an untyped float as a `float64`, so its value shows whole (section 3.12), and `N :: null;` as a `*void`. A number, a `bool` or `null` is a constant value with no storage (CodeView's `S_CONSTANT`, DWARF's `DW_AT_const_value`); a constant holding data (a string, a struct, an array, a `#run`'s view) is a variable at its read-only data (section 10.3), and so is a pointer to a string literal (`GREETING :: cast(*u8) "hi";`), at the 8 bytes holding its address there, since CodeView can't give an address as a value, and so is a body's constant naming a procedure that hides a name a debugger shows, at 8 bytes holding the procedure's address, so a debugger shows the procedure where the constant hides the name (under a top-level `OP :: 5;`, cdb's `?? OP` after `OP :: add;` is `add`'s address, not `0n5`). A body's constant that hides nothing is in the lexical block that declares it, even after a declaration that started one inside it: it needs no code where it is declared, and a debugger shows it wherever its block has code. One that hides a name a debugger shows is in the block its declaration starts, as a local is, and so is shown only where code follows it in its block: so in `{ y := x + STEP; LIMIT :: 99; z := LIMIT + y; }` under a top-level `LIMIT :: 12;`, a debugger shows `LIMIT` as 12 at `y`'s line, 99 at `z`'s, and 12 again after the block (on Windows, not when a `return`, `break` or `continue` leaves the block through deferred code: see below). A copy of deferred code (section 6.12) declares its constants anew, as it does its variables. gdb's `print` and `info locals`, cdb's `??` and `dv /t`, and VS Code's Watch, hover and Debug Console show them, on both systems (gdb's `print LIMIT` is `12`, `print RATIO` `0.10000000000000001`; cdb's `?? LIMIT` is `int64 0n12`). cdb's `dx` doesn't find a top-level number constant, where `??` does; and VS Code's Variables view lists only what has storage: a body's constants holding data, its pointers to a string literal and its procedure constants that hide a name, not its numbers, `bool`s and `null`s.
-- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, and each aggregate result a pointer parameter, `result$`, before the visible ones, the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, int)`, `ptype sum` `int (struct Pair *)`; cdb's `dt make` `void (Pair*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them: given `q`, a `Pair`, gdb's `print sum(&q)` and cdb's `.call sum(&q)` return `q.a + q.b`, and gdb's `print make(&q, 7)` and cdb's `.call make(&q, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's (gdb's `print twice(4)`, cdb's `.call twice(4)`). A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A line of deferred code that runs at more than one way out of its block has its code in several places, one per copy, and the debuggers treat a breakpoint on it by their own rules and LLVM's, not Rig's. cdb takes a breakpoint on a line only when the line's code is in one piece, as it refuses one on a `for` line, so it refuses one on such a line (`Ambiguous symbol error`). gdb keeps one place of a line per lexical block, and LLVM writes a lexical block only for a scope that declares a variable itself (a scope that holds only other scopes is folded into the one around it too): so the copies of a deferred line are one place, the first copy in the code, where a breakpoint stops only when that copy runs, unless the line is in a block of the deferred code that declares a variable itself. Both statements of `defer { t := f(); g(t); }` have a place per copy, but the `if` line of `defer if c { t := f(); g(t); }` one, since `t` is in a block inside it. Stepping goes through every copy that runs, in both debuggers.
 
@@ -2774,6 +2971,7 @@ The compiler can run a program's code itself, while compiling, on its interprete
 **Memory.** The interpreter's memory is native memory of the compiler's own, laid out as the target's (section 10.3), so a pointer is a plain address, and C's functions (`malloc`, `memcpy`, `strlen`) work on interpreted data directly. So a memory error that no check catches (section 8.6), such as a write through a dangling pointer, or past a local array with bounds checks off, or by C given a bad pointer, is one in the compiler's own memory, which holds the interpreter's stack and globals and the compiler's own data: it may corrupt the compiler or stop it, as it would the compiled program.
 
 - **Globals** are made in memory from their bytes, and the addresses they hold (a string literal's, another global's, a procedure's) are written into them: a Rig procedure's is the address standing for it (below), a foreign one's its C function's. They are all writable, a string literal's bytes and a constant's data too, which a compiled program keeps read-only (writing them is a memory error no check catches, sections 3.8, 5.17 and 8.6). A `#run` that writes them so has made that memory error too: the `#run`s after it may see what it wrote, but the program keeps the value the constant was written or baked with. They last as long as the interpreter: what one run leaves in a global, the next run sees, as every `#run` of a compilation shares them (section 7.8). The program's own globals are not these: it starts from their written values.
+- **The context** (section 7.10) is the world's own: Preload's `default_context` and its temporary storage are globals of the world, as every global is. Each run's procedure calls Preload's `__runtime_init` first, as `main` does, and only the world's first call sets them up, so every run starts with the same default context, whose allocator is the heap of the C library the interpreter calls (below), and they share its temporary storage (section 7.8).
 - **Type descriptions** (section 3.16) are globals of the compile-time module too. A `#run`'s lowering writes those its code needs, on demand, before it runs, each the first time any `#run` needs it, and the interpreter maps them into its memory as it maps any global, laid out as the compiled program's (section 10.3), with the addresses they hold written in: once per type for the compile-time world, so every `#run` of the compilation sees one description per type, at one address.
 - **Locals** live on the interpreter's own data stack, of 8 MB. Each call of a procedure gives it one slot per local and per temporary, at its start, however often the block that makes it runs, as the compiled program's frame has one per stack slot (section 10.3): a loop that declares a local, or makes a temporary, uses the same slot on every turn.
 - **Calls** keep their bookkeeping (each frame's values and the call it came from) on that stack too, so recursion that never ends runs out of it, however small its frames, and fails with the runtime error `stack overflow` (below), where the compiled program would crash. The interpreter keeps its frames there and never recurses itself, so deep recursion in Rig can't overflow the compiler's own stack.
@@ -2901,7 +3099,7 @@ Block           = "{" { Statement } "}" .
 Statement       = VarDecl | ConstDecl | MultiVarDecl
                 | Assignment | MultiAssignment
                 | ReturnStmt | Block | IfStmt | IfDirective | WhileStmt | ForStmt
-                | "break" ";" | "continue" ";" | DeferStmt
+                | "break" ";" | "continue" ";" | DeferStmt | PushContextStmt
                 | Expression ";" .
 
 Assignment      = Expression AssignOp Expression ";" .
@@ -2913,9 +3111,10 @@ IfStmt          = "if" Expression Block [ "else" ( Block | IfStmt ) ] .
 WhileStmt       = "while" Expression Block .
 ForStmt         = "for" [ "*" ] [ identifier ":" ] Expression [ ".." Expression ] Block .
 DeferStmt       = "defer" Statement .
+PushContextStmt = "push_context" Expression Block .
 ```
 
-A statement that starts with an identifier followed by `:`, `:=` or `::` is a declaration; one that starts with identifiers separated by commas and then `:=` is a `MultiVarDecl`. Otherwise a statement that starts with an expression is an `Assignment` when an assignment operator follows the expression, a `MultiAssignment` when a `,` does, and an expression statement when `;` does. In `IfStmt`, `IfDirective`, `WhileStmt` and `ForStmt`, the `{` of the block ends the expression before it. `IfDirective` is the rule of A.2, its blocks holding statements here. In `ForStmt`, an identifier followed by `:` right after `for` (or `for *`) names the iterator. A `DeferStmt`'s `Statement` is not a declaration (`VarDecl`, `ConstDecl` or `MultiVarDecl`), and a `DeferStmt` appears only in a body, never at the top level (section 6.12).
+A statement that starts with an identifier followed by `:`, `:=` or `::` is a declaration; one that starts with identifiers separated by commas and then `:=` is a `MultiVarDecl`. Otherwise a statement that starts with an expression is an `Assignment` when an assignment operator follows the expression, a `MultiAssignment` when a `,` does, and an expression statement when `;` does. In `IfStmt`, `IfDirective`, `WhileStmt`, `ForStmt` and `PushContextStmt`, the `{` of the block ends the expression before it. `IfDirective` is the rule of A.2, its blocks holding statements here. In `ForStmt`, an identifier followed by `:` right after `for` (or `for *`) names the iterator. A `DeferStmt`'s `Statement` is not a declaration (`VarDecl`, `ConstDecl` or `MultiVarDecl`), and a `DeferStmt` appears only in a body, never at the top level (section 6.12), as a `PushContextStmt` does (section 6.13).
 
 ### A.4 Expressions
 
@@ -2939,6 +3138,7 @@ TypedLiteral  = "." StructBody | "." ArrayBody .
 Primary       = identifier
               | int_lit | float_lit | string_lit
               | "true" | "false" | "null"
+              | "context"
               | "size_of" "(" Type ")"
               | "type_info" "(" Type ")"
               | "(" Expression ")"
@@ -2958,6 +3158,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 |---|---|---|
 | `break` | leave a loop | 6.9 |
 | `cast` | cast, checked or `cast,trunc` | 3.14 |
+| `context` | the current context | 7.10, 5.1 |
 | `continue` | next iteration | 6.9 |
 | `defer` | run a statement when its block is left | 6.12 |
 | `else` | alternative of `if` and of `#if` | 6.5, 4.9 |
@@ -2966,6 +3167,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional | 6.5 |
 | `null` | the null pointer; the null procedure value | 3.5, 3.15 |
+| `push_context` | run a block with another context | 6.13 |
 | `return` | return from a procedure | 6.10 |
 | `struct` | struct type | 3.9, 4.5 |
 | `while` | loop on a condition | 6.6 |
