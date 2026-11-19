@@ -6338,6 +6338,89 @@ TEST(a_resizable_array_converts_to_a_view_of_its_count_and_data) {
     arena_free(&a);
 }
 
+TEST(a_resizable_array_cast_to_a_view_is_its_count_and_data) {
+    // cast([]int) a is the view a converts to without a cast: a view slot
+    // of its own, %4, holding the count and data loaded from %2, the
+    // array, at the cast. w's slot, %3, is then a copy of it.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    w := cast([]int) a;\n"
+                                                              "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 40 align 8\n"
+              "  zero %2, 40\n"
+              "  %3 = local 16 align 8\n"
+              "  %4 = local 16 align 8\n"
+              "  %5 = load i64 %2\n"
+              "  %6 = const i64 8\n"
+              "  %7 = ptradd %2, %6\n"
+              "  %8 = load ptr %7\n"
+              "  store i64 %5, %4\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %4, %9\n"
+              "  store ptr %8, %10\n"
+              "  copy %3, %4, 16\n"
+              "  %11 = const i32 0\n"
+              "  ret %11\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_result_put_into_a_view_is_its_count_and_data) {
+    // v, n = pair(); puts the [..]int result's view into v, %2: a view slot
+    // of its own, %8, holding the count and data loaded from %5, the call's
+    // temporary, where it converts, then copied into v.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "pair :: () -> ([..]int, int) {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    return a, 1;\n"
+                                                              "}\n"
+                                                              "main :: () {\n"
+                                                              "    v : []int;\n"
+                                                              "    n : int;\n"
+                                                              "    v, n = pair();\n"
+                                                              "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 16 align 8\n"
+              "  zero %2, 16\n"
+              "  %3 = local i64\n"
+              "  %4 = const i64 0\n"
+              "  store i64 %4, %3\n"
+              "  %5 = local 40 align 8\n"
+              "  %6 = load ptr %0\n"
+              "  %7 = call @pair(%5, %6)\n"
+              "  %8 = local 16 align 8\n"
+              "  %9 = load i64 %5\n"
+              "  %10 = const i64 8\n"
+              "  %11 = ptradd %5, %10\n"
+              "  %12 = load ptr %11\n"
+              "  store i64 %9, %8\n"
+              "  %13 = const i64 8\n"
+              "  %14 = ptradd %8, %13\n"
+              "  store ptr %12, %14\n"
+              "  copy %2, %8, 16\n"
+              "  store i64 %7, %3\n"
+              "  %15 = const i32 0\n"
+              "  ret %15\n"
+              "}\n");
+    arena_free(&a);
+}
+
 // The IR of main for a `TYPE = ---` local a, indexed and gone over.
 static String index_and_loop_ir(Arena *a, const char *type) {
     String text = string_printf(a,

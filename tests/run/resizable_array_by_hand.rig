@@ -1,7 +1,7 @@
 // A resizable array used by hand, before it has procedures to grow it
 // (issue #158, spec 3.17): its four members, indexing, for and for *,
-// its view, a spread, a parameter, a result, a copy, a field and a
-// global, compiled and interpreted.
+// its view, a cast, a spread, a parameter, a result, a multi-assign, a
+// copy, a field and a global, compiled and interpreted.
 #import "Basic";
 
 Bag :: struct { name: string; items: [..]int; }
@@ -27,6 +27,8 @@ over :: (data: *int, count: int) -> [..]int {
     return a;
 }
 
+counted :: (a: [..]int) -> ([..]int, int) { return a, a.count; }
+
 main :: () {
     buffer := int.[1, 2, 3, 4];
     a : [..]int;
@@ -49,6 +51,12 @@ main :: () {
     bag : Bag;
     bag.items = over(*buffer[0], 4);
     print("{} {} {}\n", bag.items.count, bag.items[3], kept.count);
+    w := cast([]int) bag.items;
+    u : []int;
+    m : int;
+    u, m = counted(bag.items);
+    bag.items.count = 1;
+    print("{} {} {} {}\n", w.count, w[3], u.count, u[0] + m);
     a.allocated = 3;
     a.allocator = HEAP_ALLOCATOR;
     print("{} {}\n", a.allocated, a.allocator.proc == heap_allocator_proc);

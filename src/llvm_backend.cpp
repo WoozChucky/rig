@@ -109,7 +109,9 @@ struct Backend {
                               // procedure types: one that isn't #c_call takes a *Context
                               // (spec 10.7); null without Preload
     Type *allocator_type;     // Preload's Allocator (Ir_Module.allocator_type), the debug type of a
-                              // [..]T's allocator member (spec 10.7); null without Preload
+                              // [..]T's allocator member (spec 10.7); null without Preload (a
+                              // compile-time module, which can lack it even with Preload,
+                              // never comes here)
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {

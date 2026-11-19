@@ -113,11 +113,11 @@
 //   divisor not known while compiling is compared with 0, and a signed one
 //   with -1 (lower_division); a cast checks that the number survives
 //   (lower_cast); a pointer is compared with null before anything is read
-//   or written through it (emit_null_check), and so is a view's or a
-//   string's data before an element is read (lower_index_address,
-//   emit_data_check, lower_string_comparison). A check that fails is a
-//   runtime error: a block of its own panics with "PATH:LINE:COL: runtime
-//   error: MESSAGE" (emit_runtime_check).
+//   or written through it (emit_null_check), and so is a view's, a
+//   resizable array's or a string's data before an element is read
+//   (lower_index_address, emit_data_check, lower_string_comparison). A
+//   check that fails is a runtime error: a block of its own panics with
+//   "PATH:LINE:COL: runtime error: MESSAGE" (emit_runtime_check).
 // - Pointers (spec 6.5) are ptr values. Since every variable is a slot
 //   already, *x is x's slot (a global's addr), and p.* a load or store
 //   through p, once it's checked not to be null (lower_address finds the
@@ -174,11 +174,19 @@
 //   (lower_variadic_argument), so a view kept past the call may see it
 //   rebuilt, or dangle once the caller returns; the language promises it
 //   only until the end of the statement holding the call (spec 5.10). A
-//   spread, ..e, is an array or a view argument as any other
-//   (lower_variadic_argument). for over an array, a view or a string takes
-//   its data and count once, then counts an index up to the count
-//   (lower_for_sequence). A global view of a literal, or of an array
-//   constant, points at a global array of its own (constant_bytes).
+//   spread, ..e, is an array, a resizable array or a view argument as any
+//   other (lower_variadic_argument). for over an array, a resizable array,
+//   a view or a string takes its data and count once, then counts an index
+//   up to the count (lower_for_sequence). A global view of a literal, or of
+//   an array constant, points at a global array of its own (constant_bytes).
+// - A resizable array, [..]T (spec 3.17), is an aggregate of 40 bytes
+//   whose first 16 are a view's, its count and data, then allocated at 16
+//   and allocator, Preload's Allocator, at 24. Indexing, for, .count and
+//   .data read it as a view (type_has_view_fields). Where it meets a []T
+//   (an argument, a spread, an assignment, a cast, a multi-assign), its
+//   count and data are read there, into a view slot of its own
+//   (lower_view_of_resizable); its elements lie elsewhere, so unlike an
+//   array's view (view_of_copy) nothing more is copied.
 // - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal's bytes are a constant global of
 //   their own, str.N, one per literal however often it's reached

@@ -1,5 +1,5 @@
 // An index of a resizable array is checked against its count, as a view's
-// is (issue #158, spec 3.17, 6.5): out of bounds, the program stops.
+// is (issue #158, spec 3.17, 5.11, 8.5): out of bounds, the program stops.
 main :: () {
     buffer := int.[1, 2, 3];
     a : [..]int;

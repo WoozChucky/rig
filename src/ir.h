@@ -511,7 +511,9 @@ struct Ir_Module {
     Type *context_type;        // Preload's Context, for the debug types of procedure types: one that
                                // isn't #c_call takes a *Context (spec 10.7); null without Preload
     Type *allocator_type;      // Preload's Allocator, a [..]T's allocator field, for its debug type
-                               // (spec 10.7); null without Preload
+                               // (spec 10.7); null without Preload, and in a compile-time module
+                               // made before Resizable_Array was laid out (allocator_type_of),
+                               // which never gets debug information
 };
 
 // Whether t is f32 or f64.

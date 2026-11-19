@@ -2842,7 +2842,8 @@ TEST(llvm_describes_the_context) {
 TEST(a_resizable_arrays_debug_type) {
     // [..]int is a struct named as Rig names it, of 40 bytes: a view's
     // count and data (a pointer to int), then allocated, an int, and
-    // allocator, Preload's Allocator struct, each at its offset.
+    // allocator, Preload's Allocator struct, each of its size at its
+    // offset.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a, "main :: () { a : [..]int; }\n");
     for (int t = 0; t < 2; t++) {
@@ -2857,11 +2858,11 @@ TEST(a_resizable_arrays_debug_type) {
         CHECK(node.count > 0 && integer.count > 0 && allocator.count > 0 && to_int.count > 0);
         struct Member {
             const char *name;
-            s64 offset;  // in bits
+            s64 size, offset;  // in bits
             String type;
         };
-        Member members[] = {{"count", 0, integer}, {"data", 64, to_int}, {"allocated", 128, integer},
-                            {"allocator", 192, allocator}};
+        Member members[] = {{"count", 64, 0, integer}, {"data", 64, 64, to_int}, {"allocated", 64, 128, integer},
+                            {"allocator", 128, 192, allocator}};
         for (Member &member : members) {
             String line = line_with(text, string_cstr(&a, string_printf(&a,
                                                                         "!DIDerivedType(tag: DW_TAG_member, name: "
@@ -2869,9 +2870,12 @@ TEST(a_resizable_arrays_debug_type) {
                                                                         member.name, STR_ARG(node))));
             CHECK(line.count > 0);
             CHECK(string_eq(attached(&a, line, "baseType:"), member.type));
+            // LLVM prints no offset of 0: the size ends the line.
             if (member.offset) {
-                CHECK(contains(line, string_cstr(&a, string_printf(&a, "offset: %lld)", (long long)member.offset))));
+                CHECK(contains(line, string_cstr(&a, string_printf(&a, "size: %lld, offset: %lld)", (long long)member.size,
+                                                                   (long long)member.offset))));
             } else {
+                CHECK(contains(line, string_cstr(&a, string_printf(&a, "size: %lld)", (long long)member.size))));
                 CHECK(!contains(line, "offset:"));
             }
         }
