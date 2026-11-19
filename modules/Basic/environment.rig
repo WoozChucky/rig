@@ -6,8 +6,9 @@
 // (to_c_string), which C reads up to its first zero. So a name or a
 // command with a zero byte in it would reach C cut short, another name or
 // another command, and both procedures here refuse it without calling C.
-// The copies come from the allocator each procedure is given, and go back
-// to it as soon as the C call that takes them returns.
+// The copies come from the allocator each procedure is given, the
+// context's unless another is, and go back to it as soon as the C call
+// that takes them returns.
 //
 // The systems differ in what they hand C, and Basic doesn't hide it:
 // Windows' variable names are case-insensitive, so "Path" finds PATH
@@ -27,18 +28,18 @@
 #load "memory.rig";
 
 // A copy of the value of the environment's variable name, in memory from
-// allocator, which the caller gives back with free(value.data, allocator),
-// and true. C's getenv gives a pointer to its own copy, which a later call
-// may change, so the value is copied out at once, its zero not included.
-// A variable set to "" is the zeroed string (count 0, data null), which
-// allocates nothing, and true.
+// allocator, the context's unless given, which the caller gives back with
+// free(value.data, allocator), and true. C's getenv gives a pointer to its
+// own copy, which a later call may change, so the value is copied out at
+// once, its zero not included. A variable set to "" is the zeroed string
+// (count 0, data null), which allocates nothing, and true.
 //
 // It is the zeroed string and false, with nothing left allocated, when the
 // variable isn't set, when the allocator has no memory for the name's C
 // copy or the value's, and for a name C would read wrong: an empty name,
 // one with '=', which ends a name in the environment (NAME=value), and one
 // with a zero byte, which C would read as a shorter name.
-get_environment :: (name: string, allocator: Allocator) -> string, bool {
+get_environment :: (name: string, allocator: Allocator = context.allocator) -> string, bool {
     empty : string;
     if name.count == 0 || find_byte(name, "="[0]) >= 0 || find_byte(name, 0) >= 0 { return empty, false; }
     c_name := to_c_string(name, allocator);
@@ -73,16 +74,17 @@ get_environment :: (name: string, allocator: Allocator) -> string, bool {
 // shell.
 //
 // It is -1, and nothing runs, for a command with a zero byte, which C
-// would read as a shorter command, and when the allocator has no memory
-// for the command's C copy. -1 is also what C's system gives when it
-// can't start the shell, and on Windows what a command that exits with -1
-// gives ("exit -1"), so -1 alone doesn't say the command never ran.
+// would read as a shorter command, and when allocator, the context's
+// unless given, has no memory for the command's C copy. -1 is also what
+// C's system gives when it can't start the shell, and on Windows what a
+// command that exits with -1 gives ("exit -1"), so -1 alone doesn't say
+// the command never ran.
 //
 // The program's output may still sit in C's buffer for stdout, where
 // Basic's print puts it, while the command writes to the same place
 // straight away; so every C stream is flushed first, and what the program
 // printed before the command comes out before what the command prints.
-run_command :: (command: string, allocator: Allocator) -> int {
+run_command :: (command: string, allocator: Allocator = context.allocator) -> int {
     if find_byte(command, 0) >= 0 { return -1; }
     c_command := to_c_string(command, allocator);
     if c_command == null { return -1; }

@@ -2,7 +2,7 @@
 // that grows as it fills, and copied out as one string at the end. A string
 // is a view of bytes someone else holds, so text made at run time, from
 // pieces and numbers, needs memory of its own to be made in: the builder's,
-// taken from the allocator it is given.
+// taken from the allocator it is given, the context's unless another is.
 //
 // Every append goes through append_string, which is where the memory
 // grows. A number is written into a buffer on the stack by numbers.rig and
@@ -22,10 +22,11 @@ String_Builder :: struct {
     capacity: int;
 }
 
-// Makes builder an empty builder whose memory comes from allocator. Nothing
-// is taken until the first append that needs it. It doesn't give back
-// memory a builder already had: builder_free does.
-builder_init :: (builder: *String_Builder, allocator: Allocator) {
+// Makes builder an empty builder whose memory comes from allocator, the
+// context's unless given, which the builder keeps. Nothing is taken until
+// the first append that needs it. It doesn't give back memory a builder
+// already had: builder_free does.
+builder_init :: (builder: *String_Builder, allocator: Allocator = context.allocator) {
     builder.allocator = allocator;
     builder.data = null;
     builder.count = 0;
@@ -126,17 +127,18 @@ append_bool :: (builder: *String_Builder, value: bool) {
     }
 }
 
-// A copy of the builder's text, in memory from allocator, which may be
-// another than the builder's. The caller gives it back with
-// free(s.data, allocator). The copy is the caller's own: the builder can be
-// appended to, reset or freed without changing it.
+// A copy of the builder's text, in memory from allocator, the context's
+// unless given (not the builder's, though it may be the same one). The
+// caller gives it back with free(s.data, allocator). The copy is the
+// caller's own: the builder can be appended to, reset or freed without
+// changing it.
 //
 // An empty builder gives the zeroed string, count 0 and data null, and
 // allocates nothing: a literal "" would do as well to read, but its data
 // isn't null, and freeing it would give an allocator memory it never gave.
 // An allocator that has no memory gives null, and the copy stops the
 // program with a null pointer dereference, as append_string's does.
-builder_to_string :: (builder: *String_Builder, allocator: Allocator) -> string {
+builder_to_string :: (builder: *String_Builder, allocator: Allocator = context.allocator) -> string {
     text : string;
     if builder.count == 0 { return text; }
     text.data = cast(*u8) alloc(builder.count, allocator);

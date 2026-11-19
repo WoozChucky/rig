@@ -6,7 +6,7 @@
 // its own type:
 //
 //     points : Array;
-//     array_init(*points, size_of(Point), HEAP_ALLOCATOR);
+//     array_init(*points, size_of(Point));    // the context's allocator
 //     p := Point.{1, 2};
 //     array_add(*points, *p);
 //     first := cast(*Point) array_get(points, 0);
@@ -56,13 +56,14 @@ Array :: struct {
 }
 
 // Makes array an empty array of elements of element_size bytes, whose
-// memory comes from allocator. Nothing is taken until the first add. It
-// doesn't give back memory an array already had: array_free does.
+// memory comes from allocator, the context's unless given, which the array
+// keeps. Nothing is taken until the first add. It doesn't give back memory
+// an array already had: array_free does.
 //
 // Elements of 0 bytes, of a struct with no fields, take no memory: the
 // array counts them, and every element's address is data, null. A negative
 // element_size, which no type has, is taken as 0.
-array_init :: (array: *Array, element_size: int, allocator: Allocator) {
+array_init :: (array: *Array, element_size: int, allocator: Allocator = context.allocator) {
     array.element_size = element_size;
     if element_size < 0 { array.element_size = 0; }
     array.count = 0;
