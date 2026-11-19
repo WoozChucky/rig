@@ -8,9 +8,12 @@
 // builder, a growable array, hash tables, sorting and searching, paths,
 // files, the clock and the calendar, random numbers, the environment's
 // variables and commands run by the system's shell, and formatted printing
-// to standard output, to a string builder and to a string. Whatever
-// allocates takes its memory from the context's allocator unless it is
-// given another (spec 7.10).
+// to standard output, to a string builder and to a string. Whatever hands
+// back memory it allocates takes it from the context's allocator unless it
+// is given another (spec 7.10); talloc and tprint take theirs from the
+// context's temporary storage instead. Memory used only for a moment inside
+// a call, such as sprint's scratch builder and the C copy of a file's path,
+// comes from the heap, and is freed before the call returns.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):

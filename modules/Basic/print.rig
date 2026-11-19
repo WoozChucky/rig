@@ -1,8 +1,8 @@
-// Basic's print: writing to standard output, or to a string builder. Every
-// byte written to standard output goes out through c_putchar, C's putchar
-// (libc.rig), so it passes through C's own stdout buffer, and what a
-// program prints with Basic and with C's printf comes out in the order it
-// was printed, compiled and interpreted.
+// Basic's print: writing to standard output, to a string builder, or to a
+// new string. Every byte written to standard output goes out through
+// c_putchar, C's putchar (libc.rig), so it passes through C's own stdout
+// buffer, and what a program prints with Basic and with C's printf comes
+// out in the order it was printed, compiled and interpreted.
 //
 // A string is bytes, and they're written as they are: no encoding is
 // checked or changed, so UTF-8 text prints as UTF-8. There's no portable
@@ -19,16 +19,19 @@
 // writes a struct's fields and an array's or a view's elements each as an
 // Any of its own.
 //
-// print and print_to_builder write a format whose {} placeholders take
-// ..Any arguments, each written by print_item, through print_formatted,
-// the one format walk. The helpers under them, print_or_append,
-// print_quoted, print_item and print_formatted, take a string builder
-// (builder.rig) first, and a null one means standard output: Rig has no
-// closures or generics, so a builder that may be null is the simplest way
-// for one walk to write to either. print passes null; print_to_builder
-// takes a builder and stops the program on a null one. Written to
-// standard output, nothing is allocated; print_to_builder writes into a
-// builder of its own on the heap, then appends it to the one it is given.
+// print, print_to_builder, sprint and tprint write a format whose {}
+// placeholders take ..Any arguments, each written by print_item, through
+// print_formatted, the one format walk. The helpers under them,
+// print_or_append, print_quoted, print_item and print_formatted, take a
+// string builder (builder.rig) first, and a null one means standard
+// output: Rig has no closures or generics, so a builder that may be null
+// is the simplest way for one walk to write to either. print passes null;
+// print_to_builder takes a builder and stops the program on a null one.
+// Written to standard output, nothing is allocated; print_to_builder
+// writes into a builder of its own on the heap, then appends it to the one
+// it is given. sprint's string is from context.allocator, copied out of a
+// builder of its own on the heap; tprint's is from the temporary storage,
+// with no copy.
 #load "libc.rig";
 #load "numbers.rig";
 #load "string.rig";

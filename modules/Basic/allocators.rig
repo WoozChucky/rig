@@ -336,9 +336,16 @@ get_temporary_storage_mark :: () -> Temporary_Storage_Mark {
 // allocated after the mark is handed out again. So a stretch of code that
 // takes temporary memory it is done with at its end gives it back there,
 // leaving what came before. Memory allocated after the mark and used after
-// going back to it is a memory error no check catches (spec 8.6), and so
-// is a mark of another storage, or one taken before a reset since: its
-// page is gone.
+// going back to it is a memory error no check catches (spec 8.6).
+//
+// A mark whose page the storage no longer has is wrong too: one of another
+// storage, one taken before a reset since, or one taken after a mark the
+// storage has gone back to since. The walk below never meets that page, so
+// every page goes back and the program stops at a null pointer dereference
+// once the walk passes the oldest, unless a page made since happens to have
+// the gone page's address: then the walk stops there, and that is a memory
+// error no check catches. A mark with no page takes every page back, which
+// is right only for a mark of this storage.
 set_temporary_storage_mark :: (mark: Temporary_Storage_Mark) {
     storage := context.temporary_storage;
     page := storage.overflow_pages;

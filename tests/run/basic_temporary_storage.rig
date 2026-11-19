@@ -9,30 +9,68 @@ counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: 
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
+// The storage's overflow_allocator while the test runs: the heap, counting
+// the pages it is given back.
+freeing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == FREE { (cast(*int) data).* += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
 main :: () {
     s := context.temporary_storage;
+    frees := 0;
+    s.overflow_allocator = Allocator.{freeing_proc, *frees};
     a := talloc(10);
     mark := get_temporary_storage_mark();
     b := talloc(40000);
     print("{} {}\n", s.occupied, s.overflow_pages != null);
+    // Going back to a mark taken before the page gives the page back.
     set_temporary_storage_mark(mark);
-    print("{} {}\n", s.occupied, s.overflow_pages == null);
+    print("{} {} {}\n", s.occupied, s.overflow_pages == null, frees);
     c := talloc(8);
     print("{}\n", cast(*u8) c - cast(*u8) a);
+    // tprint's text is the storage's last allocation, its builder's first
+    // 64 bytes after c, with no copy.
     print_line(tprint("{} + {} = {}", 1, 2, 3));
-    print("{}\n", s.occupied > 24);
+    print("{}\n", s.occupied);
     reset_temporary_storage();
     print("{} {}\n", s.occupied, s.high_water_mark);
     text := sprint("{}-{}", "a", 7);
     print_line(text);
     free(text.data);
-    // One allocation from the context's allocator, the text's.
+    // One allocation from the context's allocator, the text's, and none
+    // for nothing written. That sprint frees its scratch builder on the
+    // heap is not seen here: the heap's own traffic can't be counted.
     count := 0;
     counting := context;
     counting.allocator = Allocator.{counting_proc, *count};
+    empty_s : string;
     push_context counting {
         t := sprint("{}", 1);
         free(t.data);
+        empty_s = sprint("");
     }
-    print("{}\n", count);
+    print("{} {} {}\n", count, empty_s.count, empty_s.data == null);
+    // tprint with nothing written takes nothing from the storage.
+    occupied := s.occupied;
+    empty_t := tprint("");
+    print("{} {} {}\n", s.occupied == occupied, empty_t.count, empty_t.data == null);
+    // Going back to a mark taken inside a page keeps that page and gives
+    // back the two made since, so allocation goes on inside it, right
+    // after p's 30000 bytes. Each 30000 bytes take a region of their own,
+    // the first block and then a page of 32 KB each, so p starts a page.
+    talloc(30000);
+    p := talloc(30000);
+    inner := get_temporary_storage_mark();
+    talloc(30000);
+    talloc(30000);
+    frees = 0;
+    set_temporary_storage_mark(inner);
+    print("{} {} {}\n", frees, s.overflow_pages == inner.page, s.occupied == inner.occupied);
+    d := talloc(8);
+    print("{}\n", cast(*u8) d - cast(*u8) p);
+    // The reset gives back the page kept.
+    reset_temporary_storage();
+    print("{}\n", frees);
+    s.overflow_allocator = HEAP_ALLOCATOR;
 }
