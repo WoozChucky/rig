@@ -1,0 +1,26 @@
+// A debugger's view of the context (bin/run-tests runs it under gdb with
+// implicit_context.gdb and under cdb with implicit_context.cdb; issue
+// #156, spec 10.7): a procedure's is its first parameter after the result
+// pointers, an artificial one named context; main's is a local context,
+// the default context's address; a push_context block's is a local of the
+// block, hiding the one around it; a #c_call procedure has none outside
+// its push. A debugger passes the context to a Rig procedure it calls.
+twice :: (n: int) -> int {
+    t := n * 2;
+    return t;
+}
+
+callback :: () #c_call {
+    y := 1;
+    push_context default_context {
+        x := twice(y);
+    }
+}
+
+main :: () {
+    other := context;
+    push_context other {
+        n := twice(4);
+    }
+    callback();
+}
