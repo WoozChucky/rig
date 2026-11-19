@@ -1,9 +1,9 @@
 // A debugger's view of named constants (bin/run-tests runs it under gdb
-// with constants.gdb and under cdb with constants.cdb): a number, a float,
-// a bool, a string, a struct, an array and a pointer, at the top level and
-// in main's body (an untyped float there a float64), read or not, Basic's
-// and Preload's, a block's that hide top-level ones to the block's end, and
-// a block's after one that hides a name where no code follows it.
+// with constants.gdb and under cdb with constants.cdb), read or not: a
+// number, a float (an untyped one a float64), a bool, a string and a
+// struct, at the top level and in main's body, an array and a pointer at
+// the top level, Basic's and Preload's, a block's hiding top-level ones
+// to its end, and a block's after one hiding a name where no code follows.
 #import "Basic";
 
 Point :: struct { x: int; y: int; }
