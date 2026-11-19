@@ -171,10 +171,13 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 // temporary storage.
 
 // A page of temporary storage, asked of the storage's overflow_allocator
-// once its first block is full: this header, then size bytes. start is
-// where its bytes start in the storage's count (Temporary_Storage.occupied,
-// which counts from the first block's start), so the current page's own
-// offset is occupied - start, found without walking the pages.
+// when the region before it, the first block or the newest page, can't
+// hold an allocation: this header, then size bytes. The header is 24
+// bytes, a multiple of 8, so the bytes after it start as aligned as the
+// page. start is where its bytes start in the storage's count
+// (Temporary_Storage.occupied, which counts from the first block's start),
+// so the current page's own offset is occupied - start, found without
+// walking the pages.
 Temporary_Storage_Page :: struct { previous: *Temporary_Storage_Page; size: int; start: int; }
 
 // Memory that is given out from one end and given back all at once:
@@ -231,7 +234,8 @@ __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign l
 // temporary storage, context.temporary_storage, so data is unused: a
 // push_context with another storage makes it allocate from that one. A
 // program's own storage needs data, size and overflow_allocator set, and
-// its data aligned to 8 for its allocations to be.
+// its data and overflow_allocator's memory aligned to 8, as the heap's is,
+// for its allocations to be.
 //
 // It allocates from the current region, the newest page's bytes after its
 // header or, with no page, the first block. The region's own offset is
@@ -241,8 +245,9 @@ __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign l
 // the newest page's offset is found without walking the pages.
 //
 // - ALLOCATE starts at the first multiple of 8 at or past the offset, so
-//   every allocation is aligned to 8, as any Rig type needs (spec 3.11).
-//   When the region's rest can't hold size bytes, a page is asked of
+//   every allocation is aligned to 8, as any Rig type needs (spec 3.11),
+//   when the first block and overflow_allocator's memory are. When the
+//   region's rest can't hold size bytes, a page is asked of
 //   overflow_allocator, TEMPORARY_STORAGE_SIZE bytes or size with the
 //   header when that is larger, and the rest of the region before it goes
 //   unused but counts as occupied. Its null is passed on, the storage as

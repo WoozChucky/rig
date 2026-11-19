@@ -2,13 +2,27 @@ start: occupied 0, pages 0, most 0
 16
 two: occupied 17, pages 0, most 17
 1
-0
-grown: occupied 140, pages 0, most 140
-reset: occupied 0, pages 0, most 140
+in place: occupied 116, pages 0, most 116
+1
+shrunk: occupied 20, pages 0, most 116
+0 55
+grown: occupied 44, pages 0, most 116
+freed: occupied 44, pages 0, most 116
+1
+too large: occupied 44, pages 0, most 116
+reset: occupied 0, pages 0, most 116
 full: occupied 32768, pages 0, most 32768
 a page: occupied 32776, pages 1, most 32776
-1 0
+1 0 1
 moved: occupied 65544, pages 1, most 65544
 large: occupied 105544, pages 2, most 105544
 reset again: occupied 0, pages 0, most 105544
 100 204
+own: at 0
+own page: occupied 104, pages 1, most 104
+1 1
+refused: occupied 104, pages 1, most 104
+own pages: occupied 72808, pages 2, most 72808
+own reset: occupied 0, pages 0, most 72808
+given back 2 of 2
+default storage untouched: 1

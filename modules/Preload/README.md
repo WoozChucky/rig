@@ -130,7 +130,7 @@ The context is what code deep in a call chain needs without every caller handing
   - `data: *u8`, `size: int`: its first block, `TEMPORARY_STORAGE_SIZE` bytes of Preload's.
   - `occupied: int`: how many bytes are given out, counted from the first block's start, through the pages after it.
   - `high_water_mark: int`: the most bytes ever occupied.
-  - `overflow_allocator: Allocator`: where its pages come from once the first block is full; the heap.
+  - `overflow_allocator: Allocator`: where its pages come from when the current region, the first block or the newest page, can't hold an allocation; the heap.
   - `overflow_pages: *Temporary_Storage_Page`: those pages, newest first.
 - `Temporary_Storage_Page`, a page's header, before its bytes:
   - `previous: *Temporary_Storage_Page`: the page before it, or null.
@@ -146,12 +146,12 @@ The context is what code deep in a call chain needs without every caller handing
 
 It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
 
-- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, the result is null and the storage is as it was.
+- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, the result is null and the storage is as it was.
 - `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from its start. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
 - `FREE` does nothing: the memory goes back with everything else at the next reset.
 - `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the most bytes ever occupied, counting the unused tails of regions a page replaced, so it's at least the size of a first block that would have held everything.
 
-Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` aligned to 8 for its allocations to be.
+Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` and `overflow_allocator`'s memory aligned to 8 for its allocations to be.
 
 While compiling, every `#run` starts with the compile-time world's `default_context`, so the runs share the world's temporary storage, which nothing resets but their own code.
 
