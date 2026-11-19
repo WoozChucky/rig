@@ -1,8 +1,8 @@
-// Basic's print: writing to standard output, or to a string builder. Every
-// byte written to standard output goes out through c_putchar, C's putchar
-// (libc.rig), so it passes through C's own stdout buffer, and what a
-// program prints with Basic and with C's printf comes out in the order it
-// was printed, compiled and interpreted.
+// Basic's print: writing to standard output, to a string builder, or to a
+// new string. Every byte written to standard output goes out through
+// c_putchar, C's putchar (libc.rig), so it passes through C's own stdout
+// buffer, and what a program prints with Basic and with C's printf comes
+// out in the order it was printed, compiled and interpreted.
 //
 // A string is bytes, and they're written as they are: no encoding is
 // checked or changed, so UTF-8 text prints as UTF-8. There's no portable
@@ -19,16 +19,19 @@
 // writes a struct's fields and an array's or a view's elements each as an
 // Any of its own.
 //
-// print and print_to_builder write a format whose {} placeholders take
-// ..Any arguments, each written by print_item, through print_formatted,
-// the one format walk. The helpers under them, print_or_append,
-// print_quoted, print_item and print_formatted, take a string builder
-// (builder.rig) first, and a null one means standard output: Rig has no
-// closures or generics, so a builder that may be null is the simplest way
-// for one walk to write to either. print passes null; print_to_builder
-// takes a builder and stops the program on a null one. Written to
-// standard output, nothing is allocated; print_to_builder writes into a
-// builder of its own on the heap, then appends it to the one it is given.
+// print, print_to_builder, sprint and tprint write a format whose {}
+// placeholders take ..Any arguments, each written by print_item, through
+// print_formatted, the one format walk. The helpers under them,
+// print_or_append, print_quoted, print_item and print_formatted, take a
+// string builder (builder.rig) first, and a null one means standard
+// output: Rig has no closures or generics, so a builder that may be null
+// is the simplest way for one walk to write to either. print passes null;
+// print_to_builder takes a builder and stops the program on a null one.
+// Written to standard output, nothing is allocated; print_to_builder
+// writes into a builder of its own on the heap, then appends it to the one
+// it is given. sprint's string is from context.allocator, copied out of a
+// builder of its own on the heap; tprint's is from the temporary storage,
+// with no copy.
 #load "libc.rig";
 #load "numbers.rig";
 #load "string.rig";
@@ -402,4 +405,37 @@ print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
     text.count = scratch.count;
     append_string(builder, text);
     builder_free(*scratch);
+}
+
+// What print would write, as a string in memory from context.allocator,
+// which the caller gives back with free(s.data): sprint("{}-{}", "a", 7) is
+// "a-7". It is written into a builder of its own on the heap first, as
+// print_to_builder's is, and then copied out by builder_to_string, so the
+// context's allocator gives one allocation, the size of the text, and the
+// heap's memory is freed before it returns. Nothing written gives the
+// zeroed string, count 0 and data null, and allocates nothing.
+sprint :: (format: string, args: ..Any) -> string {
+    scratch : String_Builder;
+    builder_init(*scratch, HEAP_ALLOCATOR);
+    print_formatted(*scratch, format, args);
+    text := builder_to_string(*scratch);
+    builder_free(*scratch);
+    return text;
+}
+
+// What print would write, as a string in the context's temporary storage
+// (TEMPORARY_ALLOCATOR), which goes back with the rest of it at the next
+// reset (allocators.rig): print_line(tprint("{} + {} = {}", 1, 2, 3)). It
+// is written into a builder on the temporary storage, whose text is
+// returned as it is, with no copy: while the builder's memory is the
+// storage's last allocation, it grows in place. Nothing written gives the
+// zeroed string, count 0 and data null, and allocates nothing.
+tprint :: (format: string, args: ..Any) -> string {
+    builder : String_Builder;
+    builder_init(*builder, TEMPORARY_ALLOCATOR);
+    print_formatted(*builder, format, args);
+    text : string;
+    text.data = builder.data;
+    text.count = builder.count;
+    return text;
 }

@@ -1,0 +1,26 @@
+// A #c_call procedure that pushes a context (issue #156, spec 7.6, 7.10).
+// Inside push_context its body uses context, calls Rig procedures that
+// take it, directly and through a value, and leaves out default values
+// that need it. Outside, it calls a #c_call procedure and a foreign one,
+// which take none.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+twice :: (n: int) -> int { return n * 2; }
+take :: (n: int, a: Allocator = context.allocator) -> int { return n; }
+sized :: (n: int = context.temporary_storage.size) -> int #c_call { return n; }
+doubling : (int) -> int = twice;
+other :: (n: int) -> int #c_call { return n + 1; }
+
+callback :: (n: int) -> int #c_call {
+    m := other(n);
+    printf("other %lld\n", m);
+    push_context default_context {
+        same := *context == *default_context;
+        printf("%d %lld %lld %lld %d\n", same, twice(m), doubling(m), take(m), sized() == 32768);
+        return twice(m);
+    }
+}
+
+main :: () {
+    printf("%lld\n", callback(3));
+}

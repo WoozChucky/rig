@@ -1,0 +1,45 @@
+// __runtime_init sets default_context up the first time it's called and
+// does nothing after (issue #156, spec 7.4, 7.8): a #run's change to the
+// world's context is still there in a later run, and a Rig call of main
+// runs with default_context as the first main left it, not set up anew.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// The heap under another name, so a context holding it can be told from
+// the default one.
+marked_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// A run that makes the marked allocator the world's.
+mark :: () -> bool {
+    context.allocator = Allocator.{marked_proc, null};
+    return true;
+}
+// A later run, after MARKED's since it takes its value: it finds the
+// marked allocator still there, and puts the heap back.
+still_marked :: (marked: bool) -> bool {
+    found := context.allocator.proc == marked_proc;
+    context.allocator = HEAP_ALLOCATOR;
+    return marked && found;
+}
+MARKED :: #run mark();
+STILL_MARKED :: #run still_marked(MARKED);
+
+again := false;
+
+main :: () {
+    if again {
+        printf("%d %d\n", *context == *default_context, context.allocator.proc == marked_proc);
+        return;
+    }
+    printf("%d\n", STILL_MARKED);
+    // main's context is default_context: marking it, then calling main
+    // in a push of another context, main runs with default_context, the
+    // marked allocator still in it.
+    context.allocator = Allocator.{marked_proc, null};
+    other := context;
+    other.allocator = HEAP_ALLOCATOR;
+    again = true;
+    push_context other { main(); }
+    context.allocator = HEAP_ALLOCATOR;
+}

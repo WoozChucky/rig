@@ -936,6 +936,19 @@ check('the grammar colours type_info as it does size_of', () => {
     assertScopes('type_info := 1;', { type_info: null });
 });
 
+// The context's keywords (issue #156): push_context decides what a block
+// runs with, as defer decides when a statement runs; context is a variable
+// the language gives, as a for loop's it is.
+check('the grammar colours context and push_context', () => {
+    assertScopes('push_context with_arena {', { push_context: 'keyword.control.rig', with_arena: null });
+    assertScopes('context.allocator = arena_allocator(*arena);', {
+        context: 'variable.language.rig',
+        '.': 'punctuation.accessor.rig',
+        arena_allocator: 'entity.name.function.call.rig',
+    });
+    assertScopes('p := *context;', { context: 'variable.language.rig' });
+});
+
 check('the grammar colours no type where none is written', () => {
     // A for loop's named iterator: what follows its ':' is an expression.
     assertScopes('for n: numbers { total += n; }', { for: 'keyword.control.rig', n: null, numbers: null, ':': 'punctuation.separator.colon.rig' });

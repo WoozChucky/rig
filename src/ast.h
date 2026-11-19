@@ -78,6 +78,8 @@ enum Ast_Kind : u8 {
     AST_DEFER,         // Ast_Defer: defer statement;  defer { ... }
     AST_SPREAD,        // Ast_Spread: ..e, a view spread into a '..T' parameter
     AST_TYPE_INFO,     // Ast_Type_Info: type_info(T)
+    AST_CONTEXT,       // a plain Ast: context
+    AST_PUSH_CONTEXT,  // Ast_Push_Context: push_context e { ... }
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -136,6 +138,9 @@ struct Ast_Param : Ast {
                          // to the parameter's type (checker.cpp's check_defaults)
     Position equals;     // where that '=' is written
     s32 default_levels;  // the deepest levels of default_value (MAX_DEPTH), as Ast_Const.levels
+    bool default_needs_context;  // its default value uses context, calls a procedure that takes it, or
+                                 // leaves out a default that needs it (checker.cpp's check_defaults): a
+                                 // #c_call body outside a push_context can't leave it out (spec 7.6)
 };
 
 struct Ast_Proc;
@@ -543,6 +548,14 @@ struct Ast_Defer : Ast {
     Ast *statement;  // any statement but a declaration; an Ast_Block for defer { ... }
 };
 
+// push_context e { ... }: the block runs with e as its context (spec 6.13).
+// pos is the 'push_context'.
+struct Ast_Push_Context : Ast {
+    Ast *context;      // a Context: a place's own address is pushed, anything else a copy
+    Ast_Block *block;
+    bool is_place;     // context is a place (checker.cpp's check_push_context, expr_is_place)
+};
+
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the
 // predeclared OS_WINDOWS and OS_LINUX are; 0 names none.
 enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
@@ -612,6 +625,12 @@ struct Ast_File {
     Array<s32> order;       // order[f]: file f's place in load order, as Source_File.order; empty: each file's index
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
+    // Preload's, found by the checker (checker.cpp's declare_top_level), spec
+    // 7.10; all null without Preload, whose programs have no context:
+    Type *context_type;        // Preload's Context struct: what context is, and push_context takes
+    Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
+                               // #c_call procedure pushes for itself
+    Ast_Proc *runtime_init;    // Preload's __runtime_init, which sets it up: main and each #run call it first
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

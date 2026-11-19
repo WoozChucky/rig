@@ -1,0 +1,169 @@
+// Basic's allocators default to the context's (issue #156, spec 7.10):
+// each procedure of Basic's that takes an allocator, but the tables' own
+// table_make_room, takes context.allocator when it's left out. Under a
+// pushed context whose allocator counts the memory it gives, each is
+// called without one, and prints its name and whether the count grew
+// during the call; free and free_all, which give memory back, print
+// whether the count of what was given back grew. What each
+// gave is freed with the allocator left out too, so it goes back to the
+// allocator that gave it. Last, a #c_call procedure, which has no context
+// until it pushes one, pushes the default context and leaves the
+// allocator out inside the push. The other basic_* tests, which pass their
+// allocators, still pass as they are.
+#import "Basic";
+
+// The file read_entire_file reads, under .build/tests/, which the runner
+// makes before any test; written before the push and deleted at the end.
+PATH :: ".build/tests/basic_context_defaults.txt";
+
+// How many times the counting allocator gave memory, or moved it.
+count : int;
+
+// How many times the counting allocator was given memory back, or asked
+// to give back all it gave.
+freed : int;
+
+// The heap, counting each ALLOCATE and RESIZE in count, and each FREE and
+// FREE_ALL in freed.
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE || mode == RESIZE { count += 1; }
+    if mode == FREE || mode == FREE_ALL { freed += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// Prints name and whether count grew since it was before.
+grew :: (name: string, before: int) {
+    print("{} {}\n", name, count > before);
+}
+
+// Prints name and whether freed grew since it was before.
+gave_back :: (name: string, before: int) {
+    print("{} {}\n", name, freed > before);
+}
+
+// Called as C would call it, with no context: it pushes the default one,
+// whose allocator is the heap, and allocates there.
+from_c_call :: () #c_call {
+    push_context default_context {
+        p := alloc(8);
+        if p != null { print("from_c_call true\n"); }
+        free(p);
+    }
+}
+
+main :: () {
+    counting := context;
+    counting.allocator = Allocator.{counting_proc, null};
+    // Written before the push, so writing it counts nothing.
+    write_entire_file(PATH, "data");
+    push_context counting {
+        before := count;
+        p := alloc(8);
+        grew("alloc", before);
+        before = count;
+        p = resize(p, 8, 64);
+        grew("resize", before);
+        before = freed;
+        free(p);
+        gave_back("free", before);
+        before = freed;
+        free_all();
+        gave_back("free_all", before);
+
+        // An arena's and a pool's memory comes from the parent at their
+        // first allocation.
+        arena : Arena;
+        before = count;
+        arena_init(*arena, 64);
+        alloc(8, arena_allocator(*arena));
+        grew("arena_init", before);
+        free_all(arena_allocator(*arena));
+        pool : Pool;
+        before = count;
+        pool_init(*pool, 16, 4);
+        alloc(8, pool_allocator(*pool));
+        grew("pool_init", before);
+        free_all(pool_allocator(*pool));
+
+        b : String_Builder;
+        before = count;
+        builder_init(*b);
+        append_string(*b, "hi");
+        grew("builder_init", before);
+        before = count;
+        s := builder_to_string(*b);
+        grew("builder_to_string", before);
+        free(s.data);
+        builder_free(*b);
+
+        numbers : Array;
+        n := 7;
+        before = count;
+        array_init(*numbers, size_of(int));
+        array_add(*numbers, *n);
+        grew("array_init", before);
+        array_free(*numbers);
+        t : Table;
+        before = count;
+        table_init(*t, size_of(int));
+        table_set(*t, "k", *n);
+        grew("table_init", before);
+        table_free(*t);
+        u : Int_Table;
+        before = count;
+        int_table_init(*u, size_of(int));
+        int_table_set(*u, 1, *n);
+        grew("int_table_init", before);
+        int_table_free(*u);
+
+        before = count;
+        c := to_c_string("abc");
+        grew("to_c_string", before);
+        free(c);
+        before = count;
+        s = join(string.["a", "b"], ", ");
+        grew("join", before);
+        free(s.data);
+        before = count;
+        s = replace("aba", "a", "c");
+        grew("replace", before);
+        free(s.data);
+        before = count;
+        s = repeat("ab", 2);
+        grew("repeat", before);
+        free(s.data);
+        before = count;
+        s = to_upper_copy("ab");
+        grew("to_upper_copy", before);
+        free(s.data);
+        before = count;
+        s = to_lower_copy("AB");
+        grew("to_lower_copy", before);
+        free(s.data);
+        before = count;
+        s = path_join("a", "b");
+        grew("path_join", before);
+        free(s.data);
+
+        ok : bool;
+        before = count;
+        s, ok = read_entire_file(PATH);
+        grew("read_entire_file", before);
+        free(s.data);
+        before = count;
+        s, ok = get_environment("RIG_BASIC_TEST");
+        grew("get_environment", before);
+        free(s.data);
+        before = count;
+        run_command("exit 0");
+        grew("run_command", before);
+        // More than SORT_INSERTION_MAX, so the sort asks for its scratch
+        // memory.
+        values := int.[6, 5, 4, 3, 2, 1];
+        before = count;
+        sort(values.data, 6, size_of(int), less_int);
+        grew("sort", before);
+    }
+    from_c_call();
+    delete_file(PATH);
+}

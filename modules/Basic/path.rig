@@ -84,13 +84,14 @@ path_without_extension :: (path: string) -> string {
     return slice(path, 0, path.count - path_extension(path).count);
 }
 
-// a and b joined into one path, in memory from allocator, which the caller
-// gives back with free(s.data, allocator). It is a, then a / between the
-// two, then b. The / is left out when either is empty, so a join with ""
-// is the other path, and when a ends with a separator or b starts with
-// one, so there is one at the seam already: "a/" and "b" give "a/b", but
-// "a/" and "/b" give "a//b", since neither separator is taken away. An
-// absolute b is joined all the same: "a" and "/b" give "a/b".
+// a and b joined into one path, in memory from allocator, the context's
+// unless given, which the caller gives back with free(s.data, allocator).
+// It is a, then a / between the two, then b. The / is left out when
+// either is empty, so a join with "" is the other path, and when a ends
+// with a separator or b starts with one, so there is one at the seam
+// already: "a/" and "b" give "a/b", but "a/" and "/b" give "a//b", since
+// neither separator is taken away. An absolute b is joined all the same:
+// "a" and "/b" give "a/b".
 //
 // The result is always a copy, even when it is a or b, so the caller can
 // always free it. Two empty paths give the zeroed string, count 0 and data
@@ -98,7 +99,7 @@ path_without_extension :: (path: string) -> string {
 // and freeing it gives the allocator nothing. When the allocator has no
 // memory to give, the result is the zeroed string too. The size is worked
 // out first, so the memory is asked for once.
-path_join :: (a: string, b: string, allocator: Allocator) -> string {
+path_join :: (a: string, b: string, allocator: Allocator = context.allocator) -> string {
     joined : string;
     separator := 1;
     if a.count == 0 || b.count == 0 { separator = 0; }

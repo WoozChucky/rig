@@ -7,6 +7,6 @@ continue
 print OP
 ptype OP
 info locals
-print OP(1, 2)
+print OP(context, 1, 2)
 continue
 print OP

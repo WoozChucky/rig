@@ -1,1 +1,1 @@
-@MODULES@/Basic/array.rig:88:23: runtime error: null pointer dereference
+@MODULES@/Basic/array.rig:89:23: runtime error: null pointer dereference

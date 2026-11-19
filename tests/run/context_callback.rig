@@ -1,0 +1,88 @@
+// C calls Rig back (issues #84 and #156, spec 7.6, 7.10). C gives a
+// #c_call procedure no context, so it has none until it pushes one: the
+// default context, or the context its caller gave C as user data. The
+// Rig code it calls inside the push is given that one.
+//
+// The numbers are shown before C is first called: the interpreter
+// refuses that qsort (context_callback.interp.err), and the line it has
+// printed by then is what the runner holds to the start of the .out.
+qsort :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void) -> s32 #c_call) #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// C's sort with user data, in each system's own shape: the UCRT's
+// qsort_s passes the data first, glibc's qsort_r last.
+// Each pushes the context its caller gave C as user data.
+#if OS == OS_WINDOWS {
+    qsort_s :: (base: *void, count: u64, size: u64, compare: (data: *void, a: *void, b: *void) -> s32 #c_call, data: *void) #foreign libc;
+    with_data :: (data: *void, a: *void, b: *void) -> s32 #c_call {
+        push_context (cast(*Context) data).* {
+            use_memory();
+            return order(a, b);
+        }
+    }
+    sort_with :: (numbers: []int, data: *void) { qsort_s(numbers.data, cast(u64) numbers.count, size_of(int), with_data, data); }
+} else {
+    qsort_r :: (base: *void, count: u64, size: u64, compare: (a: *void, b: *void, data: *void) -> s32 #c_call, data: *void) #foreign libc;
+    with_data :: (a: *void, b: *void, data: *void) -> s32 #c_call {
+        push_context (cast(*Context) data).* {
+            use_memory();
+            return order(a, b);
+        }
+    }
+    sort_with :: (numbers: []int, data: *void) { qsort_r(numbers.data, cast(u64) numbers.count, size_of(int), with_data, data); }
+}
+
+// The heap, counting what it gives: data is the count, an *int.
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// Ordinary Rig code: it takes memory from the context it's given.
+use_memory :: () {
+    a := context.allocator;
+    a.proc(FREE, 0, 0, a.proc(ALLOCATE, 16, 0, null, a.data), a.data);
+}
+
+order :: (a: *void, b: *void) -> s32 {
+    x := (cast(*int) a).*;
+    y := (cast(*int) b).*;
+    if x < y { return -1; }
+    if x > y { return 1; }
+    return 0;
+}
+
+// C calls it with no context, and C's qsort takes no user data: it
+// pushes the default context for the Rig code it calls.
+by_value :: (a: *void, b: *void) -> s32 #c_call {
+    push_context default_context {
+        use_memory();
+        return order(a, b);
+    }
+}
+
+show :: (numbers: []int) {
+    for numbers { printf("%lld ", it); }
+    printf("\n");
+}
+
+main :: () {
+    numbers := int.[42, 7, -3, 19, 0];
+    show(numbers);
+    qsort(numbers.data, cast(u64) numbers.count, size_of(int), by_value);
+    show(numbers);
+    count := 0;
+    counting := context;
+    counting.allocator = Allocator.{counting_proc, *count};
+    push_context counting {
+        // by_value pushes the default context, not this one.
+        more := int.[5, 4, 3, 2, 1];
+        qsort(more.data, cast(u64) more.count, size_of(int), by_value);
+        printf("%lld\n", count);
+        // This one's, through C.
+        again := int.[9, 8, 7];
+        sort_with(again, *context);
+        printf("%d\n", count > 0);
+        show(again);
+    }
+}

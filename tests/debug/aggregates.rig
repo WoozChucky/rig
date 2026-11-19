@@ -5,10 +5,10 @@
 // information says so, alike on both systems: a parameter p of a struct is
 // a pointer to it (p->a, *p), and a procedure returning a struct takes a
 // pointer to where it goes first, result$ (result$1, result$2 for pairs's
-// two), and returns nothing (split: its int). So a debugger calls one as
-// the program does, given the addresses (sum(&q), make(&q, 7)), and shows
-// no made-up value on leaving it. words's variables are named as C++'s
-// keywords, which a debugger reading C takes as names.
+// two), and returns nothing (split: its int); then the context, a *Context
+// (spec 7.10). So a debugger calls one as the program does, given them all
+// (sum(context, &q), make(&q, context, 7)), and shows no made-up value on
+// leaving it. words's variables are named as C++'s keywords, names in C.
 Pair :: struct { a: int; b: int; }
 Small :: struct { a: s32; b: s32; }
 

@@ -118,6 +118,65 @@ an int: 42
 Vec2 with 2 fields
 ```
 
+### The context
+
+The context is what code deep in a call chain needs without every caller handing it down, as in Jai (issue #156, spec 7.10): the allocator code takes its memory from when it's handed none, and the temporary storage. Every Rig procedure but `main` and a `#c_call` one is given its caller's context, a `*Context` it isn't given in the source, and `context` names it (`main` starts with `default_context`); `push_context` runs a block with another (spec 6.13).
+
+- `Context`:
+  - `allocator: Allocator`: where code takes its memory from when it's handed no allocator.
+  - `temporary_storage: *Temporary_Storage`: the temporary storage.
+- `default_context: Context`: the context `main` and each `#run` start with, and the one a `#c_call` procedure, which C calls with none, pushes for itself when it has no other (`push_context default_context { ... }`). Its allocator is the heap, and its temporary storage Preload's one.
+- `Temporary_Storage`, memory given out from one end and given back all at once:
+  - `data: *u8`, `size: int`: its first block, `TEMPORARY_STORAGE_SIZE` bytes of Preload's.
+  - `occupied: int`: how far into the storage's count allocations reach, from the first block's start through the pages after it, counting the padding that aligns them and the unused tails of regions a page replaced.
+  - `high_water_mark: int`: the largest `occupied` has been.
+  - `overflow_allocator: Allocator`: where its pages come from when the current region, the first block or the newest page, can't hold an allocation; the heap.
+  - `overflow_pages: *Temporary_Storage_Page`: those pages, newest first.
+- `Temporary_Storage_Page`, a page's header, before its bytes:
+  - `previous: *Temporary_Storage_Page`: the page before it, or null.
+  - `size: int`: its bytes after the header.
+  - `start: int`: where they start in the storage's count (`occupied`).
+- `TEMPORARY_STORAGE_SIZE`: 32768, the first block's bytes.
+
+`__runtime_init` sets `default_context` up: its allocator, and the pointers to Preload's storage and its first block (`__temporary_storage`, `__temporary_storage_data`), which a global's value can't hold, since it can't hold another global's address (spec 4.3). It runs before `main`'s first line and before each `#run`'s code, and only the first call does anything. It's `#c_call`, so it uses no context itself. It and the two globals are Preload's own, not for programs.
+
+#### The temporary allocator
+
+- `temporary_allocator_proc`, `TEMPORARY_ALLOCATOR`: memory from the current context's temporary storage, `context.temporary_storage`, handed out one allocation after another and given back all at once. The procedure finds the storage through the context, so the allocator's `data` is unused, and a `push_context` with another storage makes it allocate from that one. A program that imports Basic reaches it through Basic's `talloc`, `tprint`, `reset_temporary_storage` and the storage's marks ([`../Basic/README.md`](../Basic/README.md)) rather than through its procedure.
+
+It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, rounded up to a multiple of 8, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
+
+- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, the result is null and the storage is as it was.
+- `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from its start. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
+- `FREE` does nothing: the memory goes back with everything else at the next reset.
+- `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
+
+Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` and `overflow_allocator`'s memory aligned to 8 for its allocations to be.
+
+While compiling, every `#run` starts with the compile-time world's `default_context`, so the runs share the world's temporary storage, which nothing resets but their own code.
+
+```rig
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    t := TEMPORARY_ALLOCATOR;
+    a := t.proc(ALLOCATE, 10, 0, null, t.data);
+    b := t.proc(ALLOCATE, 100, 0, null, t.data);
+    printf("%lld bytes occupied\n", context.temporary_storage.occupied);
+    t.proc(FREE_ALL, 0, 0, null, t.data);
+    printf("%lld after the reset, at most %lld\n", context.temporary_storage.occupied, context.temporary_storage.high_water_mark);
+}
+```
+
+It prints:
+
+```text
+116 bytes occupied
+0 after the reset, at most 116
+```
+
+`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with; it's not for programs.
+
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.

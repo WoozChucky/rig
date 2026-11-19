@@ -1,0 +1,34 @@
+l+t
+l+s
+l+l
+dt implicit_context!twice
+bp `implicit_context.rig:21`
+bp `implicit_context.rig:23`
+g
+dv /t
+?? context == &default_context
+?? context->allocator
+.call implicit_context!twice(context, 3)
+g
+g
+dv /t
+bp `implicit_context.rig:9`
+g
+dv /t
+r? $t0 = context
+.frame 1
+?? @$t0 == &other
+bc *
+bp `implicit_context.rig:14`
+bp `implicit_context.rig:16`
+g
+dv /t
+dx context
+.call implicit_context!twice(&default_context, 3)
+g
+.call implicit_context!halve(8)
+g
+g
+dv /t
+?? context == &default_context
+q

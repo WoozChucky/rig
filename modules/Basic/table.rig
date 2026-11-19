@@ -5,7 +5,7 @@
 // caller casts to a pointer to its own type:
 //
 //     ages : Table;
-//     table_init(*ages, size_of(int), HEAP_ALLOCATOR);
+//     table_init(*ages, size_of(int));    // the context's allocator
 //     age := 36;
 //     table_set(*ages, "ada", *age);
 //     found := table_find(ages, "ada");
@@ -240,13 +240,13 @@ table_same_key :: (entry: *u8, key: *void) -> bool {
 }
 
 // Makes table an empty table of string keys with values of value_size
-// bytes, whose memory comes from allocator. Nothing is taken until the
-// first set. It doesn't give back memory a table already had: table_free
-// does.
+// bytes, whose memory comes from allocator, the context's unless given,
+// which the table keeps. Nothing is taken until the first set. It doesn't
+// give back memory a table already had: table_free does.
 //
 // Values of 0 bytes take no memory beyond their entries' headers, and a
 // negative value_size, which no type has, is taken as 0.
-table_init :: (table: *Table, value_size: int, allocator: Allocator) {
+table_init :: (table: *Table, value_size: int, allocator: Allocator = context.allocator) {
     table.value_size = value_size;
     if value_size < 0 { table.value_size = 0; }
     table.entry_size = table_entry_size(TABLE_VALUE_OFFSET, table.value_size);
@@ -372,7 +372,7 @@ int_table_same_key :: (entry: *u8, key: *void) -> bool {
 }
 
 // Makes table an empty table of int keys, as table_init does for strings.
-int_table_init :: (table: *Int_Table, value_size: int, allocator: Allocator) {
+int_table_init :: (table: *Int_Table, value_size: int, allocator: Allocator = context.allocator) {
     table.value_size = value_size;
     if value_size < 0 { table.value_size = 0; }
     table.entry_size = table_entry_size(INT_TABLE_VALUE_OFFSET, table.value_size);

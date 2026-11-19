@@ -13,6 +13,9 @@
 // is allowed and reads nothing more, just as a #load of this file by its
 // path reads nothing more: a file is read once.
 //
+// It holds the allocator's shape and the heap, type information and Any,
+// and the context, with the temporary storage and its allocator.
+//
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
 // programs. Every name Preload declares for its own use starts with two
@@ -158,3 +161,188 @@ ARRAY_VIEW :: 1;
 // a description of its own, a struct named Any. The program reads the value
 // by casting value_pointer once type says what it is.
 Any :: struct { type: *Type_Info; value_pointer: *void; }
+
+// The context (spec 7.10): what code deep in a call chain needs without
+// every caller handing it down, Jai's way. Every Rig procedure but main and
+// a #c_call one is given the caller's context, a *Context it isn't given in
+// the source, and context names it; main starts with default_context.
+// push_context runs a block with another (spec 6.13). It holds the
+// allocator code takes its memory from when it's handed none, and the
+// temporary storage.
+
+// A page of temporary storage, asked of the storage's overflow_allocator
+// when the region before it, the first block or the newest page, can't
+// hold an allocation: this header, then size bytes. The header is 24
+// bytes, a multiple of 8, so the bytes after it are aligned to 8 when the
+// page is. start is where its bytes start in the storage's count
+// (Temporary_Storage.occupied, which counts from the first block's start),
+// so the current page's own offset is occupied - start, found without
+// walking the pages.
+Temporary_Storage_Page :: struct { previous: *Temporary_Storage_Page; size: int; start: int; }
+
+// Memory that is given out from one end and given back all at once:
+// allocations from its first block, data's size bytes, then from pages
+// asked of overflow_allocator, the newest first in overflow_pages. occupied
+// is how far into the storage's count allocations reach, from the first
+// block's start, counting the padding that aligns them and the unused
+// tails of regions a page replaced; high_water_mark is the largest it has
+// been.
+Temporary_Storage :: struct {
+    data: *u8;
+    size: int;
+    occupied: int;
+    high_water_mark: int;
+    overflow_allocator: Allocator;
+    overflow_pages: *Temporary_Storage_Page;  // newest first
+}
+
+// The context: the allocator code takes its memory from when it's handed
+// none, and the temporary storage.
+Context :: struct { allocator: Allocator; temporary_storage: *Temporary_Storage; }
+
+// The bytes of the temporary storage's first block.
+TEMPORARY_STORAGE_SIZE :: 32768;
+
+// The context main and each #run start with, and the one a #c_call
+// procedure, which C calls with none, pushes for itself when it has no
+// other: the heap, and Preload's temporary storage. __runtime_init sets it
+// up.
+default_context : Context;
+
+// Preload's one temporary storage, which default_context holds, and its
+// first block, as u64s so its allocations are 8-aligned.
+__temporary_storage : Temporary_Storage;
+__temporary_storage_data : [TEMPORARY_STORAGE_SIZE / 8]u64;
+
+// Sets default_context up, before main's first line and each #run's code:
+// its allocator the heap, its temporary storage Preload's, whose first
+// block is __temporary_storage_data. The pointers are set here, since a
+// global's value can't hold another global's address (spec 4.3). Once: a
+// second call does nothing. #c_call, so it uses no context itself.
+__runtime_init :: () #c_call {
+    if default_context.temporary_storage != null { return; }
+    __temporary_storage.data = cast(*u8) *__temporary_storage_data[0];
+    __temporary_storage.size = TEMPORARY_STORAGE_SIZE;
+    __temporary_storage.overflow_allocator = HEAP_ALLOCATOR;
+    default_context.allocator = HEAP_ALLOCATOR;
+    default_context.temporary_storage = *__temporary_storage;
+}
+
+// C's memmove, under Preload's own name, as __malloc is: the temporary
+// allocator's RESIZE copies with it.
+__memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign libc "memmove";
+
+// The temporary allocator's procedure. It works on the current context's
+// temporary storage, context.temporary_storage, so data is unused: a
+// push_context with another storage makes it allocate from that one. A
+// program's own storage needs data, size and overflow_allocator set, and
+// its data and overflow_allocator's memory aligned to 8, as the heap's is,
+// for its allocations to be.
+//
+// It allocates from the current region, the newest page's bytes after its
+// header or, with no page, the first block. The region's own offset is
+// occupied - start (0 for the first block), since a page starts in the
+// storage's count where the region before it ended, rounded up to a
+// multiple of 8: so occupied keeps counting through the pages,
+// high_water_mark is its largest value, and the newest page's offset is
+// found without walking the pages. The rounding keeps a page's offsets as
+// aligned as the count's, so the high water mark is at least the size of a
+// first block that would have held everything.
+//
+// - ALLOCATE starts at the first multiple of 8 at or past the offset, so
+//   every allocation is aligned to 8, as any Rig type needs (spec 3.11),
+//   when the first block and overflow_allocator's memory are. When the
+//   region's rest can't hold size bytes, a page is asked of
+//   overflow_allocator, TEMPORARY_STORAGE_SIZE bytes or size with the
+//   header when that is larger, and the rest of the region before it goes
+//   unused but counts as occupied. Its null is passed on, the storage as
+//   it was.
+// - RESIZE grows or shrinks old_memory in place when it is the last
+//   allocation and the region holds size bytes from it. Otherwise it
+//   allocates anew and copies the old bytes that fit, or gives null with
+//   old_memory as it was.
+// - FREE does nothing. The memory goes back with everything else at the
+//   next reset.
+// - FREE_ALL is a reset: every page goes back to overflow_allocator, newest
+//   first, and the first block is handed out again from its start. Memory
+//   used after a reset is a memory error no check catches (spec 8.6). The
+//   high water mark stays.
+temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    LARGEST :: 9223372036854775807; // int's largest value
+    storage := context.temporary_storage;
+    page := storage.overflow_pages;
+    base := storage.data;
+    region_size := storage.size;
+    start := 0;
+    if page != null {
+        base = cast(*u8) page + size_of(Temporary_Storage_Page);
+        region_size = page.size;
+        start = page.start;
+    }
+    offset := storage.occupied - start;
+    if mode == ALLOCATE {
+        at := (offset + 7) & ~7;
+        // Compared as size against what is left, rather than at + size
+        // against the region's size, so that a size near int's largest
+        // can't wrap the sum. at may be past the region's end, when offset
+        // is within 7 of it, and then nothing is left.
+        if size <= region_size - at {
+            storage.occupied = start + at + size;
+            if storage.occupied > storage.high_water_mark { storage.high_water_mark = storage.occupied; }
+            return base + at;
+        }
+        // A page that big, with its header, has no int size.
+        if size > LARGEST - size_of(Temporary_Storage_Page) { return null; }
+        bytes := TEMPORARY_STORAGE_SIZE;
+        if size_of(Temporary_Storage_Page) + size > bytes { bytes = size_of(Temporary_Storage_Page) + size; }
+        overflow := storage.overflow_allocator;
+        fresh := cast(*Temporary_Storage_Page) overflow.proc(ALLOCATE, bytes, 0, null, overflow.data);
+        if fresh == null { return null; }
+        fresh.previous = page;
+        fresh.size = bytes - size_of(Temporary_Storage_Page);
+        // A region whose size isn't a multiple of 8, a large page's, would
+        // otherwise start the page at a count that isn't one. The gap
+        // counts as occupied, as the tail does.
+        fresh.start = (start + region_size + 7) & ~7;
+        storage.overflow_pages = fresh;
+        storage.occupied = fresh.start + size;
+        if storage.occupied > storage.high_water_mark { storage.high_water_mark = storage.occupied; }
+        return cast(*u8) fresh + size_of(Temporary_Storage_Page);
+    }
+    if mode == RESIZE {
+        // The last allocation ends where the region's offset is. old_size
+        // within the offset keeps old_memory in the region, and its own
+        // offset is then the region's less old_size.
+        if old_memory != null && old_size <= offset && cast(*u8) old_memory + old_size == base + offset {
+            from := offset - old_size;
+            if size <= region_size - from {
+                storage.occupied = start + from + size;
+                if storage.occupied > storage.high_water_mark { storage.high_water_mark = storage.occupied; }
+                return old_memory;
+            }
+        }
+        memory := temporary_allocator_proc(ALLOCATE, size, 0, null, data);
+        if memory == null { return null; }
+        count := old_size;
+        if size < count { count = size; }
+        // A count of 0 or less copies nothing, and never reaches C as a
+        // size_t that wrapped.
+        if count > 0 { __memmove(memory, old_memory, cast(u64) count); }
+        return memory;
+    }
+    if mode == FREE_ALL {
+        overflow := storage.overflow_allocator;
+        while page != null {
+            previous := page.previous;
+            overflow.proc(FREE, 0, 0, page, overflow.data);
+            page = previous;
+        }
+        storage.overflow_pages = null;
+        storage.occupied = 0;
+    }
+    return null;
+}
+
+// The temporary storage as an Allocator. Its procedure finds the storage
+// through the context, so it needs no data.
+TEMPORARY_ALLOCATOR :: Allocator.{temporary_allocator_proc, null};

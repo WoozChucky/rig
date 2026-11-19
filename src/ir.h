@@ -111,9 +111,19 @@
 //   procedures the compiler makes itself (__rig_bounds_failed,
 //   __rig_string_equal) have none, and no source, so a debugger steps over
 //   them. In a procedure of the source, only the prologue's work has none:
-//   each scalar parameter's slot and the store into it, before the body's
-//   first line (a debugger's breakpoint on the procedure stops at the first
-//   instruction with a line, once they're done).
+//   each scalar parameter's slot and the store into it, and the context's
+//   slot and what it's given (spec 7.10: the hidden parameter; or, in main
+//   and a run's procedure, the call of Preload's __runtime_init, then
+//   default_context's address), before the body's first line (a debugger's
+//   breakpoint on the procedure stops at the first instruction with a
+//   line, once they're done). __runtime_init itself has no debug
+//   information (Ir_Proc.no_debug_info), as the procedures the compiler
+//   makes have none: located at line 0, the call would be given main's own
+//   line, and `break main` would stop there before the call ran; with no
+//   location, LLVM refuses a call of a procedure that has debug
+//   information. So __runtime_init has none, the call has no location, and
+//   `break main` stops at main's first line with the context set up, and a
+//   debugger steps over the call.
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
 //   once, in the procedure's debug scope, and each line in it. So a call's
@@ -127,12 +137,13 @@
 //   visible: each Ir_Scope is one, the body scope 0, and each instruction
 //   with a position says which it runs in (Ir_Instr.scope; one without, in
 //   a procedure the compiler makes, is in none, -1). They follow the
-//   checker's scopes: an if's or else's block, or a block statement, is a
-//   scope; a for's or while's body is the loop's scope, which starts at
-//   the keyword and holds the iterator and it_index. An #if's taken branch
-//   is no scope (spec 4.9): its statements are the enclosing block's, and
-//   the #if adds no code of its own, its taken statements being at their
-//   own positions (none at the '#if'). Each copy of a deferred statement is a
+//   checker's scopes: an if's or else's block, a block statement, or a
+//   push_context's block is a scope, starting at its '{'; a for's or
+//   while's body is the loop's scope, which starts at the keyword and holds
+//   the iterator and it_index. An #if's taken branch is no scope (spec
+//   4.9): its statements are the enclosing block's, and the #if adds no
+//   code of its own, its taken statements being at their own positions
+//   (none at the '#if'). Each copy of a deferred statement is a
 //   scope of its own, at the statement, inside the scope the defer was
 //   reached in, so what each copy declares is a variable of its own. And a
 //   declaration of a local or a constant that hides a name a debugger
@@ -150,7 +161,16 @@
 //   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is
 //   stored on entry, and every use reads it, so a debugger that changes it
 //   changes what the program reads), an aggregate parameter as the
-//   pointer it's passed as.
+//   pointer it's passed as. And the context (spec 7.10), which the source
+//   doesn't declare, so it's artificial (Ir_Var.artificial): the hidden
+//   parameter, the first parameter after the result pointers (arg 1, the
+//   visible ones from 2), in its slot, at the procedure's name; in main and
+//   a run's procedure, the slot holding default_context's address, a local
+//   of the body's scope; and in a push_context's block, the slot holding
+//   the pushed context's address, a local of the block's scope at the
+//   keyword (lower.cpp's lower_push_context). A #c_call procedure has one
+//   only inside its pushes. Each is a *Context, and named context, so a debugger shows it and passes it to a
+//   procedure it calls (gdb's `print twice(context, 4)`).
 //   Temporaries and hidden result pointers aren't variables here: the
 //   source has no name for them. (The backend still describes each hidden
 //   result pointer to a debugger, from Ir_Proc.source_results, as an
@@ -421,13 +441,16 @@ struct Ir_Var {
     s32 scope;         // the Ir_Scope that declares it; -1 for a top-level constant
     Ir_Var_Kind kind;
     s32 value;         // a value's number, or a global's index: what, Ir_Var_Kind says
-    s32 arg;           // a parameter's place among the visible ones, from 1 (the hidden
-                       // result pointers before them don't count); 0 for any other
+    s32 arg;           // a parameter's place among those after the hidden result pointers,
+                       // which don't count, from 1: the context's first, when the procedure
+                       // takes it, then the visible ones; 0 for any other
     u64 constant;      // IR_VAR_CONSTANT: its bits, as Ast.constant keeps them (an integer's
                        // sign-extended to 64 when signed or untyped, zero-extended when
                        // unsigned; a bool's 0 or 1; a float's a double's, a float32's too,
                        // whose value it holds exactly, and which the backend narrows to its
                        // 32 bits: debug_constant_bits); 0 for the other kinds
+    bool artificial;   // made by the compiler, not declared in the source: the context (spec
+                       // 10.7), the hidden parameter or a slot holding the current one
 };
 
 struct Ir_Proc {
@@ -459,6 +482,9 @@ struct Ir_Proc {
     Array<Type *> source_results;  // its results' Rig types, in order, aggregates too (each of
                                    // them is a hidden pointer parameter in the IR); none for Rig's
                                    // main, though C's returns an int
+    bool no_debug_info;        // Preload's __runtime_init: a procedure of the source with no
+                               // subprogram and no line table, as the compiler's own have none, so
+                               // a debugger steps over main's call of it (see "Positions" above)
 };
 
 // A file of the program, for a debugger: how to find it, and whether the
@@ -482,6 +508,8 @@ struct Ir_Module {
     String directory;          // the directory rig ran in
     Array<Ir_Var> constants;   // the top-level constants, for a debugger, in source order: scope -1,
                                // arg 0 (see "Constants" above); none in a compile-time module
+    Type *context_type;        // Preload's Context, for the debug types of procedure types, which
+                               // take a *Context (spec 10.7); null without Preload
 };
 
 // Whether t is f32 or f64.
@@ -572,9 +600,12 @@ struct Lowering;
 // after; a global made the first time a body uses it. Bounds checks are
 // always on (#no_abc still holds). __rig_bounds_failed (index 0) and
 // __rig_string_equal (index 1) are made at once, whole: the bounds
-// buffer is sized for the longest path among d's files. d and the tree
-// must outlive the lowering; m and what it holds live in `a`.
-Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a);
+// buffer is sized for the longest path among d's files. `file` is the
+// checked tree, whose Preload declarations of the context (Ast_File's
+// context_type, default_context, runtime_init) the procedures lowered use;
+// null, or a tree without Preload, gives no context. d and the tree must
+// outlive the lowering; m and what it holds live in `a`.
+Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file);
 
 // The procedure `run` runs, run.N in l's module, and everything it reaches,
 // lowered (spec 7.8); its index. An expression #run's procedure returns
@@ -607,7 +638,11 @@ String ir_print(Arena *a, Ir_Module *m);
 // position and scope at the end of its line (none at line 0). A position in
 // the first file is L:C, its line and column, and one in any other F:L:C, F
 // the file's index (1:3:5 is line 3, column 5 of the second source). A
-// constant's place is its bits, in decimal, or its const.N:
+// constant's place is its bits, in decimal, or its const.N. A variable the
+// compiler made, the context, says `artificial` after its arg (`; var
+// context *Context slot %2 arg 1 artificial in 0 at 1:1`), and the source
+// line of a procedure with no debug information, __runtime_init, ends in
+// `, no debug info`:
 //
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
 //   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210

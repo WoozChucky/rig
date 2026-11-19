@@ -1,0 +1,21 @@
+implicit_context.rig:21
+= 1
+<heap_allocator_proc>
+implicit_context.rig:23
+= 1
+= 6
+type = int (struct Context *, int)
+twice (context=0x
+n=4) at
+context = 0x
+n = 4
+= 1
+implicit_context.rig:14
+y =
+= 6
+= 4
+implicit_context.rig:16
+= 1
+No symbol "context" in current context.
+!The program being debugged
+!.debug_names not created by gdb

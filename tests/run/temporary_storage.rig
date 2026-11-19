@@ -1,0 +1,171 @@
+// Temporary storage (issue #156, spec 7.10): TEMPORARY_ALLOCATOR hands
+// out context.temporary_storage's memory one allocation after another,
+// each at a multiple of 8, from its first 32 KB, which lie in the
+// program, then from pages its overflow_allocator gives, of 32 KB or the
+// request with its header, whichever is larger. A resize of the last
+// allocation stays in place when it fits. Nothing is given back until a
+// reset, FREE_ALL. occupied counts from the first byte, a page from the
+// first multiple of 8 at or past where the region before it ended, and
+// high_water_mark is the most it has been. A push_context with a program's own storage makes it allocate
+// from that one, its pages from its own overflow_allocator, which a reset
+// gives them back to; that allocator's null gives null, the storage as it
+// was.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// int's largest value.
+INT_LARGEST :: 9223372036854775807;
+
+T :: TEMPORARY_ALLOCATOR;
+
+take :: (size: int) -> *u8 { return T.proc(ALLOCATE, size, 0, null, T.data); }
+grow :: (p: *u8, old_size: int, size: int) -> *u8 { return T.proc(RESIZE, size, old_size, p, T.data); }
+reset :: () { T.proc(FREE_ALL, 0, 0, null, T.data); }
+
+pages :: () -> int {
+    n := 0;
+    page := context.temporary_storage.overflow_pages;
+    while page != null {
+        n += 1;
+        page = page.previous;
+    }
+    return n;
+}
+
+show :: (what: *u8) {
+    s := context.temporary_storage;
+    printf("%s: occupied %lld, pages %lld, most %lld\n", what, s.occupied, pages(), s.high_water_mark);
+}
+
+// While compiling, the runs share the compile-time world's storage,
+// which nothing resets but their own code.
+left :: () -> int {
+    take(100);
+    return context.temporary_storage.occupied;
+}
+FIRST :: #run left();
+SECOND :: #run left();
+
+// What a program's own storage asks of its overflow allocator, which
+// refuses every page while refuse is set.
+Overflow :: struct { allocations: int; frees: int; refuse: bool; }
+
+// Passes every call on to the heap, counting allocations and frees, or
+// gives null for an allocation while refuse is set.
+overflow_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Overflow) data;
+    if mode == ALLOCATE {
+        if counter.refuse { return null; }
+        counter.allocations += 1;
+    }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// A storage of the program's own, pushed: its first block 64 bytes of a
+// local, as u64s so they're aligned to 8, then pages of 32 KB from the
+// counting allocator.
+own :: () {
+    buffer : [8]u64;
+    counter : Overflow;
+    storage : Temporary_Storage;
+    storage.data = cast(*u8) *buffer[0];
+    storage.size = 64;
+    storage.overflow_allocator = Allocator.{overflow_proc, *counter};
+    before := context.temporary_storage.occupied;
+    pushed := context;
+    pushed.temporary_storage = *storage;
+    push_context pushed {
+        a := take(40);
+        printf("own: at %lld\n", a - storage.data);
+        b := take(40);         // past the 64 bytes: a page
+        show("own page");
+        counter.refuse = true;
+        c := take(40000);      // past the page, and refused
+        d := grow(b, 40, 40000);   // the last allocation, too big to stay: refused
+        printf("%d %d\n", c == null, d == null);
+        show("refused");
+        counter.refuse = false;
+        e := take(40000);      // a page of its own
+        show("own pages");
+        reset();
+        show("own reset");
+        printf("given back %lld of %lld\n", counter.frees, counter.allocations);
+    }
+    printf("default storage untouched: %d\n", context.temporary_storage.occupied == before);
+}
+
+main :: () {
+    show("start");
+    a := take(10);
+    b := take(1);
+    printf("%lld\n", b - a);
+    show("two");
+    c := grow(b, 1, 100);      // the last allocation: in place
+    printf("%d\n", c == b);
+    show("in place");
+    c = grow(c, 100, 4);       // shrunk in place
+    printf("%d\n", c == b);
+    show("shrunk");
+    for i: 0..9 { a[i] = cast(u8) (i + 1); }
+    d := grow(a, 10, 20);      // not the last: anew, copied
+    sum := 0;
+    for i: 0..9 { sum += cast(int) d[i]; }
+    printf("%d %lld\n", d == a, sum);
+    show("grown");
+    T.proc(FREE, 0, 20, d, T.data);   // nothing
+    show("freed");
+    printf("%d\n", take(INT_LARGEST) == null);
+    show("too large");
+    reset();
+    show("reset");
+    e := take(32768);          // the first 32 KB, exactly
+    show("full");
+    f := take(8);              // a page of 32 KB
+    show("a page");
+    reset();
+    g := take(32760);
+    h := grow(g, 32760, 32768);   // in place, to the end exactly
+    h[0] = 5;
+    h[32767] = 9;
+    k := grow(h, 32768, 32776);   // past it: a page of its own
+    printf("%d %d %d\n", h == g, k == h, k[0] == 5 && k[32767] == 9);
+    show("moved");
+    m := take(40000);          // the page is full: one of 40000 bytes
+    show("large");
+    reset();
+    show("reset again");
+    take(1);
+    take(32760);               // from 8: the first 32 KB, exactly
+    show("padded, full");
+    reset();
+    take(1);
+    take(32761);               // from 8, the padding leaves 32760: a page
+    show("padded, a page");
+    reset();
+    take(32765);
+    take(1);                   // from 32768, past the first 32 KB: a page
+    show("past the end");
+    reset();
+    take(32768);
+    take(32745);               // a page of 32745 bytes, an odd count
+    take(8);                   // the next page from a multiple of 8
+    show("odd page");
+    reset();
+    z := take(40);
+    for i: 0..39 { z[i] = 0; }
+    reset();
+    p := take(16);
+    for i: 0..15 { p[i] = cast(u8) (i + 1); }
+    q := take(8);              // so p isn't the last
+    r := grow(p, 16, 4);       // shrunk, not the last: anew, 4 bytes copied
+    s := take(8);              // right after r, on z's zeros
+    sum = 0;
+    for i: 0..3 { sum += cast(int) r[i]; }
+    zeros := 0;
+    for i: 0..7 { if s[i] == 0 { zeros += 1; } }
+    printf("%d %lld %lld %lld\n", r == p, s - r, sum, zeros);
+    show("shrunk anew");
+    reset();
+    printf("%lld %lld\n", FIRST, SECOND);
+    own();
+}

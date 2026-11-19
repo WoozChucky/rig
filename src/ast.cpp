@@ -493,6 +493,20 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump(buffer, ((Ast_Defer *)node)->statement);
         out(buffer, ")");
         break;
+    case AST_CONTEXT:
+        // (context): the current context, a keyword as null is.
+        out(buffer, "(context)");
+        break;
+    case AST_PUSH_CONTEXT: {
+        // (push_context E (block ...)): the block runs with E as its context.
+        Ast_Push_Context *push = (Ast_Push_Context *)node;
+        out(buffer, "(push_context ");
+        dump(buffer, push->context);
+        out(buffer, " ");
+        dump(buffer, push->block);
+        out(buffer, ")");
+        break;
+    }
     case AST_SPREAD:
         // (spread E) for ..e.
         out(buffer, "(spread ");

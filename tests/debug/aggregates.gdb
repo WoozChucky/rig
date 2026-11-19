@@ -18,27 +18,27 @@ info args
 print p.a
 print p->b
 print *p
-print twice(4)
+print twice(context, 4)
 ptype make
 ptype sum
 ptype both
 up
 delete
-print sum(&q)
-print make(&q, 7)
+print sum(context, &q)
+print make(&q, context, 7)
 print q
-print both(&b, 4)
+print both(&b, context, 4)
 print b
 break aggregates.rig:60
 continue
 print new
 print this
-print twice(3)
+print twice(context, 3)
 up
-print pairs(&x, &y, 3)
+print pairs(&x, &y, context, 3)
 print x
 print y
-print split(&z, 4)
+print split(&z, context, 4)
 print z
 break pairs
 break split

@@ -105,6 +105,8 @@ struct Backend {
     // address names it.
     Table<Debug_Type> debug_types;
     Arena *arena;             // where the build allocates: the table's keys, types' names
+    Type *context_type;       // Preload's Context (Ir_Module.context_type), for the debug types of
+                              // procedure types, which take a *Context (spec 10.7); null without
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
@@ -967,11 +969,14 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
 // list is the result's type first, the one scalar result when there's
 // exactly one, and none (null) otherwise: no scalar result, or several,
 // which LLVM returns together in a way no C type describes; then those
-// pointers, then the visible parameters. Its parts are made `depth` levels
-// down (part_debug_type, which raises *levels), or, with depth -1, as a
-// procedure's own (debug_type: begin_procedure_debug_info).
+// pointers, then `context`, the *Context a procedure that takes the context
+// is given (spec 7.10; null for none), then the visible parameters. Its
+// parts are made `depth` levels down (part_debug_type, which raises
+// *levels), or, with depth -1, as a procedure's own (debug_type:
+// begin_procedure_debug_info, whose context, when it takes one, is its
+// first parameter variable, so among `params` already).
 static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_count, Type **results,
-                                       s64 result_count, s32 depth, s32 *levels) {
+                                       s64 result_count, Type *context, s32 depth, s32 *levels) {
     s64 pointers = 0, scalars = 0;
     Type *scalar = nullptr;
     for (s64 i = 0; i < result_count; i++) {
@@ -982,14 +987,15 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
             scalar = results[i];
         }
     }
-    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(b->arena, 1 + pointers + param_count);
+    LLVMMetadataRef *types = arena_new_array<LLVMMetadataRef>(b->arena, 2 + pointers + param_count);
     s64 count = 0;
     types[count++] = scalars == 1 ? (depth < 0 ? debug_type_at(b, scalar, 0).node
                                                : part_debug_type(b, scalar, depth, levels))
                                   : nullptr;
-    for (s64 i = 0; i < result_count + param_count; i++) {
-        Type *t = i < result_count ? results[i] : params[i - result_count];
-        if (i < result_count && !type_is_aggregate(t)) continue;
+    // The aggregate results' pointers, the context, the parameters.
+    for (s64 i = 0; i <= result_count + param_count; i++) {
+        Type *t = i < result_count ? results[i] : i == result_count ? context : params[i - result_count - 1];
+        if (!t || (i < result_count && !type_is_aggregate(t))) continue;
         LLVMMetadataRef type = depth < 0 ? debug_type_at(b, t, 0).node : part_debug_type(b, t, depth, levels);
         types[count++] = type_is_aggregate(t) ? debug_pointer(b, type) : type;
     }
@@ -1079,8 +1085,15 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
     case TYPE_PROC: {
         // Its parts first, which may have made this type already (a
         // procedure type taking a struct that holds one): then that one is it.
+        // A type that isn't #c_call is one of procedures that take the
+        // context (spec 7.10), so its signature lists the *Context after the
+        // result pointers, and a debugger's call through a value of it passes
+        // one (gdb's `print f(context, 10, 20)`). (Context holds an
+        // Allocator, whose procedure type takes a *Context: a cycle through
+        // a struct, which debug_struct breaks.)
+        Type *context = b->context_type && !t->is_c_call ? type_pointer_to(b->context_type) : nullptr;
         LLVMMetadataRef signature =
-            debug_signature(b, t->params, t->param_count, t->results, t->result_count, depth, &levels);
+            debug_signature(b, t->params, t->param_count, t->results, t->result_count, context, depth, &levels);
         made = cached_debug_type(b, t);
         if (made.node) return made;
         return remember_debug_type(b, t, Debug_Type{debug_pointer(b, signature), levels});
@@ -1110,7 +1123,9 @@ static s64 result_pointers(Ir_Proc *p) {
 // lexical blocks, in body->scopes. Nothing for a procedure without a source
 // name (one the compiler made) or in a module without debug information.
 static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMValueRef function, Body *body) {
-    if (!b->debug || p->source_name.count == 0) return;
+    // Preload's __runtime_init has none either (Ir_Proc.no_debug_info), as
+    // the compiler's own procedures: a debugger steps over main's call of it.
+    if (!b->debug || p->source_name.count == 0 || p->no_debug_info) return;
     RIG_ASSERT(p->scopes.count > 0);
     // The procedure's type: a list of types, its result's first (null for
     // none), then its parameters' (debug_signature). It says how the
@@ -1120,11 +1135,14 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // A debugger calling a procedure from an expression passes the
     // parameters its debug information shows, as C passes them, and takes
     // the result from where C leaves one. Described so, that is what the
-    // procedure expects: gdb's `print sum(&q)` and cdb's `.call sum(&q)`
-    // pass q's address, and gdb's `print make(&q, 7)` and cdb's `.call
-    // make(&q, 7)` the address make writes its Pair to, and a `finish`
-    // out of make shows no value. Described as C would pass the types, a
-    // debugger would pass a struct by value where sum expects its address,
+    // procedure expects: gdb's `print sum(context, &q)` and cdb's `.call
+    // sum(context, &q)` pass the context (spec 7.10: the hidden *Context
+    // after the result pointers, the variable context where the debugger
+    // stopped) and q's address, and gdb's `print make(&q, context, 7)` and
+    // cdb's `.call make(&q, context, 7)` the address make writes its Pair
+    // to first, and a `finish` out of make shows no value. Described as C
+    // would pass the types, a debugger would pass a struct by value where
+    // sum expects its address,
     // leave make's result pointer out (crashing the program), and read a
     // returned struct from rax and rdx, as C returns 16 bytes, showing
     // whatever those registers held (measured with gdb). DWARF can mark
@@ -1139,8 +1157,9 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
     // those to check a call's arguments (measured: without the result
     // pointer's, `.call make(9)` was taken, 9 put where the pointer goes).
     // So declare_variables makes the same parameters variables: each
-    // result pointer, then each visible parameter, an aggregate one as the
-    // pointer it is.
+    // result pointer, then the context when the procedure takes it (its
+    // first Ir_Var, arg 1), then each visible parameter, an aggregate one as
+    // the pointer it is.
     s64 params = 0;
     while (params < p->vars.count && p->vars[params].arg > 0) params++;
     Type **param_types = arena_new_array<Type *>(a, params);
@@ -1148,8 +1167,8 @@ static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMVal
         RIG_ASSERT(p->vars[i].arg == i + 1);
         param_types[i] = p->vars[i].type;
     }
-    LLVMMetadataRef type =
-        debug_signature(b, param_types, params, p->source_results.data, p->source_results.count, -1, nullptr);
+    LLVMMetadataRef type = debug_signature(b, param_types, params, p->source_results.data, p->source_results.count,
+                                           nullptr, -1, nullptr);
     // Its Rig name, and no linkage name (the symbol's): given one, gdb
     // names the procedure by it, so a Rig `write` that LLVM renamed write.1
     // (C's write was taken first) would be write.1 to `break` and `bt`.
@@ -1427,10 +1446,11 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 //   typed as the pointer it holds, a pointer to the aggregate (`[]int *`):
 //   what the procedure takes, as its type says
 //   (begin_procedure_debug_info), so a debugger calls it with an address
-//   (gdb's `print sum(&q)`). gdb shows the address and takes `p->a`, `*p` and `p.a`
-//   (it reads `.` through a pointer too); cdb takes `p->a`; Visual
-//   Studio's debugger, VS Code's on Windows, shows the fields and takes
-//   `a.count`, as it does for any pointer to a struct. (The variable could
+//   (gdb's `print sum(context, &q)`, the context first: below). gdb shows
+//   the address and takes `p->a`, `*p` and `p.a` (it reads `.` through a
+//   pointer too); cdb takes `p->a`; Visual Studio's debugger, VS Code's on
+//   Windows, shows the fields and takes `a.count`, as it does for any
+//   pointer to a struct. (The variable could
 //   be the value at the address the slot holds instead, the declare's
 //   expression DW_OP_deref, as clang declares an argument passed by its
 //   address: gdb would show the struct, but call the procedure with it by
@@ -1443,18 +1463,24 @@ static u64 debug_constant_bits(Type *t, u64 bits) {
 //   32-bit pointer.)
 // - Each hidden result pointer (one per aggregate result, the IR's first
 //   parameters) is a parameter variable too, the first ones, so a debugger
-//   shows it and calls the procedure with it: gdb's `print make(&q, 7)`,
-//   cdb's `.call make(&q, 7)`. It's stored into a slot of its own like an
-//   aggregate parameter's address, and the variable is the slot: a
-//   pointer to the result's type. It's named result$ (result$1, result$2,
-//   ... for several), which can't be a Rig name (Rig's names are C's:
-//   letters, digits and '_'), but which both debuggers take in an
-//   expression (gdb's `print result$`, cdb's `?? result$`), where gdb
-//   would take $result for one of its own convenience variables. (What it
-//   points at, the caller's temporary, holds the result once `return` has
-//   copied it there.) It's
-//   artificial (DW_AT_artificial): made by the compiler, not declared in
-//   the source.
+//   shows it and calls the procedure with it, before the context: gdb's
+//   `print make(&q, context, 7)`, cdb's `.call make(&q, context, 7)`. It's
+//   stored into a slot of its own like an aggregate parameter's address,
+//   and the variable is the slot: a pointer to the result's type. It's
+//   named result$ (result$1, result$2, ... for several), which can't be a
+//   Rig name (Rig's names are C's: letters, digits and '_'), but which both
+//   debuggers take in an expression (gdb's `print result$`, cdb's `??
+//   result$`), where gdb would take $result for one of its own convenience
+//   variables. (What it points at, the caller's temporary, holds the result
+//   once `return` has copied it there.) It's artificial (DW_AT_artificial):
+//   made by the compiler, not declared in the source.
+// - The context (spec 7.10) is a variable in a slot (IR_VAR_SLOT) named
+//   context, artificial too (Ir_Var.artificial): in a procedure that takes
+//   it, the hidden parameter after the result pointers, its ArgNo the one
+//   after theirs (arg 1 in lowering's count, which leaves them out); in
+//   main and a run's procedure, a local holding default_context's address;
+//   in a push_context's block, a local of the block holding the pushed
+//   context's address.
 // - A constant that is a number, a bool or null (IR_VAR_CONSTANT) has no
 //   storage: it's a DILocalVariable whose value a value record
 //   (#dbg_value) at the same place gives, for the whole of its scope, so
@@ -1511,9 +1537,9 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
     LLVMMetadataRef plain = LLVMDIBuilderCreateExpression(b->debug, nullptr, 0);
     // Each variable is in the procedure's file, as its scopes are.
     LLVMMetadataRef file = debug_file(b, p->pos);
-    // The result pointers, parameters 1 to `pointers` (the visible ones
-    // come after them), at the procedure's own line: the i-th points at the
-    // i-th aggregate result.
+    // The result pointers, parameters 1 to `pointers` (the context and the
+    // visible ones come after them), at the procedure's own line: the i-th
+    // points at the i-th aggregate result.
     s64 aggregate = 0;
     for (s64 i = 0; i < pointers; i++) {
         while (!type_is_aggregate(p->source_results[aggregate])) aggregate++;
@@ -1545,17 +1571,21 @@ static void declare_variables(Backend *b, Arena *a, Ir_Proc *p, Body *body) {
             continue;
         }
         // An aggregate parameter: a pointer in its slot (see above). A
-        // visible parameter's ArgNo counts the result pointers before it.
+        // visible parameter's ArgNo counts the result pointers before it,
+        // and its v->arg the context before it too.
         if (v->kind == IR_VAR_ADDRESS) type = debug_pointer(b, type);
         // AlwaysPreserve: kept even if LLVM finds no use of it (an optimiser
         // could drop a variable that's never read; a debugger still shows
-        // it).
+        // it). One the compiler made, the context (spec 7.10: the hidden
+        // parameter, or a slot holding it: main's, a run's or a
+        // push_context's), is artificial, as result$ is.
+        LLVMDIFlags flags = v->artificial ? LLVMDIFlagArtificial : LLVMDIFlagZero;
         LLVMMetadataRef variable =
             v->arg > 0 ? LLVMDIBuilderCreateParameterVariable(b->debug, scope, name, (size_t)v->name.count,
                                                               (unsigned)(pointers + v->arg), file, line, type, 1,
-                                                              LLVMDIFlagZero)
+                                                              flags)
                        : LLVMDIBuilderCreateAutoVariable(b->debug, scope, name, (size_t)v->name.count, file, line,
-                                                         type, 1, LLVMDIFlagZero, 0);
+                                                         type, 1, flags, 0);
         // The record's own location: the declaration's line, in its scope
         // (column 0 on Windows, as every location there: set_location).
         unsigned column = b->target == TARGET_WINDOWS_X64 ? 0 : (unsigned)v->pos.col;
@@ -1876,6 +1906,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     b->target = t;
     b->optimize = optimize;
     b->arena = a;
+    b->context_type = m->context_type;  // here, since part_debug_type sees only b
     b->context = LLVMContextCreate();
     b->module = LLVMModuleCreateWithNameInContext("rig", b->context);
     LLVMSetTarget(b->module, triple);

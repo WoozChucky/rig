@@ -1,0 +1,67 @@
+// The context (issue #156, spec 7.10): every Rig procedure but a #c_call
+// one is given its caller's context without naming it, and context
+// names it there. Code three calls deep allocates from context.allocator,
+// and main decides where that is. main runs with the default context,
+// and so does a #run's code, the compile-time world's own.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// The heap, counting what it gives: data is the count, an *int.
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+allocate :: (size: int) -> *void {
+    a := context.allocator;
+    return a.proc(ALLOCATE, size, 0, null, a.data);
+}
+give_back :: (p: *void) {
+    a := context.allocator;
+    a.proc(FREE, 0, 0, p, a.data);
+}
+second :: () -> *void { return allocate(8); }
+first :: () -> *void { return second(); }
+
+// A call through a procedure value passes the context too.
+through :: (f: () -> *void) -> *void { return f(); }
+
+// A callee's context is its caller's, the same one.
+same :: (c: *Context) -> bool { return c == *context; }
+
+// While compiling: the world's default context, the heap its allocator.
+HEAP_WHILE_COMPILING :: #run (context.allocator.proc == heap_allocator_proc);
+ITS_OWN :: #run same(*default_context);
+STORAGE :: #run context.temporary_storage.size;
+// A string made from the run's context's allocator, baked: the run leaves
+// out the default, which reads the context there.
+made :: (a: Allocator = context.allocator) -> string {
+    bytes := cast(*u8) a.proc(ALLOCATE, 3, 0, null, a.data);
+    bytes[0] = 114;
+    bytes[1] = 117;
+    bytes[2] = 110;
+    s : string;
+    s.data = bytes;
+    s.count = 3;
+    return s;
+}
+MADE :: #run made();
+// A block's run starts with the world's default context too, and passes
+// it to what it calls. What it prints is rig build's (context.build.out).
+#run {
+    give_back(first());
+    printf("%d %lld\n", context.allocator.proc == heap_allocator_proc, context.temporary_storage.size);
+}
+
+main :: () {
+    count := 0;
+    printf("%d %d\n", context.allocator.proc == heap_allocator_proc, same(*context));
+    saved := context.allocator;
+    context.allocator = Allocator.{counting_proc, *count};
+    give_back(first());
+    give_back(through(first));
+    printf("%lld\n", count);
+    context.allocator = saved;
+    give_back(first());
+    printf("%lld %d\n", count, *context == *default_context);
+    printf("%d %d %lld %.*s\n", HEAP_WHILE_COMPILING, ITS_OWN, STORAGE, cast(s32) MADE.count, MADE.data);
+}

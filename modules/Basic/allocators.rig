@@ -1,14 +1,21 @@
-// Basic's allocators: where memory comes from. An allocator is passed to
-// whatever needs memory, rather than everything taking it from one global
-// heap, so the caller decides where it comes from and how it goes back:
-// Basic's are a run of blocks given back all at once (an arena) and slots
-// of one size (a pool).
+// Basic's allocators: where memory comes from. Whatever needs memory takes
+// an allocator, rather than everything taking it from one global heap, so
+// the caller decides where it comes from and how it goes back: Basic's are
+// a run of blocks given back all at once (an arena) and slots of one size
+// (a pool). Left out, the allocator is the context's, context.allocator
+// (spec 7.10), worked out in the caller as any default value is (7.2): so
+// a caller that pushes a context with an arena's allocator, or sets
+// context.allocator for a stretch, has the memory of every call that
+// leaves its allocator out, in the stretch and in what it calls, come
+// from the arena without passing it down.
 //
 // An allocator's shape (Allocator), its modes (ALLOCATE, RESIZE, FREE and
 // FREE_ALL) and the heap (heap_allocator_proc and HEAP_ALLOCATOR) are
 // Preload's, which every program imports without asking (spec 2.14; its
-// README.md lists them). This file adds what is built over them: the four
-// helpers, an arena and a pool.
+// README.md lists them), and so are the context's temporary storage and
+// its allocator, TEMPORARY_ALLOCATOR. This file adds what is built over
+// them: the four helpers, an arena, a pool, and the temporary storage's
+// own helpers, talloc, its marks and its reset.
 //
 // A program calls the four helpers, alloc, resize, free and free_all,
 // rather than an allocator's procedure. They settle the edges once, so no
@@ -18,17 +25,19 @@
 // pass that on.
 #load "memory.rig";
 
-// size bytes from allocator, or null when it has none to give. A size of 0
-// or less gives null without asking the allocator.
-alloc :: (size: int, allocator: Allocator) -> *void {
+// size bytes from allocator, the context's unless given, or null when it
+// has none to give. A size of 0 or less gives null without asking the
+// allocator.
+alloc :: (size: int, allocator: Allocator = context.allocator) -> *void {
     if size <= 0 { return null; }
     return allocator.proc(ALLOCATE, size, 0, null, allocator.data);
 }
 
-// memory, which holds old_size bytes from allocator, made new_size bytes
-// long. The result may be another address, holding the first of memory's
-// bytes, and then memory is gone. When the allocator can't give the bytes,
-// the result is null and memory is as it was, still the caller's to free.
+// memory, which holds old_size bytes from allocator, the context's unless
+// given, made new_size bytes long. The result may be another address,
+// holding the first of memory's bytes, and then memory is gone. When the
+// allocator can't give the bytes, the result is null and memory is as it
+// was, still the caller's to free.
 //
 // Resizing null is alloc, so memory can start out null and grow.
 //
@@ -38,7 +47,7 @@ alloc :: (size: int, allocator: Allocator) -> *void {
 // compiled program's C library and the interpreter's (the compiler's own,
 // linked statically) differ, one freeing the memory and the other keeping
 // it.
-resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator) -> *void {
+resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator = context.allocator) -> *void {
     if memory == null { return alloc(new_size, allocator); }
     if new_size <= 0 {
         free(memory, allocator);
@@ -47,16 +56,18 @@ resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator) ->
     return allocator.proc(RESIZE, new_size, old_size, memory, allocator.data);
 }
 
-// Gives memory back to the allocator it came from. Freeing null does
-// nothing.
-free :: (memory: *void, allocator: Allocator) {
+// Gives memory back to allocator, the context's unless given, which must
+// be the allocator it came from: memory another allocator gave is freed
+// by passing that one. Freeing null does nothing.
+free :: (memory: *void, allocator: Allocator = context.allocator) {
     if memory == null { return; }
     allocator.proc(FREE, 0, 0, memory, allocator.data);
 }
 
-// Gives back everything allocator has given, for the allocators that keep
-// track of it: an arena and a pool do, the heap doesn't.
-free_all :: (allocator: Allocator) {
+// Gives back everything allocator, the context's unless given, has given,
+// for the allocators that keep track of it: an arena and a pool do, the
+// heap doesn't.
+free_all :: (allocator: Allocator = context.allocator) {
     allocator.proc(FREE_ALL, 0, 0, null, allocator.data);
 }
 
@@ -84,11 +95,13 @@ Arena :: struct {
     used: int;
 }
 
-// Makes arena an empty arena whose blocks come from parent, block_size
-// bytes each, or 4096 for a block_size of 0 or less. No block is taken
-// until the first allocation. It doesn't give back blocks an arena already
-// had: free_all does.
-arena_init :: (arena: *Arena, block_size: int, parent: Allocator) {
+// Makes arena an empty arena whose blocks come from parent, the context's
+// unless given, block_size bytes each, or 4096 for a block_size of 0 or
+// less. The arena keeps parent, so its blocks come from there and go back
+// there whatever the context is later. No block is taken until the first
+// allocation. It doesn't give back blocks an arena already had: free_all
+// does.
+arena_init :: (arena: *Arena, block_size: int, parent: Allocator = context.allocator) {
     arena.parent = parent;
     arena.block_size = block_size;
     if block_size <= 0 { arena.block_size = 4096; }
@@ -198,11 +211,13 @@ Pool :: struct {
 }
 
 // Makes pool an empty pool of slot_count slots of slot_size bytes, whose
-// memory comes from parent at the first allocation. slot_size is raised to
-// at least the size of a Pool_Slot, since a free slot holds one, and up to
-// a multiple of 8, so every slot is aligned to 8 when the parent's memory
-// is. It doesn't give back memory a pool already had: free_all does.
-pool_init :: (pool: *Pool, slot_size: int, slot_count: int, parent: Allocator) {
+// memory comes from parent, the context's unless given, at the first
+// allocation; the pool keeps parent, as an arena does. slot_size is raised
+// to at least the size of a Pool_Slot, since a free slot holds one, and up
+// to a multiple of 8, so every slot is aligned to 8 when the parent's
+// memory is. It doesn't give back memory a pool already had: free_all
+// does.
+pool_init :: (pool: *Pool, slot_size: int, slot_count: int, parent: Allocator = context.allocator) {
     LARGEST :: 9223372036854775807; // int's largest value
     size := slot_size;
     if size < size_of(Pool_Slot) { size = size_of(Pool_Slot); }
@@ -275,4 +290,71 @@ pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, 
 // pool as an Allocator.
 pool_allocator :: (pool: *Pool) -> Allocator {
     return Allocator.{pool_allocator_proc, pool};
+}
+
+// Where the context's temporary storage reached when the mark was taken:
+// its newest page, null while it has none, and how far into its count
+// allocations reached (Temporary_Storage.occupied, Preload's). Going back
+// to it gives back what was allocated since.
+Temporary_Storage_Mark :: struct {
+    page: *Temporary_Storage_Page;
+    occupied: int;
+}
+
+// size bytes from the context's temporary storage, through
+// TEMPORARY_ALLOCATOR, or null when it has none to give, as alloc gives
+// them. Nothing goes back one allocation at a time: everything goes back
+// at once, at reset_temporary_storage or set_temporary_storage_mark, so
+// it suits memory that is done with by a point the program knows, such as
+// a frame's end or a request's.
+talloc :: (size: int) -> *void {
+    return alloc(size, TEMPORARY_ALLOCATOR);
+}
+
+// Empties the context's temporary storage: every page goes back to its
+// overflow_allocator, and its first block is handed out again from its
+// start, as FREE_ALL of TEMPORARY_ALLOCATOR does. Everything allocated
+// from it before is gone, and memory used after the reset is a memory
+// error no check catches (spec 8.6). Its high_water_mark stays, so a
+// program can see how much a frame or a request took at its most.
+reset_temporary_storage :: () {
+    free_all(TEMPORARY_ALLOCATOR);
+}
+
+// A mark of where the context's temporary storage is now, to go back to
+// with set_temporary_storage_mark.
+get_temporary_storage_mark :: () -> Temporary_Storage_Mark {
+    storage := context.temporary_storage;
+    mark : Temporary_Storage_Mark;
+    mark.page = storage.overflow_pages;
+    mark.occupied = storage.occupied;
+    return mark;
+}
+
+// Takes the context's temporary storage back to mark: every page made
+// since goes back to its overflow_allocator, newest first, and what was
+// allocated after the mark is handed out again. So a stretch of code that
+// takes temporary memory it is done with at its end gives it back there,
+// leaving what came before. Memory allocated after the mark and used after
+// going back to it is a memory error no check catches (spec 8.6).
+//
+// A mark whose page the storage no longer has is wrong too: one of another
+// storage, one taken before a reset since, or one taken after a mark the
+// storage has gone back to since. Going back to it is a memory error no
+// check catches. When no page made since has the gone page's address, the
+// walk below never meets it, so every page goes back and the program stops
+// at a null pointer dereference once the walk passes the oldest; but the
+// heap often hands that address out again, and then the walk stops there
+// silently. A mark with no page takes every page back, which is right only
+// for a mark of this storage.
+set_temporary_storage_mark :: (mark: Temporary_Storage_Mark) {
+    storage := context.temporary_storage;
+    page := storage.overflow_pages;
+    while page != mark.page {
+        previous := page.previous;
+        free(page, storage.overflow_allocator);
+        page = previous;
+    }
+    storage.overflow_pages = mark.page;
+    storage.occupied = mark.occupied;
 }

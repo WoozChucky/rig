@@ -11,9 +11,10 @@
 //
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values, a
-// reached procedure's default values, which its callers' code holds), so
-// whatever the #run's code is lowered with is checked, whether or not it
-// runs. A type's description (type_info(T), a value converted to Any) is
+// reached procedure's default values, which its callers' code holds), and
+// Preload's __runtime_init, which every run's procedure calls first (spec
+// 7.10), so whatever the #run's code is lowered with is checked, whether or
+// not it runs. A type's description (type_info(T), a value converted to Any) is
 // lowered with every type it reaches, so the walk follows those too, behind
 // pointers as well (walk_described). And it fails where lowering couldn't
 // go on: a value, a parameter or a result with no type, a #run with no
@@ -71,8 +72,8 @@ static void reach_described(Reach *r, Type *t) {
 // them in source order: a call's callee and arguments, an operator's
 // operands (a spread's too), a cast's value, a field's struct, an element's
 // array and index, a literal's values. Nothing for a name, a number, a
-// string, a bool, null, size_of, type_info or a #run, whose operand was
-// checked as it was.
+// string, a bool, null, size_of, type_info, context or a #run, whose
+// operand was checked as it was.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -334,6 +335,14 @@ static bool walk_node(Reach *r, Ast *node) {
     // A deferred statement is code wherever its block is left (spec 6.12):
     // walked as any statement.
     case AST_DEFER: array_add(nodes, ((Ast_Defer *)node)->statement); return true;
+    // A push's context, then its block (spec 6.13), as an if's condition
+    // and block.
+    case AST_PUSH_CONTEXT: {
+        Ast_Push_Context *push = (Ast_Push_Context *)node;
+        array_add(nodes, push->block);
+        array_add(nodes, push->context);
+        return true;
+    }
     case AST_BREAK:
     case AST_CONTINUE: return true;
     default: return walk_expression(r, node);
@@ -415,6 +424,11 @@ static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
     } else {
         reach_decl(&r, run->proc);
     }
+    // Every run's procedure calls Preload's __runtime_init first (lowering's
+    // startup, spec 7.10), so its body is reached too, and checked before
+    // the run is lowered: a constant's #run in the declarations pass, before
+    // any body is checked, included.
+    if (c->file->runtime_init) reach_decl(&r, c->file->runtime_init);
     reach_type(&r, t);
     bool clean = true;
     while (clean && (r.types.count || r.described.count || r.nodes.count)) {
@@ -465,7 +479,17 @@ Type *check_run(Checker *c, Ast_Run *run) {
     }
     Ast *operand = run->operand;
     s64 errors = c->diag->error_count;
-    if (!check_value(c, operand)) return nullptr;
+    // Its operand is code that runs, with the run's own context (spec
+    // 7.10), wherever the #run is: in a #c_call body too, and in a default
+    // value, which needs no caller's context for it.
+    bool outer_in_code = c->in_code, outer_contextless = c->contextless, outer_needs = c->needs_context;
+    c->in_code = true;
+    c->contextless = false;
+    Type *checked = check_value(c, operand);
+    c->in_code = outer_in_code;
+    c->contextless = outer_contextless;
+    c->needs_context = outer_needs;
+    if (!checked) return nullptr;
     check_default_type(c, operand);
     Type *t = operand->type;
     if (!t) return nullptr;  // a literal with no type to take, or a float too large: said
@@ -499,7 +523,12 @@ void check_top_level_run(Checker *c, Ast_Run *run) {
         return;
     }
     s64 errors = c->diag->error_count;
-    if (!check_expression(c, run->operand)) return;
+    // Code that runs, with the run's own context (spec 7.10).
+    bool outer_in_code = c->in_code;
+    c->in_code = true;
+    Type *checked = check_expression(c, run->operand);
+    c->in_code = outer_in_code;
+    if (!checked) return;
     check_default_type(c, run->operand);
     run->type = run->operand->type;
     if (!run->type) return;

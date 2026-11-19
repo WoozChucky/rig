@@ -1,0 +1,12 @@
+tests/errors/context_refused.rig:4:10: error: 'context' is only in a body, where a procedure runs
+    limit := context.allocator;
+             ^
+tests/errors/context_refused.rig:5:10: error: 'context' is only in a body, where a procedure runs
+    LIMIT :: context;
+             ^
+tests/errors/context_refused.rig:6:1: error: push_context can only be in a body
+    push_context context { }
+    ^
+tests/errors/context_refused.rig:8:18: error: push_context needs a 'Context', not 'Allocator'
+        push_context a { }
+                     ^

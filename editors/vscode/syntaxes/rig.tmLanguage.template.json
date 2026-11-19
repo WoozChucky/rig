@@ -285,6 +285,10 @@
                 {
                     "name": "keyword.other.rig",
                     "match": "\\b(?:@KEYWORDS_OTHER@)\\b"
+                },
+                {
+                    "name": "variable.language.rig",
+                    "match": "\\b(?:@KEYWORDS_VARIABLE@)\\b"
                 }
             ]
         },

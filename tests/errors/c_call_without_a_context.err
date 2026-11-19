@@ -1,0 +1,15 @@
+tests/errors/c_call_without_a_context.rig:9:10: error: a #c_call procedure has no context until it pushes one, as in push_context default_context { ... }
+        a := context.allocator;
+             ^
+tests/errors/c_call_without_a_context.rig:12:10: error: 'twice' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }
+        n := twice(1);
+             ^
+tests/errors/c_call_without_a_context.rig:13:10: error: 'doubling' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }
+        m := doubling(2);
+             ^
+tests/errors/c_call_without_a_context.rig:16:10: error: 'sized' leaves out 'n', whose default value needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }
+        n := sized();
+             ^
+tests/errors/c_call_without_a_context.rig:20:10: error: '(int) -> int' needs a context; a #c_call procedure has none until it pushes one, as in push_context default_context { ... }
+        n := ops.*[0](1);
+             ^

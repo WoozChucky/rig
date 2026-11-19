@@ -1,0 +1,121 @@
+// push_context (issue #156, spec 6.13): a block run with another context
+// as context, by its address when it's a place and a copy of it when it
+// isn't. However the block is left (its end, return, break, continue),
+// the context is the one before it again: push_context is lexical, so
+// nothing is undone at run time. A defer runs with the context where
+// it's written.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+// The heap under another name: its data names it.
+named_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// A copy of the current context, its allocator named.
+named :: (name: *u8) -> Context {
+    c := context;
+    c.allocator = Allocator.{named_proc, name};
+    return c;
+}
+
+// The name of the allocator in the context a callee is given.
+say :: (where: *u8) {
+    name : *u8 = "heap";
+    if context.allocator.data != null { name = context.allocator.data; }
+    printf("%s: %s\n", where, name);
+}
+
+returns :: () -> int {
+    defer say("outer defer");
+    push_context named("returning") {
+        defer say("inner defer");
+        say("in the block");
+        return 7;
+    }
+    return 0;
+}
+
+// Code after a way out in the block still runs with the block's context,
+// though the defer the return runs has its own.
+guarded :: (n: int) {
+    defer say("guarded defer");
+    push_context named("guarded") {
+        if n == 1 { return; }
+        say("after the if");
+    }
+}
+
+main :: () {
+    // A place: the block runs with c itself, and what it sets is c's.
+    c := named("place");
+    push_context c {
+        say("place");
+        changed : *u8 = "changed";
+        context.allocator.data = changed;
+        say("set");
+    }
+    printf("c: %s\n", c.allocator.data);
+    say("after the place");
+
+    // Anything else is copied: here a call's result. The block's own defer
+    // runs at its end, with its context, before what follows it.
+    push_context named("temporary") {
+        defer say("temporary defer");
+        say("temporary");
+    }
+    say("after the temporary");
+
+    printf("%lld\n", returns());
+    say("after return");
+    guarded(1);
+    guarded(2);
+
+    // The body's defer, outside the push, runs with the body's context
+    // at the continue and the break, and at the body's end.
+    for 1..3 {
+        defer say("loop defer");
+        say("iteration");
+        push_context named("loop") {
+            if it == 2 { continue; }
+            say("loop");
+            if it == 3 { break; }
+        }
+        say("after the block");
+    }
+    say("after break");
+
+    push_context named("outer") {
+        push_context named("inner") { say("nested"); }
+        say("back out");
+    }
+
+    // An untyped literal takes the type Context and is copied, into a
+    // temporary filled again each time round the loop.
+    for 1..2 {
+        lit : *u8 = "literal 1";
+        if it == 2 { lit = "literal 2"; }
+        push_context .{allocator = Allocator.{named_proc, lit}, temporary_storage = context.temporary_storage} {
+            say("literal");
+        }
+    }
+    say("after the literal");
+
+    // context converts to Any by its address, main's and a pushed place's.
+    printf("%d", is_context(context));
+    push_context c { printf(" %d\n", is_context(context)); }
+
+    // context is assigned whole: assigning a saved copy back puts the heap
+    // back in main's context, default_context, for callees too.
+    saved := context;
+    assigned : *u8 = "assigned";
+    context.allocator = Allocator.{named_proc, assigned};
+    say("assigned");
+    context = saved;
+    say("assigned back");
+    printf("%d\n", default_context.allocator.proc == heap_allocator_proc);
+}
+
+// Whether a holds the current context, by its address.
+is_context :: (a: Any) -> bool {
+    return a.value_pointer == cast(*void) *context;
+}

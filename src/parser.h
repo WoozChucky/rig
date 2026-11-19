@@ -29,7 +29,8 @@
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
 //   block       = '{' statement* '}'
 //   statement   = declaration | multi_var | assignment | return | block
-//               | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | expression ';'
+//               | if | if_directive | while | for | 'break' ';' | 'continue' ';' | defer | push_context
+//               | expression ';'
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
@@ -42,6 +43,7 @@
 //   while       = 'while' expression block
 //   for         = 'for' ['*'] [IDENT ':'] expression ['..' expression] block
 //   defer       = 'defer' statement                                (any statement but a declaration)
+//   push_context = 'push_context' expression block                 (the block runs with another context)
 //   expression  = unary { BINARY_OPERATOR unary }, binary operators left-associative, tightest last:
 //                   1: ||   2: &&   3: == != < <= > >=   4: + - | ^   5: * / % << >> &
 //   unary       = ('-' | '~' | '!' | '*' | '..' | '#run') unary | cast | postfix
@@ -50,7 +52,7 @@
 //   postfix     = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
 //                           | '.' '*' | '.' IDENT
 //                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name: the literal's type)
-//   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
+//   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
 //               | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //   fields      = [field {',' field} [',']]
@@ -227,6 +229,19 @@
 // two. Only a body has blocks to leave: at the top level, a top-level #if's
 // branch included, a defer is "defer can only be in a body", at the
 // keyword.
+//
+// The context (spec 7.10) has two keywords, Jai's. `context` is the current
+// context, a primary expression as null is (a plain Ast of AST_CONTEXT):
+// `context.allocator = a;`, `p := *context;`. `push_context e { ... }`
+// (spec 6.13) runs its block with e as its context (Ast_Push_Context); e is
+// a whole expression, which the block's '{' ends, as a while's condition
+// is. What e may be, and where context may be, are the checker's to say.
+// Being keywords, neither names a declaration, a field or a parameter:
+// `context :: 1;` is "expected identifier, found 'context'", `s.context`
+// "expected a field's name, found 'context'", as for any keyword. A
+// push_context is a statement, and only a body runs one: at the top level,
+// a top-level #if's branch included, it's "push_context can only be in a
+// body", at the keyword, as for a defer.
 //
 // A program can be several files (spec 2.13): `#load "world/map.rig";` at
 // the top level names another, whose declarations join the program's. The

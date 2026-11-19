@@ -490,6 +490,7 @@ static void out_proc_debug(Printer *p, Arena *a, Ir_Module *m, Ir_Proc *proc) {
     out_pos(p, proc->pos);
     out(p, ", body ");
     out_pos(p, proc->body);
+    if (proc->no_debug_info) out(p, ", no debug info");
     out(p, "\n");
     for (s64 i = 1; i < proc->scopes.count; i++) {
         Ir_Scope *s = &proc->scopes[i];
@@ -502,6 +503,7 @@ static void out_proc_debug(Printer *p, Arena *a, Ir_Module *m, Ir_Proc *proc) {
         out(p, "  ; var " STR_FMT " " STR_FMT, STR_ARG(v->name), STR_ARG(type_name(a, v->type)));
         out_var_place(p, m, v);
         if (v->arg) out(p, " arg %d", v->arg);
+        if (v->artificial) out(p, " artificial");
         out(p, " in %d at ", v->scope);
         out_pos(p, v->pos);
         out(p, "\n");

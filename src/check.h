@@ -56,6 +56,17 @@ struct Checker {
     s32 filled_depth;            // the deepest defaults_depth of the procedures whose default values the
                                  // calls in the default being checked fill in (check_call); set aside
                                  // too
+    bool needs_context;          // the default value being checked needs a context, so far: it uses
+                                 // context, calls a procedure that takes one, or leaves out a default
+                                 // that needs one (check_call, check_expr.cpp's check_context; read by
+                                 // check_defaults); set aside too
+    bool in_code;                // code that runs is being checked, a body or a #run's operand, where
+                                 // context is (spec 7.10); set aside with the scopes, so a declaration
+                                 // worked out inside a body isn't code
+    bool contextless;            // a #c_call procedure's body is being checked (not main's), outside its
+                                 // push_contexts and what's worked out while compiling (checker.cpp's
+                                 // check_const): C called it with no context (spec 7.6, 7.10); set
+                                 // aside with the scopes too
     Ast_File *file;              // the program being checked
     bool deciding;               // a decider (check_decider_new): it checks the top-level #ifs'
                                  // conditions only, knowing the base's names alone, and refuses any
@@ -209,9 +220,9 @@ void check_default_type(Checker *c, Ast *e);
 void report_null_without_a_type(Checker *c, Ast *e);
 
 // Whether e is a place in memory, which has an address (*e) and can be
-// assigned to (e = v): a local or global variable, p.*, or a field of a
-// place (v.x, b.pos.x) or of a struct a pointer points at (p.x, whatever p
-// is). Checks e, filling in its type, and returns true when it's such a
+// assigned to (e = v): a local or global variable, p.*, context, or a field
+// of a place (v.x, b.pos.x) or of a struct a pointer points at (p.x,
+// whatever p is). Checks e, filling in its type, and returns true when it's such a
 // place and its type is known; otherwise false, after saying why not,
 // unless e's own error was reported already. for_writing says which
 // message: "can't assign to 'a': it's a parameter" or "can't take the

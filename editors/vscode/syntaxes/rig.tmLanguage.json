@@ -272,7 +272,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.rig",
-                    "match": "\\b(?:if|else|while|for|break|continue|return|defer)\\b"
+                    "match": "\\b(?:if|else|while|for|break|continue|return|defer|push_context)\\b"
                 },
                 {
                     "name": "storage.type.rig",
@@ -285,6 +285,10 @@
                 {
                     "name": "keyword.other.rig",
                     "match": "\\b(?:using)\\b"
+                },
+                {
+                    "name": "variable.language.rig",
+                    "match": "\\b(?:context)\\b"
                 }
             ]
         },

@@ -256,7 +256,7 @@ static Lowered_Runs lower_runs_of(Arena *a, const char *text) {
     if (!ok) fprintf(stderr, "lower_runs_of: doesn't check:\n%.*s", STR_ARG(messages(a, &r.list->diag)));
     RIG_ASSERT(ok);
     r.module = arena_new<Ir_Module>(a);
-    r.lowering = ir_lowering_new(r.module, &r.list->diag, a);
+    r.lowering = ir_lowering_new(r.module, &r.list->diag, a, r.file);
     return r;
 }
 

@@ -923,6 +923,54 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     return t != nullptr;  // an unknown type was reported with its own mistake
 }
 
+// The fix every refusal of a #c_call body's use of a context ends with
+// (spec 7.6): the push to write.
+static const char *PUSH_A_CONTEXT = "as in push_context default_context { ... }";
+
+// Whether a direct call of proc passes the context (spec 7.10): it has a
+// body and is neither #c_call nor main (lower.cpp's takes_context says the
+// same). A foreign or #compiler procedure takes none. False without Preload,
+// whose programs have no context.
+static bool needs_a_context(Checker *c, Ast_Proc *proc) {
+    return c->file->context_type && proc->body && !proc->is_c_call && !string_eq(proc->name, str("main"));
+}
+
+// Whether a call through a value of procedure type t does: t isn't #c_call.
+// Every such value names a procedure that takes the context: main can't be
+// a value, a foreign procedure's value is #c_call, a #compiler one is none
+// (spec 3.15). False without Preload.
+static bool type_needs_a_context(Checker *c, Type *t) {
+    return c->file->context_type && t && t->kind == TYPE_PROC && !t->is_c_call;
+}
+
+// context (spec 7.10): the current context, a place of Preload's Context.
+// It's in code that runs (Checker.in_code: a body, a #run's operand) and in
+// a default value, worked out in each caller with the caller's context;
+// anywhere else, a global's or a constant's value, an array's count outside
+// a body, a top-level #if's condition, it's "'context' is only in a body,
+// where a procedure runs". A #c_call body has none outside its pushes
+// (Checker.contextless): "a #c_call procedure has no context until it
+// pushes one, as in push_context default_context { ... }". Without Preload
+// there is no Context, which is said first: "'context' needs Preload's
+// 'Context', which the program doesn't have". In a default being checked,
+// it makes the default need a context (Checker.needs_context).
+static Type *check_context(Checker *c, Ast *e) {
+    if (!c->file->context_type) {
+        diag_error(c->diag, e->pos, "'context' needs Preload's 'Context', which the program doesn't have");
+        return nullptr;
+    }
+    if (!c->in_code && !c->default_of) {
+        diag_error(c->diag, e->pos, "'context' is only in a body, where a procedure runs");
+        return nullptr;
+    }
+    if (c->contextless) {
+        diag_error(c->diag, e->pos, "a #c_call procedure has no context until it pushes one, %s", PUSH_A_CONTEXT);
+        return nullptr;
+    }
+    if (c->default_of) c->needs_context = true;
+    return c->file->context_type;
+}
+
 // How many arguments a direct call of proc must give at least (spec 5.10):
 // its parameters up to and including the last one without a default value.
 // After a gap, refused with the signature (check_defaults), only the
@@ -934,6 +982,39 @@ static s64 required_arguments(Ast_Proc *proc) {
     s64 required = proc->params.count;
     while (required > 0 && proc->params[required - 1]->default_value) required--;
     return required;
+}
+
+// What a call that matches its callee needs of the context (spec 7.6,
+// 7.10): the callee takes one (needs_a_context, type_needs_a_context), or a
+// parameter it leaves out has a default that needs one, worked out in the
+// caller (Ast_Param.default_needs_context; the first such one is named). A
+// #c_call body outside its pushes has none to give (Checker.contextless):
+// "'twice' needs a context; ..." at the callee, or else "'sized' leaves out
+// 'n', whose default value needs a context; ...", each ending in the push
+// to write, once per call. In a default being checked, either makes the
+// default need a context too (Checker.needs_context).
+static void check_call_context(Checker *c, Ast_Call *call, String name, bool more) {
+    Ast_Proc *proc = call->proc;
+    bool takes = proc ? needs_a_context(c, proc) : type_needs_a_context(c, call->callee_type);
+    Ast_Param *left_out = nullptr;
+    if (proc && !more) {
+        for (s64 i = call->args.count; i < proc->params.count && !left_out; i++) {
+            if (proc->params[i]->default_needs_context) left_out = proc->params[i];
+        }
+    }
+    if (!takes && !left_out) return;
+    if (c->default_of) c->needs_context = true;
+    if (!c->contextless) return;
+    if (takes) {
+        diag_error(c->diag, call->callee->start,
+                   "'" STR_FMT "' needs a context; a #c_call procedure has none until it pushes one, %s",
+                   STR_ARG(name), PUSH_A_CONTEXT);
+    } else {
+        diag_error(c->diag, call->callee->start,
+                   "'" STR_FMT "' leaves out '" STR_FMT
+                   "', whose default value needs a context; a #c_call procedure has none until it pushes one, %s",
+                   STR_ARG(name), STR_ARG(left_out->name), PUSH_A_CONTEXT);
+    }
 }
 
 // A call: the callee (check_callee), then the arguments, whose own mistakes
@@ -952,7 +1033,8 @@ static s64 required_arguments(Ast_Proc *proc) {
 // no defaults. In a default value being checked (Checker.default_of), a
 // direct call that leaves some out raises Checker.filled_depth to its
 // callee's defaults_depth, which check_defaults counts in the default's
-// depth. A callee with a '..T' parameter takes at least the
+// depth. What the call needs of the context is check_call_context's, once
+// the call matches. A callee with a '..T' parameter takes at least the
 // others, its fixed ones, and then any number more, or one spread
 // (check_variadic_arguments). A spread is only that: the last argument of
 // such a call. Anywhere else among the arguments it's refused
@@ -1027,6 +1109,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
         if (c->default_of && proc && !more && given < n && proc->defaults_depth > c->filled_depth) {
             c->filled_depth = proc->defaults_depth;
         }
+        check_call_context(c, call, name, more);
         if (gathers) {
             check_variadic_arguments(c, call, fixed, call_variadic_type(call), name);
         } else {
@@ -1878,6 +1961,7 @@ bool expr_is_place(Ast *e) {
         return decl->kind == AST_VAR && !((Ast_Var *)decl)->is_iterator;
     }
     case AST_DEREF: return true;
+    case AST_CONTEXT: return true;  // the current context, wherever it lies (spec 7.10)
     case AST_MEMBER: {
         Type *t = ((Ast_Member *)e)->operand->type;
         return type_is_pointer(t) || (t->kind != TYPE_ARRAY && expr_is_place(((Ast_Member *)e)->operand));
@@ -2354,6 +2438,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_DEREF: t = check_deref(c, (Ast_Deref *)e); break;
     case AST_SIZE_OF: t = check_size_of(c, (Ast_Size_Of *)e); break;
     case AST_TYPE_INFO: t = check_type_info(c, (Ast_Type_Info *)e); break;
+    case AST_CONTEXT: t = check_context(c, e); break;
     case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;
