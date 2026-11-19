@@ -98,13 +98,7 @@ main :: () {
         free(s.data);
         builder_free(*b);
 
-        numbers : Array;
         n := 7;
-        before = count;
-        array_init(*numbers, size_of(int));
-        array_add(*numbers, *n);
-        grew("array_init", before);
-        array_free(*numbers);
         t : Table;
         before = count;
         table_init(*t, size_of(int));

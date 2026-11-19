@@ -6,7 +6,6 @@ arena_init true
 pool_init true
 builder_init true
 builder_to_string true
-array_init true
 table_init true
 int_table_init true
 to_c_string true

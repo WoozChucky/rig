@@ -1,8 +1,8 @@
 // Basic's hash tables: values found by their key, a string or an int, in
-// about the same time however many there are. Like the array, a table is
-// untyped: it knows only how many bytes a value is, copies values in by
-// that many bytes, and hands out a value's address as a *void, which the
-// caller casts to a pointer to its own type:
+// about the same time however many there are. A table is untyped: it knows
+// only how many bytes a value is, copies values in by that many bytes, and
+// hands out a value's address as a *void, which the caller casts to a
+// pointer to its own type:
 //
 //     ages : Table;
 //     table_init(*ages, size_of(int));    // the context's allocator
