@@ -1,0 +1,69 @@
+// Preload's helpers for resizable arrays (issue #158, spec 3.17), called
+// by hand through the untyped Resizable_Array, as the built-in procedures
+// call them: the growth policy, the allocator the first growth takes from
+// the context and keeps, elements of no size, adopted memory, and growth
+// past int's range.
+#import "Basic";
+
+// The heap, saying what the arrays ask of it.
+printing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { print("allocate {}\n", size); }
+    if mode == RESIZE { print("resize {} to {}\n", old_size, size); }
+    if mode == FREE { print("free {}\n", old_size); }
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+Empty :: struct { }
+
+main :: () {
+    printing := Allocator.{printing_proc, null};
+    a : [..]int;
+    r := cast(*Resizable_Array) *a;
+    push_context .{printing, context.temporary_storage} {
+        for 1..9 { n := it; __array_add(r, 8, *n); }
+    }
+    __array_reserve(r, 8, 20);
+    print("remembered {} {} {}\n", a.count, a.allocated, a.allocator.proc == printing_proc);
+    zero := 0;
+    __array_insert(r, 8, 0, *zero);
+    __array_remove_ordered(r, 8, 1);
+    __array_remove_unordered(r, 8, 0);
+    last := 0;
+    __array_pop(r, 8, *last);
+    print("{} {}\n", a, last);
+    __array_resize(r, 8, 9);
+    print("{}\n", a);
+    __array_resize(r, 8, 2);
+    print("{} {}\n", a, a.allocated);
+    __array_reset(r, 8);
+    print("{} {}\n", a.count, a.allocated);
+    __array_free(r, 8);
+    print("{} {} {}\n", a.data == null, a.allocated, a.allocator.proc == printing_proc);
+
+    e : [..]Empty;
+    e.allocator = printing;
+    for 1..3 { x : Empty; __array_add(cast(*Resizable_Array) *e, 0, *x); }
+    seen := 0;
+    for e { seen += 1; }
+    print("nothing {} {} {} {}\n", e.count, e.data != null, e.allocated, seen);
+    __array_free(cast(*Resizable_Array) *e, 0);
+
+    buffer := int.[7, 8];
+    h : [..]int;
+    h.allocator = printing;
+    h.data = *buffer[0];
+    h.count = 2;
+    three := 3;
+    __array_add(cast(*Resizable_Array) *h, 8, *three);
+    print("adopted {} {} {}\n", h, buffer[1], h.data != cast(*void) *buffer[0]);
+    __array_free(cast(*Resizable_Array) *h, 8);
+
+    huge : [..]int;
+    huge.count = 1152921504606846976;
+    huge.allocated = 1152921504606846976;
+    g := cast(*Resizable_Array) *huge;
+    print("{} {}\n", __array_add(g, 8, *three), huge.count);
+    huge.count = 4611686018427387904;
+    huge.allocated = 4611686018427387904;
+    print("{} {}\n", __array_add(g, 1, *three), __array_reserve(g, 8, 9223372036854775807));
+}

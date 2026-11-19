@@ -8908,3 +8908,37 @@ TEST(resizable_array_members_and_views_are_exact) {
               "9:18: a value of type '*[..]int' doesn't convert to '*[]int' implicitly\n");
     arena_free(&a);
 }
+
+TEST(preload_declares_the_array_helpers) {
+    // What the built-in procedures call (spec 3.17): Preload's nine helpers,
+    // each taking the untyped array and its element's size, then what the
+    // built-in takes after the array, an item by its address. Those that can
+    // grow the array say whether the allocator gave memory.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    struct {
+        const char *name;
+        const char *type;
+    } helpers[] = {
+        {"__array_add", "(*Resizable_Array, int, *void) -> bool"},
+        {"__array_insert", "(*Resizable_Array, int, int, *void) -> bool"},
+        {"__array_pop", "(*Resizable_Array, int, *void)"},
+        {"__array_remove_ordered", "(*Resizable_Array, int, int)"},
+        {"__array_remove_unordered", "(*Resizable_Array, int, int)"},
+        {"__array_reserve", "(*Resizable_Array, int, int) -> bool"},
+        {"__array_resize", "(*Resizable_Array, int, int) -> bool"},
+        {"__array_reset", "(*Resizable_Array, int)"},
+        {"__array_free", "(*Resizable_Array, int)"},
+    };
+    for (s64 i = 0; i < (s64)(sizeof helpers / sizeof helpers[0]); i++) {
+        Ast_Proc *found = nullptr;
+        for (s64 j = 0; j < tree->procs.count; j++) {
+            if (string_eq(tree->procs[j]->name, str(helpers[i].name))) found = tree->procs[j];
+        }
+        CHECK(found != nullptr);
+        if (!found) continue;
+        CHECK_STR(type_name(&a, found->type), helpers[i].type);
+    }
+    arena_free(&a);
+}
