@@ -1,0 +1,30 @@
+tests/errors/resizable_array_refused.rig:5:14: error: a foreign procedure can't take a '[..]int'; pass its .data
+    takes :: (a: [..]int) #foreign libc "puts";
+                 ^
+tests/errors/resizable_array_refused.rig:9:12: error: '[..]int' has no field 'size'
+        n := a.size;
+               ^
+tests/errors/resizable_array_refused.rig:11:12: error: '.count' isn't reached through a pointer, '*[..]int'; write .*.count
+        c := p.count;
+               ^
+tests/errors/resizable_array_refused.rig:12:12: error: '.allocator' isn't reached through a pointer, '*[..]int'; write .*.allocator
+        k := p.allocator;
+               ^
+tests/errors/resizable_array_refused.rig:13:9: error: 'for' needs a range, an array, a view or a string, not '*[..]int'
+        for p { }
+            ^
+tests/errors/resizable_array_refused.rig:14:19: error: a '.[' literal needs an array or a view type, not '[..]int'
+        b : [..]int = .[1, 2];
+                      ^
+tests/errors/resizable_array_refused.rig:16:9: error: a value of type '[]int' doesn't convert to '[..]int' implicitly
+        a = v;
+            ^
+tests/errors/resizable_array_refused.rig:17:10: error: can't cast '[]int' to '[..]int'
+        w := cast([..]int) v;
+             ^
+tests/errors/resizable_array_refused.rig:18:15: error: '==' needs numbers, bools, pointers, procedure values or strings, not '[..]int'
+        same := a == a;
+                  ^
+tests/errors/resizable_array_refused.rig:20:9: error: '..' spreads a '[..]u8' into 'values', which needs a '[]int'
+        all(..bytes);
+            ^

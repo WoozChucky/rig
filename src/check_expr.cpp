@@ -553,6 +553,10 @@ bool type_converts(Type *from, Type *to) {
     // 5.17): [N]T becomes the []T of its N T's, wherever it is (lowering).
     // Never the other way: a view's count isn't known while compiling.
     if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return from->element == to->element;
+    // So is a resizable array (spec 3.17): [..]T becomes the []T of its
+    // count elements at its data, read where it converts (lowering). Never
+    // the other way: a view has no allocator, and owns no memory.
+    if (from->kind == TYPE_RESIZABLE && to->kind == TYPE_VIEW) return from->element == to->element;
     // Every float32 value is a float64 one, so a float32 widens; the other
     // way loses precision, and takes a cast.
     return from == &type_float32 && to == &type_float64;
@@ -834,9 +838,10 @@ static void check_argument(Checker *c, Ast *arg, Type *to, s64 index, String nam
 // type `view` (null when T is an error), the arguments from `fixed` on
 // (spec 5.10):
 // - a spread, ..e, the last of them and the only one (check_call made sure),
-//   passes e as the parameter's view: e's type must be exactly a []T or a
-//   [N]T, its elements never converted, or "'..' spreads a '[]int' into
-//   'rest', which needs a '[]Any'", at the '..'. Through a procedure value,
+//   passes e as the parameter's view: e's type must be exactly a []T, a
+//   [N]T or a [..]T (the view of its elements, spec 3.17), its elements
+//   never converted, or "'..' spreads a '[]int' into 'rest', which needs a
+//   '[]Any'", at the '..'. Through a procedure value,
 //   whose type names no parameter, the parameter is its type written ..T:
 //   "'..' spreads a '[2]u8' into '..int', which needs a '[]int'";
 // - otherwise each converts to T, as an argument to a T parameter does
@@ -850,7 +855,8 @@ static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, Type
     if (last && last->kind == AST_SPREAD) {
         Type *from = last->type;
         if (!view || !from) return;  // T's mistake or the operand's, reported
-        bool exact = from == view || (from->kind == TYPE_ARRAY && from->element == view->element);
+        bool exact = from == view || ((from->kind == TYPE_ARRAY || from->kind == TYPE_RESIZABLE) &&
+                                      from->element == view->element);
         if (!exact) {
             String into = call->proc ? call->proc->params[fixed]->name
                                      : string_printf(c->arena, ".." STR_FMT,
@@ -1830,8 +1836,9 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 // - Any value to Preload's Any: its conversion (check_convert, spec 3.16),
 //   never a constant.
 // - Anything else casts only where it converts implicitly: to its own
-//   type, null to a pointer, an array to a view of it, or a string literal,
-//   or constant data holding one (is_literal_string, spec 3.8), to *u8.
+//   type, null to a pointer, an array or a resizable array to a view of it
+//   (spec 3.17), or a string literal, or constant data holding one
+//   (is_literal_string, spec 3.8), to *u8.
 //   Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
 // A cast of a constant is a constant of T, but a cast to Any: a checked
@@ -1943,13 +1950,14 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
 
 // A field is a place when its struct is, or always when it's reached
 // through a pointer (p.x is p.*.x, and p.* is a place whatever p is). An
-// element is one when its array is; a view's, a string's or a pointer's
-// always is, its elements lying elsewhere (v[0] = 1 for a view parameter v
-// changes the elements it sees, not v; s[0] = 1 on a literal writes its
-// read-only bytes, a memory error, spec 3.8 and 8.6), except a string's
-// that is part of a constant (constant_root): its bytes are the constant's,
-// and no part of a constant is a place, so NAME[0] = 65 is refused, said of
-// NAME (is_place). A view's or a string's count and data are fields like a
+// element is one when its array is; a view's, a string's, a resizable
+// array's or a pointer's always is, its elements lying elsewhere (v[0] = 1
+// for a view parameter v changes the elements it sees, not v; s[0] = 1 on a
+// literal writes its read-only bytes, a memory error, spec 3.8 and 8.6),
+// except a string's that is part of a constant (constant_root): its bytes
+// are the constant's, and no part of a constant is a place, so NAME[0] = 65
+// is refused, said of NAME (is_place). A view's or a string's count and
+// data, and a resizable array's four members (spec 3.17), are fields like a
 // struct's. An array's .count is a constant and its .data an address worked
 // out on the spot, so neither is a place.
 bool expr_is_place(Ast *e) {
@@ -2097,17 +2105,19 @@ static void fold_constant_part(Ast *part, Type *t) {
     }
 }
 
-// a[i] (spec 5.11): element i of array, view or string a (a string's, a
-// u8), or the T i T's on from where pointer a points (C's a[i], p.* moved by
-// i, unchecked). i is any integer, read by its own sign; an untyped one
+// a[i] (spec 5.11): element i of array, view, string or resizable array a
+// (a string's, a u8; a resizable array's, as its view's, spec 3.17), or the
+// T i T's on from where pointer a points (C's a[i], p.* moved by i,
+// unchecked). i is any integer, read by its own sign; an untyped one
 // becomes an int. Reported at the '[': "'[]' needs an array, a view, a
 // string or a pointer, not 'int'", or "can't index a '*void'; ..." (it
 // points at nothing with a size); at i: "an index must be an integer, not
 // 'float32'". A constant i of an array is checked here, by its sign: "index
 // 3 is out of bounds for '[3]int'"; and so is one of a string that is
 // constant data, whose bytes are known: "index 5 is out of bounds for a
-// string of 3 bytes". Any other index of an array, a view or a string is
-// checked at run time (lowering), unless the procedure says #no_abc or the
+// string of 3 bytes". Any other index of an array, a view, a string or a
+// resizable array is checked at run time (lowering), unless the procedure
+// says #no_abc or the
 // build --no-bounds-checks.
 //
 // An element of constant data at a constant index is known while compiling
@@ -2122,7 +2132,7 @@ static Type *check_index(Checker *c, Ast_Index *ix) {
     Type *index = check_operand(c, ix->index);
     if (!t) return nullptr;
     Type *element = nullptr;
-    if (t->kind == TYPE_ARRAY || type_is_view_or_string(t)) {
+    if (t->kind == TYPE_ARRAY || type_has_view_fields(t)) {
         element = t->element;
     } else if (type_is_pointer(t) && t->pointee != &type_void) {
         element = t->pointee;
@@ -2236,9 +2246,22 @@ Ast_Type_Info *type_info_address(Ast *e) {
 // b : u8 = a.count; takes it), a isn't evaluated for it; its .data, a *T, is
 // the address of its first element, so a must have one, as for *a[0]
 // ("can't take the address of 'a': it's a parameter").
+//
+// A resizable array (spec 3.17) has four: a view's count and data, an int
+// and a *T, then allocated, an int, and allocator, Preload's Allocator, the
+// type of Resizable_Array's last field (Ast_File.resizable_array_type,
+// which every [..]T has, resolve_written), read once that struct is laid
+// out. Each is a field as a view's are, so a place when the array is one.
 static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     m->index = -1;
     bool count = string_eq(m->name, str("count"));
+    if (t->kind == TYPE_RESIZABLE && string_eq(m->name, str("allocated"))) return &type_int;
+    if (t->kind == TYPE_RESIZABLE && string_eq(m->name, str("allocator"))) {
+        Type *layout = c->file->resizable_array_type;
+        RIG_ASSERT(layout);
+        if (!check_layout(c, layout) || !layout->fields.count) return nullptr;  // Preload's mistake, reported
+        return layout->fields[layout->fields.count - 1].type;
+    }
     if (!count && !string_eq(m->name, str("data"))) {
         diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                    STR_ARG(m->name));
@@ -2254,7 +2277,7 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
         m->is_constant = true;
         m->constant = 0;
     }
-    if (type_is_view_or_string(t)) return count ? &type_int : type_pointer_to(t->element);
+    if (type_has_view_fields(t)) return count ? &type_int : type_pointer_to(t->element);
     if (count) {
         m->is_constant = true;
         m->constant = (u64)t->count;
@@ -2268,7 +2291,8 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
 // or a pointer to one, not 'int'". m->index is the field's, whose type is
 // made now if it's a late field's not made yet (check_late_field). An
-// array's, a view's or a string's .count and .data are
+// array's, a view's or a string's .count and .data, and a resizable
+// array's and its .allocated and .allocator (spec 3.17), are
 // check_sequence_member's, not reached through a pointer: on a pointer to
 // one, "'.count' isn't reached through a pointer, '*string'; write
 // .*.count".
@@ -2282,10 +2306,13 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 static Type *check_member(Checker *c, Ast_Member *m) {
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
-    if (t->kind == TYPE_ARRAY || type_is_view_or_string(t)) return check_sequence_member(c, m, t);
+    if (t->kind == TYPE_ARRAY || type_has_view_fields(t)) return check_sequence_member(c, m, t);
     Type *s = type_is_pointer(t) && t->pointee->kind == TYPE_STRUCT ? t->pointee : t;
-    bool sequence = type_is_pointer(t) && (t->pointee->kind == TYPE_ARRAY || type_is_view_or_string(t->pointee));
-    if (sequence && (string_eq(m->name, str("count")) || string_eq(m->name, str("data")))) {
+    bool sequence = type_is_pointer(t) && (t->pointee->kind == TYPE_ARRAY || type_has_view_fields(t->pointee));
+    bool resizable = sequence && t->pointee->kind == TYPE_RESIZABLE;
+    bool named = string_eq(m->name, str("count")) || string_eq(m->name, str("data")) ||
+                 (resizable && (string_eq(m->name, str("allocated")) || string_eq(m->name, str("allocator"))));
+    if (sequence && named) {
         diag_error(c->diag, m->pos, "'." STR_FMT "' isn't reached through a pointer, '" STR_FMT "'; write .*." STR_FMT,
                    STR_ARG(m->name), STR_ARG(type_name(c->arena, t)), STR_ARG(m->name));
         return nullptr;

@@ -109,13 +109,14 @@ static void report_variadic_refused(Checker *c, Type *view, Position dots, const
 // A parameter's or, with `result`, a result's type t, at `at`, of `who`, "a
 // foreign procedure" or "a #c_call procedure", which C calls or is called by
 // (spec 7.6): what C can't take is reported.
-// - A struct, an array, a view or a string: C passes a struct by value by
-//   rules of its own on each platform, which come with milestone 6's
-//   bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer
-//   to it", "... can't return a 'Vec2' yet"). A pointer to one is a C
-//   pointer to a C struct of the same layout, which passes. C has no views,
-//   and takes an array as a pointer to its first element: "a foreign
-//   procedure can't take a '[3]int'; pass its .data" (or a view's .data,
+// - A struct, an array, a view, a resizable array or a string: C passes a
+//   struct by value by rules of its own on each platform, which come with
+//   milestone 6's bindings ("a foreign procedure can't take a 'Vec2' yet;
+//   pass a pointer to it", "... can't return a 'Vec2' yet"). A pointer to
+//   one is a C pointer to a C struct of the same layout, which passes. C has
+//   no views nor resizable arrays (spec 3.17), and takes an array as a
+//   pointer to its first element: "a foreign procedure can't take a
+//   '[3]int'; pass its .data" (or a view's or a resizable array's .data,
 //   with its count if C needs it). A C string is a pointer to bytes ending
 //   with a zero, which a literal converts to, but another string's bytes
 //   needn't end with one: "a foreign procedure can't take a 'string'; pass
@@ -1597,13 +1598,14 @@ static Type *check_range(Checker *c, Ast_For *loop) {
     return t;
 }
 
-// for a: a is an array, a view or a string, worked out once, before the
-// first iteration (lowering), and the iterator is each element in turn, a
-// copy (a string's, each byte, a u8); for * a, a pointer to each, through
-// which the body can change it. So `for * a` needs a's elements to have an
-// address, as *a[i] does: an array's when the array has one (not a
-// parameter's, nor a call's or a literal's: "can't take the address of 'a':
-// it's a parameter"), a view's always, and a string's unless it's part of a
+// for a: a is an array, a view, a string or a resizable array (as its view,
+// spec 3.17), worked out once, before the first iteration (lowering), and
+// the iterator is each element in turn, a copy (a string's, each byte, a
+// u8); for * a, a pointer to each, through which the body can change it. So
+// `for * a` needs a's elements to have an address, as *a[i] does: an
+// array's when the array has one (not a parameter's, nor a call's or a
+// literal's: "can't take the address of 'a': it's a parameter"), a view's
+// and a resizable array's always, and a string's unless it's part of a
 // constant (constant_root), whose bytes are no place: "can't take the
 // address of 'NAME': it's a constant". Anything else is "'for' needs a
 // range, an array, a view or a string, not 'int'", at it.
@@ -1611,7 +1613,7 @@ static Type *check_sequence(Checker *c, Ast_For *loop) {
     Ast *sequence = loop->sequence;
     Type *t = check_operand(c, sequence);
     if (!t) return nullptr;
-    if (t->kind != TYPE_ARRAY && !type_is_view_or_string(t)) {
+    if (t->kind != TYPE_ARRAY && !type_has_view_fields(t)) {
         check_default_type(c, sequence);  // `for 10` names the type 10 has: int
         diag_error(c->diag, sequence->start, "'for' needs a range, an array, a view or a string, not '" STR_FMT "'",
                    STR_ARG(type_name(c->arena, sequence->type)));

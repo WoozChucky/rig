@@ -8774,3 +8774,110 @@ TEST(a_resizable_array_needs_preload) {
     CHECK_STR(check_source(&a, "main :: () {\n    a : [..]Nope;\n}\n"), "2:13: unknown type 'Nope'\n");
     arena_free(&a);
 }
+
+// How messages name the type of main's local `name` in a program checked
+// with Preload (check_with_preload's tree); "?" when the checker found none.
+static String type_of_main_local(Arena *a, Ast_File *tree, const char *name) {
+    Ast *local = find_local(((Ast_Proc *)top_level_named(tree, "main"))->body, name);
+    RIG_ASSERT(local);
+    return local->type ? type_name(a, local->type) : str("?");
+}
+
+TEST(resizable_array_members) {
+    // A view's count and data, then allocated and the allocator, Preload's
+    // Allocator: each a place when the array is one, so each can be
+    // assigned. It indexes and loops as a view does, its elements places.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    a : [..]int;\n"
+                                 "    n := a.count;\n"
+                                 "    d := a.data;\n"
+                                 "    r := a.allocated;\n"
+                                 "    k := a.allocator;\n"
+                                 "    a.count = 0;\n"
+                                 "    a.data = null;\n"
+                                 "    a.allocated = 0;\n"
+                                 "    a.allocator = HEAP_ALLOCATOR;\n"
+                                 "    x := a[1];\n"
+                                 "    a[0] = 3;\n"
+                                 "    p := *a[0];\n"
+                                 "    for a { y := it + it_index; }\n"
+                                 "    for * a { it.* = 1; }\n"
+                                 "    for e: a { }\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    CHECK_STR(type_of_main_local(&a, tree, "n"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "d"), "*int");
+    CHECK_STR(type_of_main_local(&a, tree, "r"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "k"), "Allocator");
+    CHECK_STR(type_of_main_local(&a, tree, "x"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "p"), "*int");
+    CHECK_STR(type_of_main_local(&a, tree, "e"), "int");
+    arena_free(&a);
+}
+
+TEST(resizable_array_converts_to_its_view) {
+    // A [..]T converts to the []T of its elements, wherever a view goes: a
+    // view's slot, a cast, a []T parameter; a spread passes that view. An
+    // Any holds it as any value.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "sum :: (v: []int) -> int { return v.count; }\n"
+                                 "all :: (v: ..int) -> int { return v.count; }\n"
+                                 "main :: () {\n"
+                                 "    a : [..]int;\n"
+                                 "    v : []int = a;\n"
+                                 "    w := cast([]int) a;\n"
+                                 "    n := sum(a) + all(..a);\n"
+                                 "    q : Any = a;\n"
+                                 "}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(resizable_array_parameter) {
+    // A parameter is read-only, as a view parameter is: its members can't
+    // be assigned, nor its address taken, but its elements can, lying
+    // elsewhere.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (a: [..]int) {\n"
+                                 "    a[0] = 1;\n"
+                                 "    a.count = 2;\n"
+                                 "    p := *a;\n"
+                                 "}\n"
+                                 "main :: () { }\n"),
+              "3:5: can't assign to 'a': it's a parameter\n"
+              "4:11: can't take the address of 'a': it's a parameter\n");
+    arena_free(&a);
+}
+
+TEST(resizable_array_members_and_views_are_exact) {
+    // None of the four members is reached through a pointer, and a pointer
+    // has no other: .size on one is a pointer's message. A [..]T is a view
+    // of its own T only, and a *[..]T is no *[]T. A copy is a [..]T, and
+    // the allocator's fields are places too.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (p: *[..]int) {\n"
+                                 "    d := p.data;\n"
+                                 "    r := p.allocated;\n"
+                                 "    s := p.size;\n"
+                                 "}\n"
+                                 "main :: () {\n"
+                                 "    a : [..]int;\n"
+                                 "    v : []u8 = a;\n"
+                                 "    q : *[]int = *a;\n"
+                                 "    b : [..]int = a;\n"
+                                 "    a.allocator.proc = null;\n"
+                                 "}\n"),
+              "2:12: '.data' isn't reached through a pointer, '*[..]int'; write .*.data\n"
+              "3:12: '.allocated' isn't reached through a pointer, '*[..]int'; write .*.allocated\n"
+              "4:12: '.size' needs a struct or a pointer to one, not '*[..]int'\n"
+              "8:16: a value of type '[..]int' doesn't convert to '[]u8' implicitly\n"
+              "9:18: a value of type '*[..]int' doesn't convert to '*[]int' implicitly\n");
+    arena_free(&a);
+}

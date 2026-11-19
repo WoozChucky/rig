@@ -836,6 +836,32 @@
 //   is the allocator's type. Without Preload, [..]T is "a resizable array
 //   needs Preload's 'Resizable_Array', which the program doesn't have", at
 //   its '['.
+// - A [..]T is a value, an aggregate: assigning, passing or returning one
+//   copies its 40 bytes, not its elements, so two copies share them. A
+//   parameter is read-only as a view parameter is: its members can't be
+//   assigned ("can't assign to 'a': it's a parameter"), nor its address
+//   taken, but its elements can, lying elsewhere.
+// - It converts implicitly to the []T of the same T, the view of its count
+//   elements at its data (type_converts): into a []T's slot, a parameter, a
+//   cast (cast([]int) a), and a spread, ..a, passes that view as a [N]T's
+//   would. Nothing converts to a [..]T but a [..]T: "a value of type
+//   '[]int' doesn't convert to '[..]int' implicitly", "can't cast '[]int'
+//   to '[..]int'", and a '.[' literal makes none ("a '.[' literal needs an
+//   array or a view type, not '[..]int'"). A *[..]T is no *[]T. Being an
+//   aggregate, == doesn't compare one, and C takes none ("a foreign
+//   procedure can't take a '[..]int'; pass its .data").
+// - Its members are .count (an int) and .data (a *T), a view's, then
+//   .allocated (an int) and .allocator (Preload's Allocator, the type of
+//   Resizable_Array's last field): each a place when the array is one, so
+//   a program may set the allocator before the first growth, or adopt
+//   memory by setting data and count. Any other name is "'[..]int' has no
+//   field 'size'"; Ast_Member.index stays -1, lowering knowing the four by
+//   name. Through a pointer they aren't reached, as a view's aren't:
+//   "'.count' isn't reached through a pointer, '*[..]int'; write .*.count".
+// - Indexing and for are a view's (type_has_view_fields): a[i] is an
+//   element, always a place, of a parameter too; for a, for * a, a named
+//   iterator and it_index go over its elements. A for over a *[..]T is
+//   "'for' needs a range, an array, a view or a string, not '*[..]int'".
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
