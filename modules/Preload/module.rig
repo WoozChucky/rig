@@ -380,9 +380,11 @@ Resizable_Array :: struct {
 // address of a copy of its own, so an item that is one of the array's own
 // elements is read before the array grows or its elements move, and pop
 // the address its last element is copied to, the built-in's result.
-// Lowering checks the pointer, the index and the count first, at the
-// built-in's name, so the helpers check none of them, and a program that
-// calls one by hand gets no check.
+// Lowering checks the pointer and resize's count first, at the built-in's
+// name, and the index and pop's count too unless bounds checks are off
+// (#no_abc, --no-bounds-checks; spec 7.7), when an index outside the array
+// is a memory error no check catches (spec 8.6). The helpers check none of
+// them, and a program that calls one by hand gets no check.
 //
 // The allocator: an array whose allocator's procedure is null, a zeroed
 // one, takes the caller's context.allocator when it first grows, and keeps
@@ -406,8 +408,11 @@ __memset :: (destination: *void, value: s32, count: u64) -> *void #foreign libc 
 // Where an array of elements of 0 bytes ([..]Empty, for a struct Empty
 // with no fields) points once it has grown: they take no memory, but an
 // array holding some isn't null, so indexing and for find its data, and
-// every element's address is this byte's. Nothing reads or writes it.
-__array_no_bytes : u8;
+// every element's address is this one's. Nothing reads or writes it. It's
+// an int, not a byte, for its alignment: an element of 0 bytes can still
+// need 8-byte alignment, as a struct holding a [0]int does, and its
+// address must have it (spec 3.11).
+__array_no_bytes : int;
 
 // Makes room in array for room elements of size bytes, or for its count
 // when that is more, and says whether the allocator gave the memory. On
@@ -494,7 +499,8 @@ __array_insert :: (array: *Resizable_Array, size: int, index: int, item: *void) 
 }
 
 // array_pop: copies the last element into the size bytes at item, and
-// removes it. The array has one: lowering checks.
+// removes it. The array has one: lowering checks, unless bounds checks are
+// off.
 __array_pop :: (array: *Resizable_Array, size: int, item: *void) {
     array.count -= 1;
     if size > 0 { __memmove(item, cast(*u8) array.data + array.count * size, cast(u64) size); }
@@ -521,7 +527,9 @@ __array_remove_unordered :: (array: *Resizable_Array, size: int, index: int) {
 }
 
 // array_reserve: makes allocated at least count, growing to exactly count
-// when it is more, so that many elements are added without growing again.
+// when it is more, or to the array's count when that is more still, as for
+// an array whose data and count were set by hand (__array_grow), so that
+// many elements are added without growing again.
 // A count within allocated, or below 0, does nothing. False when the
 // allocator had no memory to give: the array is as it was, but for the
 // allocator it took.
@@ -531,7 +539,9 @@ __array_reserve :: (array: *Resizable_Array, size: int, count: int) -> bool {
 }
 
 // array_resize: makes count the array's count, growing to exactly count
-// when it's past allocated. The elements it adds are zeroed; shrinking
+// when it's past allocated, or to the array's count when that is more, as
+// for an array whose data and count were set by hand (__array_grow). The
+// elements it adds are zeroed; shrinking
 // keeps the memory. The count isn't below 0: lowering checks. False when
 // the allocator had no memory to give: the array is as it was, but for the
 // allocator it took.

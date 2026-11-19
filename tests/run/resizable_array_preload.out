@@ -14,6 +14,7 @@ resize 24 to 40
 grown [1, 0, 0, 0, 0] 5
 free 40
 nothing 3 true 8 3
+aligned 0 0
 kept true 0 0 [7, 8]
 allocate 64
 adopted [7, 8, 3] 8 true
@@ -24,8 +25,14 @@ free 80
 allocate 40
 adopted [1, 2, 3, 4, 5] 5
 free 40
+allocate 64
+refuse 64 to 128
+refused false 8 8 true [1, 2, 3, 4, 5, 6, 7, 8]
+refuse 64 to 160
+refused false 8 8 true [1, 2, 3, 4, 5, 6, 7, 8]
+free 64
 allocate 9223372036854775807
-false 1152921504606846976
+false 1152921504606846976 1152921504606846976 true
 kept true
 allocate 9223372036854775807
 false
