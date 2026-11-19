@@ -56,7 +56,9 @@
 // the compiler's own memory: "#run's result holds a pointer, which can't be
 // baked, for now". A view or a string whose count is below zero has no
 // elements: "#run failed: its result holds a view with a negative count"
-// (a string's says string). Baking stops at the first part refused, and
+// (a string's says string). A resizable array anywhere in it, whatever it
+// holds, is "#run's result holds a resizable array, which can't be baked,
+// for now" (spec 3.17). Baking stops at the first part refused, and
 // that is said at the #run, once, after it (Baking); nothing of the value
 // is kept, and the #run has no value, as after a failure.
 
@@ -307,6 +309,7 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 //   string is. A count below zero is "#run failed: its result holds a view
 //   with a negative count". Data that isn't memory the compiler may read
 //   is a memory error (spec 8.6), not checked.
+// - A resizable array [..]T is refused (refuse), whatever it holds.
 // What a view or a string points at is copied as it is now: a later run
 // that changes it leaves the baked value as it was.
 static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
@@ -330,6 +333,11 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
         return baked_string(b, data, count);
     }
     case TYPE_ARRAY: return bake_elements(b, t, at);
+    // A resizable array is refused, a zeroed one too (spec 3.17): its
+    // memory and its allocator are the compile-time world's, which the
+    // program never sees, so the rule is the array, not what it holds now.
+    // A view of its elements bakes as any view does.
+    case TYPE_RESIZABLE: return refuse(b, "#run's result holds a resizable array, which can't be baked, for now");
     case TYPE_STRUCT: {
         Ast_Literal *literal = baked_literal(b, t, t->fields.count);
         for (s64 i = 0; i < t->fields.count; i++) {

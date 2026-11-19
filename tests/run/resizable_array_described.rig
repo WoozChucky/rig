@@ -1,0 +1,22 @@
+// A resizable array's description and Basic's print of it (issue #158,
+// spec 3.16, 3.17): a Type_Info_Array of array_kind ARRAY_RESIZABLE,
+// count -1, written as a view is.
+#import "Basic";
+
+Point :: struct { x: int; y: int; }
+Holder :: struct { points: [..]Point; }
+
+main :: () {
+    t := cast(*Type_Info_Array) type_info([..]Point);
+    print("{} {} {} {} {}\n", t.info.tag == TYPE_INFO_ARRAY, t.array_kind == ARRAY_RESIZABLE, t.count,
+          t.info.size, t.element_type == type_info(Point));
+    buffer := Point.[.{1, 2}, .{3, 4}];
+    a : [..]Point;
+    print("{}\n", a);
+    a.data = *buffer[0];
+    a.count = 2;
+    print("{}\n", a);
+    held : Any = a;
+    print("{}\n", held.value_pointer == cast(*void) *a);
+    print("{}\n", Holder.{a});
+}

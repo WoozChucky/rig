@@ -558,6 +558,49 @@ TEST(run_results_holding_pointers_are_refused) {
     arena_free(&a);
 }
 
+TEST(a_runs_resizable_array_isnt_baked) {
+    // A resizable array's memory is the compile-time world's, and its
+    // allocator a procedure of that world's (spec 3.17): a result holding
+    // one, itself or in a field, zeroed or not, is refused, and the
+    // constant has no type. A view of its elements bakes as any view does,
+    // its elements copied. Through Preload, which a [..]T needs.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Holder :: struct { items: [..]int; }\n"
+                                 "store : [3]int;\n"
+                                 "empty :: () -> [..]int { a : [..]int; return a; }\n"
+                                 "held :: () -> Holder { h : Holder; return h; }\n"
+                                 "viewed :: () -> []int {\n"
+                                 "    store[0] = 1; store[1] = 2; store[2] = 3;\n"
+                                 "    a : [..]int;\n"
+                                 "    a.data = *store[0];\n"
+                                 "    a.count = 3;\n"
+                                 "    return a;\n"
+                                 "}\n"
+                                 "EMPTY :: #run empty();\n"
+                                 "HELD :: #run held();\n"
+                                 "VIEWED :: #run viewed();\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "12:10: #run's result holds a resizable array, which can't be baked, for now\n"
+              "13:9: #run's result holds a resizable array, which can't be baked, for now\n");
+    CHECK(!top_level_named(tree, "EMPTY")->type);
+    CHECK(!top_level_named(tree, "HELD")->type);
+    Ast_Const *viewed = (Ast_Const *)top_level_named(tree, "VIEWED");
+    CHECK_STR(type_name(&a, viewed->type), "[]int");
+    CHECK(viewed->is_data && viewed->data && viewed->data->kind == AST_LITERAL);
+    if (viewed->is_data && viewed->data && viewed->data->kind == AST_LITERAL) {
+        Ast_Literal *items = (Ast_Literal *)viewed->data;
+        CHECK_STR(type_name(&a, items->type), "[3]int");
+        CHECK_EQ(items->values.count, 3);
+        for (s64 i = 0; i < items->values.count && i < 3; i++) {
+            CHECK(is_number(&a, items->values[i], (u64)i + 1, "int"));
+        }
+    }
+    arena_free(&a);
+}
+
 TEST(run_negative_counts_are_refused) {
     // A view or a string with a count below zero has no elements to bake:
     // its #run fails. A view whose count makes its elements' array too big

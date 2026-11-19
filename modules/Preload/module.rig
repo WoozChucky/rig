@@ -145,14 +145,16 @@ Type_Info_Struct :: struct { info: Type_Info; name: string; members: []Type_Info
 // in the struct, in bytes from its start (spec 3.9).
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 
-// TYPE_INFO_ARRAY: an array, [N]T, or a view, []T, which array_kind tells
-// apart (ARRAY_FIXED or ARRAY_VIEW); the description of T; and N, or -1 for
-// a view. A string is no view here: it has its own tag, TYPE_INFO_STRING.
+// TYPE_INFO_ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T,
+// which array_kind tells apart (ARRAY_FIXED, ARRAY_VIEW or ARRAY_RESIZABLE);
+// the description of T; and N, or -1 for a view or a resizable array. A
+// string is no view here: it has its own tag, TYPE_INFO_STRING.
 Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: int; count: int; }
 
-// A Type_Info_Array's array_kind.
+// A Type_Info_Array's array_kind, in Jai's order.
 ARRAY_FIXED :: 0;
 ARRAY_VIEW :: 1;
+ARRAY_RESIZABLE :: 2;
 
 // A value of any type: its type's description and its address. Every value
 // converts to an Any implicitly (spec 3.16), a place by its own address, any

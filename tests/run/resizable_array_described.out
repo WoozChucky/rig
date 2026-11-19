@@ -1,0 +1,5 @@
+true true -1 40 true
+[]
+[{x = 1, y = 2}, {x = 3, y = 4}]
+true
+{points = [{x = 1, y = 2}, {x = 3, y = 4}]}

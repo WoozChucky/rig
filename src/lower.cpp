@@ -3012,10 +3012,10 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // returns.
 
 // The tag of the description of a type of t's kind: integers, floats,
-// bool, string, pointers, procedure types, void, structs, and arrays and
-// views, which share one. The checker gave every value a type of its own
-// before lowering, so the untyped types, null's and a literal's without its
-// type never get here.
+// bool, string, pointers, procedure types, void, structs, and arrays, views
+// and resizable arrays (spec 3.17), which share one. The checker gave every
+// value a type of its own before lowering, so the untyped types, null's and
+// a literal's without its type never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
     RIG_ASSERT(!type_is_untyped(t));
     switch (t->kind) {
@@ -3028,7 +3028,8 @@ static Type_Info_Tag type_info_tag(Type *t) {
     case TYPE_VOID: return TYPE_INFO_VOID;
     case TYPE_STRUCT: return TYPE_INFO_STRUCT;
     case TYPE_ARRAY:
-    case TYPE_VIEW: return TYPE_INFO_ARRAY;
+    case TYPE_VIEW:
+    case TYPE_RESIZABLE: return TYPE_INFO_ARRAY;
     default: RIG_ASSERT(!"a type with no description"); return TYPE_INFO_VOID;
     }
 }
@@ -3139,8 +3140,9 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, St
 
 // Writes the description `global` of type t: its kind's tag, t's size and
 // alignment (void's 0 and 1), and what its kind adds: an integer's sign; a
-// pointer's pointee's description (a *void's, void's); an array's or a
-// view's element's description, its kind and its count (-1 for a view); a
+// pointer's pointee's description (a *void's, void's); an array's, a view's
+// or a resizable array's element's description, its kind and its count (-1
+// for a view or a resizable array, whose count is its value's); a
 // struct's name and members; a procedure type's parameters' and results'
 // descriptions (a ..T parameter's []T), #c_call and whether its last
 // parameter is a ..T. Its names' str.N and its arrays' globals are made
@@ -3163,10 +3165,13 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
         break;
     case TYPE_ARRAY:
     case TYPE_VIEW:
+    case TYPE_RESIZABLE: {
+        s64 kind = t->kind == TYPE_ARRAY ? ARRAY_FIXED : t->kind == TYPE_VIEW ? ARRAY_VIEW : ARRAY_RESIZABLE;
         array_add(&relocs, Ir_Reloc{TYPE_INFO_ELEMENT_OFFSET, type_info_global(l, t->element), false});
-        write_bits(bytes + TYPE_INFO_ARRAY_KIND_OFFSET, (u64)(t->kind == TYPE_ARRAY ? ARRAY_FIXED : ARRAY_VIEW), 8);
+        write_bits(bytes + TYPE_INFO_ARRAY_KIND_OFFSET, (u64)kind, 8);
         write_bits(bytes + TYPE_INFO_COUNT_OFFSET, (u64)(t->kind == TYPE_ARRAY ? t->count : -1), 8);
         break;
+    }
     case TYPE_STRUCT:
         write_bits(bytes + TYPE_INFO_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
         array_add(&relocs, Ir_Reloc{TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});

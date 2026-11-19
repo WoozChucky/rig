@@ -127,8 +127,9 @@ enum Type_Info_Tag : s64 {
     TYPE_INFO_POINTER = 4, TYPE_INFO_PROCEDURE = 5, TYPE_INFO_VOID = 6, TYPE_INFO_STRUCT = 7,
     TYPE_INFO_ARRAY = 8,
 };
-// Type_Info_Array's array_kind: an array, [N]T, or a view, []T.
-const s64 ARRAY_FIXED = 0, ARRAY_VIEW = 1;
+// Type_Info_Array's array_kind: an array, [N]T, a view, []T, or a resizable
+// array, [..]T (spec 3.17), in Jai's order.
+const s64 ARRAY_FIXED = 0, ARRAY_VIEW = 1, ARRAY_RESIZABLE = 2;
 // Type_Info: tag, size and alignment, each an int.
 const s64 TYPE_INFO_TAG_OFFSET = 0, TYPE_INFO_SIZE_OFFSET = 8, TYPE_INFO_ALIGNMENT_OFFSET = 16;
 const s64 TYPE_INFO_SIZE = 24;            // a plain Type_Info: a float, bool, string, void
@@ -147,7 +148,7 @@ const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_S
 const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, TYPE_INFO_MEMBER_OFFSET_OFFSET = 24,
           TYPE_INFO_MEMBER_SIZE = 32;
 // Type_Info_Array: info, element_type, a *Type_Info, then the ints
-// array_kind and count (N, or -1 for a view).
+// array_kind and count (N, or -1 for a view or a resizable array).
 const s64 TYPE_INFO_ELEMENT_OFFSET = 24, TYPE_INFO_ARRAY_KIND_OFFSET = 32, TYPE_INFO_COUNT_OFFSET = 40,
           TYPE_INFO_ARRAY_SIZE = 48;
 // Any: type, the value's *Type_Info, then value_pointer, its address.

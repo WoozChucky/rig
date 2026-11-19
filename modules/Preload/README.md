@@ -77,11 +77,11 @@ Every description starts with a `Type_Info`. Each kind's struct holds it as its 
   - `name: string`: the field's name.
   - `type: *Type_Info`: its type's description.
   - `offset: int`: where it is, in bytes from the struct's start (spec 3.9).
-- `Type_Info_Array` (`TYPE_INFO_ARRAY`, for an array `[N]T` and a view `[]T` alike):
+- `Type_Info_Array` (`TYPE_INFO_ARRAY`, for an array `[N]T`, a view `[]T` and a resizable array `[..]T` alike):
   - `info: Type_Info`.
   - `element_type: *Type_Info`: `T`'s description.
-  - `array_kind: int`: `ARRAY_FIXED` (0) for an array, `ARRAY_VIEW` (1) for a view.
-  - `count: int`: the array's `N`, or -1 for a view. A string isn't described as a view: it has its own tag.
+  - `array_kind: int`: `ARRAY_FIXED` (0) for an array, `ARRAY_VIEW` (1) for a view, `ARRAY_RESIZABLE` (2) for a resizable array (spec 3.17), in Jai's order.
+  - `count: int`: the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A string isn't described as a view: it has its own tag.
 
 `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`:
 

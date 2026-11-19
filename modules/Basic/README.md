@@ -378,7 +378,7 @@ How each value is written:
 - **Pointers:** `null`, or the address in lowercase hexadecimal after `0x`, unpadded. A pointer isn't followed, and a `*u8` is a pointer, not a C string.
 - **Procedure values:** as pointers. Interpreted, a Rig procedure's address is the interpreter's stand-in (spec 10.8), so its text differs from the compiled program's, as every address does from run to run.
 - **Structs:** `{x = 1, y = 2}`, fields in order, named; nested, `{from = {x = 1, y = 2}, to = {x = 3, y = 4}}`; a struct with no fields `{}`.
-- **Arrays and views:** `[1, 2, 3]`; empty, or a view with a count of 0 or less, `[]`. A view with null data and a count above 0 stops the program with `null pointer dereference` before any of it is written, as indexing it would (spec 8.4).
+- **Arrays and views:** `[1, 2, 3]`; empty, or a view with a count of 0 or less, `[]`. A view with null data and a count above 0 stops the program with `null pointer dereference` before any of it is written, as indexing it would (spec 8.4). A resizable array `[..]T` (spec 3.17) is written as its view is: its `count` elements, `[]` for a zeroed one.
 - **`Any`**, as a field or an element: the value it holds, written as that field or element would be. A zeroed `Any`, whose type is null, as a zeroed struct's `Any` field is, writes `null`.
 - **`void`:** a description of `void`, which only an `Any` made by hand can hold, writes `void`.
 - **Any other tag:** a description whose tag isn't one of the nine writes nothing.

@@ -7419,6 +7419,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         {"TYPE_INFO_ARRAY", TYPE_INFO_ARRAY},
         {"ARRAY_FIXED", ARRAY_FIXED},
         {"ARRAY_VIEW", ARRAY_VIEW},
+        {"ARRAY_RESIZABLE", ARRAY_RESIZABLE},
     };
     for (s64 i = 0; i < (s64)(sizeof constants / sizeof constants[0]); i++) {
         Ast *k = top_level_named(tree, constants[i].name);
