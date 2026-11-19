@@ -44,23 +44,17 @@ digit_value :: (c: u8) -> int {
 // The digits come from the magnitude as a u64: int's most negative value,
 // -9223372036854775808, has no positive int, but its magnitude is a u64,
 // and 0 - m on a u64 wraps to exactly it. So no value needs a case of its
-// own. format_u64 writes them, into the bytes after the "-" when there's
-// one.
+// own. format_u64_after writes them, after the "-" when there's one.
 format_int :: (buffer: []u8, value: int, base: int) -> string {
     if base < 2 || base > 36 { return ""; }
     magnitude := cast,trunc(u64) value;
-    if value >= 0 { return format_u64(buffer, magnitude, base); }
-    magnitude = 0 - magnitude;
-
-    buffer[0] = "-"[0];
-    rest : []u8;
-    rest.data = buffer.data + 1;
-    rest.count = buffer.count - 1;
-    digits := format_u64(rest, magnitude, base);
-
-    text := cast(string) buffer;
-    text.count = digits.count + 1;
-    return text;
+    count := 0;
+    if value < 0 {
+        magnitude = 0 - magnitude;
+        buffer[0] = "-"[0];
+        count = 1;
+    }
+    return format_u64_after(buffer, count, magnitude, base);
 }
 
 // Writes value in base into buffer, with lowercase digits, and returns the
@@ -72,6 +66,14 @@ format_int :: (buffer: []u8, value: int, base: int) -> string {
 // the cast's check, and through cast,trunc it wraps to a negative number
 // (spec 3.14, 8.3). So a u64, as print writes one, comes here instead.
 format_u64 :: (buffer: []u8, value: u64, base: int) -> string {
+    return format_u64_after(buffer, 0, value, base);
+}
+
+// Writes value in base into buffer after the count bytes already there,
+// with lowercase digits, and returns the text written, at the buffer's
+// start: format_int's digits, after its "-" or not, and format_u64's. A
+// base outside 2 to 36 writes nothing and returns "".
+format_u64_after :: (buffer: []u8, count: int, value: u64, base: int) -> string {
     DIGITS :: "0123456789abcdefghijklmnopqrstuvwxyz";
     if base < 2 || base > 36 { return ""; }
     radix := cast(u64) base;
@@ -87,12 +89,12 @@ format_u64 :: (buffer: []u8, value: u64, base: int) -> string {
     }
     left := value;
     for 1..digits {
-        buffer[digits - it] = DIGITS[left % radix];
+        buffer[count + digits - it] = DIGITS[left % radix];
         left /= radix;
     }
 
     text := cast(string) buffer;
-    text.count = digits;
+    text.count = count + digits;
     return text;
 }
 

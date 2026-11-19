@@ -28,10 +28,10 @@
 //   caller's copy, used as it is (the backend keeps the pointer in a slot for
 //   the debugger). A '..T' parameter (spec 7.2) is a []T one, to the callee
 //   and to a debugger alike: only the caller does anything more
-//   (lower_call_results).
-//   A parameter's default value (spec 7.2) is the caller's code too: a call
-//   that leaves the parameter out works the value out and passes it, as if
-//   it were written there, so the callee never knows (lower_call_results).
+//   (lower_call_results). A parameter's default value (spec 7.2) is the
+//   caller's code too: a call that leaves the parameter out works the value
+//   out and passes it, as if it were written there, so the callee never
+//   knows (lower_call_results).
 // - The context (spec 7.10, 10.4). Every procedure with a body but a
 //   #c_call one and main takes a *Context, a hidden ptr parameter after
 //   the result pointers and before the visible ones (takes_context), and a

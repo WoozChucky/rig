@@ -106,8 +106,8 @@ struct Backend {
     Table<Debug_Type> debug_types;
     Arena *arena;             // where the build allocates: the table's keys, types' names
     Type *context_type;       // Preload's Context (Ir_Module.context_type), for the debug types of
-                              // procedure types: one that isn't #c_call takes a *Context (spec
-                              // 10.7); null without Preload
+                              // procedure types: one that isn't #c_call takes a *Context
+                              // (spec 10.7); null without Preload
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {

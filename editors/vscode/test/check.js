@@ -868,11 +868,11 @@ check('the grammar colours a \'..T\' parameter and a spread', () => {
 });
 
 // A default parameter value (issue #155) is an expression after the
-// parameter's type and its '=': a name in it isn't coloured as a type, a
-// call in it is a call, and `f :: (n := 0)` is a procedure, if a wrong one,
-// as the parser reads it, while `N :: (1 + 2);` is still a constant. A '='
-// in a procedure type, which the parser refuses, leaves the types around it
-// coloured.
+// parameter's type and its '=': a value's name in it isn't coloured, a
+// literal's type is a type, a call in it is a call, and `f :: (n := 0)` is
+// a procedure, if a wrong one, as the parser reads it, while
+// `N :: (1 + 2);` is still a constant. A '=' in a procedure type, which the
+// parser refuses, leaves the types around it coloured.
 check('the grammar colours default parameter values', () => {
     const ASSIGNMENT = 'keyword.operator.assignment.rig';
     assertScopes('repeat :: (s: string, times: int = 2, separator: string = " ") {', {
