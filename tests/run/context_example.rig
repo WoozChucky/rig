@@ -1,0 +1,30 @@
+// Issue #156's example of the context: greeting allocates with its
+// allocators left out, so main decides where its memory comes from, an
+// arena, by pushing a context whose allocator is the arena's, without
+// passing the arena down. Then tprint formats into the temporary storage,
+// which reset_temporary_storage empties.
+#import "Basic";
+
+greeting :: (name: string) -> string {
+    b : String_Builder;
+    builder_init(*b);                         // allocator = context.allocator
+    append_string(*b, "hello, ");
+    append_string(*b, name);
+    s := builder_to_string(*b);               // context.allocator too
+    builder_free(*b);
+    return s;
+}
+
+main :: () {
+    arena : Arena;
+    arena_init(*arena, 4096);                 // its blocks from the heap: main's context
+    with_arena := context;
+    with_arena.allocator = arena_allocator(*arena);
+    push_context with_arena {
+        print_line(greeting("Ada"));          // every allocation from the arena
+    }
+    free_all(arena_allocator(*arena));
+
+    print_line(tprint("{} + {} = {}", 1, 2, 3));   // temporary storage
+    reset_temporary_storage();
+}

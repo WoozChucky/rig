@@ -12,8 +12,10 @@
 // An allocator's shape (Allocator), its modes (ALLOCATE, RESIZE, FREE and
 // FREE_ALL) and the heap (heap_allocator_proc and HEAP_ALLOCATOR) are
 // Preload's, which every program imports without asking (spec 2.14; its
-// README.md lists them). This file adds what is built over them: the four
-// helpers, an arena and a pool.
+// README.md lists them), and so are the context's temporary storage and
+// its allocator, TEMPORARY_ALLOCATOR. This file adds what is built over
+// them: the four helpers, an arena, a pool, and the temporary storage's
+// own helpers, talloc, its marks and its reset.
 //
 // A program calls the four helpers, alloc, resize, free and free_all,
 // rather than an allocator's procedure. They settle the edges once, so no
@@ -288,4 +290,63 @@ pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, 
 // pool as an Allocator.
 pool_allocator :: (pool: *Pool) -> Allocator {
     return Allocator.{pool_allocator_proc, pool};
+}
+
+// Where the context's temporary storage reached when the mark was taken:
+// its newest page, null while it has none, and how far into its count
+// allocations reached (Temporary_Storage.occupied, Preload's). Going back
+// to it gives back what was allocated since.
+Temporary_Storage_Mark :: struct {
+    page: *Temporary_Storage_Page;
+    occupied: int;
+}
+
+// size bytes from the context's temporary storage, through
+// TEMPORARY_ALLOCATOR, or null when it has none to give, as alloc gives
+// them. Nothing goes back one allocation at a time: everything goes back
+// at once, at reset_temporary_storage or set_temporary_storage_mark, so
+// it suits memory that is done with by a point the program knows, such as
+// a frame's end or a request's.
+talloc :: (size: int) -> *void {
+    return alloc(size, TEMPORARY_ALLOCATOR);
+}
+
+// Empties the context's temporary storage: every page goes back to its
+// overflow_allocator, and its first block is handed out again from its
+// start, as FREE_ALL of TEMPORARY_ALLOCATOR does. Everything allocated
+// from it before is gone, and memory used after the reset is a memory
+// error no check catches (spec 8.6). Its high_water_mark stays, so a
+// program can see how much a frame or a request took at its most.
+reset_temporary_storage :: () {
+    free_all(TEMPORARY_ALLOCATOR);
+}
+
+// A mark of where the context's temporary storage is now, to go back to
+// with set_temporary_storage_mark.
+get_temporary_storage_mark :: () -> Temporary_Storage_Mark {
+    storage := context.temporary_storage;
+    mark : Temporary_Storage_Mark;
+    mark.page = storage.overflow_pages;
+    mark.occupied = storage.occupied;
+    return mark;
+}
+
+// Takes the context's temporary storage back to mark: every page made
+// since goes back to its overflow_allocator, newest first, and what was
+// allocated after the mark is handed out again. So a stretch of code that
+// takes temporary memory it is done with at its end gives it back there,
+// leaving what came before. Memory allocated after the mark and used after
+// going back to it is a memory error no check catches (spec 8.6), and so
+// is a mark of another storage, or one taken before a reset since: its
+// page is gone.
+set_temporary_storage_mark :: (mark: Temporary_Storage_Mark) {
+    storage := context.temporary_storage;
+    page := storage.overflow_pages;
+    while page != mark.page {
+        previous := page.previous;
+        free(page, storage.overflow_allocator);
+        page = previous;
+    }
+    storage.overflow_pages = mark.page;
+    storage.occupied = mark.occupied;
 }

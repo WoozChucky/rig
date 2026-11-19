@@ -1,0 +1,38 @@
+// Basic's temporary storage (issue #156): talloc takes from it, a mark
+// goes back to where it was, giving back the pages made since,
+// reset_temporary_storage empties it, and tprint formats into it.
+// sprint formats into memory from context.allocator.
+#import "Basic";
+
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+main :: () {
+    s := context.temporary_storage;
+    a := talloc(10);
+    mark := get_temporary_storage_mark();
+    b := talloc(40000);
+    print("{} {}\n", s.occupied, s.overflow_pages != null);
+    set_temporary_storage_mark(mark);
+    print("{} {}\n", s.occupied, s.overflow_pages == null);
+    c := talloc(8);
+    print("{}\n", cast(*u8) c - cast(*u8) a);
+    print_line(tprint("{} + {} = {}", 1, 2, 3));
+    print("{}\n", s.occupied > 24);
+    reset_temporary_storage();
+    print("{} {}\n", s.occupied, s.high_water_mark);
+    text := sprint("{}-{}", "a", 7);
+    print_line(text);
+    free(text.data);
+    // One allocation from the context's allocator, the text's.
+    count := 0;
+    counting := context;
+    counting.allocator = Allocator.{counting_proc, *count};
+    push_context counting {
+        t := sprint("{}", 1);
+        free(t.data);
+    }
+    print("{}\n", count);
+}

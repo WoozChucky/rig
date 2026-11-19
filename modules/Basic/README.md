@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and formatted printing to standard output and to a string builder (issues #134, #145, #148 and #154).
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), the context's temporary storage, a string builder, a growable array, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and formatted printing to standard output, to a string builder and to a string (issues #134, #145, #148, #154 and #156). Whatever allocates takes its memory from the context's allocator unless it is given another (Allocators, below), so a caller decides where the memory of everything it calls comes from without passing an allocator down.
 
 ## Importing it
 
@@ -175,6 +175,34 @@ push_context with_arena {
 }
 ```
 
+### Temporary storage
+
+The context's temporary storage (Preload's, spec 7.10; [`../Preload/README.md`](../Preload/README.md) has its rules) hands out memory one allocation after another, each at a multiple of 8, and takes it all back at once: nothing is given back one allocation at a time. So taking memory from it is quick, and nothing has to be freed, which suits memory that is done with by a point the program knows: a frame's end, a request's, a command's. The program resets the storage there; until then, everything it gave stays. Its first 32 KB lie in the program, and past them it asks its `overflow_allocator`, the heap's, for pages, which a reset gives back. `TEMPORARY_ALLOCATOR` is it as an allocator, to give a procedure that takes one; `tprint` (`print.rig`) formats into it.
+
+Memory from it used after a reset, or after going back to a mark taken before it was allocated, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with the heap. So is a mark of another storage, or one taken before a reset since.
+
+- `talloc(size: int) -> *void`: `size` bytes from the context's temporary storage, or null, as `alloc(size, TEMPORARY_ALLOCATOR)` gives them.
+- `reset_temporary_storage()`: empties the context's temporary storage: its pages go back to its `overflow_allocator`, and its first block is handed out again from its start. Its `high_water_mark`, the most it has held, stays, so a program can see how much a frame took at its most.
+- `Temporary_Storage_Mark`: where the storage reached, `page: *Temporary_Storage_Page` (its newest page, null while it has none) and `occupied: int`.
+- `get_temporary_storage_mark() -> Temporary_Storage_Mark`: a mark of where the context's temporary storage is now.
+- `set_temporary_storage_mark(mark: Temporary_Storage_Mark)`: takes the context's temporary storage back to `mark`, giving back every page made since, newest first, so what was allocated after the mark is handed out again and what came before it stays.
+
+```rig
+frame :: (n: int) {
+    mark := get_temporary_storage_mark();
+    defer set_temporary_storage_mark(mark);
+    title := tprint("frame {}", n);    // gone at the end of frame
+    print_line(title);
+}
+
+main :: () {
+    for 1..3 { frame(it); }
+    names := tprint("{} and {}", "Ada", "Grace");
+    print_line(names);
+    reset_temporary_storage();          // names is gone
+}
+```
+
 ## String builder (`builder.rig`)
 
 Text put together a piece at a time, in memory of the builder's own from the allocator it is given, the context's unless another is, and copied out as one string. `print_to_builder` (`print.rig`) appends formatted text to one. When an append doesn't fit, the capacity becomes the larger of 64 and twice the old one, doubled again until it fits, and the memory moves with `resize`. Numbers are written on the stack first, so the appends allocate nothing but the builder's memory (`print_to_builder` also takes some of the heap's for a moment). An allocator that has no memory to give stops the program at the next write, with the language's `null pointer dereference`.
@@ -324,9 +352,11 @@ What is written to standard output goes through C's `putchar`, so it comes out i
 - `print_or_append(builder: *String_Builder, s: string)`: writes the bytes of `s` to `builder`, or to standard output when it is null.
 - `print_quoted(builder: *String_Builder, s: string)`: writes `s` in double quotes, with the escapes below.
 - `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view or `{!EXTRA: ...}`, where a string is quoted.
-- `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print` and `print_to_builder` are it.
+- `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below; `print`, `print_to_builder`, `sprint` and `tprint` are it.
 - `print(format: string, args: ..Any)`: writes `format` to standard output with its `{}`s replaced by the arguments, in order: `print("{} is {}\n", name, age)`. A `[]Any` already made is forwarded with `..`, as in `print(format, ..args)`; passed without it, it is one argument, a view.
 - `print_to_builder(builder: *String_Builder, format: string, args: ..Any)`: appends what `print` would write to `builder`, and writes nothing to standard output. A null `builder` stops the program with `null pointer dereference`, whatever the format. The format and the arguments may view the builder's own text, as `append_string`'s `s` may: the text is written into a builder of its own first, on the heap whatever `builder`'s allocator, and then appended at once, and the heap's memory is freed before it returns. So an arena's builder keeps nothing more, and a pool's needs no second slot.
+- `sprint(format: string, args: ..Any) -> string`: what `print` would write, as a string in memory from `context.allocator`, which the caller gives back with `free(s.data)`: `sprint("{}-{}", "a", 7)` is `"a-7"`. It is written on the heap first, as `print_to_builder`'s text is, and copied out at once, so the context's allocator gives one allocation, the text's size; nothing written is the zeroed string (count 0, data null) and allocates nothing.
+- `tprint(format: string, args: ..Any) -> string`: what `print` would write, as a string in the context's temporary storage, gone at its next reset (Temporary storage, above): `print_line(tprint("{} + {} = {}", 1, 2, 3))`. It is written into a builder on the temporary storage and returned with no copy; nothing written is the zeroed string and allocates nothing.
 
 The format, read left to right:
 
