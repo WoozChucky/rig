@@ -263,25 +263,28 @@
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block,
 //   lower_push_context, and the loops, which are one), and so does a
 //   declaration that hides a name a debugger shows, for the rest of its
-//   block (lower_statement); each declaration adds an Ir_Var
-//   (add_local_var, add_constant, and the parameters in lower_body), a
-//   top-level constant one in the module's constants (ir_lower), and so
-//   does the context, an artificial one: the hidden parameter, arg 1, or
+//   block (lower_statement). Each variable and parameter adds an Ir_Var
+//   (add_local_var, and the parameters in lower_body), and so does each
+//   constant a debugger shows (add_constant), a top-level one in the
+//   module's constants (ir_lower): not one naming a procedure, unless it
+//   hides a name, nor one in a block no debugger can stop in, or hiding a
+//   name after code that can't go on (lower_statements, lower_statement).
+//   So does the context, an artificial one: the hidden parameter, arg 1, or
 //   main's and a run's slot, a local (lower_body), or a push_context's
 //   slot, a local of its block's scope at its keyword (lower_push_context).
 //   __runtime_init has no debug information at all (Ir_Proc.no_debug_info),
-//   and main's call of it no position, so `break main` stops at main's first
-//   line with the context set up. Each copy of deferred code is a scope of
-//   its own too, at the deferred statement, inside the scope the defer was
-//   reached in, its instructions at their own lines (lower_deferred); the ret
-//   or jump that leaves after the copies is where it is without them (a
-//   return's, break's or continue's at its keyword, an if's block's at its
-//   '}', a loop body's at the loop's keyword, the body's ret at its '}'), so
-//   a debugger steps through the deferred lines in the order they run, then
-//   to that place, when it has an instruction there (a jump to the block laid
-//   out right after it has none, so a break at the end of a while body goes
-//   straight on after the loop); a block statement has no jump of its own,
-//   and goes on to the next statement.
+//   and main's call of it no position, so `break main` stops at main's
+//   first line with the context set up. Each copy of deferred code is a
+//   scope of its own too, at the deferred statement, inside the scope the
+//   defer was reached in, its instructions at their own lines
+//   (lower_deferred); the ret or jump that leaves after the copies is where
+//   it is without them (a return's, break's or continue's at its keyword,
+//   an if's block's at its '}', a loop body's at the loop's keyword, the
+//   body's ret at its '}'), so a debugger steps through the deferred lines
+//   in the order they run, then to that place, when it has an instruction
+//   there (a jump to the block laid out right after it has none, so a break
+//   at the end of a while body goes straight on after the loop); a block
+//   statement has no jump of its own, and goes on to the next statement.
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source (deferred code's where each copy is
@@ -395,9 +398,10 @@ struct Lowering {
     s32 constant_count;       // the const.N globals made so far
     // The constants recorded for a debugger (ir.h's "Constants"): each
     // top-level one's index in module->constants, by name, which a body's
-    // declaration may hide (hides_a_name); and those at a const.N (data, a
-    // pointer to a literal, a procedure that hides a name), whose const.N is
-    // found after every body (resolve_constant_globals).
+    // declaration may hide (hides_a_name, which asks only whether a name is
+    // there: nothing reads the index); and those at a const.N (data, a
+    // pointer to a literal, a procedure that hides a name), whose const.N
+    // is found after every body (resolve_constant_globals).
     Table<s32> constant_index;
     Array<Pending_Constant> pending_constants;
     bool for_debugger;        // the const.N being made is for a debugger alone, which no code
@@ -405,7 +409,7 @@ struct Lowering {
                               // the program uses that procedure anyway (constant_bytes)
     // The foreign procedures the program uses, by name: those a body calls
     // or takes the address of, or a global or a used const.N holds the
-    // address of (proc_index_of, outside for_debugger).
+    // address of (proc_index_of).
     Table<bool> used_foreign;
     Ir_Proc *proc;            // the procedure whose body is being lowered
     s32 block;                // the block instructions go into
@@ -840,10 +844,11 @@ static s32 address_of(Lowering *l, Ast *decl) {
 // the program, from any of its files: its name's (the checker allowed no
 // other top-level declaration of it, in any file). ir_lower numbered every
 // procedure first; on demand, one nothing named before is declared now,
-// its body lowered later (declare_proc). A foreign one named outside a
-// const.N for a debugger alone is one the program uses (used_foreign).
+// its body lowered later (declare_proc). A foreign one named here is one
+// the program uses (used_foreign): a const.N for a debugger alone names
+// only one the program uses already (constant_bytes), so it adds none.
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
-    if (proc->is_foreign && !l->for_debugger) table_put(&l->used_foreign, proc->name, true);
+    if (proc->is_foreign) table_put(&l->used_foreign, proc->name, true);
     s32 *index = table_get(&l->proc_index, proc->name);
     if (index) return *index;
     RIG_ASSERT(l->on_demand);
@@ -2776,22 +2781,23 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
         break;
     }
     // No code here: a number's, a bool's or a null pointer's uses are
-    // constants already, a procedure's its address, a pointer to a literal's
-    // that literal's str.N (literal_global), and so are a string's uses met
-    // as a *u8; data's const.N is made where a use first reads its bytes
-    // (constant_global). The constant is recorded for a debugger
-    // (add_constant) in its block's scope (Lowering.block_scope), even after
-    // a hiding declaration began one inside it: it needs no code here, and a
-    // debugger shows it wherever the block has code, where the hiding
-    // scope may have none (when nothing but constants follows). One naming a
-    // procedure isn't recorded (is_shown_constant). One that hides a name a
-    // debugger shows is in a scope of its own from here to the block's end,
-    // as a variable that hides one is (above), one naming a procedure too,
-    // as its address (add_constant): else a debugger would show the name it
-    // hides. Once the block's code can't go on (its IR block has ended, as
-    // after a return, a break or a continue, or a block or an if that
-    // always ends in one), nothing follows that has code, so it would never
-    // be shown: it's neither recorded nor given a scope.
+    // constants already, a procedure's its address, a pointer to a
+    // literal's that literal's str.N (literal_global), and so are a
+    // string's uses met as a *u8; data's const.N is made where a use first
+    // reads its bytes (constant_global), or, when no code reads them, after
+    // every body (resolve_constant_globals). The constant is recorded for a
+    // debugger (add_constant) in its block's scope (Lowering.block_scope),
+    // even after a hiding declaration began one inside it: it needs no code
+    // here, and a debugger shows it wherever the block has code, where the
+    // hiding scope may have none (when nothing but constants follows). One
+    // naming a procedure isn't recorded (is_shown_constant). One that hides
+    // a name a debugger shows is in a scope of its own from here to the
+    // block's end, as a variable that hides one is (above), one naming a
+    // procedure too, as its address (add_constant): else a debugger would
+    // show the name it hides. Once the block's code can't go on (its IR
+    // block has ended, as after a return, a break or a continue, or a block
+    // or an if that always ends in one), nothing follows that has code, so
+    // it would never be shown: it's neither recorded nor given a scope.
     case AST_CONST: {
         Ast_Const *constant = (Ast_Const *)s;
         if (!hides_a_name(l, constant->name)) {
@@ -2888,14 +2894,16 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
 // The block's statements in order. Once the IR block has ended (as after a
 // return, a break or a continue, or after a block, an if or a push_context
 // that always ends in one: lower_scoped_block, lower_if and
-// lower_push_context leave the IR block they end in current), the rest can't
-// run: they aren't lowered, and couldn't be, since nothing may follow a
-// terminator. Only their constants are, a taken #if branch's too, since they
-// need no code: the block's scope has code before them, where a debugger
-// shows them as it shows any of the block's names (ir.h's "Constants"), but
-// for one that hides a name (lower_statement). A nested block's constants
-// aren't: that block's scope has no code for a debugger to stop in. A taken
-// #if branch's statements are lowered this way alone, in the block around it
+// lower_push_context leave the IR block they end in current), the rest
+// can't run: they aren't lowered, and couldn't be, since nothing may follow
+// a terminator. Only their constants are, a taken #if branch's too, since
+// they need no code: the block's scope has code before them, where a
+// debugger shows them as it shows any of the block's names (ir.h's
+// "Constants"). One that hides a name isn't recorded (lower_statement): its
+// own scope would have no code, so a debugger shows the name it hides over
+// the whole block. A nested block's constants aren't lowered: that block's
+// scope has no code for a debugger to stop in. A taken #if branch's
+// statements are lowered this way alone, in the block around it
 // (lower_statement).
 static void lower_statements(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     for (s64 i = 0; i < block->statements.count; i++) {
@@ -3380,15 +3388,15 @@ static s32 constant_global(Lowering *l, Ast_Const *constant) {
     return read_only_global(l, constant, constant->type, constant->value);
 }
 
-// The const.N of each constant recorded for a debugger at one (add_constant:
-// data, a pointer to a literal, a procedure that hides a name), once every
-// body is lowered: the one a use made, or, when no code reads the constant,
-// one made now, in the order the constants were recorded, so the numbers a
-// use gives are those it would give with no debugger. Each
-// copy of deferred code recorded the same constant again, and finds the
-// same const.N. One made here holds no address of a foreign procedure
-// nothing else uses (Lowering.for_debugger), so the program needs no
-// symbol it didn't.
+// The const.N of each constant recorded for a debugger at one
+// (add_constant: data, a pointer to a literal, a procedure that hides a
+// name), once every body is lowered: the one a use made, or, when no code
+// reads the constant, one made now, in the order the constants were
+// recorded, so the numbers a use gives are those it would give with no
+// debugger. Each copy of deferred code recorded the same constant again,
+// and finds the same const.N. One made here holds no address of a foreign
+// procedure nothing else uses (Lowering.for_debugger), so the program needs
+// no symbol it didn't.
 static void resolve_constant_globals(Lowering *l) {
     l->for_debugger = true;
     for (s64 i = 0; i < l->pending_constants.count; i++) {
