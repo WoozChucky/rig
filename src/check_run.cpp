@@ -157,8 +157,8 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
 // but its parameter with no type. A default value (spec 7.2) is lowered
 // with each call that leaves its parameter out, as the caller's code, so
 // what it calls is walked as the body's calls are, whether or not a call
-// the #run makes leaves it out. A foreign one has no body, nor has a
-// #compiler one: C's code is called as it is, and the compiler does the
+// the #run makes leaves it out. A foreign procedure has no body, nor has
+// a #compiler one: C's code is called as it is, and the compiler does the
 // other itself.
 static bool walk_proc(Reach *r, Ast_Proc *proc) {
     if (proc->is_broken || !check_proc_signature(r->c, proc) || proc->had_errors) return false;

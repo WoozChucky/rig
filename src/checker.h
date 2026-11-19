@@ -560,15 +560,15 @@
 //   f(1))) or through another's default that does, is "'f' is defined in
 //   terms of itself", at the procedure, once. A default's errors are its
 //   signature's: a #run reaching the procedure doesn't run.
-// - A direct call, of the procedure's name or a constant naming it, gives
-//   at least the parameters without a default and at most all of them:
-//   "'repeat' takes 1 to 3 arguments, but 4 were given", "'pair' takes 1 or
-//   2 arguments, but 3 were given" when they differ by one, at the callee.
-//   With no defaults the count is exact, as before. After a refused gap only
-//   the trailing defaults can be left out. Each given argument converts to
-//   its parameter's type, as any argument does; the ones left out pass their
-//   defaults, converted with the signature, which lowering works out at the
-//   call, in the caller, after the given ones.
+// - A direct call, of the procedure's name or a constant naming it, gives at
+//   least the parameters without a default and at most all of them: "'repeat'
+//   takes 1 to 3 arguments, but 4 were given", "'pair' takes 1 or 2
+//   arguments, but 3 were given" when they differ by one, at the callee. With
+//   no defaults the count is exact. After a refused gap only the trailing
+//   defaults can be left out. Each given argument converts to its parameter's
+//   type, as any argument does; the ones left out pass their defaults,
+//   converted with the signature, which lowering works out at the call, in
+//   the caller, after the given ones.
 // - A procedure type keeps no defaults, so a call through a value gives
 //   every argument: with f := repeat, f("ho") is "'f' takes 3 arguments, but
 //   1 was given".

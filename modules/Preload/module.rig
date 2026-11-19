@@ -22,12 +22,12 @@
 // underscores (__malloc, say), which leaves the plain names to programs:
 // a convention, which the compiler doesn't enforce.
 
-// The allocator: where memory comes from. An allocator is passed to
-// whatever needs memory, rather than everything taking it from one global
-// heap, so the caller decides where it comes from and how it goes back.
-// Preload holds its shape, its modes and the heap, which every program
-// has; Basic adds the helpers (alloc, resize, free and free_all), an arena
-// and a pool.
+// The allocator: where memory comes from. Whatever needs memory takes an
+// allocator, so the caller decides where it comes from and how it goes
+// back; left out, it is the context's, context.allocator (below). Preload
+// holds its shape, its modes and the heap, which every program has; Basic
+// adds the helpers (alloc, resize, free and free_all), an arena, a pool,
+// and the temporary storage's own helpers, talloc, its marks and its reset.
 //
 // An allocator is Jai's shape: one procedure and the data it works on. The
 // procedure is called with a mode, ALLOCATE, RESIZE, FREE or FREE_ALL, and
@@ -200,7 +200,9 @@ Temporary_Storage :: struct {
 // none, and the temporary storage.
 Context :: struct { allocator: Allocator; temporary_storage: *Temporary_Storage; }
 
-// The bytes of the temporary storage's first block.
+// The bytes of Preload's temporary storage's first block, and of the
+// smallest page any storage asks for, its header included
+// (temporary_allocator_proc).
 TEMPORARY_STORAGE_SIZE :: 32768;
 
 // The context main and each #run start with, and the one a #c_call
@@ -256,7 +258,8 @@ __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign l
 //   overflow_allocator, TEMPORARY_STORAGE_SIZE bytes or size with the
 //   header when that is larger, and the rest of the region before it goes
 //   unused but counts as occupied. Its null is passed on, the storage as
-//   it was.
+//   it was, and a size whose page, with the header, would be past int's
+//   largest gives null too, the storage as it was.
 // - RESIZE grows or shrinks old_memory in place when it is the last
 //   allocation and the region holds size bytes from it. Otherwise it
 //   allocates anew and copies the old bytes that fit, or gives null with

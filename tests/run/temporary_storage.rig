@@ -1,15 +1,14 @@
-// Temporary storage (issue #156, spec 7.10): TEMPORARY_ALLOCATOR hands
-// out context.temporary_storage's memory one allocation after another,
-// each at a multiple of 8, from its first 32 KB, which lie in the
-// program, then from pages its overflow_allocator gives, of 32 KB or the
-// request with its header, whichever is larger. A resize of the last
-// allocation stays in place when it fits. Nothing is given back until a
-// reset, FREE_ALL. occupied counts from the first byte, a page from the
-// first multiple of 8 at or past where the region before it ended, and
-// high_water_mark is the most it has been. A push_context with a program's own storage makes it allocate
-// from that one, its pages from its own overflow_allocator, which a reset
-// gives them back to; that allocator's null gives null, the storage as it
-// was.
+// Temporary storage (issue #156, spec 7.10): TEMPORARY_ALLOCATOR hands out
+// context.temporary_storage's memory one allocation after another, each at a
+// multiple of 8, from its first 32 KB, which lie in the program, then from
+// pages its overflow_allocator gives, of 32 KB or the request with its
+// header, whichever is larger. A resize of the last allocation stays in place
+// when it fits. Nothing is given back until a reset, FREE_ALL. occupied
+// counts from the first byte, a page from the first multiple of 8 at or past
+// where the region before it ended, and high_water_mark is the most it has
+// been. A push_context with a program's own storage makes it allocate from
+// that one, its pages from its own overflow_allocator, which a reset gives
+// them back to; that allocator's null gives null, the storage as it was.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 // int's largest value.

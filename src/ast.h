@@ -214,7 +214,9 @@ struct Ast_Proc : Ast {
     s32 defaults_depth;         // how deep lowering goes in a call that leaves every parameter with a
                                 // default value out: its deepest default's levels and those of the
                                 // defaults its calls fill in (checker.cpp's check_defaults, MAX_DEPTH);
-                                // 0 without defaults
+                                // 0 without defaults, when a default is past MAX_DEPTH (said there, so
+                                // a chain is said once per 1000 levels), and for a procedure refused
+                                // defaults ('..T', C's '..', #compiler), whose defaults go unchecked
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -392,8 +394,8 @@ struct Ast_Call : Ast {
     Array<Ast *> args;
     Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
                         // constant naming one (OP :: add;), is a call of the procedure itself;
-                        // one without a '..T' parameter that gives fewer arguments than `proc`
-                        // has parameters passes the rest's default values (spec 5.10)
+                        // a call of one without a '..T' parameter that gives fewer arguments
+                        // than `proc` has parameters passes the rest's default values (spec 5.10)
     Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a
                         // call's result): the value's procedure type, found by the checker;
                         // null when `proc` is the procedure called
@@ -553,7 +555,8 @@ struct Ast_Defer : Ast {
 struct Ast_Push_Context : Ast {
     Ast *context;      // a Context: a place's own address is pushed, anything else a copy
     Ast_Block *block;
-    bool is_place;     // context is a place (checker.cpp's check_push_context, expr_is_place)
+    bool is_place;     // context is a place, expr_is_place (checker.h): set by checker.cpp's
+                       // check_push_context
 };
 
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the

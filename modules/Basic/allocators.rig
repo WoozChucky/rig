@@ -65,7 +65,8 @@ free :: (memory: *void, allocator: Allocator = context.allocator) {
 }
 
 // Gives back everything allocator, the context's unless given, has given,
-// for the allocators that keep track of it: an arena and a pool do, the
+// for the allocators that keep track of it: an arena, a pool and
+// TEMPORARY_ALLOCATOR do (the last is reset_temporary_storage's reset), the
 // heap doesn't.
 free_all :: (allocator: Allocator = context.allocator) {
     allocator.proc(FREE_ALL, 0, 0, null, allocator.data);
@@ -325,10 +326,7 @@ reset_temporary_storage :: () {
 // with set_temporary_storage_mark.
 get_temporary_storage_mark :: () -> Temporary_Storage_Mark {
     storage := context.temporary_storage;
-    mark : Temporary_Storage_Mark;
-    mark.page = storage.overflow_pages;
-    mark.occupied = storage.occupied;
-    return mark;
+    return Temporary_Storage_Mark.{storage.overflow_pages, storage.occupied};
 }
 
 // Takes the context's temporary storage back to mark: every page made

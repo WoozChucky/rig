@@ -136,7 +136,7 @@ The context is what code deep in a call chain needs without every caller handing
   - `previous: *Temporary_Storage_Page`: the page before it, or null.
   - `size: int`: its bytes after the header.
   - `start: int`: where they start in the storage's count (`occupied`).
-- `TEMPORARY_STORAGE_SIZE`: 32768, the first block's bytes.
+- `TEMPORARY_STORAGE_SIZE`: 32768, the bytes of Preload's storage's first block, and of the smallest page any storage asks for, its header included.
 
 `__runtime_init` sets `default_context` up: its allocator, and the pointers to Preload's storage and its first block (`__temporary_storage`, `__temporary_storage_data`), which a global's value can't hold, since it can't hold another global's address (spec 4.3). It runs before `main`'s first line and before each `#run`'s code, and only the first call does anything. It's `#c_call`, so it uses no context itself. It and the two globals are Preload's own, not for programs.
 
@@ -146,8 +146,8 @@ The context is what code deep in a call chain needs without every caller handing
 
 It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, rounded up to a multiple of 8, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
 
-- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, the result is null and the storage is as it was.
-- `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from its start. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
+- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, or `size` with the header would be past `int`'s largest, the result is null and the storage is as it was.
+- `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from where that allocation starts. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
 - `FREE` does nothing: the memory goes back with everything else at the next reset.
 - `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
 

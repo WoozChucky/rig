@@ -1,9 +1,8 @@
 // Basic's print (issue #154) given a null builder: print_to_builder stops
 // with the language's null pointer dereference (spec 8.4), whatever the
-// format, rather than printing to standard output, as a null builder
-// means to the procedures under it. It stops at the line of
-// print.rig that basic_print_null_builder.err names. Edit one, edit the
-// other.
+// format, rather than printing to standard output, as a null builder means
+// to the procedures under it. It stops at the line of print.rig that
+// basic_print_null_builder.err names. Edit one, edit the other.
 #import "Basic";
 
 main :: () {
