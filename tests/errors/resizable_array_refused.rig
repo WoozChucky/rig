@@ -12,6 +12,9 @@ all :: (values: ..int) { }
 Holder :: struct { items: [..]int; n: int; }
 H :: Holder.{n = 2};
 E :: H.items;
+g : [..]int;
+L :: Holder.{items = g};
+Bad :: Holder.{items = 5};
 main :: () {
     a : [..]int;
     n := a.size;
