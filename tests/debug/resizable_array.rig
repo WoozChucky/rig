@@ -12,6 +12,15 @@ main :: () {
     points : [..]Point;
     array_add(*points, Point.{1, 2});
     count := numbers.count;
+    passed := count_of(numbers);
     array_free(*numbers);
     array_free(*points);
+}
+
+// A [..]T parameter is described as what's passed, a pointer to the
+// caller's copy, as any aggregate parameter is: a debugger shows its
+// address and reads its fields through it (gdb's a->count, cdb's ?? a->count).
+count_of :: (a: [..]int) -> int {
+    n := a.count;
+    return n;
 }

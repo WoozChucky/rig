@@ -6,3 +6,7 @@ print *numbers.data@numbers.count
 print numbers.allocator.proc
 ptype numbers
 print points.data[0]
+break resizable_array.rig:25
+continue
+print a
+print a->count

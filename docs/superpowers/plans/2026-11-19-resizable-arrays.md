@@ -733,7 +733,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 
 **Files:**
 - Create: `tests/debug/resizable_array.rig`, `.gdb`, `.gdb.expect`, `.cdb`, `.cdb.expect`
-- Modify: `CONTRIBUTING.md` (its debugging paragraph)
+- Modify: `CONTRIBUTING.md` (its debugging paragraph), `editors/vscode/README.md` (its Variables view paragraph)
 
 - [ ] **Step 1: Write the test.** `tests/debug/resizable_array.rig`, lines as numbered (its header comment is lines 1 to 4):
   ```rig
@@ -751,16 +751,25 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
       points : [..]Point;
       array_add(*points, Point.{1, 2});
       count := numbers.count;
+      passed := count_of(numbers);
       array_free(*numbers);
       array_free(*points);
   }
+
+  // A [..]T parameter is described as what's passed, a pointer to the
+  // caller's copy, as any aggregate parameter is: a debugger shows its
+  // address and reads its fields through it (gdb's a->count, cdb's ?? a->count).
+  count_of :: (a: [..]int) -> int {
+      n := a.count;
+      return n;
+  }
   ```
-  - `.gdb`: `break resizable_array.rig:14`, `run`, `print numbers.count`, `print numbers.allocated`, `print *numbers.data@numbers.count`, `print numbers.allocator.proc`, `ptype numbers`, `print points.data[0]`.
-  - `.gdb.expect` pieces, in order: `resizable_array.rig:14`, `= 3`, `= 8`, `= {3, 5, 8}`, `<heap_allocator_proc>`, `type = struct [..]int {`, `int count;`, `int *data;`, `int allocated;`, `struct Allocator allocator;`, `= {x = 1, y = 2}`; forbidden: `!The program being debugged`, `!.debug_names not created by gdb`.
-  - `.cdb`: `l+t`, `l+s`, `l+l`, `` bp `resizable_array.rig:14` ``, `g`, `dv /t`, `?? numbers.count`, `?? numbers.data[2]`, `?? numbers.allocated`, `?? numbers.allocator.proc`, `?? points.data[0].y`, `q`.
-  - `.cdb.expect` pieces, in order: `14:     count := numbers.count;`, `struct [..]int numbers = struct [..]int`, `struct [..]Point points = struct [..]Point`, `int64 0n3`, `int64 0n8`, `int64 0n8`, `resizable_array!heap_allocator_proc`, `int64 0n2`.
+  - `.gdb`: `break resizable_array.rig:14`, `run`, `print numbers.count`, `print numbers.allocated`, `print *numbers.data@numbers.count`, `print numbers.allocator.proc`, `ptype numbers`, `print points.data[0]`, `break resizable_array.rig:25`, `continue`, `print a`, `print a->count`.
+  - `.gdb.expect` pieces, in order: `resizable_array.rig:14`, `= 3`, `= 8`, `= {3, 5, 8}`, `<heap_allocator_proc>`, `type = struct [..]int {`, `int count;`, `int *data;`, `int allocated;`, `struct Allocator allocator;`, `= {x = 1, y = 2}`, `resizable_array.rig:25`, `= (struct [..]int *) 0x`, `= 3`; forbidden: `!The program being debugged`, `!.debug_names not created by gdb`.
+  - `.cdb`: `l+t`, `l+s`, `l+l`, `` bp `resizable_array.rig:14` ``, `g`, `dv /t`, `?? numbers.count`, `?? numbers.data[2]`, `?? numbers.allocated`, `?? numbers.allocator.proc`, `?? points.data[0].y`, `` bp `resizable_array.rig:25` ``, `g`, `dv /t a`, `?? a->count`, `q`.
+  - `.cdb.expect` pieces, in order: `14:     count := numbers.count;`, `struct [..]int numbers = struct [..]int`, `struct [..]Point points = struct [..]Point`, `int64 0n3`, `int64 0n8`, `int64 0n8`, `resizable_array!heap_allocator_proc`, `int64 0n2`, `25:     return n;`, `struct [..]int * a = 0x`, `int64 0n3`.
 - [ ] **Step 2: Run** `.\bin\run-tests.exe` and the Linux runner. Read each debugger's whole output against the pieces before settling them: where a debugger words a piece otherwise but says the same thing (the four fields, their values, the element), keep what it shows, and say so in the commit's body.
-- [ ] **Step 3: CONTRIBUTING.md's debugging paragraph:** a `[..]T` is a struct of its four fields; its elements are `numbers.data[i]`, gdb's `print *numbers.data@numbers.count` shows them all.
+- [ ] **Step 3: CONTRIBUTING.md's debugging paragraph:** a `[..]T` is a struct of its four fields; its elements are `numbers.data[i]`, gdb's `print *numbers.data@numbers.count` shows them all; its lists of what's passed as a pointer to the caller's copy and returned through `result$` gain the resizable array. VS Code's README's Variables view paragraph says the same.
 - [ ] **Step 4: Run all tests** on both hosts. The new debugger test PASSes on both, not SKIP.
 - [ ] **Step 5: Commit** `Show resizable arrays in gdb and cdb`. Push.
 
@@ -804,6 +813,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
   - 8.6: a copy, a view or an element's address used after the array grew or was freed; changing `.allocator` while it holds memory; a `for` whose body grows past the room.
   - 9.3: `argument 1 of 'array_add' must be a pointer to a resizable array (*[..]T), not '[..]int'` (3.17).
   - 10.3: a `[..]T` is 40 bytes: a view's 16, then `allocated` and the allocator.
+  - 10.4: the Aggregates bullet gains `[..]T`: passed as a pointer to the caller's copy, returned through a hidden pointer.
   - 10.5: the built-ins call Preload's `__array_*` helpers, written in Rig, with debug information.
   - 10.7: the Types bullet gains `[..]T`, a struct of its four fields named `[..]T` (gdb's `print *numbers.data@numbers.count`).
   - A.2: `Type` gains `"[" ".." "]" Type`.

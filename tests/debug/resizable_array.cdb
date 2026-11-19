@@ -9,4 +9,8 @@ dv /t
 ?? numbers.allocated
 dx numbers.allocator.proc
 ?? points.data[0].y
+bp `resizable_array.rig:25`
+g
+dv /t a
+?? a->count
 q

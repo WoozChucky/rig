@@ -9,5 +9,8 @@ int *data;
 int allocated;
 struct Allocator allocator;
 = {x = 1, y = 2}
+resizable_array.rig:25
+= (struct [..]int *) 0x
+= 3
 !The program being debugged
 !.debug_names not created by gdb

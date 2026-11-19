@@ -6,3 +6,6 @@ int64 0n8
 int64 0n8
 resizable_array!heap_allocator_proc
 int64 0n2
+25:     return n;
+struct [..]int * a = 0x
+int64 0n3
