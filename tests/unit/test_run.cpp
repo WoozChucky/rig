@@ -571,6 +571,12 @@ TEST(a_runs_resizable_array_isnt_baked) {
                                  "store : [3]int;\n"
                                  "empty :: () -> [..]int { a : [..]int; return a; }\n"
                                  "held :: () -> Holder { h : Holder; return h; }\n"
+                                 "filled :: () -> [..]int {\n"
+                                 "    a : [..]int;\n"
+                                 "    a.data = *store[0];\n"
+                                 "    a.count = 3;\n"
+                                 "    return a;\n"
+                                 "}\n"
                                  "viewed :: () -> []int {\n"
                                  "    store[0] = 1; store[1] = 2; store[2] = 3;\n"
                                  "    a : [..]int;\n"
@@ -580,13 +586,16 @@ TEST(a_runs_resizable_array_isnt_baked) {
                                  "}\n"
                                  "EMPTY :: #run empty();\n"
                                  "HELD :: #run held();\n"
+                                 "FILLED :: #run filled();\n"
                                  "VIEWED :: #run viewed();\n"
                                  "main :: () { }\n",
                                  &tree),
-              "12:10: #run's result holds a resizable array, which can't be baked, for now\n"
-              "13:9: #run's result holds a resizable array, which can't be baked, for now\n");
+              "18:10: #run's result holds a resizable array, which can't be baked, for now\n"
+              "19:9: #run's result holds a resizable array, which can't be baked, for now\n"
+              "20:11: #run's result holds a resizable array, which can't be baked, for now\n");
     CHECK(!top_level_named(tree, "EMPTY")->type);
     CHECK(!top_level_named(tree, "HELD")->type);
+    CHECK(!top_level_named(tree, "FILLED")->type);
     Ast_Const *viewed = (Ast_Const *)top_level_named(tree, "VIEWED");
     CHECK_STR(type_name(&a, viewed->type), "[]int");
     CHECK(viewed->is_data && viewed->data && viewed->data->kind == AST_LITERAL);
