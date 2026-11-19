@@ -1,5 +1,7 @@
 alloc true
 resize true
+free true
+free_all true
 arena_init true
 pool_init true
 builder_init true

@@ -1,8 +1,10 @@
 // Basic's allocators default to the context's (issue #156, spec 7.10):
-// each procedure of Basic's that takes an allocator takes
-// context.allocator when it's left out. Under a pushed context whose
-// allocator counts the memory it gives, each is called without one, and
-// prints its name and whether the count grew during the call. What each
+// each procedure of Basic's that takes an allocator, but the tables' own
+// table_make_room, takes context.allocator when it's left out. Under a
+// pushed context whose allocator counts the memory it gives, each is
+// called without one, and prints its name and whether the count grew
+// during the call; free and free_all, which give memory back, print
+// whether the count of what was given back grew. What each
 // gave is freed with the allocator left out too, so it goes back to the
 // allocator that gave it. Last, a #c_call procedure, which has no context
 // until it pushes one, pushes the default context and leaves the
@@ -17,15 +19,26 @@ PATH :: ".build/tests/basic_context_defaults.txt";
 // How many times the counting allocator gave memory, or moved it.
 count : int;
 
-// The heap, counting each ALLOCATE and RESIZE in count.
+// How many times the counting allocator was given memory back, or asked
+// to give back all it gave.
+freed : int;
+
+// The heap, counting each ALLOCATE and RESIZE in count, and each FREE and
+// FREE_ALL in freed.
 counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     if mode == ALLOCATE || mode == RESIZE { count += 1; }
+    if mode == FREE || mode == FREE_ALL { freed += 1; }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
 // Prints name and whether count grew since it was before.
 grew :: (name: string, before: int) {
     print("{} {}\n", name, count > before);
+}
+
+// Prints name and whether freed grew since it was before.
+gave_back :: (name: string, before: int) {
+    print("{} {}\n", name, freed > before);
 }
 
 // Called as C would call it, with no context: it pushes the default one,
@@ -50,8 +63,12 @@ main :: () {
         before = count;
         p = resize(p, 8, 64);
         grew("resize", before);
+        before = freed;
         free(p);
+        gave_back("free", before);
+        before = freed;
         free_all();
+        gave_back("free_all", before);
 
         // An arena's and a pool's memory comes from the parent at their
         // first allocation.

@@ -5,8 +5,9 @@
 // (a pool). Left out, the allocator is the context's, context.allocator
 // (spec 7.10), worked out in the caller as any default value is (7.2): so
 // a caller that pushes a context with an arena's allocator, or sets
-// context.allocator for a stretch, has every callee's memory come from the
-// arena without passing it down.
+// context.allocator for a stretch, has the memory of every call that
+// leaves its allocator out, in the stretch and in what it calls, come
+// from the arena without passing it down.
 //
 // An allocator's shape (Allocator), its modes (ALLOCATE, RESIZE, FREE and
 // FREE_ALL) and the heap (heap_allocator_proc and HEAP_ALLOCATOR) are
