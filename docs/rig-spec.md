@@ -824,7 +824,7 @@ A use of a constant that is a number, a `bool`, a pointer or a procedure reads n
 
 No part of a constant can be assigned to or have its address taken: a constant is not a place (section 5.1), nor is any field or element of one, a string constant's bytes included. `PRIMES[0] = 1;` is `can't assign to 'PRIMES': it's a constant`, as `N = 1;` is `can't assign to 'N': it's a constant`, and `*ORIGIN.x` is `can't take the address of 'ORIGIN': it's a constant`.
 
-A local constant, declared in a body, holds what a top-level one does, by the same rules, and its data is in the program's read-only data as a top-level constant's is, whether code reads it or not (above), once for the whole program however often its block runs.
+A local constant, declared in a body, holds what a top-level one does, by the same rules. Its data is in the program's read-only data whether code reads it or not, once for the whole program however often its block runs. The two exceptions above are a body's: a constant in a block that can't run, and a hiding one after code that can't go on, have no data there.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;

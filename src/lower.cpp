@@ -263,12 +263,14 @@
 //   Each block that's a scope adds an Ir_Scope (lower_scoped_block,
 //   lower_push_context, and the loops, which are one), and so does a
 //   declaration that hides a name a debugger shows, for the rest of its
-//   block (lower_statement). Each variable and parameter adds an Ir_Var
-//   (add_local_var, and the parameters in lower_body), and so does each
-//   constant a debugger shows (add_constant), a top-level one in the
-//   module's constants (ir_lower): not one naming a procedure, unless it
-//   hides a name, nor one in a block no debugger can stop in, or hiding a
-//   name after code that can't go on (lower_statements, lower_statement).
+//   block (lower_statement). Each local variable (an iterator and
+//   it_index too) and parameter adds an Ir_Var (add_local_var, and the
+//   parameters in lower_body; a global is an Ir_Global instead), and so
+//   does each constant a debugger shows (add_constant), a top-level one in
+//   the module's constants (ir_lower): not one naming a procedure, unless
+//   it hides a name a debugger shows, nor one in a block no debugger can
+//   stop in, or hiding a name after code that can't go on
+//   (lower_statements, lower_statement).
 //   So does the context, an artificial one: the hidden parameter, arg 1, or
 //   main's and a run's slot, a local (lower_body), or a push_context's
 //   slot, a local of its block's scope at its keyword (lower_push_context).
