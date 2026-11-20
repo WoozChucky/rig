@@ -119,7 +119,7 @@
 5. **The debugger never allocates through the context.** Every call in the file that takes an allocator is given one: `HEAP_ALLOCATOR` for its records, its report's scratch and `sort`'s scratch, the wrapped allocator for what it passes on. `print` allocates nothing, and `print_to_builder` takes only the heap's scratch and the output builder's own allocator. So the allocations it counts are the program's alone, and a record table that grows (rehashes past 16 entries) is no allocation of its own.
 6. **The protocol.** The procedure first copies `context.allocation_location`, the place of this call (Fact 3), before it calls anything of Basic's itself (each of Basic's helpers puts the field back after its own call, so the copy is for the reader, not a need). It passes a call on by a direct call of the wrapped allocator's procedure, `wrapped.proc(MODE, size, old_size, old_memory, wrapped.data)`, never through `alloc`, `resize`, `free` or `free_all`, which would set the field to a `loc` of their own: a direct call leaves it as it is (Fact 3), so an arena or a pool it wraps passes the program's place on to its parent, and a debugger over it records the same place (measured: Task 3's `inner` and `over_heap`). It settles the edges as Basic's helpers do, so a direct call asks the wrapped allocator only what the helpers would (Fact 1):
    - `ALLOCATE`: a size of 0 or less gives null, not asked, not counted. Otherwise the wrapped allocator's memory: null is passed on, not counted; anything else is the next allocation, `allocations` plus 1, recorded with its size and the place, and returned.
-   - `RESIZE`: of null, it is `ALLOCATE`. Of memory with no live record, it is a bad call (Task 2) and gives null, not passed on: `old_memory` is as it was, as the protocol says of a null. Of a live record, a size of 0 or less is `FREE` and gives null. Otherwise an `old_size` that isn't the record's size is a bad call (Task 2), written and counted, and gives null, not passed on, the record as it was (its size the one it had), so `old_memory` is as it was and still the caller's to free (settled by the maintainer). Otherwise the resize is passed on; null from the wrapped allocator is passed on and the record stays as it was; any other result is the same allocation, its number and place kept, its size the new one, at the result's address, and when the result moved the old address's record is marked `freed`.
+   - `RESIZE`: of null, it is `ALLOCATE`. Of memory with no live record, it is a bad call (Task 2) and gives null, not passed on: `old_memory` is as it was, as the protocol says of a null. Of a live record, a size of 0 or less is `FREE` and gives null. Otherwise an `old_size` that isn't the record's size is a bad call (Task 2), written and counted, and gives null, not passed on, the record as it was (its size the one it had), so `old_memory` is as it was and still the caller's to free (settled by the maintainer). Otherwise the resize is passed on; null from the wrapped allocator is passed on and the record stays as it was; any other result is the same allocation, its number and place kept, its size the new one, at the result's address, and when the result moved the old address's record is marked `freed`. The record is copied before the resize is passed on, and the old address's found again after it: the wrapped allocator is given the caller's context, whose allocator is the debugger, so an allocation it makes while it resizes is the debugger's, whose set may rehash the table and move every record.
    - `FREE`: of null, nothing. Of memory with no live record, a bad call (Task 2), not passed on. Of a live record: marked `freed`, then passed on with its `old_size` as given. That `old_size` isn't checked: Basic's `free` passes 0, and #158's `__array_free` the array's bytes (Fact 1).
    - `FREE_ALL`: passed on, then (Task 3) every record is marked `freed` when the wrapped allocator gives everything back (Decision 7). Until Task 3, passed on and nothing more.
    - Each returns what the protocol says: `ALLOCATE` and `RESIZE` memory or null, `FREE` and `FREE_ALL` null.
@@ -152,7 +152,7 @@
 
 ## Review Focus
 
-1. **The debugger's own memory taken from the context's allocator,** or its own calls of Basic changing the place before it is read. Expected: neither; the records grow on the heap while `context.allocator` is the debugger, the count is the program's allocations, exactly, and each record has its caller's place. Test: Task 1's `memory_debugger_leaks` (made ready while the debugger is the context's allocator, 20 allocations live at once so the records grow past 16 entries on every host, a report of 8 records, which `sort` merges with scratch, called while the debugger is the context's allocator, and a resize to 0 bytes through a debugger over it that the inner one sees freed), and Task 4's `memory_debugger_basic`.
+1. **The debugger's own memory taken from the context's allocator,** or its own calls of Basic changing the place before it is read. Expected: neither; the records grow on the heap while `context.allocator` is the debugger, the count is the program's allocations, exactly, and each record has its caller's place. Test: Task 1's `memory_debugger_leaks` (made ready while the debugger is the context's allocator, 20 allocations live at once so the records grow past 16 entries on every host, a report of 8 records, which `sort` merges with scratch, called while the debugger is the context's allocator, a resize to 0 bytes through a debugger over it, with an `old_size` not the record's, that both see freed, a report written into a builder while an allocation with a place is live, and a resize passed to an allocator that allocates through the debugger while it resizes and is asked a free for a resize to 0), and Task 4's `memory_debugger_basic`.
 2. **A double free whose address was handed out again in between.** Expected: the second free is the new allocation's, which it frees; the new allocation's own free is then the bad one. Pinned as the documented limit, with a pool, whose freed slot is the next handed out. Test: Task 2's `memory_debugger_bad_calls`, its pool part.
 3. **`free_all` of a debugger over a debugger over the heap.** Expected: both keep their records, since the heap gave nothing back. Test: Task 3's `memory_debugger_wrapping`, its nested part.
 4. **A bad resize whose null the caller doesn't test.** Expected: the debugger's line, then the runtime error at the caller's dereference, compiled and interpreted, status 101. Test: Task 2's `memory_debugger_bad_resize`.
@@ -182,9 +182,36 @@
   // and the count is the program's own allocations. Each record has the
   // place it was asked for at, which the report names; called straight, from
   // no helper, its procedure settles the edges as Basic's helpers do, and
-  // what it gives has no place. A debugger over it passes a resize to 0
-  // bytes on as a free. Freed and made ready again, it starts afresh.
+  // what it gives has no place. A debugger over it takes a resize to 0 bytes
+  // as a free, whatever old_size it is given, and so the one under it sees
+  // the memory freed. Given a string builder, it writes its report there.
+  // Freed and made ready again, it starts afresh. Over an allocator that
+  // allocates through the context while it resizes, so through the debugger,
+  // whose records then grow, it keeps the resize's record right, and it asks
+  // that allocator a free for a resize to 0 bytes.
   #import "Basic";
+
+  // An allocator over the heap whose data is an int it sets to the mode of
+  // each call it is given. A resize to more than 0 bytes first takes 16
+  // notes from the context's allocator, the debugger over it here, and gives
+  // them back, as an allocator that traces its calls might, and then moves
+  // the memory.
+  watching_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+      (cast(*int) data).* = mode;
+      if mode == RESIZE && old_memory != null && size > 0 {
+          notes : [16]*void;
+          for 0..15 { notes[it] = alloc(1); }
+          for 0..15 { free(notes[it]); }
+          memory := alloc(size, HEAP_ALLOCATOR);
+          if memory == null { return null; }
+          kept := old_size;
+          if size < kept { kept = size; }
+          copy_memory(memory, old_memory, kept);
+          free(old_memory, HEAP_ALLOCATOR);
+          return memory;
+      }
+      return heap_allocator_proc(mode, size, old_size, old_memory, null);
+  }
 
   main :: () {
       debugger : Memory_Debugger;
@@ -213,13 +240,13 @@
       memory_debugger_init(*over, d);
       e := memory_debugger_allocator(*over);
       grown := e.proc(RESIZE, 8, 0, null, e.data);        // 24
-      gone := e.proc(RESIZE, 0, 8, grown, e.data);        // a free of 24
+      gone := e.proc(RESIZE, 0, 0, grown, e.data);        // a free of 24
+      print("{}\n", memory_debugger_report(*over));
       memory_debugger_free(*over);
       d.proc(FREE, 0, 0, null, d.data);                   // nothing
       loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 25, no place
       print("{} {}\n", none == null, gone == null);
       print("{}\n", memory_debugger_report(*debugger));
-      free(a);
       free(loose);
       builder_free(*builder);
       for 0..4 { free(kept[it]); }
@@ -229,37 +256,54 @@
       debugger.output = *written;
       clean := memory_debugger_report(*debugger);
       text := builder_to_string(*written, HEAP_ALLOCATOR);
-      print("{}{}\n", text, clean);
+      print("from the builder: {}{}\n", text, clean);
       free(text.data, HEAP_ALLOCATOR);
       builder_free(*written);
+      free(a);
 
       memory_debugger_free(*debugger);
       memory_debugger_init(*debugger, old);
       again := alloc(8);                           // 1 again
       print("{}\n", memory_debugger_report(*debugger));
       free(again);
+
+      memory_debugger_free(*debugger);
+      watched := 0;
+      memory_debugger_init(*debugger, Allocator.{watching_allocator_proc, *watched});
+      moved := alloc(16);                          // 1
+      moved = resize(moved, 16, 32);               // still 1, after 2 to 17
+      print("{}\n", memory_debugger_report(*debugger));
+      gone = d.proc(RESIZE, 0, 0, moved, d.data);         // a free of 1
+      print("{} {}\n", gone == null, watched == FREE);
   }
   ```
   Its `.out`:
   ```text
   memory debugger: 0 allocations, 0 not freed (0 bytes), 0 bad calls
   true
+  memory debugger: 1 allocation, 0 not freed (0 bytes), 0 bad calls
+  true
   true true
-  tests/run/memory_debugger_leaks.rig:24:10: memory debugger: allocation 1 (64 bytes) isn't freed
-  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 3 (1 byte) isn't freed
-  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 4 (2 bytes) isn't freed
-  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 5 (3 bytes) isn't freed
-  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 6 (4 bytes) isn't freed
-  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 7 (5 bytes) isn't freed
-  tests/run/memory_debugger_leaks.rig:33:5: memory debugger: allocation 23 (64 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:51:10: memory debugger: allocation 1 (64 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 3 (1 byte) isn't freed
+  tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 4 (2 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 5 (3 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 6 (4 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 7 (5 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:60:5: memory debugger: allocation 23 (64 bytes) isn't freed
   memory debugger: allocation 25 (8 bytes) isn't freed
   memory debugger: 25 allocations, 8 not freed (151 bytes), 0 bad calls
   false
-  memory debugger: 25 allocations, 0 not freed (0 bytes), 0 bad calls
-  true
-  tests/run/memory_debugger_leaks.rig:62:14: memory debugger: allocation 1 (8 bytes) isn't freed
+  from the builder: tests/run/memory_debugger_leaks.rig:51:10: memory debugger: allocation 1 (64 bytes) isn't freed
+  memory debugger: 25 allocations, 1 not freed (64 bytes), 0 bad calls
+  false
+  tests/run/memory_debugger_leaks.rig:90:14: memory debugger: allocation 1 (8 bytes) isn't freed
   memory debugger: 1 allocation, 1 not freed (8 bytes), 0 bad calls
   false
+  tests/run/memory_debugger_leaks.rig:97:14: memory debugger: allocation 1 (32 bytes) isn't freed
+  memory debugger: 17 allocations, 1 not freed (32 bytes), 0 bad calls
+  false
+  true true
   ```
 - [ ] **Step 2: Run** the build and `.\bin\run-tests.exe`. `memory_debugger_leaks` fails to check: `Memory_Debugger` is unknown.
 - [ ] **Step 3: Implement** Decision 3's Task 1 names in `memory_debugger.rig`, with the rules of Decisions 4 to 9 for good calls: `RESIZE` and `FREE` of memory with no live record give null and do nothing else until Task 2; `FREE_ALL` is passed on and nothing more until Task 3. The file's header comment says what the debugger is for, that it wraps another allocator and is pushed in the context (spec 6.13, 7.10), where its records' memory comes from and why (Decisions 4, 5), that it passes calls on by a direct call of what it wraps, so the place reaches that allocator unchanged (Decision 6), and that it changes nothing a program does but refuse its bad calls. Load it from `module.rig`. The README section:

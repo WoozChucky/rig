@@ -428,7 +428,7 @@ The place is `context.allocation_location` when the debugger is called (Allocato
 The report writes a line for each allocation not freed, in number order, at its place, and then a line that counts them, which has no place:
 
 ```text
-tests/run/memory_debugger_leaks.rig:24:10: memory debugger: allocation 1 (64 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:51:10: memory debugger: allocation 1 (64 bytes) isn't freed
 memory debugger: 25 allocations, 8 not freed (151 bytes), 0 bad calls
 ```
 

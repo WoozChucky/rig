@@ -156,13 +156,19 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
             return null;
         }
         if old_size != found.size { return null; }
+        // The record is copied out before the resize is passed on, and the
+        // old one is found again after it: a set may rehash the table and
+        // move every record, the debugger's own below, and any allocation
+        // the wrapped allocator makes through the context while it resizes,
+        // whose allocator is this debugger when the program pushed it.
+        record := found.*;
         memory := wrapped.proc(RESIZE, size, old_size, old_memory, wrapped.data);
         if memory == null { return null; }
-        // The record is copied out before the set, which may rehash the
-        // table and move every record.
-        record := found.*;
+        if memory != old_memory {
+            moved := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
+            moved.freed = true;
+        }
         record.size = size;
-        if memory != old_memory { found.freed = true; }
         int_table_set(*debugger.records, cast(int) memory, *record);
         return memory;
     }

@@ -6,9 +6,36 @@
 // and the count is the program's own allocations. Each record has the
 // place it was asked for at, which the report names; called straight, from
 // no helper, its procedure settles the edges as Basic's helpers do, and
-// what it gives has no place. A debugger over it passes a resize to 0
-// bytes on as a free. Freed and made ready again, it starts afresh.
+// what it gives has no place. A debugger over it takes a resize to 0 bytes
+// as a free, whatever old_size it is given, and so the one under it sees
+// the memory freed. Given a string builder, it writes its report there.
+// Freed and made ready again, it starts afresh. Over an allocator that
+// allocates through the context while it resizes, so through the debugger,
+// whose records then grow, it keeps the resize's record right, and it asks
+// that allocator a free for a resize to 0 bytes.
 #import "Basic";
+
+// An allocator over the heap whose data is an int it sets to the mode of
+// each call it is given. A resize to more than 0 bytes first takes 16
+// notes from the context's allocator, the debugger over it here, and gives
+// them back, as an allocator that traces its calls might, and then moves
+// the memory.
+watching_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    (cast(*int) data).* = mode;
+    if mode == RESIZE && old_memory != null && size > 0 {
+        notes : [16]*void;
+        for 0..15 { notes[it] = alloc(1); }
+        for 0..15 { free(notes[it]); }
+        memory := alloc(size, HEAP_ALLOCATOR);
+        if memory == null { return null; }
+        kept := old_size;
+        if size < kept { kept = size; }
+        copy_memory(memory, old_memory, kept);
+        free(old_memory, HEAP_ALLOCATOR);
+        return memory;
+    }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
 
 main :: () {
     debugger : Memory_Debugger;
@@ -37,13 +64,13 @@ main :: () {
     memory_debugger_init(*over, d);
     e := memory_debugger_allocator(*over);
     grown := e.proc(RESIZE, 8, 0, null, e.data);        // 24
-    gone := e.proc(RESIZE, 0, 8, grown, e.data);        // a free of 24
+    gone := e.proc(RESIZE, 0, 0, grown, e.data);        // a free of 24
+    print("{}\n", memory_debugger_report(*over));
     memory_debugger_free(*over);
     d.proc(FREE, 0, 0, null, d.data);                   // nothing
     loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 25, no place
     print("{} {}\n", none == null, gone == null);
     print("{}\n", memory_debugger_report(*debugger));
-    free(a);
     free(loose);
     builder_free(*builder);
     for 0..4 { free(kept[it]); }
@@ -53,13 +80,23 @@ main :: () {
     debugger.output = *written;
     clean := memory_debugger_report(*debugger);
     text := builder_to_string(*written, HEAP_ALLOCATOR);
-    print("{}{}\n", text, clean);
+    print("from the builder: {}{}\n", text, clean);
     free(text.data, HEAP_ALLOCATOR);
     builder_free(*written);
+    free(a);
 
     memory_debugger_free(*debugger);
     memory_debugger_init(*debugger, old);
     again := alloc(8);                           // 1 again
     print("{}\n", memory_debugger_report(*debugger));
     free(again);
+
+    memory_debugger_free(*debugger);
+    watched := 0;
+    memory_debugger_init(*debugger, Allocator.{watching_allocator_proc, *watched});
+    moved := alloc(16);                          // 1
+    moved = resize(moved, 16, 32);               // still 1, after 2 to 17
+    print("{}\n", memory_debugger_report(*debugger));
+    gone = d.proc(RESIZE, 0, 0, moved, d.data);         // a free of 1
+    print("{} {}\n", gone == null, watched == FREE);
 }

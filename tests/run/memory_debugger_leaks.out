@@ -1,18 +1,25 @@
 memory debugger: 0 allocations, 0 not freed (0 bytes), 0 bad calls
 true
+memory debugger: 1 allocation, 0 not freed (0 bytes), 0 bad calls
+true
 true true
-tests/run/memory_debugger_leaks.rig:24:10: memory debugger: allocation 1 (64 bytes) isn't freed
-tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 3 (1 byte) isn't freed
-tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 4 (2 bytes) isn't freed
-tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 5 (3 bytes) isn't freed
-tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 6 (4 bytes) isn't freed
-tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 7 (5 bytes) isn't freed
-tests/run/memory_debugger_leaks.rig:33:5: memory debugger: allocation 23 (64 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:51:10: memory debugger: allocation 1 (64 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 3 (1 byte) isn't freed
+tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 4 (2 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 5 (3 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 6 (4 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:56:28: memory debugger: allocation 7 (5 bytes) isn't freed
+tests/run/memory_debugger_leaks.rig:60:5: memory debugger: allocation 23 (64 bytes) isn't freed
 memory debugger: allocation 25 (8 bytes) isn't freed
 memory debugger: 25 allocations, 8 not freed (151 bytes), 0 bad calls
 false
-memory debugger: 25 allocations, 0 not freed (0 bytes), 0 bad calls
-true
-tests/run/memory_debugger_leaks.rig:62:14: memory debugger: allocation 1 (8 bytes) isn't freed
+from the builder: tests/run/memory_debugger_leaks.rig:51:10: memory debugger: allocation 1 (64 bytes) isn't freed
+memory debugger: 25 allocations, 1 not freed (64 bytes), 0 bad calls
+false
+tests/run/memory_debugger_leaks.rig:90:14: memory debugger: allocation 1 (8 bytes) isn't freed
 memory debugger: 1 allocation, 1 not freed (8 bytes), 0 bad calls
 false
+tests/run/memory_debugger_leaks.rig:97:14: memory debugger: allocation 1 (32 bytes) isn't freed
+memory debugger: 17 allocations, 1 not freed (32 bytes), 0 bad calls
+false
+true true
