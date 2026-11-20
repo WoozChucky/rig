@@ -31,6 +31,12 @@
 // passes the program's place on to its parent, and a debugger over the
 // debugger records it too.
 //
+// The place is only the innermost call that passed one down. For the whole
+// stack, a program run under gdb or cdb sets break_at to an allocation's
+// number, from a report: the debugger calls memory_debugger_break when it
+// makes that allocation, and at every bad call, and a breakpoint there
+// shows every caller.
+//
 // The debugger changes nothing a program does but refuse its mistakes: a
 // call it takes as good reaches the wrapped allocator as the helpers would
 // have made it, and gives back what that allocator gives.
@@ -53,28 +59,41 @@ Memory_Debugger_Record :: struct {
 
 // A memory debugger: the allocator it passes calls on to, wrapped; its
 // records, Memory_Debugger_Record values by address; the allocations it
-// has made, so the last one's number; the bad calls it was given; and
-// where it writes, a string builder, or standard output when output is
-// null.
+// has made, so the last one's number; the bad calls it was given; where it
+// writes, a string builder, or standard output when output is null; and the
+// number of the allocation to call memory_debugger_break at, 0 for none.
 Memory_Debugger :: struct {
     wrapped: Allocator;
     records: Int_Table;
     allocations: int;
     bad_calls: int;
     output: *String_Builder;
+    break_at: int;
 }
 
 // Makes debugger an empty debugger over wrapped, the context's allocator
 // unless given: no allocations and no bad calls, writing to standard
-// output, its records an empty table on the heap. Like table_init, it
-// doesn't give back records a debugger already had: memory_debugger_free
-// does.
+// output, breaking at no allocation, its records an empty table on the
+// heap. Like table_init, it doesn't give back records a debugger already
+// had: memory_debugger_free does.
 memory_debugger_init :: (debugger: *Memory_Debugger, wrapped: Allocator = context.allocator) {
     debugger.wrapped = wrapped;
     int_table_init(*debugger.records, size_of(Memory_Debugger_Record), HEAP_ALLOCATOR);
     debugger.allocations = 0;
     debugger.bad_calls = 0;
     debugger.output = null;
+    debugger.break_at = 0;
+}
+
+// Where a debugger attached to the program stops: the memory debugger
+// calls it when it makes the allocation its break_at names, after
+// recording it, and after writing each bad call. It does nothing itself. A
+// breakpoint on it, break memory_debugger_break in gdb or
+// bp PROGRAM!memory_debugger_break in cdb, shows the whole stack there,
+// every caller, where the place an allocation records is only the
+// innermost call that passed one down. A program built unoptimised, the
+// default, keeps the call; interpreted, nothing stops.
+memory_debugger_break :: (debugger: *Memory_Debugger) {
 }
 
 // The ending of a count's noun: "" for 1, "s" for any other count, so the
@@ -109,7 +128,8 @@ memory_debugger_write :: (debugger: *Memory_Debugger, at: Source_Code_Location, 
 // and writes it at its place, at: of memory it never gave out when found
 // is null, named by the allocation the debugger will give next, since it
 // has no number of its own; otherwise of the allocation found is the
-// record of, which is already freed. The caller doesn't pass the call on.
+// record of, which is already freed. Then it calls memory_debugger_break,
+// where a debugger attached stops. The caller doesn't pass the call on.
 memory_debugger_bad_call :: (debugger: *Memory_Debugger, at: Source_Code_Location, what: string, found: *Memory_Debugger_Record) {
     debugger.bad_calls += 1;
     if found == null {
@@ -117,6 +137,7 @@ memory_debugger_bad_call :: (debugger: *Memory_Debugger, at: Source_Code_Locatio
     } else {
         memory_debugger_write(debugger, at, "memory debugger: {} of allocation {} ({} byte{}), which is already freed\n", what, found.number, found.size, memory_debugger_plural(found.size));
     }
+    memory_debugger_break(debugger);
 }
 
 // Whether allocator's FREE_ALL gives back everything it gave, so that a
@@ -144,7 +165,8 @@ memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
 // - ALLOCATE of 0 bytes or less gives null without asking. Otherwise the
 //   wrapped allocator's memory: its null is passed on and isn't counted;
 //   anything else is the next allocation, recorded with its size and the
-//   place, and returned.
+//   place, and returned, after a call of memory_debugger_break when its
+//   number is break_at.
 // - RESIZE of null is ALLOCATE. Of an allocation the debugger gave and
 //   hasn't taken back, to 0 bytes or less, it is FREE and gives null.
 //   Otherwise, its old_size the allocation's size, the resize is passed
@@ -164,7 +186,8 @@ memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
 //
 // A resize or a free of memory the debugger never gave, or has taken back,
 // and a resize whose old_size isn't the allocation's size, are bad calls:
-// each is written at its place and counted, and isn't passed on. A resize
+// each is written at its place and counted, memory_debugger_break is
+// called, and the call isn't passed on. A resize
 // gives null, which leaves the memory as it was and still the caller's to
 // free, as the protocol says of a null, and a free does nothing. The
 // address a resize moved an allocation from is taken back: its record
@@ -184,6 +207,7 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
         debugger.allocations += 1;
         record := Memory_Debugger_Record.{debugger.allocations, size, false, at};
         int_table_set(*debugger.records, cast(int) memory, *record);
+        if debugger.allocations == debugger.break_at { memory_debugger_break(debugger); }
         return memory;
     }
     if mode == RESIZE {
@@ -200,6 +224,7 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
         if old_size != found.size {
             debugger.bad_calls += 1;
             memory_debugger_write(debugger, at, "memory debugger: resize of allocation {} ({} byte{}) given old_size {}\n", found.number, found.size, memory_debugger_plural(found.size), old_size);
+            memory_debugger_break(debugger);
             return null;
         }
         // The record is copied out before the resize is passed on, and the

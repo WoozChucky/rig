@@ -1,0 +1,10 @@
+l+t
+l+s
+l+l
+.lines -e
+bp break_at_allocation!memory_debugger_break
+g
+k
+g
+k
+q

@@ -1,0 +1,17 @@
+memory_debugger_break (
+in memory_debugger_allocator_proc (
+in alloc (
+in builder_to_string (
+in sprint (
+in make_name (
+break_at_allocation.rig:10
+in main () at
+break_at_allocation.rig:21
+memory_debugger_break (
+in memory_debugger_bad_call (
+in memory_debugger_allocator_proc (
+in free (
+in main () at
+break_at_allocation.rig:23
+!The program being debugged
+!.debug_names not created by gdb

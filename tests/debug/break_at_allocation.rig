@@ -1,0 +1,27 @@
+// A debugger stopped where an allocation is made (bin/run-tests runs it
+// under gdb with break_at_allocation.gdb and under cdb with
+// break_at_allocation.cdb; issue #159): Basic's memory debugger numbers its
+// allocations, and calls memory_debugger_break when it makes the one its
+// break_at names, and at each bad free or resize, so the stack there shows
+// every caller, the program's own lines among them.
+#import "Basic";
+
+make_name :: () -> string {
+    return sprint("{}-{}", "name", 2);
+}
+
+main :: () {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugger.break_at = 2;
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        first := make_name();
+        second := make_name();
+        free(first.data);
+        free(first.data);
+        free(second.data);
+    }
+    memory_debugger_free(*debugger);
+}
