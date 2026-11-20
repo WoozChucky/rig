@@ -8,10 +8,12 @@
 // line printing its name, so each of its allocator calls, not only the
 // last, is listed under its name: the callee's name in the call on that
 // line. What each gave is freed with Basic's helpers, the context's, on a
-// line of its own after it, so those frees are listed too. Not
-// print_to_builder, sprint or print.rig's other procedures that write into
-// a builder they are given, which take no loc for now: their allocations
-// name print.rig's own line, an absolute path.
+// line of its own after it, so those frees are listed too.
+// print_to_builder and sprint, last, take no loc for now, nor do
+// print.rig's other procedures that write into a builder they are given:
+// their allocations name print.rig's own line, in an absolute path that
+// differs from machine to machine, so for a place in print.rig the
+// allocator prints that file's name rather than the path.
 #import "Basic";
 
 // The file read_entire_file reads, under .build/tests/, which the runner
@@ -32,7 +34,11 @@ recording_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data:
         name = "FREE_ALL";
     }
     loc := context.allocation_location;
-    print("    {} {}:{}\n", name, loc.line, loc.column);
+    if ends_with(loc.file, "print.rig") {
+        print("    {} print.rig {}:{}\n", name, loc.line, loc.column);
+    } else {
+        print("    {} {}:{}\n", name, loc.line, loc.column);
+    }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
@@ -143,6 +149,16 @@ main :: () {
         int_table_set(*u, 13, *n);
         print("{}\n", "int_table_free");
         int_table_free(*u);
+
+        // The builder's growth is append_string's, called in print.rig.
+        builder_init(*b);
+        print("{}\n", "print_to_builder");
+        print_to_builder(*b, "{}", 7);
+        builder_free(*b);
+        // The string is builder_to_string's, called in print.rig.
+        print("{}\n", "sprint");
+        s = sprint("{}", 7);
+        free(s.data);
     }
     delete_file(PATH);
 }

@@ -4,16 +4,42 @@
 // allocator is answering; resizing null or to 0 passes the place to the alloc
 // or free it is; a direct call of an allocator's procedure leaves it as it
 // is; an arena's procedure and a pool's pass it on to their parent, so a
-// block or the slots have the place of the request that needed them.
+// block or the slots have the place of the request that needed them. An
+// arena's free_all gives its newest block back with its caller's place and
+// the older ones through arena_reset, at that procedure's line in
+// allocators.rig. The earlier place is back after each helper also when
+// the allocator refuses.
 #import "Basic";
+
+// A place's file, but for a module's, an absolute path that differs from
+// machine to machine, which is shown as the file's name alone.
+short :: (file: string) -> string {
+    if ends_with(file, "allocators.rig") { return "allocators.rig"; }
+    return file;
+}
 
 // Calls a helper of its own before it reads the place, which must then be
 // put back to the one it was called with.
 seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     free(alloc(1, HEAP_ALLOCATOR), HEAP_ALLOCATOR);
     at := context.allocation_location;
-    print("{} {} {}:{}:{}\n", mode, size, at.file, at.line, at.column);
+    print("{} {} {}:{}:{}\n", mode, size, short(at.file), at.line, at.column);
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// Prints as seen_proc does, and refuses, giving null, any allocation or
+// resize to more than 64 bytes.
+refusing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    at := context.allocation_location;
+    print("{} {} {}:{}:{}\n", mode, size, short(at.file), at.line, at.column);
+    if size > 64 { return null; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+// The place in the context, after the helper named.
+after :: (name: string) {
+    at := context.allocation_location;
+    print("after {} {}:{}:{}\n", name, at.file, at.line, at.column);
 }
 
 main :: () {
@@ -37,7 +63,35 @@ main :: () {
         pool_init(*pool, 8, 4);
         b := alloc(8, pool_allocator(*pool));
         free_all(pool_allocator(*pool));
+        // Blocks of 16 bytes, each filled by one allocation, so the three
+        // take three blocks of 32 bytes with their headers. free_all gives
+        // back the middle one and then the oldest at arena_reset's line,
+        // and then the newest at its own.
+        small : Arena;
+        arena_init(*small, 16);
+        c := alloc(16, arena_allocator(*small));
+        c = alloc(16, arena_allocator(*small));
+        c = alloc(16, arena_allocator(*small));
+        free_all(arena_allocator(*small));
         at := context.allocation_location;
         print("{}:{}:{}\n", at.file, at.line, at.column);
+    }
+
+    refusing := context;
+    refusing.allocator = Allocator.{refusing_proc, null};
+    refusing.allocation_location = Source_Code_Location.{"outer", 3, 4};
+    push_context refusing {
+        big := alloc(128);
+        print("refused {}\n", big == null);
+        after("alloc");
+        p := alloc(8);
+        after("alloc");
+        bigger := resize(p, 8, 128);
+        print("refused {}\n", bigger == null);
+        after("resize");
+        free(p);
+        after("free");
+        free_all();
+        after("free_all");
     }
 }

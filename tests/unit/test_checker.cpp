@@ -9029,8 +9029,8 @@ TEST(caller_location_is_a_default_value) {
 
 TEST(caller_location_needs_no_context) {
     // The place is the call's, known where the call is lowered: working it
-    // out reads no context, so a #c_call body may leave it out. A default
-    // that reads context still needs one.
+    // out reads no context, so the default doesn't set default_needs_context.
+    // A default that reads context still sets it.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
