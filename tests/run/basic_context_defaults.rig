@@ -4,14 +4,14 @@
 // pushed context whose allocator counts the memory it gives, each is
 // called without one, and prints its name and whether the count grew
 // during the call; free and free_all, which give memory back, print
-// whether the count of what was given back grew. What each
-// gave is freed with the allocator left out too, so it goes back to the
-// allocator that gave it. The built-in array_add (issue #158, spec 3.17)
-// grows a zeroed resizable array from context.allocator too, and
-// array_free gives its memory back there. Last, a #c_call procedure,
-// which has no context until it pushes one, pushes the default context
-// and leaves the allocator out inside the push. The other basic_* tests, which pass their
-// allocators, still pass as they are.
+// whether the count of what was given back grew. What each gave is freed
+// with the allocator left out too, so it goes back to the allocator that
+// gave it. The built-in array_add (issue #158, spec 3.17) grows a zeroed
+// resizable array from context.allocator too; where array_free gives that
+// memory back, resizable_arrays' remembered case checks. Last, a #c_call
+// procedure, which has no context until it pushes one, pushes the default
+// context and leaves the allocator out inside the push. The other basic_*
+// tests, which pass their allocators, still pass as they are.
 #import "Basic";
 
 // The file read_entire_file reads, under .build/tests/, which the runner

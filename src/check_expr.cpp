@@ -850,9 +850,9 @@ static void check_argument(Checker *c, Ast *arg, Type *to, s64 index, String nam
 //   passes e as the parameter's view: e's type must be exactly a []T, a
 //   [N]T or a [..]T (the view of its elements, spec 3.17), its elements
 //   never converted, or "'..' spreads a '[]int' into 'rest', which needs a
-//   '[]Any'", at the '..'. Through a procedure value,
-//   whose type names no parameter, the parameter is its type written ..T:
-//   "'..' spreads a '[2]u8' into '..int', which needs a '[]int'";
+//   '[]Any'", at the '..'. Through a procedure value, whose type names no
+//   parameter, the parameter is its type written ..T: "'..' spreads a
+//   '[2]u8' into '..int', which needs a '[]int'";
 // - otherwise each converts to T, as an argument to a T parameter does
 //   ("argument 3 of 'sum' has type 'string', which can't be converted to
 //   'int'", counted over all the arguments), and they go, in order, into a
@@ -1078,7 +1078,7 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
     for (s64 i = 0; i < given; i++) {
         if (call->args[i]->kind == AST_SPREAD) refuse_spread(c, call->args[i]);
     }
-    s64 n = 1 + (entry->takes_int ? 1 : 0) + (entry->takes_item ? 1 : 0);
+    s64 n = entry->param_count();
     if (given != n) {
         diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %lld argument%s, but %lld %s given",
                    STR_ARG(name), (long long)n, n == 1 ? "" : "s", (long long)given, given == 1 ? "was" : "were");
@@ -1108,10 +1108,11 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
 
 // A call: the callee (check_callee), then the arguments, whose own mistakes
 // are reported even when the callee is wrong, after its: in source order (a
-// spread argument's operand by check_spread_argument). A built-in's call
-// goes on in check_builtin_call. Then the arguments
-// against the parameters, the same for a procedure and for a value of a
-// procedure type, named in the messages by callee_name: as many as there are
+// spread argument's operand by check_spread_argument). A built-in's call is
+// then check_builtin_call's, which matches its arguments itself; what
+// follows is every other call's. Then the arguments against the
+// parameters, the same for a procedure and for a value of a procedure
+// type, named in the messages by callee_name: as many as there are
 // ("'f' takes 2 arguments, but 1 was given", at the callee; a foreign
 // procedure taking C's '..' "at least" its fixed ones), each converting to
 // its parameter's type. A direct call of a procedure with default values
@@ -2203,8 +2204,7 @@ static void fold_constant_part(Ast *part, Type *t) {
 // constant data, whose bytes are known: "index 5 is out of bounds for a
 // string of 3 bytes". Any other index of an array, a view, a string or a
 // resizable array is checked at run time (lowering), unless the procedure
-// says #no_abc or the
-// build --no-bounds-checks.
+// says #no_abc or the build --no-bounds-checks.
 //
 // An element of constant data at a constant index is known while compiling
 // (spec 5.9) when it's a number, a bool or null: an array's, the value its
@@ -2335,9 +2335,11 @@ Ast_Type_Info *type_info_address(Ast *e) {
 //
 // A resizable array (spec 3.17) has four: a view's count and data, an int
 // and a *T, then allocated, an int, and allocator, Preload's Allocator, the
-// type of Resizable_Array's last field (Ast_File.resizable_array_type,
-// which every [..]T has, resolve_written), read once that struct is laid
-// out. Each is a field as a view's are, so a place when the array is one.
+// type of Resizable_Array's last field (type_resizable_allocator), read
+// once that struct is laid out. Every [..]T is laid out as that struct,
+// Ast_File.resizable_array_type, which resolve_written makes sure is there
+// before it makes any [..]T. Each is a field as a view's are, so a place
+// when the array is one.
 static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     m->index = -1;
     bool count = string_eq(m->name, str("count"));
@@ -2345,8 +2347,8 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     if (t->kind == TYPE_RESIZABLE && string_eq(m->name, str("allocator"))) {
         Type *layout = c->file->resizable_array_type;
         RIG_ASSERT(layout);
-        if (!check_layout(c, layout) || !layout->fields.count) return nullptr;  // Preload's mistake, reported
-        return layout->fields[layout->fields.count - 1].type;
+        if (!check_layout(c, layout)) return nullptr;  // Preload's mistake, reported
+        return type_resizable_allocator(layout);  // null when Preload's has no fields
     }
     if (!count && !string_eq(m->name, str("data"))) {
         diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
@@ -2377,11 +2379,10 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
 // or a pointer to one, not 'int'". m->index is the field's, whose type is
 // made now if it's a late field's not made yet (check_late_field). An
-// array's, a view's or a string's .count and .data, and a resizable
-// array's and its .allocated and .allocator (spec 3.17), are
-// check_sequence_member's, not reached through a pointer: on a pointer to
-// one, "'.count' isn't reached through a pointer, '*string'; write
-// .*.count".
+// array's, a view's or a string's .count and .data, and a resizable array's
+// four members (spec 3.17), are check_sequence_member's, not reached
+// through a pointer: on a pointer to one, "'.count' isn't reached through a
+// pointer, '*string'; write .*.count".
 //
 // A field of constant data is known while compiling (spec 5.9) when it's a
 // number, a bool or null: the value its literal gives, or zero when it

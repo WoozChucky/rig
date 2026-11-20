@@ -164,8 +164,8 @@ print_quoted :: (builder: *String_Builder, s: string) {
 //   - A struct, {name = value, ...}, its fields in order, and {} for one
 //     with none. An Any field is the value it holds, written as the field
 //     would be.
-//   - An array, a view or a resizable array, [value, ...], and [] for one
-//     with no elements, or a view's or resizable array's count of 0 or less.
+//   - An array, a view or a resizable array, [value, ...]; [] for one with
+//     no elements, or a view or resizable array whose count is 0 or less.
 //
 // nested says the value is inside a struct or an array of any kind, or among
 // the arguments a format leaves over, {!EXTRA: ...}, where a string is

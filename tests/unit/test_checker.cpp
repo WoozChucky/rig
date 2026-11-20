@@ -7315,10 +7315,11 @@ struct Preload_Field {
 
 // One struct Preload declares for type information (or for a resizable
 // array's layout, issue #158), and its layout as types.h mirrors it: its
-// size and its fields, in order.
+// size, its alignment and its fields, in order.
 struct Preload_Struct {
     const char *name;
     s64 size;
+    s32 align;
     Preload_Field fields[5];
     s64 field_count;
 };
@@ -7326,31 +7327,37 @@ struct Preload_Struct {
 TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // Lowering writes each description from types.h's constants; the
     // program reads it through Preload's structs, which the checker lays
-    // out as any struct. The two must agree: each struct's size, alignment,
-    // field offsets and field types, and each tag's value. Each kind's struct starts
-    // with its Type_Info, info, so a *Type_Info casts to it. Resizable_Array
-    // is a [..]T's layout (spec 3.17), which lowering and Preload's helpers
-    // read alike.
+    // out as any struct. The two must agree: each struct's size,
+    // alignment, field offsets and field types, and each tag's value. Each
+    // kind's struct starts with its Type_Info, info, so a *Type_Info casts
+    // to it. Resizable_Array is a [..]T's layout (spec 3.17), which lowering
+    // and Preload's helpers read alike, aligned as a [..]T is
+    // (type_resizable_of), not as type information is.
+    s32 resizable_align = type_resizable_of(&type_int)->align;
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
     Preload_Struct structs[] = {
         {"Type_Info",
          TYPE_INFO_SIZE,
+         TYPE_INFO_ALIGN,
          {{"tag", TYPE_INFO_TAG_OFFSET, "int"},
           {"size", TYPE_INFO_SIZE_OFFSET, "int"},
           {"alignment", TYPE_INFO_ALIGNMENT_OFFSET, "int"}},
          3},
         {"Type_Info_Integer",
          TYPE_INFO_INTEGER_SIZE,
+         TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"}, {"signed", TYPE_INFO_SIGNED_OFFSET, "bool"}},
          2},
         {"Type_Info_Pointer",
          TYPE_INFO_POINTER_SIZE,
+         TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"}, {"pointer_to", TYPE_INFO_POINTER_TO_OFFSET, "*Type_Info"}},
          2},
         {"Type_Info_Procedure",
          TYPE_INFO_PROCEDURE_SIZE,
+         TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"},
           {"parameter_types", TYPE_INFO_PARAMETERS_OFFSET, "[]*Type_Info"},
           {"result_types", TYPE_INFO_RESULTS_OFFSET, "[]*Type_Info"},
@@ -7359,26 +7366,34 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
          5},
         {"Type_Info_Struct",
          TYPE_INFO_STRUCT_SIZE,
+         TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"},
           {"name", TYPE_INFO_NAME_OFFSET, "string"},
           {"members", TYPE_INFO_MEMBERS_OFFSET, "[]Type_Info_Struct_Member"}},
          3},
         {"Type_Info_Struct_Member",
          TYPE_INFO_MEMBER_SIZE,
+         TYPE_INFO_ALIGN,
          {{"name", TYPE_INFO_MEMBER_NAME_OFFSET, "string"},
           {"type", TYPE_INFO_MEMBER_TYPE_OFFSET, "*Type_Info"},
           {"offset", TYPE_INFO_MEMBER_OFFSET_OFFSET, "int"}},
          3},
         {"Type_Info_Array",
          TYPE_INFO_ARRAY_SIZE,
+         TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"},
           {"element_type", TYPE_INFO_ELEMENT_OFFSET, "*Type_Info"},
           {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "int"},
           {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
          4},
-        {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET, "*Type_Info"}, {"value_pointer", ANY_VALUE_OFFSET, "*void"}}, 2},
+        {"Any",
+         ANY_SIZE,
+         TYPE_INFO_ALIGN,
+         {{"type", ANY_TYPE_OFFSET, "*Type_Info"}, {"value_pointer", ANY_VALUE_OFFSET, "*void"}},
+         2},
         {"Resizable_Array",
          RESIZABLE_SIZE,
+         resizable_align,
          {{"count", VIEW_COUNT_OFFSET, "int"},
           {"data", VIEW_DATA_OFFSET, "*void"},
           {"allocated", RESIZABLE_ALLOCATED_OFFSET, "int"},
@@ -7392,11 +7407,11 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         if (decl->kind != AST_STRUCT) continue;
         Type *t = ((Ast_Struct *)decl)->declared;
         CHECK_EQ(t->size, s->size);
-        CHECK_EQ(t->align, TYPE_INFO_ALIGN);
+        CHECK_EQ(t->align, s->align);
         CHECK_EQ(t->fields.count, s->field_count);  // no field types.h doesn't know
         for (s64 f = 0; f < s->field_count; f++) {
             s32 index = type_field_index(t, str(s->fields[f].name));
-            CHECK_EQ(index, f);  // in the issue's order
+            CHECK_EQ(index, f);  // in the order given here
             if (index < 0) continue;
             CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
             CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
@@ -8937,13 +8952,10 @@ TEST(preload_declares_the_array_helpers) {
         {"__array_free", "(*Resizable_Array, int, Source_Code_Location)"},
     };
     for (s64 i = 0; i < (s64)(sizeof helpers / sizeof helpers[0]); i++) {
-        Ast_Proc *found = nullptr;
-        for (s64 j = 0; j < tree->procs.count; j++) {
-            if (string_eq(tree->procs[j]->name, str(helpers[i].name))) found = tree->procs[j];
-        }
-        CHECK(found != nullptr);
-        if (!found) continue;
-        CHECK_STR(type_name(&a, found->type), helpers[i].type);
+        Ast *found = top_level_named(tree, helpers[i].name);
+        CHECK_EQ(found->kind, AST_PROC);
+        if (found->kind != AST_PROC) continue;
+        CHECK_STR(type_name(&a, ((Ast_Proc *)found)->type), helpers[i].type);
     }
     arena_free(&a);
 }

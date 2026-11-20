@@ -526,7 +526,10 @@ static void dump(Array<u8> *buffer, Ast *node) {
         break;
     case AST_BUILTIN:
         // (builtin array_add): a built-in procedure, which the checker
-        // predeclares; no file holds one, but a name may mean one.
+        // predeclares. No file holds one, and a name that means one prints
+        // as (name x), never following Ast_Name.decl, so no dump of a tree
+        // reaches here: the case is here so the switch covers every
+        // Ast_Kind.
         out(buffer, "(builtin ");
         out(buffer, ((Ast_Builtin *)node)->name);
         out(buffer, ")");

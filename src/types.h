@@ -183,6 +183,11 @@ Type *type_view_of(Type *element);
 // checker's to find (Ast_File.resizable_array_type), not the Type's.
 Type *type_resizable_of(Type *element);
 
+// The type of a [..]T's allocator member, Preload's Allocator: that of the
+// last field of `layout`, Preload's Resizable_Array once laid out (spec
+// 3.17), or null when it has no fields.
+Type *type_resizable_allocator(Type *layout);
+
 // The procedure type of these parameters and results, #c_call or not, its
 // last parameter a ..T or not (then param_count >= 1 and that parameter a
 // view, the []T): the same Type every time for the same ones (each array's
@@ -197,9 +202,9 @@ Type *type_proc_of(Type **params, s64 param_count, Type **results, s64 result_co
 bool type_proc_same_but_c_call(Type *a, Type *b);
 
 // How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8",
-// "[..]int", and a procedure type as its signature is written: "(int, int)
-// -> int", "(int) -> (int, int)", "(*void, *void) -> s32 #c_call",
-// "(int, ..int)", "()".
+// "[..]int", and a procedure type as its signature is written:
+// "(int, int) -> int", "(int) -> (int, int)",
+// "(*void, *void) -> s32 #c_call", "(int, ..int)", "()".
 String type_name(Arena *a, Type *t);
 
 // t's alignment, in bytes: where in memory a value of type t may start.

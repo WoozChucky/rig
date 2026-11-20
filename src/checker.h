@@ -4,13 +4,14 @@
 // every expression, folds the constants, and checks each call, declaration,
 // assignment and return against the types involved. It fills in the tree as
 // it goes (Ast.type, Ast.is_constant and Ast.constant, Ast_Name.decl,
-// Ast_Call.proc or Ast_Call.callee_type, Ast_Member.index (-1 for an
-// array's, a view's or a string's .count and .data), and each struct's type
-// and layout, Ast_Struct.declared), so the stages after it never look
-// anything up again.
-// checker.cpp checks declarations and statements, check_expr.cpp
-// expressions, check_run.cpp #run and what it reaches; check.h is what
-// they share.
+// Ast_Call.proc or Ast_Call.callee_type, or for a built-in's call
+// Ast_Call.builtin with a callee_type made for the call, which lowering and
+// the #run walk look at first; Ast_Member.index (-1 for an array's, a
+// view's or a string's .count and .data, and a resizable array's four
+// members); and each struct's type and layout, Ast_Struct.declared), so the
+// stages after it never look anything up again. checker.cpp checks
+// declarations and statements, check_expr.cpp expressions, check_run.cpp
+// #run and what it reaches; check.h is what they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
@@ -240,11 +241,11 @@
 // - *x is x's address, a *T for an x of type T that has one
 //   (check_addressable): a variable, local or global, p.*, a field or an
 //   element (of a struct or an array that has one, or through a pointer, a
-//   view or a string). Parameters
-//   are read-only, so they have none: "can't take the address of 'a': it's
-//   a parameter" (or "it's a constant", "it's the loop's iterator", "it's
-//   the loop's index", "it's a procedure"); any other value, "only a
-//   variable, a field or an element has an address".
+//   view, a string or a resizable array). Parameters are read-only, so they
+//   have none: "can't take the address of 'a': it's a parameter" (or "it's
+//   a constant", "it's the loop's iterator", "it's the loop's index", "it's
+//   a procedure"); any other value, "only a variable, a field or an element
+//   has an address".
 // - p.* is the T a *T points at, a place that can be assigned to and have
 //   its address taken. On anything else: "'.*' needs a pointer, not 'int'";
 //   on a *void: "can't dereference a '*void'; cast it to a pointer to
@@ -317,8 +318,8 @@
 //   information and Any, below): it's copied whole by an assignment, as an
 //   argument and as a result (several results too); `x : Vec2;` is zeroed,
 //   `x : Vec2 = ---;` left as it is. A cast takes a struct only to its own
-//   type, or to Any. No operator takes a struct ("'+' needs
-//   numbers, not 'Vec2'", the == rule above), nor does a condition.
+//   type, or to Any. No operator takes a struct ("'+' needs numbers, not
+//   'Vec2'", the == rule above), nor does a condition.
 // - size_of(Vec2) is its size.
 // - A foreign procedure takes and returns no struct, for now: "a foreign
 //   procedure can't take a 'Vec2' yet; pass a pointer to it", "a foreign
@@ -344,18 +345,19 @@
 //   integer, read by its sign, an untyped one an int. Otherwise: "'[]' needs
 //   an array, a view, a string or a pointer, not 'int'", "can't index a
 //   '*void'; cast it to a pointer to something first", at the '['; "an
-//   index must be an integer, not 'bool'", at i. A constant i of an array is checked here: "index 3 is
-//   out of bounds for '[3]int'", at i; so is one of a string that is
-//   constant data (below), against its bytes, none when a literal leaves it
-//   out: "index 5 is out of bounds for a string of 3 bytes". Every other
-//   index of an array, a view or a string is checked at run time
-//   (lowering), unless the procedure has #no_abc or the build
-//   --no-bounds-checks. An element is a place when its array is (so a[0] = 1
-//   for a parameter a is "can't assign to 'a': it's a parameter"); a view's
-//   or a pointer's always, and a string's unless the string is part of a
-//   constant (constant_root): NAME[0] = 65 for `NAME :: "rig";` is "can't
-//   assign to 'NAME': it's a constant", as for * NAME is "can't take the
-//   address of 'NAME': it's a constant".
+//   index must be an integer, not 'bool'", at i. A constant i of an array
+//   is checked here: "index 3 is out of bounds for '[3]int'", at i; so is
+//   one of a string that is constant data (below), against its bytes, none
+//   when a literal leaves it out: "index 5 is out of bounds for a string of
+//   3 bytes". Every other index of an array, a view, a string or a
+//   resizable array is checked at run time (lowering), unless the procedure
+//   has #no_abc or the build --no-bounds-checks. An element is a place when
+//   its array is (so a[0] = 1 for a parameter a is "can't assign to 'a':
+//   it's a parameter"); a view's, a resizable array's or a pointer's
+//   always, and a string's unless the string is part of a constant
+//   (constant_root): NAME[0] = 65 for `NAME :: "rig";` is "can't assign to
+//   'NAME': it's a constant", as for * NAME is "can't take the address of
+//   'NAME': it's a constant".
 // - a.count and a.data: a view's are its fields (an int, a *T, places when
 //   the view is one); an array's .count is its N, an untyped integer
 //   constant (a isn't evaluated), and its .data the address of its first
@@ -375,8 +377,8 @@
 //   value converts (a declaration, an assignment, an argument, a return, a
 //   cast); nothing else converts to or from either but its own type (and a
 //   [..]T to []T: Resizable arrays, below), and either converts to Any
-//   (Type information and Any, below). No operator takes them ("'==' needs numbers, bools, pointers, procedure
-//   values or strings, not '[3]int'").
+//   (Type information and Any, below). No operator takes them ("'==' needs
+//   numbers, bools, pointers, procedure values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
 //   give ("'[3]int' has 3 elements, but this literal gives 2"), or a view
@@ -388,9 +390,10 @@
 //   (below), worked out once: it is each element, a copy, it_index its
 //   index. for * a makes it a pointer to each, which needs a's elements to
 //   have an address, as *a[i] does: "can't take the address of 'a': it's a
-//   parameter", "only a variable, a field or an element has an address". On anything else: "'for' needs a
-//   range, an array, a view or a string, not 'int'"; a range's numbers have
-//   none: "'for *' needs an array, a view or a string, not a range".
+//   parameter", "only a variable, a field or an element has an address".
+//   On anything else: "'for' needs a range, an array, a view or a string,
+//   not 'int'"; a range's numbers have none: "'for *' needs an array, a
+//   view or a string, not a range".
 // - A foreign procedure takes no array or view: "a foreign procedure can't
 //   take a '[3]int'; pass its .data", and returns none ("... can't return a
 //   '[]int' yet").
@@ -1098,3 +1101,33 @@ Ast_Proc *procedure_address(Ast *e);
 // may hold one, its address written by the linker (spec 4.3): the checker
 // asks this to allow it, and lowering to write it.
 Ast_Type_Info *type_info_address(Ast *e);
+
+// A procedure built into the language for resizable arrays (spec 3.17),
+// predeclared as an Ast_Builtin (checker.cpp's declare_predeclared): its
+// name, the name of the helper of Preload's it calls (Ast_File.array_procs),
+// and what it takes, gives and does, which check_builtin_call and lowering
+// (lower_builtin_call) read. Its parameters, param_count of them, are the
+// array, a *[..]T, then an int when takes_int, then a T when takes_item;
+// check_builtin_call makes the call's signature from them for the array's
+// element type T.
+struct Builtin_Procedure {
+    const char *name;       // array_add, ...
+    Array_Builtin builtin;  // its index in BUILTIN_PROCEDURES too, which declare_predeclared asserts
+    const char *helper;     // Preload's procedure it calls: __array_add, ...
+    bool takes_int;         // an int after the array: an index (array_insert, the removes) or a count
+                            // (array_reserve, array_resize)
+    bool takes_item;        // then a T, the item added or inserted (array_add, array_insert)
+    bool returns_item;      // returns a T, the element removed (array_pop)
+    bool indexes;           // reaches an element by index, bounds-checked against the count: the int
+                            // given (array_insert, the removes) or the last one (array_pop)
+    bool places;            // its helper can reach the allocator, so it's passed the call's place
+                            // (array_add, array_insert, array_reserve, array_resize, array_free)
+    bool may_fail;          // its helper says whether the allocator gave the memory it needed
+                            // (array_add, array_insert, array_reserve, array_resize)
+
+    // How many arguments a call gives: the array, then the int and the T it takes.
+    s64 param_count() const { return 1 + (takes_int ? 1 : 0) + (takes_item ? 1 : 0); }
+};
+
+// The nine built-ins, by their Array_Builtin (checker.cpp).
+extern const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT];

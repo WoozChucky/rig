@@ -176,7 +176,7 @@ It prints:
 0 after the reset, at most 116
 ```
 
-`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with; it's not for programs.
+`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with, and so do the resizable arrays' helpers that move or copy elements (below); it's not for programs.
 
 ### Resizable arrays
 

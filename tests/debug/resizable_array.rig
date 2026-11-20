@@ -1,7 +1,7 @@
 // A debugger's view of a resizable array (bin/run-tests runs it under gdb
 // with resizable_array.gdb and under cdb with resizable_array.cdb; issue
-// #158, spec 10.7): a struct [..]T of its four members, the elements reached
-// through data; and a stop in __array_add, Preload's, with debug info (10.5).
+// #158, spec 10.7): a struct [..]T of its four members, the elements
+// reached through data; and a stop in Preload's __array_add (spec 10.5).
 Point :: struct { x: int; y: int; }
 
 main :: () {

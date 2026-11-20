@@ -35,8 +35,8 @@
 // often it is named, so the order here is only the reading order. It is
 // README.md's, so the two can be read side by side: print.rig, which loads
 // libc.rig, numbers.rig, string.rig and builder.rig, comes after the
-// collections, and memory_debugger.rig, which writes through print.rig,
-// comes last.
+// others, and memory_debugger.rig, which writes through print.rig, comes
+// last.
 #load "libc.rig";
 #load "char.rig";
 #load "math.rig";

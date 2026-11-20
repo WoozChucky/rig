@@ -581,14 +581,16 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // and the MD5 of its text. Its directory is the first file's (the loader
 // gives every file the same one: the directory rig runs in). With
 // bounds_checks, as rig build has it unless told --no-bounds-checks, every
-// a[i] of a view or a string, and of an array but where i is a constant
-// (which the checker made sure is inside), is checked at run time, but in a
-// procedure marked #no_abc (spec 7.7). Lowering finds one error the checker
-// can't, reported to `d`: a call of a #compiler procedure, which only the
+// a[i] of a view, a string or a resizable array, and of an array but where
+// i is a constant (which the checker made sure is inside), is checked at
+// run time, and so is the index of a resizable array's built-in procedure
+// (array_insert's and the removes', array_pop's last), but in a procedure
+// marked #no_abc (spec 7.7). Lowering finds one error the checker can't,
+// reported to `d`: a call of a #compiler procedure, which only the
 // compiler can make, while compiling, is "'create_workspace' can only be
-// called while compiling", at the callee's name (spec 7.9), or, in a call's
-// default value, at the statement holding the call that leaves it out. The
-// module is whole even then, but no executable may be made of it.
+// called while compiling", at the callee's name (spec 7.9), or, in a
+// call's default value, at the statement holding the call that leaves it
+// out. The module is whole even then, but no executable may be made of it.
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // Lowering on demand (#115): what the code #run runs while compiling needs,
