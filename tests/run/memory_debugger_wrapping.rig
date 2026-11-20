@@ -3,7 +3,8 @@
 // wrapped allocator gives everything back: an arena, a pool and the
 // temporary storage do, the heap doesn't, and a debugger does when what it
 // wraps does. An arena whose blocks come from a debugger is its
-// allocations, block by block.
+// allocations, block by block. Memory given back other than through the
+// debugger keeps its records until the address is handed out again.
 #import "Basic";
 
 main :: () {
@@ -79,5 +80,36 @@ main :: () {
     memory_debugger_report(*over_heap);
     memory_debugger_free(*inner);
     memory_debugger_free(*over_heap);
+
+    // A debugger over a debugger over an arena: free_all through the outer
+    // one gives everything back, so both take their records as freed.
+    nested_arena : Arena;
+    arena_init(*nested_arena, 256);
+    below : Memory_Debugger;
+    memory_debugger_init(*below, arena_allocator(*nested_arena));
+    above : Memory_Debugger;
+    memory_debugger_init(*above, memory_debugger_allocator(*below));
+    o := memory_debugger_allocator(*above);
+    alloc(12, o);
+    free_all(o);
+    memory_debugger_report(*above);
+    memory_debugger_report(*below);
+    memory_debugger_free(*above);
+    memory_debugger_free(*below);
+
+    // An arena reset on its own, not through the debugger: the records
+    // stay, until the arena hands an address out again.
+    reset_arena : Arena;
+    arena_init(*reset_arena, 256);
+    over_reset : Memory_Debugger;
+    memory_debugger_init(*over_reset, arena_allocator(*reset_arena));
+    g := memory_debugger_allocator(*over_reset);
+    alloc(16, g);                      // 1
+    alloc(16, g);                      // 2
+    arena_reset(*reset_arena);
+    alloc(16, g);                      // 3, at 1's address
+    memory_debugger_report(*over_reset);
+    free_all(g);
+    memory_debugger_free(*over_reset);
     free_all(arena_allocator(*arena));
 }
