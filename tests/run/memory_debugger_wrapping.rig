@@ -8,7 +8,7 @@
 #import "Basic";
 
 main :: () {
-    // An arena wrapped: a resize moves, a free gives nothing back.
+    // An arena wrapped: a resize moves, and a free of the old address is bad.
     arena : Arena;
     arena_init(*arena, 256);
     over_arena : Memory_Debugger;
@@ -111,5 +111,4 @@ main :: () {
     memory_debugger_report(*over_reset);
     free_all(g);
     memory_debugger_free(*over_reset);
-    free_all(arena_allocator(*arena));
 }

@@ -222,8 +222,8 @@ TEMPORARY_STORAGE_SIZE :: 32768;
 
 // The context main and each #run start with, and the one a #c_call
 // procedure, which C calls with none, pushes for itself when it has no
-// other: the heap, and Preload's temporary storage. __runtime_init sets it
-// up.
+// other: the heap, Preload's temporary storage, and allocation_location
+// zeroed, no place. __runtime_init sets it up.
 default_context : Context;
 
 // Preload's one temporary storage, which default_context holds, and its
@@ -246,7 +246,9 @@ __runtime_init :: () #c_call {
 }
 
 // C's memmove, under Preload's own name, as __malloc is: the temporary
-// allocator's RESIZE copies with it.
+// allocator's RESIZE copies with it, and so do the resizable arrays'
+// helpers that move or copy elements (__array_grow, __array_insert,
+// __array_pop and the removes).
 __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign libc "memmove";
 
 // The temporary allocator's procedure. It works on the current context's
@@ -572,10 +574,9 @@ __array_remove_unordered :: (array: *Resizable_Array, size: int, index: int) {
 // array_reserve: makes allocated at least count, growing to exactly count
 // when it is more, or to the array's count when that is more still, as for
 // an array whose data and count were set by hand (__array_grow), so that
-// many elements are added without growing again.
-// A count within allocated, or below 0, does nothing. False when the
-// allocator had no memory to give: the array is as it was, but for the
-// allocator it took.
+// many elements are added without growing again. A count within
+// allocated, or below 0, does nothing. False when the allocator had no
+// memory to give: the array is as it was, but for the allocator it took.
 __array_reserve :: (array: *Resizable_Array, size: int, count: int, loc: Source_Code_Location) -> bool {
     if count <= array.allocated { return true; }
     return __array_grow(array, size, count, loc);
@@ -584,10 +585,9 @@ __array_reserve :: (array: *Resizable_Array, size: int, count: int, loc: Source_
 // array_resize: makes count the array's count, growing to exactly count
 // when it's past allocated, or to the array's count when that is more, as
 // for an array whose data and count were set by hand (__array_grow). The
-// elements it adds are zeroed; shrinking
-// keeps the memory. The count isn't below 0: lowering checks. False when
-// the allocator had no memory to give: the array is as it was, but for the
-// allocator it took.
+// elements it adds are zeroed; shrinking keeps the memory. The count isn't
+// below 0: lowering checks. False when the allocator had no memory to
+// give: the array is as it was, but for the allocator it took.
 __array_resize :: (array: *Resizable_Array, size: int, count: int, loc: Source_Code_Location) -> bool {
     if count > array.allocated {
         if !__array_grow(array, size, count, loc) { return false; }

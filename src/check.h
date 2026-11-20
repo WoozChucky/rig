@@ -82,26 +82,7 @@ struct Checker {
                                  // without Preload
 };
 
-// A procedure built into the language for resizable arrays (spec 3.17),
-// predeclared as an Ast_Builtin (checker.cpp's declare_predeclared): what
-// its calls give after the array, of which check_builtin_call makes the
-// call's signature for its element type T, and the helper of Preload's it
-// calls (Ast_File.array_procs). Its parameters are the array, a *[..]T,
-// then an int when takes_int, then a T when takes_item.
-struct Builtin_Procedure {
-    const char *name;      // array_add, ...
-    Array_Builtin builtin; // its index in BUILTIN_PROCEDURES too
-    const char *helper;    // Preload's procedure it calls: __array_add, ...
-    bool takes_int;        // an int after the array: an index (array_insert, the removes) or a count
-                           // (array_reserve, array_resize)
-    bool takes_item;       // then a T, the item added or inserted (array_add, array_insert)
-    bool returns_item;     // returns a T, the element removed (array_pop)
-};
-
 // checker.cpp
-
-// The nine built-ins, by their Array_Builtin.
-extern const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT];
 
 // The declaration `name` means where the checker is: the innermost block's
 // that declares it, else the top level's (a procedure, a global or a

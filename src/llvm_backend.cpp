@@ -968,9 +968,9 @@ static s64 resizable_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in,
                              LLVMMetadataRef *members, s32 *levels) {
     RIG_ASSERT(b->allocator_type);  // the checker refused a [..]T without Preload's Resizable_Array
     view_members(b, t, depth, in, file, members, levels);
-    LLVMMetadataRef count = part_debug_type(b, &type_int, depth, levels);
+    LLVMMetadataRef allocated = part_debug_type(b, &type_int, depth, levels);
     LLVMMetadataRef allocator = part_debug_type(b, b->allocator_type, depth, levels);
-    members[2] = debug_member(b, in, file, str("allocated"), 0, 8, RESIZABLE_ALLOCATED_OFFSET, count);
+    members[2] = debug_member(b, in, file, str("allocated"), 0, 8, RESIZABLE_ALLOCATED_OFFSET, allocated);
     members[3] = debug_member(b, in, file, str("allocator"), 0, b->allocator_type->size, RESIZABLE_ALLOCATOR_OFFSET,
                               allocator);
     return 4;
@@ -984,20 +984,20 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
 // The subroutine type of a signature: its parameters' types and its
 // results' (spec 10.4). How a procedure of it is called, which isn't how C
 // would pass the same types: an aggregate is never passed or returned in
-// registers. A struct, array, view or string parameter is a pointer to the
-// caller's copy, so its type here is a pointer to the aggregate. An
-// aggregate result isn't returned at all: the caller passes a pointer to a
-// temporary, which `return` copies the value into, a hidden parameter
-// before the visible ones (one per aggregate result, in order). So the
-// list is the result's type first, the one scalar result when there's
-// exactly one, and none (null) otherwise: no scalar result, or several,
-// which LLVM returns together in a way no C type describes; then those
-// pointers, then `context`, the *Context a procedure that takes the context
-// is given (spec 7.10; null for none), then the visible parameters. Its
-// parts are made `depth` levels down (part_debug_type, which raises
-// *levels), or, with depth -1, as a procedure's own (debug_type:
-// begin_procedure_debug_info, whose context, when it takes one, is its
-// first parameter variable, so among `params` already).
+// registers. A struct, array, view, resizable array or string parameter is
+// a pointer to the caller's copy, so its type here is a pointer to the
+// aggregate. An aggregate result isn't returned at all: the caller passes a
+// pointer to a temporary, which `return` copies the value into, a hidden
+// parameter before the visible ones (one per aggregate result, in order).
+// So the list is the result's type first, the one scalar result when
+// there's exactly one, and none (null) otherwise: no scalar result, or
+// several, which LLVM returns together in a way no C type describes; then
+// those pointers, then `context`, the *Context a procedure that takes the
+// context is given (spec 7.10; null for none), then the visible
+// parameters. Its parts are made `depth` levels down (part_debug_type,
+// which raises *levels), or, with depth -1, as a procedure's own
+// (debug_type: begin_procedure_debug_info, whose context, when it takes
+// one, is its first parameter variable, so among `params` already).
 static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_count, Type **results,
                                        s64 result_count, Type *context, s32 depth, s32 *levels) {
     s64 pointers = 0, scalars = 0;

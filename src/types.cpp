@@ -186,6 +186,10 @@ Type *type_resizable_of(Type *element) {
     return element->resizable;
 }
 
+Type *type_resizable_allocator(Type *layout) {
+    return layout->fields.count ? layout->fields[layout->fields.count - 1].type : nullptr;
+}
+
 // The procedure types that have no parameters or results to anchor them,
 // () and () #c_call (type_proc_of). Never a type of its own.
 static Type no_components = BUILT_IN(TYPE_VOID, "", 0, 1, false);
@@ -307,9 +311,9 @@ static void add_text(Array<u8> *name, String text) {
     for (s64 i = 0; i < text.count; i++) array_add(name, text.data[i]);
 }
 
-// Whether type t, under any pointers, arrays and views, is a procedure type:
-// its name then ends with a signature's last part, which could take a
-// #c_call after it.
+// Whether type t, under any pointers, arrays, views and resizable arrays,
+// is a procedure type: its name then ends with a signature's last part,
+// which could take a #c_call after it.
 static bool ends_with_proc_type(Type *t) {
     while (named_after(t)) t = named_after(t);
     return t->kind == TYPE_PROC;

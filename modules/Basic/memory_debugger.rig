@@ -7,8 +7,9 @@
 // passes each call on to the allocator it wraps, the context's when it is
 // made ready (the heap, in main) unless another is given, and keeps a
 // record of what it gave. memory_debugger_report then writes what isn't
-// freed. A free or a resize of memory it never gave, or has taken back, is
-// written as it happens, at the place of the call.
+// freed. A free or a resize of memory it never gave, or has taken back,
+// and a resize to more than 0 bytes given another old_size than the
+// allocation's size, are written as they happen, at the place of the call.
 //
 // The records are kept by the allocation's address in an Int_Table, so a
 // free or a resize finds its record at once however many there are. Their
@@ -27,10 +28,10 @@
 // place of their call, and Basic's other procedures to the program's own
 // call (allocators.rig). The debugger passes each call on by calling the
 // wrapped allocator's procedure directly, not through Basic's helpers,
-// which would set the place to a line of this file: a direct call leaves
-// context.allocation_location as it is, so an arena or a pool it wraps
-// passes the program's place on to its parent, and a debugger over the
-// debugger records it too.
+// which would set the place to a line of this file. A direct call leaves
+// context.allocation_location as it is, so the allocator it wraps sees the
+// program's place too: an arena or a pool passes it on to its parent, and
+// a debugger records it.
 //
 // The place is only the innermost call that passed one down. For the whole
 // stack, a program run under gdb or cdb sets break_at to an allocation's
@@ -102,8 +103,10 @@ memory_debugger_init :: (debugger: *Memory_Debugger, wrapped: Allocator = contex
 // breakpoint on it, break memory_debugger_break in gdb or
 // bp PROGRAM!memory_debugger_break in cdb, shows the whole stack there,
 // every caller, where the place an allocation records is only the
-// innermost call that passed one down. A program built unoptimised, the
-// default, keeps the call; interpreted, nothing stops.
+// innermost call that passed one down. The debugger is its parameter,
+// though it reads nothing of it, so that a debugger stopped there can show
+// it: print *debugger in gdb gives its counts and break_at. A program built
+// unoptimised, the default, keeps the call; interpreted, nothing stops.
 memory_debugger_break :: (debugger: *Memory_Debugger) {
 }
 
@@ -203,12 +206,14 @@ memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
 // A resize or a free of memory the debugger never gave, or has taken back,
 // and a resize to more than 0 bytes whose old_size isn't the allocation's
 // size, are bad calls: each is written at its place and counted,
-// memory_debugger_break is called, and the call isn't passed on. A resize
-// gives null, which leaves the memory as it was and still the caller's to
-// free, as the protocol says of a null, and a free does nothing. The
-// address a resize moved an allocation from is taken back: its record
-// stays there, freed, with the allocation's number and its size there,
-// unless the wrapped allocator handed that address out again meanwhile.
+// memory_debugger_break is called, and the call isn't passed on. A free
+// does nothing. A resize gives null, which leaves the memory as it was, as
+// the protocol says of a null: an allocation given the wrong old_size is
+// still the caller's to free, one already freed stays freed, and memory
+// the debugger never gave is the allocator's that gave it. The address a
+// resize moved an allocation from is taken back: its record stays there,
+// freed, with the allocation's number and its size there, unless the
+// wrapped allocator handed that address out again meanwhile.
 //
 // The place is copied first, before the procedure calls anything of
 // Basic's: each of Basic's helpers puts the field back after its own call,

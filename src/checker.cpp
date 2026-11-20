@@ -75,8 +75,8 @@ static bool array_count(Checker *c, Ast_Type *written, u64 *out) {
 
 static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer);
 
-// T in [N]T or []T: any type but void, which has no values to hold ("'void'
-// is only a pointer's target, as in *void", at it).
+// T in [N]T, []T or [..]T: any type but void, which has no values to hold
+// ("'void' is only a pointer's target, as in *void", at it).
 static Type *resolve_element(Checker *c, Ast_Type *written, bool behind_pointer) {
     Type *t = resolve_written(c, written, behind_pointer);
     if (t == &type_void) {
@@ -589,11 +589,11 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   literal of its elements (Ast_Literal.is_baked). A #run's array, baked
 //   too, is no view: a view of it is written, as a view of a written
 //   array is.
-// - A resizable array is never one: no literal makes one, and a constant
-//   holds one only as a struct literal's left-out field, zeroed, which is
-//   never checked here. A value in its slot, a constant's field included
-//   (E :: H.items), is "a constant can't hold a resizable array; no literal
-//   makes one" (spec 3.17).
+// - A resizable array is never a value a constant may hold: no literal
+//   makes one, and a constant holds one only as a struct literal's left-out
+//   field, zeroed, which is never checked here. A value in its slot, a
+//   constant's field included (E :: H.items), is "a constant can't hold a
+//   resizable array; no literal makes one" (spec 3.17).
 // - A string, a struct or an array is a literal whose values are checked in
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
@@ -946,16 +946,16 @@ static void resolve_global(Checker *c, Ast *decl) {
 // found as a global's circle is (resolve_global), by finding a struct under
 // way.
 //
-// A pointer is 8 bytes whatever it points at, and a view 16 whatever its
-// elements are, so a field whose type holds a pointer or a view anywhere
-// (*Node, []Tree, [2]*Tree, [][2]Tree, *[2]Node) is a late field: laid out
-// from what's written, without looking at what lies behind the pointer or
-// in the view (late_layout), and its type made only once every struct is
-// laid out (resolve_late_fields). So Node can hold a *Node, A a *B while B
-// holds an A, and Tree a view of arrays of itself, as C's struct Node can
-// hold a struct Node (*kids)[2]. Only what a struct holds by value, its
-// other fields' types and its arrays' counts, is worked out while it's
-// laid out.
+// A pointer is 8 bytes whatever it points at, and a view 16 and a
+// resizable array 40 whatever their elements are, so a field whose type
+// holds a pointer, a view or a resizable array anywhere (*Node, []Tree,
+// [2]*Tree, [][2]Tree, *[2]Node, [..]Tree) is a late field: laid out from
+// what's written, without looking at what lies behind the pointer or in
+// the view (late_layout), and its type made only once every struct is laid
+// out (resolve_late_fields). So Node can hold a *Node, A a *B while B holds
+// an A, and Tree a view of arrays of itself, as C's struct Node can hold a
+// struct Node (*kids)[2]. Only what a struct holds by value, its other
+// fields' types and its arrays' counts, is worked out while it's laid out.
 //
 // Structs, globals, constants and signatures are worked out in one pass,
 // in source order (check()), each earlier where it's first needed: an
@@ -1033,8 +1033,8 @@ static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
 // The levels of field's type that its struct's layout reaches (MAX_DEPTH):
 // all of a field held by value's; of a late field's, only the arrays it
 // starts with, whose counts the layout needs (late_layout), so all of them
-// when it starts with one, and none when it starts with a pointer or a
-// view, which the layout doesn't look behind.
+// when it starts with one, and none when it starts with a pointer, a view
+// or a resizable array, which the layout doesn't look behind.
 static s32 layout_levels(Ast_Field *field) {
     Ast_Type *written = field->type_expr;
     if (holds_pointer_or_view(written) && written->kind != AST_TYPE_ARRAY) return 0;
@@ -1286,9 +1286,10 @@ static Type *made_again(Type *t) {
 // The types of struct s's late fields, once every struct is laid out: made
 // now (make_late_field), or, for one a literal or a field access needed
 // during the layouts, made again (made_again), in case a struct it named
-// behind a pointer or in a view has no type now; its size can't have
-// changed, so the layout stays. A struct in a circle has no type, but its
-// late fields' types are still made, for their own mistakes.
+// behind a pointer, in a view or in a resizable array has no type now; its
+// size can't have changed, so the layout stays. A struct in a circle has
+// no type, but its late fields' types are still made, for their own
+// mistakes.
 static void resolve_late_fields(Checker *c, Ast_Struct *s) {
     Type *t = s->declared;
     for (s64 i = 0; i < s->fields.count; i++) {
@@ -2402,17 +2403,20 @@ static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
 // element type (check_expr.cpp's check_builtin_call), and calls the helper
 // of Preload's named here, which does the work, in Rig. The names and the
 // order of array_insert's arguments are Basic v0's, whose untyped Array
-// they replace.
+// they replace. Each entry's flags are in Builtin_Procedure's order:
+// takes_int, takes_item, returns_item, indexes, places, may_fail.
 const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT] = {
-    {"array_add", BUILTIN_ARRAY_ADD, "__array_add", false, true, false},
-    {"array_insert", BUILTIN_ARRAY_INSERT, "__array_insert", true, true, false},
-    {"array_pop", BUILTIN_ARRAY_POP, "__array_pop", false, false, true},
-    {"array_remove_ordered", BUILTIN_ARRAY_REMOVE_ORDERED, "__array_remove_ordered", true, false, false},
-    {"array_remove_unordered", BUILTIN_ARRAY_REMOVE_UNORDERED, "__array_remove_unordered", true, false, false},
-    {"array_reserve", BUILTIN_ARRAY_RESERVE, "__array_reserve", true, false, false},
-    {"array_resize", BUILTIN_ARRAY_RESIZE, "__array_resize", true, false, false},
-    {"array_reset", BUILTIN_ARRAY_RESET, "__array_reset", false, false, false},
-    {"array_free", BUILTIN_ARRAY_FREE, "__array_free", false, false, false},
+    {"array_add", BUILTIN_ARRAY_ADD, "__array_add", false, true, false, false, true, true},
+    {"array_insert", BUILTIN_ARRAY_INSERT, "__array_insert", true, true, false, true, true, true},
+    {"array_pop", BUILTIN_ARRAY_POP, "__array_pop", false, false, true, true, false, false},
+    {"array_remove_ordered", BUILTIN_ARRAY_REMOVE_ORDERED, "__array_remove_ordered", true, false, false, true, false,
+     false},
+    {"array_remove_unordered", BUILTIN_ARRAY_REMOVE_UNORDERED, "__array_remove_unordered", true, false, false, true,
+     false, false},
+    {"array_reserve", BUILTIN_ARRAY_RESERVE, "__array_reserve", true, false, false, false, true, true},
+    {"array_resize", BUILTIN_ARRAY_RESIZE, "__array_resize", true, false, false, false, true, true},
+    {"array_reset", BUILTIN_ARRAY_RESET, "__array_reset", false, false, false, false, false, false},
+    {"array_free", BUILTIN_ARRAY_FREE, "__array_free", false, false, false, false, true, false},
 };
 
 // What a predeclared name is, as the refusal of a top-level declaration of
@@ -2455,6 +2459,8 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
         table_put(&c->top_level, constant->name, (Ast *)constant);
     }
     for (const Builtin_Procedure &entry : BUILTIN_PROCEDURES) {
+        // check_builtin_call and lowering index the table by Array_Builtin.
+        RIG_ASSERT(&BUILTIN_PROCEDURES[entry.builtin] == &entry);
         Ast_Builtin *builtin = ast_new<Ast_Builtin>(c->arena, AST_BUILTIN, {0, 0, 0});
         builtin->name = str(entry.name);
         builtin->builtin = entry.builtin;
@@ -2562,7 +2568,8 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
                 c->file->resizable_array_type = ((Ast_Struct *)decl)->declared;
             }
             // And what a default #caller_location is (spec 7.2), a call's
-            // place, which lowering fills in: without it, no such default.
+            // place, which lowering fills in, as it does the one a built-in
+            // procedure passes its helper: without it, no such default.
             if (decl->kind == AST_STRUCT && string_eq(name, str("Source_Code_Location"))) {
                 c->file->source_code_location_type = ((Ast_Struct *)decl)->declared;
             }

@@ -476,12 +476,12 @@ struct Ast_While : Ast {
 
 // for first..last { ... } or for name: first..last { ... }, a range; or
 // for a { ... }, for name: a { ... }, over the elements of an array, a
-// view or a string a (its sequence); pos is the 'for'. The loop declares
-// two read-only variables (spec 6.1), visible in its body: the iterator,
-// which takes each value from first to last, both included, or each
-// element of a in order (a copy), and it_index, an int counting the
-// iterations from 0. `for * a` makes the iterator a pointer to each element
-// instead, through which the body can change it.
+// view, a string or a resizable array a (its sequence); pos is the 'for'.
+// The loop declares two read-only variables (spec 6.1), visible in its
+// body: the iterator, which takes each value from first to last, both
+// included, or each element of a in order (a copy), and it_index, an int
+// counting the iterations from 0. `for * a` makes the iterator a pointer to
+// each element instead, through which the body can change it.
 struct Ast_For : Ast {
     Ast_Var *iterator;  // `it`, at the 'for', or the name in `for i: 0..9`, at the name; is_iterator set
     Ast_Var *index;     // `it_index`, at the 'for'; is_iterator set
@@ -664,8 +664,9 @@ struct Ast_File {
                                  // its allocator field's type; null without Preload
     Ast_Proc *array_procs[BUILTIN_ARRAY_COUNT];  // Preload's __array_add ..., what each built-in calls,
                                                  // by its Array_Builtin; null without Preload
-    Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): what a default
-                                      // #caller_location is, a call's place; null without Preload
+    Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): a call's place, what
+                                      // a default #caller_location is and what a built-in procedure
+                                      // passes its helper (lower_builtin_call); null without Preload
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

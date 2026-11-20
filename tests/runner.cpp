@@ -245,6 +245,11 @@
 // Every .cdb script starts with `l+t` (step by source line), `l+s`
 // and `l+l` (show the source line at each stop), and ends with `q`; it
 // never uses `.lines`, which with -lines turns the line information off.
+// cdb's `k` names a caller's line by its return address, the code after
+// the call, where gdb names the call's own line: after a call whose result
+// isn't used, that is the next line's code, so break_at_allocation's
+// .cdb.expect has `@ 24` and `@ 27` where its .gdb.expect has the calls at
+// 23 and 26.
 //
 // Every program, rig included, gets TIMEOUT seconds, an interpreted one
 // INTERPRETED_TIMEOUT; one that takes longer is killed and its test fails,

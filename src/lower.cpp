@@ -31,7 +31,9 @@
 //   (lower_call_results). A parameter's default value (spec 7.2) is the
 //   caller's code too: a call that leaves the parameter out works the value
 //   out and passes it, as if it were written there, so the callee never
-//   knows (lower_call_results).
+//   knows (lower_call_results). A default #caller_location is the call's
+//   place: a temporary of Preload's Source_Code_Location the caller fills
+//   with it (lower_source_location).
 // - The context (spec 7.10, 10.4). Every procedure with a body but a
 //   #c_call one and main takes a *Context, a hidden ptr parameter after
 //   the result pointers and before the visible ones (takes_context), and a
@@ -400,7 +402,7 @@ struct Lowering {
     Ir_Module *module;
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
-    s32 string_count;         // the str.N globals made so far: string literals, panic messages and the names in types' descriptions
+    s32 string_count;         // the str.N globals made so far (add_bytes, which says whose bytes each holds)
     // Each string literal node's str.N, by pointer_key: one per literal,
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
@@ -752,9 +754,12 @@ static s32 emit_select(Lowering *l, Ir_Type t, s32 condition, s32 if_true, s32 i
 
 // A constant global holding `bytes` and a zero after them; its index. A
 // string literal's (a string's count leaves the zero out; C reads it through
-// a *u8, up to the zero), a panic's message (written without the zero), or
-// a name in a type's description (describe_type, describe_members: a
-// string's, without the zero).
+// a *u8, up to the zero), a panic's message (written without the zero), a
+// bounds check's message's start (emit_bounds_check) or one of the fixed
+// parts __rig_bounds_failed writes after it (append_text), a name in a
+// type's description (describe_type, describe_members: a string's, without
+// the zero), or a source file's path, which a call's place views
+// (lower_source_location: a string's too).
 static s32 add_bytes(Lowering *l, String bytes) {
     Ir_Global g = {};
     g.name = string_printf(l->arena, "str.%d", l->string_count++);
@@ -1003,7 +1008,8 @@ static s32 constant_global(Lowering *l, Ast_Const *constant);
 static s32 run_global(Lowering *l, Ast_Run *run);
 
 // A view's count and data, loaded from the view at %view (its fields, as
-// types.h lays them out).
+// types.h lays them out); a string's, and a resizable array's, which start
+// with the same two fields, too.
 static s32 load_view_count(Lowering *l, s32 view) {
     return emit_load(l, IR_I64, emit_field_address(l, view, VIEW_COUNT_OFFSET));
 }
@@ -1098,8 +1104,8 @@ static s32 lower_view_of(Lowering *l, Ast *e) {
 //     %a = ptradd %array, %8
 //     %d = load ptr %a                 (its data, at 8)
 //     store i64 %n, %v
-//     %8b = const i64 8
-//     %vd = ptradd %v, %8b
+//     %offset = const i64 8
+//     %vd = ptradd %v, %offset
 //     store ptr %d, %vd
 static s32 lower_view_of_resizable(Lowering *l, Type *resizable, s32 array) {
     s32 view = emit_slot(l, type_view_of(resizable->element));
@@ -1225,15 +1231,17 @@ static String runtime_error_prefix(Lowering *l, Position at) {
     return string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
 }
 
-// The place `at` as a value of Preload's Source_Code_Location (spec 7.2),
+// The place `at` as a value of Preload's Source_Code_Location (spec 7.2):
 // what a default #caller_location is at a call that leaves its parameter
-// out: the address of a temporary of its own, filled here. file views the
-// path messages name `at`'s file by, as runtime_error_prefix's PATH does,
-// so a place and a runtime error at it name the same file; its bytes are
-// a constant global, one per file (Lowering.path_globals), made the first
-// time. line and column are `at`'s, counted from 1 (spec 2.2). Each field
-// is put at its offset in Preload's struct, `file: string; line: int;
-// column: int;`, 32 bytes:
+// out (lower_call_results), and what a built-in procedure that can reach
+// the allocator passes its helper (lower_builtin_call). The address of a
+// temporary of its own, filled here. file views the path messages name
+// `at`'s file by, as runtime_error_prefix's PATH does, so a place and a
+// runtime error at it name the same file; its bytes are a constant global,
+// one per file (Lowering.path_globals), made the first time. line and
+// column are `at`'s, counted from 1 (spec 2.2). Each field is put at its
+// offset in Preload's struct, `file: string; line: int; column: int;`, 32
+// bytes:
 //
 //     %p = local 32 align 8
 //     %n = const i64 COUNT          (the path's count)
@@ -1246,7 +1254,9 @@ static String runtime_error_prefix(Lowering *l, Position at) {
 //     ...
 static s32 lower_source_location(Lowering *l, Position at) {
     Type *t = l->source_code_location_type;
-    RIG_ASSERT(t && t->fields.count == 3);  // the checker refused #caller_location without Preload's
+    // The checker refused a #caller_location without Preload's, and a [..]T
+    // without Preload, so without it no built-in procedure has an array.
+    RIG_ASSERT(t && t->fields.count == 3);
     while (l->path_globals.count <= at.file) array_add(&l->path_globals, -1);
     String path = l->diag->files[at.file].path;
     if (l->path_globals[at.file] < 0) l->path_globals[at.file] = add_bytes(l, path);
@@ -1749,10 +1759,11 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
     l->block = ok;
 }
 
-// The address of a[i] (spec 6.5), in this order: a (a view's or a string's
-// count and data loaded from it), then i (widened to an i64 by its own
-// sign), then the checks, then the address. So an assignment's target is
-// found, checks and all, before its value is worked out.
+// The address of a[i] (spec 6.5), in this order: a (a view's, a string's
+// or a resizable array's count and data loaded from it), then i (widened to
+// an i64 by its own sign), then the checks, then the address. So an
+// assignment's target is found, checks and all, before its value is worked
+// out.
 // - An array's value is its address, which is its data; its count, N, is
 //   a constant. A constant index of an array needs no check: the checker
 //   made sure it's inside.
@@ -2056,8 +2067,10 @@ static s32 lower_argument(Lowering *l, Ast *arg, Type *t) {
 // []T:
 // - A spread, ..e: passed as any []T argument is (lower_argument), an array
 //   e seen as a view (lower_view_of: a place's own elements, a constant's
-//   read-only data, a temporary copy otherwise), and the view's 16 bytes
-//   copied into a slot of their own, its elements never.
+//   read-only data, a temporary copy otherwise), a [..]T e as the view of
+//   its count and data read at the spread (lower_view_of_resizable, nothing
+//   copied), and the view's 16 bytes copied into a slot of their own, its
+//   elements never.
 // - The arguments one by one: built into a temporary of the checker's
 //   [N]T (Ast_Call.gathered), element by element at i * SIZE, each
 //   converted to T, as an array literal is (lower_literal); then the view
@@ -2085,8 +2098,9 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 
 // A built-in procedure's call (spec 3.17): a call of the helper of
 // Preload's it stands for (Lowering.array_procs), which does the work in
-// Rig, with the checks that need the call's T or its place around it. In
-// this order:
+// Rig, with the checks that need the call's T or its place around it. What
+// each built-in takes, gives and does is its BUILTIN_PROCEDURES entry's
+// (checker.h). In this order:
 // - The caller's current context, which the helper takes as any Rig
 //   procedure does; then the arguments, left to right, as a call's: the
 //   array's pointer, then an index or a count, an int, then an item,
@@ -2112,17 +2126,17 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   owns memory ("'array_pop' was given an array with more elements than
 //   its memory holds"). Then array_resize's count below 0, always: the
 //   helper would make a count no array has.
-// - The call of the helper, at the statement, as any call is: the
-//   context, the pointer, the element's size, an i64 constant, then the
-//   rest. The helpers index nothing themselves, so #no_abc changes nothing
-//   in them.
 // - For array_add, array_insert, array_reserve, array_resize and
-//   array_free, whose helpers can reach the allocator, the call's place
-//   last: the built-in's name, a Source_Code_Location made as a default
+//   array_free, whose helpers can reach the allocator, the call's place:
+//   the built-in's name, a Source_Code_Location made as a default
 //   #caller_location's is (lower_source_location), once the checks have
 //   passed. The helpers put it in context.allocation_location while they
 //   call the allocator (spec 7.10), so an allocator that records where it
 //   is asked from names the program's line, not Preload's.
+// - The call of the helper, at the statement, as any call is: the
+//   context, the pointer, the element's size, an i64 constant, then the
+//   rest, the place last. The helpers index nothing themselves, so #no_abc
+//   changes nothing in them.
 // - For array_add, array_insert, array_reserve and array_resize, whose
 //   helpers say whether the allocator gave the memory they needed: false
 //   is a runtime error at the name, "the array's allocator has no memory to
@@ -2185,11 +2199,11 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                                store i64 %72, %40
 static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Array_Builtin builtin = call->builtin->builtin;
+    const Builtin_Procedure *entry = &BUILTIN_PROCEDURES[builtin];
     Type *signature = call->callee_type;
     Type *element = signature->params[0]->pointee->element;
     Ast_Proc *helper = l->array_procs[builtin];
     Position at = call->callee->pos;
-    bool takes_item = builtin == BUILTIN_ARRAY_ADD || builtin == BUILTIN_ARRAY_INSERT;
     Array<s32> args = {};  // the call instruction keeps it
     if (takes_context(l, helper)) array_add(&args, load_context(l));
     s32 array = lower_value(l, call->args[0], signature->params[0]);
@@ -2197,7 +2211,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
     array_add(&args, emit_constant(l, IR_I64, (u64)element->size));
     s32 index = -1;  // the index or the count, an i64
     for (s64 i = 1; i < call->args.count; i++) {
-        if (takes_item && i == call->args.count - 1) {
+        if (entry->takes_item && i == call->args.count - 1) {
             s32 copy = emit_slot(l, element);
             emit_put(l, element, lower_value(l, call->args[i], element), copy);
             array_add(&args, copy);
@@ -2207,15 +2221,12 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
         }
     }
     s32 popped = -1;
-    if (builtin == BUILTIN_ARRAY_POP) {
+    if (entry->returns_item) {
         popped = emit_slot(l, element);
         array_add(&args, popped);
     }
     emit_null_check(l, array, at);
-    bool indexes = builtin == BUILTIN_ARRAY_INSERT || builtin == BUILTIN_ARRAY_POP ||
-                   builtin == BUILTIN_ARRAY_REMOVE_ORDERED || builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
-    bool removes = builtin == BUILTIN_ARRAY_POP || builtin == BUILTIN_ARRAY_REMOVE_ORDERED ||
-                   builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
+    bool removes = entry->indexes && !entry->takes_item;  // array_pop and the removes
     // The helpers trust what the array says of itself (Preload's
     // Resizable_Array): a count of 0 or more, a null data only with a
     // count and an allocated of 0, and an owned memory (allocated above 0,
@@ -2231,7 +2242,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
     // (lower_index_address): an empty array's pop is out of bounds.
     bool keeps = builtin != BUILTIN_ARRAY_RESET && builtin != BUILTIN_ARRAY_FREE;
     s32 count = keeps ? load_view_count(l, array) : -1;
-    bool bounded = indexes && l->checking_bounds;
+    bool bounded = entry->indexes && l->checking_bounds;
     if (bounded) {
         s32 bound = count;
         if (builtin == BUILTIN_ARRAY_INSERT) bound = emit_binary(l, IR_ADD, IR_I64, count, emit_constant(l, IR_I64, 1));
@@ -2322,11 +2333,9 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
     // allocator, which put it in the context while they call it (spec
     // 7.10): made once every check has passed, so a call that stops makes
     // none.
-    bool allocates = takes_item || builtin == BUILTIN_ARRAY_RESERVE || builtin == BUILTIN_ARRAY_RESIZE ||
-                     builtin == BUILTIN_ARRAY_FREE;
-    if (allocates) array_add(&args, lower_source_location(l, at));
+    if (entry->places) array_add(&args, lower_source_location(l, at));
     s32 result = emit_call(l, proc_index_of(l, helper), args)->result;
-    if (takes_item || builtin == BUILTIN_ARRAY_RESERVE || builtin == BUILTIN_ARRAY_RESIZE) {
+    if (entry->may_fail) {
         s32 failed = emit_binary(l, IR_XOR, IR_I1, result, emit_constant(l, IR_I1, 1));
         emit_runtime_check(l, failed, at, str("the array's allocator has no memory to give"));
     }
@@ -2876,7 +2885,7 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 //     %a = ...                        a, once
 //     %data, %count                   an array's address and N; a view's, a string's or a
 //                                     resizable array's, loaded
-//     (but an array: emit_data_check, its data null with a count above 0 fails)
+//     (all but an array: emit_data_check, its data null with a count above 0 fails)
 //     it_index = 0
 //     jump test
 //   test:
@@ -2894,14 +2903,16 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 //
 // a is worked out once, before the first iteration, and its data and count
 // taken then: the body may change a view (or call what does), which the
-// loop doesn't see. It may grow a resizable array too (spec 3.17): the
-// loop goes on over the elements the array had, where they were, memory
-// that growing past the room it had gives back (a memory error, spec 8.6).
-// it is a copy of each element, an aggregate one copied whole, so the body
-// reading it sees the element as it was when its iteration began. A view's
-// data is checked for null once, before the loop, when its count says
-// there are elements to read (emit_data_check), at the sequence: a zeroed
-// view runs no iteration and reads nothing.
+// loop doesn't see. It may grow a resizable array too (spec 3.17), and the
+// loop goes on over the elements the array had, where they were. Growing
+// within the room the array had leaves them there. Growing past it may
+// move them to new memory and give the old back, and the loop then reads
+// memory given back (a memory error, spec 8.6). it is a copy of each
+// element, an aggregate one copied whole, so the body reading it sees the
+// element as it was when its iteration began. A view's data is checked for
+// null once, before the loop, when its count says there are elements to
+// read (emit_data_check), at the sequence: a zeroed view runs no iteration
+// and reads nothing.
 //
 // Either for is at its `for`, and is a scope of its own starting there,
 // holding it (or the named iterator) and it_index, and the body's
@@ -4297,7 +4308,6 @@ static void release_lowering(Lowering *l) {
     table_free(&l->proc_index);
     table_free(&l->global_index);
     table_free(&l->literal_globals);
-    array_free(&l->path_globals);
     table_free(&l->constant_globals);
     table_free(&l->constant_index);
     table_free(&l->used_foreign);
@@ -4307,6 +4317,7 @@ static void release_lowering(Lowering *l) {
     array_free(&l->locals);
     array_free(&l->loops);
     array_free(&l->defers);
+    array_free(&l->path_globals);
     array_free(&l->sources);
     array_free(&l->waiting);
 }
@@ -4320,8 +4331,8 @@ static void release_lowering(Lowering *l) {
 // whose module the interpreter runs, with no debug information.
 static Type *allocator_type_of(Ast_File *f) {
     Type *layout = f->resizable_array_type;
-    if (!layout || layout->decl->resolve != RESOLVE_DONE || !layout->fields.count) return nullptr;
-    return layout->fields[layout->fields.count - 1].type;
+    if (!layout || layout->decl->resolve != RESOLVE_DONE) return nullptr;
+    return type_resizable_allocator(layout);
 }
 
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
