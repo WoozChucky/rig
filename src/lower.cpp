@@ -2430,11 +2430,11 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 // (The calls below but the first are of procedures that take no context,
 // as without Preload: a unit test's single file.)
 //
-//     n := twice(4);             %2 = local i64            (n; main's context in the slot %0)
-//                                %3 = load ptr %0          (the context)
-//                                %4 = const i64 4
-//                                %5 = call @twice(%3, %4)
-//                                store i64 %5, %2
+//     n := twice(4);             %4 = local i64            (n; main's context in the slot %2)
+//                                %5 = load ptr %2          (the context)
+//                                %6 = const i64 4
+//                                %7 = call @twice(%5, %6)
+//                                store i64 %7, %4
 //
 //     v := make(3);              %0 = local 8 align 4      (v)
 //                                %1 = local 8 align 4      (the result)
@@ -2720,11 +2720,11 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 // lower_deferred). Then the context is the one around again, however the
 // block is left: the push is lexical, so nothing is undone at run time.
 //
-//     push_context c { use(); }      (c a local, its slot %2; main's context %0)
-//     %4 = local ptr
-//     store ptr %2, %4
-//     %5 = load ptr %4
-//     call @use(%5)
+//     push_context c { use(); }      (c a local, its slot %4; main's context %2)
+//     %6 = local ptr
+//     store ptr %4, %6
+//     %7 = load ptr %6
+//     call @use(%7)
 static void lower_push_context(Lowering *l, Ast_Push_Context *push, Ast_Proc *source) {
     RIG_ASSERT(l->context_type);  // the checker refused a push without Preload's Context
     s32 address = lower_value_address(l, push->context, push->is_place);

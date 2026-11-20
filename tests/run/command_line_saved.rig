@@ -1,8 +1,9 @@
 // Preload's __save_command_line (issue #152, spec 7.4, 10.5), called by
 // hand, as a program may call any of Preload's names: main's prologue
 // has saved the program's own arguments, its name alone here; a list
-// given replaces them, each string's bytes where they are; null keeps
-// what was saved, as a Rig call of main passes; a count of 0 saves none.
+// given replaces them, each string's bytes where they are (its data the
+// very pointer given); null keeps what was saved, as a Rig call of main
+// passes; a count of 0 saves none, and so does a negative one.
 #import "Basic";
 
 show :: (when: string) {
@@ -25,10 +26,15 @@ main :: () {
     words[2] = cast(*u8) "Wörld";
     __save_command_line(3, *words[0]);
     show("three");
+    print("where they are: {} {}\n", __command_line_arguments[0].data == words[0],
+          __command_line_arguments[2].data == words[2]);
     __save_command_line(0, null);
     show("null keeps them");
     again = true;
     main();
     __save_command_line(0, *words[3]);
     show("none");
+    __save_command_line(3, *words[0]);
+    __save_command_line(-1, *words[0]);
+    show("negative");
 }

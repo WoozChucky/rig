@@ -259,10 +259,11 @@ __command_line_arguments : []string;
 // calls it right after __runtime_init, with the argc and argv the C
 // runtime gave C's main, which main takes though its Rig signature doesn't
 // say so (spec 10.4). A null argv keeps what was saved: a Rig call of main
-// passes 0 and null. An argc of 0 or less saves the empty view (Linux lets
-// a program be started with no argv[0]). Otherwise the elements come from
-// one __malloc, the i-th viewing argv[i]'s bytes up to its zero, which
-// stay where C put them; when __malloc gives null, what was saved stays.
+// passes 0 and null. An argc of 0 or less saves the empty view (Linux
+// before 5.18 let a program be started with no argv[0], and a hand call
+// may pass 0). Otherwise the elements come from one __malloc, the i-th
+// viewing argv[i]'s bytes up to its zero, which stay where C put them;
+// when __malloc gives null, what was saved stays.
 // #c_call, so it uses no context, as __runtime_init; and, as it, it has no
 // debug information, so a debugger steps over main's call of it. Nothing
 // it saves is ever freed.
