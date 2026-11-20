@@ -1,0 +1,83 @@
+// Basic's memory debugger (issue #159) over the allocators it may wrap.
+// free_all through it is passed on, and takes everything as freed when the
+// wrapped allocator gives everything back: an arena, a pool and the
+// temporary storage do, the heap doesn't, and a debugger does when what it
+// wraps does. An arena whose blocks come from a debugger is its
+// allocations, block by block.
+#import "Basic";
+
+main :: () {
+    // An arena wrapped: a resize moves, a free gives nothing back.
+    arena : Arena;
+    arena_init(*arena, 256);
+    over_arena : Memory_Debugger;
+    memory_debugger_init(*over_arena, arena_allocator(*arena));
+    a := memory_debugger_allocator(*over_arena);
+    p := alloc(16, a);                 // 1
+    q := resize(p, 16, 32, a);         // moves
+    free(p, a);                        // already freed: the resize moved it
+    r := alloc(8, a);                  // 2
+    memory_debugger_report(*over_arena);
+    free_all(a);
+    memory_debugger_report(*over_arena);
+    memory_debugger_free(*over_arena);
+
+    // A pool wrapped: what it can't give is no allocation.
+    pool : Pool;
+    pool_init(*pool, 16, 2);
+    over_pool : Memory_Debugger;
+    memory_debugger_init(*over_pool, pool_allocator(*pool));
+    b := memory_debugger_allocator(*over_pool);
+    x := alloc(8, b);                  // 1
+    big := alloc(64, b);               // more than a slot: null
+    x2 := resize(x, 8, 16, b);         // in its slot
+    x3 := resize(x2, 16, 32, b);       // past it: null, x as it was
+    print("{} {} {}\n", big == null, x2 == x, x3 == null);
+    memory_debugger_report(*over_pool);
+    free_all(b);
+    memory_debugger_report(*over_pool);
+    memory_debugger_free(*over_pool);
+
+    // The temporary storage wrapped: free_all is a reset.
+    over_temporary : Memory_Debugger;
+    memory_debugger_init(*over_temporary, TEMPORARY_ALLOCATOR);
+    t := memory_debugger_allocator(*over_temporary);
+    free(alloc(10, t), t);
+    alloc(20, t);
+    memory_debugger_report(*over_temporary);
+    free_all(t);
+    print("{}\n", context.temporary_storage.occupied);
+    memory_debugger_report(*over_temporary);
+    memory_debugger_free(*over_temporary);
+
+    // The heap wrapped: its free_all gives nothing back.
+    over_heap : Memory_Debugger;
+    memory_debugger_init(*over_heap);
+    h := memory_debugger_allocator(*over_heap);
+    kept := alloc(24, h);
+    free_all(h);
+    memory_debugger_report(*over_heap);
+
+    // A debugger over that one: neither free_all gives anything back. An
+    // arena whose blocks come from it.
+    inner : Memory_Debugger;
+    memory_debugger_init(*inner, h);
+    i := memory_debugger_allocator(*inner);
+    leak := alloc(5, i);
+    free_all(i);
+    blocks : Arena;
+    arena_init(*blocks, 100, i);
+    alloc(10, arena_allocator(*blocks));
+    alloc(200, arena_allocator(*blocks));
+    arena_reset(*blocks);
+    memory_debugger_report(*inner);
+    memory_debugger_report(*over_heap);
+    free_all(arena_allocator(*blocks));
+    free(leak, i);
+    free(kept, h);
+    memory_debugger_report(*inner);
+    memory_debugger_report(*over_heap);
+    memory_debugger_free(*inner);
+    memory_debugger_free(*over_heap);
+    free_all(arena_allocator(*arena));
+}
