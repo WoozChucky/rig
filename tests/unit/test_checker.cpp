@@ -8916,7 +8916,9 @@ TEST(preload_declares_the_array_helpers) {
     // each taking the untyped array and its element's size, then what the
     // built-in takes after the array, an item by its address; __array_pop
     // takes the address its last element is copied to. Those that can grow
-    // the array say whether the allocator gave memory.
+    // the array say whether the allocator gave memory. Those that can reach
+    // the allocator take the built-in's place last, which they put in the
+    // context while they call it (spec 7.10).
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
@@ -8924,15 +8926,15 @@ TEST(preload_declares_the_array_helpers) {
         const char *name;
         const char *type;
     } helpers[] = {
-        {"__array_add", "(*Resizable_Array, int, *void) -> bool"},
-        {"__array_insert", "(*Resizable_Array, int, int, *void) -> bool"},
+        {"__array_add", "(*Resizable_Array, int, *void, Source_Code_Location) -> bool"},
+        {"__array_insert", "(*Resizable_Array, int, int, *void, Source_Code_Location) -> bool"},
         {"__array_pop", "(*Resizable_Array, int, *void)"},
         {"__array_remove_ordered", "(*Resizable_Array, int, int)"},
         {"__array_remove_unordered", "(*Resizable_Array, int, int)"},
-        {"__array_reserve", "(*Resizable_Array, int, int) -> bool"},
-        {"__array_resize", "(*Resizable_Array, int, int) -> bool"},
+        {"__array_reserve", "(*Resizable_Array, int, int, Source_Code_Location) -> bool"},
+        {"__array_resize", "(*Resizable_Array, int, int, Source_Code_Location) -> bool"},
         {"__array_reset", "(*Resizable_Array, int)"},
-        {"__array_free", "(*Resizable_Array, int)"},
+        {"__array_free", "(*Resizable_Array, int, Source_Code_Location)"},
     };
     for (s64 i = 0; i < (s64)(sizeof helpers / sizeof helpers[0]); i++) {
         Ast_Proc *found = nullptr;

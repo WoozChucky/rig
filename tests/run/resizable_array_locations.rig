@@ -1,0 +1,39 @@
+// Where a resizable array's memory is asked for (spec 3.17, 7.10): each
+// built-in procedure that can reach the allocator names its own call, the
+// built-in's name in it, as the place in context.allocation_location while
+// the array's allocator is called, not Preload's line, and the place before
+// is put back after. A loop's call has the same place each time it grows
+// the array, and a #run's call its place in the run's code.
+#import "Basic";
+
+seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    at := context.allocation_location;
+    print("{} {} {}:{}\n", mode, size, at.line, at.column);
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+#run {
+    seen := context;
+    seen.allocator = Allocator.{seen_proc, null};
+    push_context seen {
+        numbers : [..]int;
+        array_add(*numbers, 1);
+        array_free(*numbers);
+    }
+}
+
+main :: () {
+    seen := context;
+    seen.allocator = Allocator.{seen_proc, null};
+    push_context seen {
+        numbers : [..]int;
+        array_add(*numbers, 1);
+        for 1..8 { array_add(*numbers, it); }
+        array_reserve(*numbers, 100);
+        array_resize(*numbers, 200);
+        array_insert(*numbers, 0, 7);
+        print("{}\n", context.allocation_location.line);
+        array_free(*numbers);
+        print("{}\n", context.allocation_location.line);
+    }
+}

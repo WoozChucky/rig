@@ -2116,6 +2116,13 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   context, the pointer, the element's size, an i64 constant, then the
 //   rest. The helpers index nothing themselves, so #no_abc changes nothing
 //   in them.
+// - For array_add, array_insert, array_reserve, array_resize and
+//   array_free, whose helpers can reach the allocator, the call's place
+//   last: the built-in's name, a Source_Code_Location made as a default
+//   #caller_location's is (lower_source_location), once the checks have
+//   passed. The helpers put it in context.allocation_location while they
+//   call the allocator (spec 7.10), so an allocator that records where it
+//   is asked from names the program's line, not Preload's.
 // - For array_add, array_insert, array_reserve and array_resize, whose
 //   helpers say whether the allocator gave the memory they needed: false
 //   is a runtime error at the name, "the array's allocator has no memory to
@@ -2146,34 +2153,36 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                                ...
 //                                branch %25, fail, ok      (the data check)
 //                              ok:
-//                                %26 = call @__array_add(%3, %2, %4, %5)
-//                                %27 = const i1 1
-//                                %28 = xor i1 %26, %27     (false: no memory given)
-//                                branch %28, fail, ok      (emit_runtime_check)
+//                                %26 = local 32 align 8    (the place, filled with the
+//                                ...                        file, line and column)
+//                                %37 = call @__array_add(%3, %2, %4, %5, %26)
+//                                %38 = const i1 1
+//                                %39 = xor i1 %37, %38     (false: no memory given)
+//                                branch %39, fail, ok      (emit_runtime_check)
 //
-//     x := array_pop(*a);        %30 = load ptr %0         (x in %29)
-//                                %31 = const i64 8
-//                                %32 = local i64           (the result's temporary)
+//     x := array_pop(*a);        %41 = load ptr %0         (x in %40)
+//                                %42 = const i64 8
+//                                %43 = local i64           (the result's temporary)
 //                                ...                       (the null check)
-//                                %35 = load i64 %2         (the count)
-//                                %36 = const i64 1
-//                                %37 = sub i64 %35, %36    (the last index)
-//                                %38 = cmp uge i64 %37, %35
-//                                %39 = const i64 0
-//                                %40 = cmp slt i64 %35, %39
-//                                %41 = or i1 %38, %40
-//                                branch %41, fail, ok      (emit_bounds_check)
+//                                %46 = load i64 %2         (the count)
+//                                %47 = const i64 1
+//                                %48 = sub i64 %46, %47    (the last index)
+//                                %49 = cmp uge i64 %48, %46
+//                                %50 = const i64 0
+//                                %51 = cmp slt i64 %46, %50
+//                                %52 = or i1 %49, %51
+//                                branch %52, fail, ok      (emit_bounds_check)
 //                              ok:
-//                                ...                       (the data check, of %35 and
-//                                                           allocated, %50)
+//                                ...                       (the data check, of %46 and
+//                                                           allocated, %61)
 //                              ok:
-//                                %59 = cmp sgt i64 %35, %50
-//                                %60 = and i1 %54, %59     (%54: allocated above 0)
-//                                branch %60, fail, ok      (past allocated)
+//                                %70 = cmp sgt i64 %46, %61
+//                                %71 = and i1 %65, %70     (%65: allocated above 0)
+//                                branch %71, fail, ok      (past allocated)
 //                              ok:
-//                                call @__array_pop(%30, %2, %31, %32)
-//                                %61 = load i64 %32
-//                                store i64 %61, %29
+//                                call @__array_pop(%41, %2, %42, %43)   (no place)
+//                                %72 = load i64 %43
+//                                store i64 %72, %40
 static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Array_Builtin builtin = call->builtin->builtin;
     Type *signature = call->callee_type;
@@ -2309,6 +2318,13 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
         s32 negative = emit_compare(l, IR_SLT, IR_I64, index, emit_constant(l, IR_I64, 0));
         emit_runtime_check(l, negative, at, str("'array_resize' was given a negative count"));
     }
+    // The built-in's place, last, to the five helpers that can reach the
+    // allocator, which put it in the context while they call it (spec
+    // 7.10): made once every check has passed, so a call that stops makes
+    // none.
+    bool allocates = takes_item || builtin == BUILTIN_ARRAY_RESERVE || builtin == BUILTIN_ARRAY_RESIZE ||
+                     builtin == BUILTIN_ARRAY_FREE;
+    if (allocates) array_add(&args, lower_source_location(l, at));
     s32 result = emit_call(l, proc_index_of(l, helper), args)->result;
     if (takes_item || builtin == BUILTIN_ARRAY_RESERVE || builtin == BUILTIN_ARRAY_RESIZE) {
         s32 failed = emit_binary(l, IR_XOR, IR_I1, result, emit_constant(l, IR_I1, 1));

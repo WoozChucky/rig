@@ -204,7 +204,8 @@ Temporary_Storage :: struct {
 // none, the temporary storage, and the place the allocation being asked for
 // was asked from (spec 7.10). Basic's alloc, resize, free and free_all set
 // allocation_location to their caller's place while they call the
-// allocator, and put the one before back after, so an allocator procedure
+// allocator, and put the one before back after, as the resizable arrays'
+// helpers do with their built-in's place (below), so an allocator procedure
 // can read where it is asked from, as a memory debugger records it, though
 // Jai's shape of the procedure, which every allocator is written to, gives
 // it no place. Outside such a call it is zeroed, no place: default_context
@@ -420,6 +421,18 @@ Resizable_Array :: struct {
 // leaving theirs alone, and array_free gives nothing back for it. Elements
 // of 0 bytes take no memory at all, so an array of them owns none, whatever
 // its allocated (__array_no_bytes).
+//
+// The place: the five helpers that can reach the allocator, __array_add,
+// __array_insert, __array_reserve, __array_resize and __array_free, take
+// loc last, the place of the built-in's name in its call, which lowering
+// makes as it makes a default #caller_location (spec 7.2). __array_grow,
+// which the first four reach the allocator through, and __array_free
+// put it in context.allocation_location while they call the allocator,
+// and put the one before back after, as Basic's alloc and free do (spec
+// 7.10), so an allocator that records where it is asked from names the
+// program's line, not Preload's. It has no default: lowering always
+// passes it, and a program that calls a helper by hand passes one too,
+// .{} for no place.
 
 // C's memset, under Preload's own name, as __memmove is: __array_resize
 // zeroes the elements it adds with it.
@@ -444,7 +457,12 @@ __array_no_bytes : int;
 // from its allocated elements' bytes. Room whose bytes pass int's largest
 // is more than any memory holds: it asks for int's largest bytes, which
 // no allocator gives. Elements of 0 bytes ask for nothing.
-__array_grow :: (array: *Resizable_Array, size: int, room: int) -> bool {
+//
+// While the allocator is called, context.allocation_location is loc, the
+// built-in's place its caller passed on. The place before is put back by
+// a defer, when the procedure returns, so after it the context is as it
+// was, whether the allocator gave memory or not.
+__array_grow :: (array: *Resizable_Array, size: int, room: int, loc: Source_Code_Location) -> bool {
     LARGEST :: 9223372036854775807; // int's largest value
     if array.allocator.proc == null { array.allocator = context.allocator; }
     elements := room;
@@ -457,6 +475,9 @@ __array_grow :: (array: *Resizable_Array, size: int, room: int) -> bool {
     bytes := LARGEST;
     if elements <= LARGEST / size { bytes = elements * size; }
     allocator := array.allocator;
+    saved := context.allocation_location;
+    context.allocation_location = loc;
+    defer context.allocation_location = saved;
     memory : *void;
     if array.allocated <= 0 || array.data == null {
         memory = allocator.proc(ALLOCATE, bytes, 0, null, allocator.data);
@@ -480,8 +501,8 @@ __array_grow :: (array: *Resizable_Array, size: int, room: int) -> bool {
 // False when the array was full and its allocator had no memory to give,
 // or its count is int's largest (__array_insert): the array is as it was,
 // but for the allocator it took.
-__array_add :: (array: *Resizable_Array, size: int, item: *void) -> bool {
-    return __array_insert(array, size, array.count, item);
+__array_add :: (array: *Resizable_Array, size: int, item: *void, loc: Source_Code_Location) -> bool {
+    return __array_insert(array, size, array.count, item, loc);
 }
 
 // array_insert: a copy of the size bytes at item as element index, from 0
@@ -497,7 +518,7 @@ __array_add :: (array: *Resizable_Array, size: int, item: *void) -> bool {
 // it is int's largest. The room is never below the count plus one, since
 // an array whose data and count were set by hand may count more than its
 // allocated 0; a count of int's largest has no room for one more.
-__array_insert :: (array: *Resizable_Array, size: int, index: int, item: *void) -> bool {
+__array_insert :: (array: *Resizable_Array, size: int, index: int, item: *void, loc: Source_Code_Location) -> bool {
     LARGEST :: 9223372036854775807; // int's largest value
     HALF :: LARGEST / 2;
     if array.count >= array.allocated {
@@ -508,7 +529,7 @@ __array_insert :: (array: *Resizable_Array, size: int, index: int, item: *void) 
             if array.count == LARGEST { return false; }
             room = array.count + 1;
         }
-        if !__array_grow(array, size, room) { return false; }
+        if !__array_grow(array, size, room, loc) { return false; }
     }
     at := cast(*u8) array.data + index * size;
     moved := (array.count - index) * size;
@@ -553,9 +574,9 @@ __array_remove_unordered :: (array: *Resizable_Array, size: int, index: int) {
 // A count within allocated, or below 0, does nothing. False when the
 // allocator had no memory to give: the array is as it was, but for the
 // allocator it took.
-__array_reserve :: (array: *Resizable_Array, size: int, count: int) -> bool {
+__array_reserve :: (array: *Resizable_Array, size: int, count: int, loc: Source_Code_Location) -> bool {
     if count <= array.allocated { return true; }
-    return __array_grow(array, size, count);
+    return __array_grow(array, size, count, loc);
 }
 
 // array_resize: makes count the array's count, growing to exactly count
@@ -565,9 +586,9 @@ __array_reserve :: (array: *Resizable_Array, size: int, count: int) -> bool {
 // keeps the memory. The count isn't below 0: lowering checks. False when
 // the allocator had no memory to give: the array is as it was, but for the
 // allocator it took.
-__array_resize :: (array: *Resizable_Array, size: int, count: int) -> bool {
+__array_resize :: (array: *Resizable_Array, size: int, count: int, loc: Source_Code_Location) -> bool {
     if count > array.allocated {
-        if !__array_grow(array, size, count) { return false; }
+        if !__array_grow(array, size, count, loc) { return false; }
     }
     added := (count - array.count) * size;
     if added > 0 { __memset(cast(*u8) array.data + array.count * size, 0, cast(u64) added); }
@@ -584,10 +605,15 @@ __array_reset :: (array: *Resizable_Array, size: int) {
 
 // array_free: gives the memory the array owns back to its allocator, with
 // FREE and its size. The array is then empty, data null and allocated 0,
-// and keeps its allocator, so it can grow again from it.
-__array_free :: (array: *Resizable_Array, size: int) {
+// and keeps its allocator, so it can grow again from it. While the
+// allocator is called, context.allocation_location is loc, and the place
+// before is put back after, as in __array_grow.
+__array_free :: (array: *Resizable_Array, size: int, loc: Source_Code_Location) {
     if array.allocated > 0 && array.data != null && size > 0 {
         allocator := array.allocator;
+        saved := context.allocation_location;
+        context.allocation_location = loc;
+        defer context.allocation_location = saved;
         allocator.proc(FREE, 0, array.allocated * size, array.data, allocator.data);
     }
     array.count = 0;
