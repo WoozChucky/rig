@@ -90,8 +90,9 @@ append_string :: (builder: *String_Builder, s: string, loc: Source_Code_Location
         builder.capacity = capacity;
         if own { source = builder.data + offset; }
     }
-    // tests/run/basic_builder_overflow.err, basic_builder_overflow_append.err
-    // and basic_builder_overflow_doubling.err name this line.
+    // tests/run/basic_builder_overflow.err, basic_builder_overflow_append.err,
+    // basic_builder_overflow_doubling.err and memory_debugger_bad_resize.err
+    // name this line.
     copy_memory(*builder.data[builder.count], source, s.count);
     builder.count += s.count;
 }

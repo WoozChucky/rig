@@ -5,8 +5,12 @@
 // clean: Basic frees all it allocates, and passes every resize the size it
 // gave. Nothing is written but the report's count, so print_to_builder's
 // and sprint's allocations, whose places are lines of print.rig, belong
-// here too.
+// here too. The count takes in get_environment's copy of RIG_BASIC_TEST,
+// which bin/run-tests sets for every program it runs, so this test passes
+// only under the runner.
 #import "Basic";
+
+PATH :: ".build/tests/memory_debugger_basic.txt";
 
 main :: () {
     debugger : Memory_Debugger;
@@ -74,8 +78,8 @@ main :: () {
         pj := path_join("a", "b");
         free(pj.data);
 
-        write_entire_file(".build/tests/memory_debugger_basic.txt", "data");
-        contents, ok :=read_entire_file(".build/tests/memory_debugger_basic.txt");
+        write_entire_file(PATH, "data");
+        contents, ok := read_entire_file(PATH);
         free(contents.data);
         value, found := get_environment("RIG_BASIC_TEST");
         free(value.data);
@@ -89,4 +93,5 @@ main :: () {
     }
     memory_debugger_report(*debugger);
     memory_debugger_free(*debugger);
+    delete_file(PATH);
 }

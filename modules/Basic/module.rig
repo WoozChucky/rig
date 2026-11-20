@@ -15,9 +15,11 @@
 // context's temporary storage instead. sprint's and print_to_builder's
 // scratch builders and the file procedures' C copies of a path come from
 // the heap, and are freed before the call returns; the memory debugger's
-// records come from the heap too, and stay until memory_debugger_free.
-// sort's scratch memory and the environment's C copies come from the
-// allocator the call is given, the context's unless another is.
+// records come from the heap too, and stay until memory_debugger_free, and
+// its report's sorted copy of them and the scratch it gives sort are the
+// heap's, freed before it returns. sort's scratch memory and the
+// environment's C copies come from the allocator the call is given, the
+// context's unless another is.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):
