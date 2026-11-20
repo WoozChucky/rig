@@ -1,6 +1,6 @@
 # Basic
 
-Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), the context's temporary storage, a string builder, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, and formatted printing to standard output, to a string builder and to a string (issues #134, #145, #148, #154 and #156). Whatever hands back memory it allocates takes it from the context's allocator unless it is given another (Allocators, below), so a caller decides where the memory of everything it calls comes from without passing an allocator down; `talloc` and `tprint` take theirs from the context's temporary storage instead. `sprint`'s and `print_to_builder`'s scratch builders and the file procedures' C copies of a path come from the heap, and are freed before the call returns; `sort`'s scratch memory and the environment's C copies come from the allocator the call is given, the context's unless another is. A resizable array, `[..]T`, grown by `array_add` and the language's other built-in procedures, is the language's, not Basic's (spec 3.17): Basic's procedures that take a view, such as `join` and `split`, take one as the view of its elements, and `print` writes one as it writes a view.
+Basic is Rig's first library, written in Rig over a thin layer of C. It holds what most programs need first. For now that is the class and case of a byte, min, max, clamp and abs, π and C's math functions (roots, trigonometry, exponentials and logarithms, powers, rounding), copying, setting and comparing bytes in memory, numbers to text and back, views and copies of strings and their UTF-8, allocators (an arena and a pool, over Preload's heap), the context's temporary storage, a string builder, hash tables, sorting and searching, paths, files, the clock and the calendar, random numbers, the environment's variables and commands run by the system's shell, formatted printing to standard output, to a string builder and to a string, and a memory debugger, an allocator that records what it gives and reports what isn't freed (issues #134, #145, #148, #154, #156 and #159). Whatever hands back memory it allocates takes it from the context's allocator unless it is given another (Allocators, below), so a caller decides where the memory of everything it calls comes from without passing an allocator down; `talloc` and `tprint` take theirs from the context's temporary storage instead. `sprint`'s and `print_to_builder`'s scratch builders and the file procedures' C copies of a path come from the heap, and are freed before the call returns; the memory debugger's records come from the heap too, and stay until `memory_debugger_free`. `sort`'s scratch memory and the environment's C copies come from the allocator the call is given, the context's unless another is. A resizable array, `[..]T`, grown by `array_add` and the language's other built-in procedures, is the language's, not Basic's (spec 3.17): Basic's procedures that take a view, such as `join` and `split`, take one as the view of its elements, and `print` writes one as it writes a view.
 
 ## Importing it
 
@@ -387,6 +387,64 @@ How each value is written:
 - **`void`:** a description of `void`, which only an `Any` made by hand can hold, writes `void`.
 - **Any other tag:** a description whose tag isn't one of the nine writes nothing.
 - **Cycles:** a pointer isn't followed, but a view's data and an `Any`'s `value_pointer` are, so a view or an `Any` that reaches a value it is part of makes a cycle: a struct whose view field views an array holding it (`nodes[0].kids = nodes;`), the struct an `Any` is a field of (`h.a = h;`), the array it is an element of (`arr[0] = arr;`), or anything that contains it deeper down. That one is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
+
+## Memory debugger (`memory_debugger.rig`)
+
+An allocator that wraps another and records every allocation it gives, so a program learns what it never freed: each allocation's size, its number, and the place it was asked for at (issue #159). A program checks itself by pushing the debugger's allocator in the context once, in `main` (spec 6.13), so that everything that takes its memory from the context's allocator, Basic's procedures and the program's own, takes it through the debugger, which passes each call on to the allocator it wraps. At the end, `memory_debugger_report` writes what isn't freed, and says whether all was well:
+
+```rig
+exit :: (status: s32) #foreign libc;
+
+main :: () {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);                // wraps main's allocator, the heap
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        run();
+    }
+    clean := memory_debugger_report(*debugger);
+    memory_debugger_free(*debugger);
+    if !clean { exit(1); }
+}
+```
+
+Setting `context.allocator` works too, with `defer`s for the report and the free, which then run after the program's own code, the allocator put back first since `defer`s run last to first:
+
+```rig
+debugger : Memory_Debugger;
+memory_debugger_init(*debugger);
+defer memory_debugger_free(*debugger);
+defer memory_debugger_report(*debugger);
+old := context.allocator;
+context.allocator = memory_debugger_allocator(*debugger);
+defer context.allocator = old;
+```
+
+The debugger keeps a record of each allocation, by its address: its number, from 1, in the order the debugger gave them; its size; whether it was given back; and the place it was first asked for at. A resize that the wrapped allocator does is the same allocation, its number and place kept, at the address it has now, so the report's sizes are the sizes now. A free marks the record freed. Memory the debugger gave goes back through it: given back some other way, such as by a `free_all` of the arena it wraps rather than of the debugger, its records stay, and the report says it isn't freed.
+
+The place is `context.allocation_location` when the debugger is called (Allocators, above): Basic's helpers set it to their caller's place, the built-in procedures of a resizable array to their own call's, and Basic's other procedures that allocate pass down the place of the program's call to them. So a leak names the program's line, not one of Basic's. A procedure of the program's own that allocates names its own line, unless it takes a `loc` and passes it on as Basic's do (`with_line_feed`, above). The procedures that take no `loc` (Allocators, above), `sprint` and `print_to_builder` above all, for now (a `..` parameter can't have default values yet), give a line of Basic's, whose file is named by its absolute path, as messages name a module's file (spec 8.1). A direct call of the debugger's procedure, from no helper, has whatever place the context holds: none, unless the program set the field. The debugger passes each call on by a direct call of the wrapped allocator's procedure, which leaves the place as it is, so an arena or a pool it wraps passes the program's place on to its parent.
+
+The report writes a line for each allocation not freed, in number order, at its place, and then a line that counts them, which has no place:
+
+```text
+tests/run/memory_debugger_leaks.rig:20:10: memory debugger: allocation 1 (64 bytes) isn't freed
+memory debugger: 45 allocations, 3 not freed (136 bytes), 0 bad calls
+```
+
+A place is written first, as `PATH:LINE:COL: `, as a diagnostic or a runtime error starts (spec 8.1), and left out for none; a count of 1 takes the singular. The report is for the end of the program, after its own code, or for any point before as a checkpoint: it may be called any number of times, and the numbering goes on. It says whether every allocation is freed and no bad call was made; what to do with that, such as the exit status, is the program's choice.
+
+It writes to standard output, through `print`, as all of Basic does, or into the string builder in its `output`, through `print_to_builder`, when that isn't null; that builder's allocator must not be the debugger. Its records are kept in an `Int_Table` on the heap, `HEAP_ALLOCATOR`, whatever it wraps, and every call of Basic's it makes is given its allocator, so the allocations it counts are the program's alone, though the context's allocator is the debugger itself while the program runs: an allocator procedure is given its caller's context (spec 7.10).
+
+- `Memory_Debugger_Record`: `number: int`, `size: int` (its bytes now), `freed: bool` and `location: Source_Code_Location` (the place it was first asked for at, zeroed for none).
+- `Memory_Debugger`: `wrapped: Allocator` (the allocator it passes calls on to), `records: Int_Table` (its records, by address), `allocations: int` (the allocations made, so the last one's number), `bad_calls: int` and `output: *String_Builder` (where it writes, null for standard output).
+- `memory_debugger_init(debugger: *Memory_Debugger, wrapped: Allocator = context.allocator)`: an empty debugger over `wrapped`, writing to standard output. It doesn't give back records a debugger already had: `memory_debugger_free` does.
+- `memory_debugger_allocator_proc`, `memory_debugger_allocator(debugger: *Memory_Debugger) -> Allocator`: each call passed on to `wrapped`, settling the edges as the helpers do (Allocators, above), and each allocation it gives recorded; `wrapped`'s null is passed on and isn't counted.
+- `memory_debugger_report(debugger: *Memory_Debugger) -> bool`: writes what isn't freed and the counts, as above, and gives whether every allocation is freed and no bad call was made.
+- `memory_debugger_free(debugger: *Memory_Debugger)`: gives the records back to the heap, and nothing the debugger gave, which is the wrapped allocator's; the debugger forgets every allocation, and `memory_debugger_init` makes it ready again.
+- `memory_debugger_write(debugger: *Memory_Debugger, at: Source_Code_Location, format: string, args: ..Any)`: writes `at`'s place, when it has one, and then `format` with the arguments, as `print` does, where the debugger writes; every line of the debugger's goes through it.
+- `memory_debugger_plural(n: int) -> string`: `""` for 1 and `"s"` for any other count.
+- `memory_debugger_less(a: *void, b: *void) -> bool`: whether the record at `a` has a lower number than the one at `b`, for `sort`.
 
 ## Waiting on the language
 

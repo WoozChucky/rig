@@ -7,15 +7,17 @@
 // pool, over Preload's heap), the context's temporary storage, a string
 // builder, hash tables, sorting and searching, paths, files, the clock and
 // the calendar, random numbers, the environment's variables and commands
-// run by the system's shell, and formatted printing to standard output, to
-// a string builder and to a string. Whatever hands back memory it allocates
-// takes it from the context's allocator unless it is given another (spec
-// 7.10); talloc and tprint take theirs from the context's temporary storage
-// instead. sprint's and print_to_builder's scratch builders and the file
-// procedures' C copies of a path come from the heap, and are freed before
-// the call returns; sort's scratch memory and the environment's C copies
-// come from the allocator the call is given, the context's unless another
-// is.
+// run by the system's shell, formatted printing to standard output, to a
+// string builder and to a string, and a memory debugger, an allocator that
+// records what it gives and reports what isn't freed. Whatever hands back
+// memory it allocates takes it from the context's allocator unless it is
+// given another (spec 7.10); talloc and tprint take theirs from the
+// context's temporary storage instead. sprint's and print_to_builder's
+// scratch builders and the file procedures' C copies of a path come from
+// the heap, and are freed before the call returns; the memory debugger's
+// records come from the heap too, and stay until memory_debugger_free.
+// sort's scratch memory and the environment's C copies come from the
+// allocator the call is given, the context's unless another is.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):
@@ -32,8 +34,9 @@
 // Each part loads the parts it uses itself, and a file is read once however
 // often it is named, so the order here is only the reading order. It is
 // README.md's, so the two can be read side by side: print.rig, which loads
-// libc.rig, numbers.rig, string.rig and builder.rig, comes last there,
-// after the collections.
+// libc.rig, numbers.rig, string.rig and builder.rig, comes after the
+// collections, and memory_debugger.rig, which writes through print.rig,
+// comes last.
 #load "libc.rig";
 #load "char.rig";
 #load "math.rig";
@@ -51,3 +54,4 @@
 #load "random.rig";
 #load "environment.rig";
 #load "print.rig";
+#load "memory_debugger.rig";
