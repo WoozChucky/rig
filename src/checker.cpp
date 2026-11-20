@@ -2568,7 +2568,8 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
                 c->file->resizable_array_type = ((Ast_Struct *)decl)->declared;
             }
             // And what a default #caller_location is (spec 7.2), a call's
-            // place, which lowering fills in: without it, no such default.
+            // place, which lowering fills in, as it does the one a built-in
+            // procedure passes its helper: without it, no such default.
             if (decl->kind == AST_STRUCT && string_eq(name, str("Source_Code_Location"))) {
                 c->file->source_code_location_type = ((Ast_Struct *)decl)->declared;
             }

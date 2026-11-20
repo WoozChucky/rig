@@ -506,3 +506,4 @@ What Basic would do differently once Rig has it:
 - No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
 - No enums, so a table entry's states and a file's modes are constants.
 - No command-line arguments: a program's start doesn't keep them for Rig code to read (#152).
+- No default values in a procedure with a `..` parameter (spec 7.2), so `print_to_builder` and `sprint` take no `loc`, and the place their allocator sees is a line of `print.rig` rather than the program's call (Allocators, above; #197).

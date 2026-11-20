@@ -222,8 +222,8 @@ TEMPORARY_STORAGE_SIZE :: 32768;
 
 // The context main and each #run start with, and the one a #c_call
 // procedure, which C calls with none, pushes for itself when it has no
-// other: the heap, and Preload's temporary storage. __runtime_init sets it
-// up.
+// other: the heap, Preload's temporary storage, and allocation_location
+// zeroed, no place. __runtime_init sets it up.
 default_context : Context;
 
 // Preload's one temporary storage, which default_context holds, and its

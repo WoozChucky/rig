@@ -73,8 +73,8 @@ static void reach_described(Reach *r, Type *t) {
 // them in source order: a call's callee and arguments, an operator's
 // operands (a spread's too), a cast's value, a field's struct, an element's
 // array and index, a literal's values. Nothing for a name, a number, a
-// string, a bool, null, size_of, type_info, context or a #run, whose
-// operand was checked as it was.
+// string, a bool, null, size_of, type_info, context, a default
+// #caller_location or a #run, whose operand was checked as it was.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {

@@ -3933,8 +3933,9 @@ TEST(caller_location_is_a_primary) {
 
 TEST(caller_location_after_a_signature) {
     // A directive Rig knows, so not "unknown directive" there: where the body
-    // should be it's what was expected, as a #run there is, also starting the
-    // next line, and the declaration is given up. At the top level, where no
+    // should be it's what was expected, as a #run on the signature's line is,
+    // and starting the next line too, where a #run would be the next
+    // declaration; the declaration is given up. At the top level, where no
     // value goes, it's no declaration.
     Arena a = arena_make();
     String errors;

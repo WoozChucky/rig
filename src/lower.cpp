@@ -31,7 +31,9 @@
 //   (lower_call_results). A parameter's default value (spec 7.2) is the
 //   caller's code too: a call that leaves the parameter out works the value
 //   out and passes it, as if it were written there, so the callee never
-//   knows (lower_call_results).
+//   knows (lower_call_results). A default #caller_location is the call's
+//   place: a temporary of Preload's Source_Code_Location the caller fills
+//   with it (lower_source_location).
 // - The context (spec 7.10, 10.4). Every procedure with a body but a
 //   #c_call one and main takes a *Context, a hidden ptr parameter after
 //   the result pointers and before the visible ones (takes_context), and a
@@ -400,7 +402,7 @@ struct Lowering {
     Ir_Module *module;
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
-    s32 string_count;         // the str.N globals made so far: string literals, panic messages and the names in types' descriptions
+    s32 string_count;         // the str.N globals made so far (add_bytes, which says whose bytes each holds)
     // Each string literal node's str.N, by pointer_key: one per literal,
     // however many uses and constants reach it (literal_global).
     Table<s32> literal_globals;
@@ -752,9 +754,12 @@ static s32 emit_select(Lowering *l, Ir_Type t, s32 condition, s32 if_true, s32 i
 
 // A constant global holding `bytes` and a zero after them; its index. A
 // string literal's (a string's count leaves the zero out; C reads it through
-// a *u8, up to the zero), a panic's message (written without the zero), or
-// a name in a type's description (describe_type, describe_members: a
-// string's, without the zero).
+// a *u8, up to the zero), a panic's message (written without the zero), a
+// bounds check's message's start (emit_bounds_check) or one of the fixed
+// parts __rig_bounds_failed writes after it (append_text), a name in a
+// type's description (describe_type, describe_members: a string's, without
+// the zero), or a source file's path, which a call's place views
+// (lower_source_location: a string's too).
 static s32 add_bytes(Lowering *l, String bytes) {
     Ir_Global g = {};
     g.name = string_printf(l->arena, "str.%d", l->string_count++);
@@ -1226,15 +1231,17 @@ static String runtime_error_prefix(Lowering *l, Position at) {
     return string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
 }
 
-// The place `at` as a value of Preload's Source_Code_Location (spec 7.2),
+// The place `at` as a value of Preload's Source_Code_Location (spec 7.2):
 // what a default #caller_location is at a call that leaves its parameter
-// out: the address of a temporary of its own, filled here. file views the
-// path messages name `at`'s file by, as runtime_error_prefix's PATH does,
-// so a place and a runtime error at it name the same file; its bytes are
-// a constant global, one per file (Lowering.path_globals), made the first
-// time. line and column are `at`'s, counted from 1 (spec 2.2). Each field
-// is put at its offset in Preload's struct, `file: string; line: int;
-// column: int;`, 32 bytes:
+// out (lower_call_results), and what a built-in procedure that can reach
+// the allocator passes its helper (lower_builtin_call). The address of a
+// temporary of its own, filled here. file views the path messages name
+// `at`'s file by, as runtime_error_prefix's PATH does, so a place and a
+// runtime error at it name the same file; its bytes are a constant global,
+// one per file (Lowering.path_globals), made the first time. line and
+// column are `at`'s, counted from 1 (spec 2.2). Each field is put at its
+// offset in Preload's struct, `file: string; line: int; column: int;`, 32
+// bytes:
 //
 //     %p = local 32 align 8
 //     %n = const i64 COUNT          (the path's count)
@@ -1247,7 +1254,9 @@ static String runtime_error_prefix(Lowering *l, Position at) {
 //     ...
 static s32 lower_source_location(Lowering *l, Position at) {
     Type *t = l->source_code_location_type;
-    RIG_ASSERT(t && t->fields.count == 3);  // the checker refused #caller_location without Preload's
+    // The checker refused a #caller_location without Preload's, and a [..]T
+    // without Preload, so without it no built-in procedure has an array.
+    RIG_ASSERT(t && t->fields.count == 3);
     while (l->path_globals.count <= at.file) array_add(&l->path_globals, -1);
     String path = l->diag->files[at.file].path;
     if (l->path_globals[at.file] < 0) l->path_globals[at.file] = add_bytes(l, path);
@@ -2117,17 +2126,17 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   owns memory ("'array_pop' was given an array with more elements than
 //   its memory holds"). Then array_resize's count below 0, always: the
 //   helper would make a count no array has.
-// - The call of the helper, at the statement, as any call is: the
-//   context, the pointer, the element's size, an i64 constant, then the
-//   rest. The helpers index nothing themselves, so #no_abc changes nothing
-//   in them.
 // - For array_add, array_insert, array_reserve, array_resize and
-//   array_free, whose helpers can reach the allocator, the call's place
-//   last: the built-in's name, a Source_Code_Location made as a default
+//   array_free, whose helpers can reach the allocator, the call's place:
+//   the built-in's name, a Source_Code_Location made as a default
 //   #caller_location's is (lower_source_location), once the checks have
 //   passed. The helpers put it in context.allocation_location while they
 //   call the allocator (spec 7.10), so an allocator that records where it
 //   is asked from names the program's line, not Preload's.
+// - The call of the helper, at the statement, as any call is: the
+//   context, the pointer, the element's size, an i64 constant, then the
+//   rest, the place last. The helpers index nothing themselves, so #no_abc
+//   changes nothing in them.
 // - For array_add, array_insert, array_reserve and array_resize, whose
 //   helpers say whether the allocator gave the memory they needed: false
 //   is a runtime error at the name, "the array's allocator has no memory to
@@ -4299,7 +4308,6 @@ static void release_lowering(Lowering *l) {
     table_free(&l->proc_index);
     table_free(&l->global_index);
     table_free(&l->literal_globals);
-    array_free(&l->path_globals);
     table_free(&l->constant_globals);
     table_free(&l->constant_index);
     table_free(&l->used_foreign);
@@ -4309,6 +4317,7 @@ static void release_lowering(Lowering *l) {
     array_free(&l->locals);
     array_free(&l->loops);
     array_free(&l->defers);
+    array_free(&l->path_globals);
     array_free(&l->sources);
     array_free(&l->waiting);
 }
