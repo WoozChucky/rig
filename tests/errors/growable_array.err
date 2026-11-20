@@ -1,3 +1,0 @@
-tests/errors/growable_array.rig:3:9: error: growable arrays ([..]T) come with the Basic module, in milestone 4
-        a : [..]int;
-            ^

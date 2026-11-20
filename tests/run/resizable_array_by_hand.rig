@@ -1,0 +1,63 @@
+// A resizable array used by hand, before it has procedures to grow it
+// (issue #158, spec 3.17): its four members, indexing, for and for *,
+// its view, a cast, a spread, a parameter, a result, a multi-assign, a
+// copy, a field and a global, compiled and interpreted.
+#import "Basic";
+
+Bag :: struct { name: string; items: [..]int; }
+
+kept : [..]int;
+
+total :: (values: []int) -> int {
+    sum := 0;
+    for values { sum += it; }
+    return sum;
+}
+
+gathered :: (values: ..int) -> int { return total(values); }
+
+first :: (a: [..]int) -> int { return a[0]; }
+
+doubled :: (a: [..]int) { for * a { it.* *= 2; } }
+
+over :: (data: *int, count: int) -> [..]int {
+    a : [..]int;
+    a.data = data;
+    a.count = count;
+    return a;
+}
+
+counted :: (a: [..]int) -> ([..]int, int) { return a, a.count; }
+
+main :: () {
+    buffer := int.[1, 2, 3, 4];
+    a : [..]int;
+    print("{} {} {} {}\n", size_of([..]int), a.count, a.data == null, a.allocated);
+    a.data = *buffer[0];
+    a.count = 3;
+    print("{} {} {}\n", a[0], a[2], total(a));
+    for a { print("{}:{} ", it_index, it); }
+    print("\n");
+    for * a { it.* += 10; }
+    print("{} {}\n", buffer[0], gathered(..a));
+    doubled(a);
+    print("{} {}\n", buffer[1], first(a));
+    v : []int = a;
+    a.count = 1;
+    print("{} {}\n", v.count, a.count);
+    b := a;
+    b.count = 2;
+    print("{} {}\n", a.count, b.count);
+    bag : Bag;
+    bag.items = over(*buffer[0], 4);
+    print("{} {} {}\n", bag.items.count, bag.items[3], kept.count);
+    w := cast([]int) bag.items;
+    u : []int;
+    m : int;
+    u, m = counted(bag.items);
+    bag.items.count = 1;
+    print("{} {} {} {}\n", w.count, w[3], u.count, u[0] + m);
+    a.allocated = 3;
+    a.allocator = HEAP_ALLOCATOR;
+    print("{} {}\n", a.allocated, a.allocator.proc == heap_allocator_proc);
+}

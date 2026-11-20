@@ -6294,3 +6294,468 @@ TEST(a_c_call_procedure_pushes_its_own) {
     CHECK(contains(debug, "; var context *Context slot %1 artificial in 1 at 3:5\n"));
     arena_free(&a);
 }
+
+// Issue #158: resizable arrays (spec 3.17).
+
+TEST(a_resizable_array_converts_to_a_view_of_its_count_and_data) {
+    // sum(a) passes the []int the [..]int converts to: a view slot of its
+    // own, %5, holding the array's count and data, loaded from %2, the
+    // array, where the conversion is; then copied, as any view argument is.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "sum :: (v: []int) -> int { return v.count; }\n"
+                                                              "main :: () {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    n := sum(a);\n"
+                                                              "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 40 align 8\n"
+              "  zero %2, 40\n"
+              "  %3 = local i64\n"
+              "  %4 = load ptr %0\n"
+              "  %5 = local 16 align 8\n"
+              "  %6 = load i64 %2\n"
+              "  %7 = const i64 8\n"
+              "  %8 = ptradd %2, %7\n"
+              "  %9 = load ptr %8\n"
+              "  store i64 %6, %5\n"
+              "  %10 = const i64 8\n"
+              "  %11 = ptradd %5, %10\n"
+              "  store ptr %9, %11\n"
+              "  %12 = local 16 align 8\n"
+              "  copy %12, %5, 16\n"
+              "  %13 = call @sum(%4, %12)\n"
+              "  store i64 %13, %3\n"
+              "  %14 = const i32 0\n"
+              "  ret %14\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_cast_to_a_view_is_its_count_and_data) {
+    // cast([]int) a is the view a converts to without a cast: a view slot
+    // of its own, %4, holding the count and data loaded from %2, the
+    // array, at the cast. w's slot, %3, is then a copy of it.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    w := cast([]int) a;\n"
+                                                              "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 40 align 8\n"
+              "  zero %2, 40\n"
+              "  %3 = local 16 align 8\n"
+              "  %4 = local 16 align 8\n"
+              "  %5 = load i64 %2\n"
+              "  %6 = const i64 8\n"
+              "  %7 = ptradd %2, %6\n"
+              "  %8 = load ptr %7\n"
+              "  store i64 %5, %4\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %4, %9\n"
+              "  store ptr %8, %10\n"
+              "  copy %3, %4, 16\n"
+              "  %11 = const i32 0\n"
+              "  ret %11\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_result_put_into_a_view_is_its_count_and_data) {
+    // v, n = pair(); puts the [..]int result's view into v, %2: a view slot
+    // of its own, %8, holding the count and data loaded from %5, the call's
+    // temporary, where it converts, then copied into v.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "pair :: () -> ([..]int, int) {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    return a, 1;\n"
+                                                              "}\n"
+                                                              "main :: () {\n"
+                                                              "    v : []int;\n"
+                                                              "    n : int;\n"
+                                                              "    v, n = pair();\n"
+                                                              "}\n")),
+                          "main");
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  %0 = local ptr\n"
+              "  %1 = addr @default_context\n"
+              "  store ptr %1, %0\n"
+              "  %2 = local 16 align 8\n"
+              "  zero %2, 16\n"
+              "  %3 = local i64\n"
+              "  %4 = const i64 0\n"
+              "  store i64 %4, %3\n"
+              "  %5 = local 40 align 8\n"
+              "  %6 = load ptr %0\n"
+              "  %7 = call @pair(%5, %6)\n"
+              "  %8 = local 16 align 8\n"
+              "  %9 = load i64 %5\n"
+              "  %10 = const i64 8\n"
+              "  %11 = ptradd %5, %10\n"
+              "  %12 = load ptr %11\n"
+              "  store i64 %9, %8\n"
+              "  %13 = const i64 8\n"
+              "  %14 = ptradd %8, %13\n"
+              "  store ptr %12, %14\n"
+              "  copy %2, %8, 16\n"
+              "  store i64 %7, %3\n"
+              "  %15 = const i32 0\n"
+              "  ret %15\n"
+              "}\n");
+    arena_free(&a);
+}
+
+// The IR of main for a `TYPE = ---` local a, indexed and gone over.
+static String index_and_loop_ir(Arena *a, const char *type) {
+    String text = string_printf(a,
+                                "main :: () {\n"
+                                "    a : %s = ---;\n"
+                                "    i := 1;\n"
+                                "    x := a[i];\n"
+                                "    for a { }\n"
+                                "}\n",
+                                type);
+    return proc_ir(ir_print(a, lower_with_preload(a, string_cstr(a, text))), "main");
+}
+
+TEST(a_resizable_arrays_index_and_loop_are_a_views) {
+    // a[i] and for a over a [..]int read its count and data as a []int's
+    // (spec 3.17): the same loads, bounds check and null checks. Only the
+    // slots differ, the array's 40 bytes where the view has 16.
+    Arena a = arena_make();
+    String resizable = index_and_loop_ir(&a, "[..]int");
+    String view = index_and_loop_ir(&a, "[]int");
+    s64 at = index_of(resizable, "local 40 align 8\n");
+    CHECK(at >= 0 && contains(view, "local 16 align 8\n") && !contains(view, "local 40 align 8\n"));
+    if (at >= 0) {
+        s64 after = at + (s64)strlen("local 40 align 8\n");
+        resizable = string_printf(&a, STR_FMT "local 16 align 8\n" STR_FMT, STR_ARG(string_slice(resizable, 0, at)),
+                                  STR_ARG(string_slice(resizable, after, resizable.count - after)));
+    }
+    CHECK_STR(resizable, string_cstr(&a, view));
+    CHECK(contains(view, "call @__rig_bounds_failed("));
+    arena_free(&a);
+}
+
+TEST(an_array_procedure_calls_its_preload_helper) {
+    // array_add(*a, 7) calls Preload's __array_add with the context, the
+    // array's address, the element's size and the address of a copy of the
+    // item, then fails when it gave false. array_pop checks the pointer and
+    // its last index, then calls __array_pop with the address its result
+    // goes to. array_reserve fails when its helper gave false, as the add
+    // does; array_resize checks its count for below 0 first. Every built-in
+    // but array_reset and array_free checks what the array says of itself,
+    // after the index: its count below 0 fails where no bounds check made
+    // sure (array_add, array_resize; never array_reserve), its data null
+    // with its count or allocated above 0 fails, and in array_pop and the
+    // removes its count past allocated fails when allocated is above 0.
+    // array_reset and array_free check only the pointer. #no_abc leaves the
+    // bounds checks out, and the count's check below 0 takes their place;
+    // the others stay.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
+                                                              "    a : [..]int;\n"
+                                                              "    array_add(*a, 7);\n"
+                                                              "    x := array_pop(*a);\n"
+                                                              "    array_reserve(*a, 4);\n"
+                                                              "    array_resize(*a, 2);\n"
+                                                              "    array_insert(*a, 0, 5);\n"
+                                                              "    array_remove_ordered(*a, 0);\n"
+                                                              "    array_remove_unordered(*a, 0);\n"
+                                                              "    array_reset(*a);\n"
+                                                              "    array_free(*a);\n"
+                                                              "}\n")),
+                          "main");
+    // a is %2; each check's failure, a panic or __rig_bounds_failed, is a
+    // block of its own. A panic's message is a string global numbered after
+    // all of Preload's, so its number isn't matched: the run tests pin the
+    // messages.
+    CHECK(contains(main, "  %3 = load ptr %0\n"
+                         "  %4 = const i64 8\n"
+                         "  %5 = local i64\n"
+                         "  %6 = const i64 7\n"
+                         "  store i64 %6, %5\n"
+                         "  %7 = const ptr 0\n"
+                         "  %8 = cmp eq ptr %2, %7\n"
+                         "  branch %8, b1, b2\n"));
+    // The add's count below 0, which no bounds check made sure of, then
+    // its data check: the count or allocated above 0 and the data null
+    // fails.
+    CHECK(contains(main, "b2:\n"
+                         "  %9 = load i64 %2\n"
+                         "  %10 = const i64 0\n"
+                         "  %11 = cmp slt i64 %9, %10\n"
+                         "  branch %11, b3, b4\n"
+                         "b3:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb4:\n"
+                         "  %12 = const i64 8\n"
+                         "  %13 = ptradd %2, %12\n"
+                         "  %14 = load ptr %13\n"
+                         "  %15 = const i64 16\n"
+                         "  %16 = ptradd %2, %15\n"
+                         "  %17 = load i64 %16\n"
+                         "  %18 = const i64 0\n"
+                         "  %19 = cmp sgt i64 %9, %18\n"
+                         "  %20 = const i64 0\n"
+                         "  %21 = cmp sgt i64 %17, %20\n"
+                         "  %22 = or i1 %19, %21\n"
+                         "  %23 = const ptr 0\n"
+                         "  %24 = cmp eq ptr %14, %23\n"
+                         "  %25 = and i1 %22, %24\n"
+                         "  branch %25, b5, b6\n"
+                         "b5:\n"
+                         "  panic @str."));
+    // No check of the count past allocated: the add grows first.
+    CHECK(contains(main, "\nb6:\n"
+                         "  %26 = call @__array_add(%3, %2, %4, %5)\n"
+                         "  %27 = const i1 1\n"
+                         "  %28 = xor i1 %26, %27\n"
+                         "  branch %28, b7, b8\n"));
+    CHECK(contains(main, "b8:\n"
+                         "  %29 = local i64\n"
+                         "  %30 = load ptr %0\n"
+                         "  %31 = const i64 8\n"
+                         "  %32 = local i64\n"
+                         "  %33 = const ptr 0\n"
+                         "  %34 = cmp eq ptr %2, %33\n"
+                         "  branch %34, b9, b10\n"));
+    // The pop's count, loaded once, is the bounds check's, which fails a
+    // count below 0 too, so no check of its own follows; then the data
+    // check, and the count past allocated, in an array that owns memory
+    // (%54, allocated above 0).
+    CHECK(contains(main, "b10:\n"
+                         "  %35 = load i64 %2\n"
+                         "  %36 = const i64 1\n"
+                         "  %37 = sub i64 %35, %36\n"
+                         "  %38 = cmp uge i64 %37, %35\n"
+                         "  %39 = const i64 0\n"
+                         "  %40 = cmp slt i64 %35, %39\n"
+                         "  %41 = or i1 %38, %40\n"
+                         "  branch %41, b11, b12\n"));
+    CHECK(contains(main, "  call @__rig_bounds_failed(%42, %43, %37, %35, %44)\n"
+                         "  unreachable\n"
+                         "b12:\n"
+                         "  %45 = const i64 8\n"
+                         "  %46 = ptradd %2, %45\n"
+                         "  %47 = load ptr %46\n"
+                         "  %48 = const i64 16\n"
+                         "  %49 = ptradd %2, %48\n"
+                         "  %50 = load i64 %49\n"
+                         "  %51 = const i64 0\n"
+                         "  %52 = cmp sgt i64 %35, %51\n"
+                         "  %53 = const i64 0\n"
+                         "  %54 = cmp sgt i64 %50, %53\n"
+                         "  %55 = or i1 %52, %54\n"
+                         "  %56 = const ptr 0\n"
+                         "  %57 = cmp eq ptr %47, %56\n"
+                         "  %58 = and i1 %55, %57\n"
+                         "  branch %58, b13, b14\n"));
+    CHECK(contains(main, "b14:\n"
+                         "  %59 = cmp sgt i64 %35, %50\n"
+                         "  %60 = and i1 %54, %59\n"
+                         "  branch %60, b15, b16\n"
+                         "b15:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb16:\n"
+                         "  call @__array_pop(%30, %2, %31, %32)\n"
+                         "  %61 = load i64 %32\n"
+                         "  store i64 %61, %29\n"));
+    // The reserve's data check comes right after its count's load: no
+    // check of the count below 0, nor past allocated.
+    CHECK(contains(main, "b18:\n"
+                         "  %67 = load i64 %2\n"
+                         "  %68 = const i64 8\n"
+                         "  %69 = ptradd %2, %68\n"));
+    CHECK(contains(main, "  %81 = and i1 %78, %80\n"
+                         "  branch %81, b19, b20\n"
+                         "b19:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb20:\n"
+                         "  %82 = call @__array_reserve(%62, %2, %63, %64)\n"
+                         "  %83 = const i1 1\n"
+                         "  %84 = xor i1 %82, %83\n"
+                         "  branch %84, b21, b22\n"));
+    // The resize's array count below 0, its data check, then the count it
+    // was given.
+    CHECK(contains(main, "b24:\n"
+                         "  %90 = load i64 %2\n"
+                         "  %91 = const i64 0\n"
+                         "  %92 = cmp slt i64 %90, %91\n"
+                         "  branch %92, b25, b26\n"
+                         "b25:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "  %106 = and i1 %103, %105\n"
+                         "  branch %106, b27, b28\n"
+                         "b27:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb28:\n"
+                         "  %107 = const i64 0\n"
+                         "  %108 = cmp slt i64 %87, %107\n"
+                         "  branch %108, b29, b30\n"
+                         "b29:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb30:\n"
+                         "  %109 = call @__array_resize(%85, %2, %86, %87)\n"
+                         "  %110 = const i1 1\n"
+                         "  %111 = xor i1 %109, %110\n"
+                         "  branch %111, b31, b32\n"));
+    // The insert's bounds check, against the count plus one, then its data
+    // check, and no check of the count past allocated.
+    CHECK(contains(main, "  %121 = add i64 %119, %120\n"
+                         "  %122 = cmp uge i64 %114, %121\n"));
+    CHECK(contains(main, "  %142 = and i1 %139, %141\n"
+                         "  branch %142, b37, b38\n"
+                         "b37:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb38:\n"
+                         "  %143 = call @__array_insert(%112, %2, %113, %114, %115)\n"));
+    // Each remove's bounds check, data check and count past allocated.
+    CHECK(contains(main, "  %172 = and i1 %169, %171\n"
+                         "  branch %172, b45, b46\n"
+                         "b45:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb46:\n"
+                         "  %173 = cmp sgt i64 %151, %164\n"
+                         "  %174 = and i1 %168, %173\n"
+                         "  branch %174, b47, b48\n"
+                         "b47:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb48:\n"
+                         "  call @__array_remove_ordered(%146, %2, %147, %148)\n"));
+    CHECK(contains(main, "  %201 = and i1 %198, %200\n"
+                         "  branch %201, b53, b54\n"
+                         "b53:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb54:\n"
+                         "  %202 = cmp sgt i64 %180, %193\n"
+                         "  %203 = and i1 %197, %202\n"
+                         "  branch %203, b55, b56\n"
+                         "b55:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb56:\n"
+                         "  call @__array_remove_unordered(%175, %2, %176, %177)\n"));
+    // The reset and the free check the pointer, and nothing else.
+    CHECK(contains(main, "  call @__array_remove_unordered(%175, %2, %176, %177)\n"
+                         "  %204 = load ptr %0\n"
+                         "  %205 = const i64 8\n"
+                         "  %206 = const ptr 0\n"
+                         "  %207 = cmp eq ptr %2, %206\n"
+                         "  branch %207, b57, b58\n"));
+    CHECK(contains(main, "b58:\n"
+                         "  call @__array_reset(%204, %2, %205)\n"
+                         "  %208 = load ptr %0\n"
+                         "  %209 = const i64 8\n"
+                         "  %210 = const ptr 0\n"
+                         "  %211 = cmp eq ptr %2, %210\n"
+                         "  branch %211, b59, b60\n"));
+    CHECK(contains(main, "b60:\n"
+                         "  call @__array_free(%208, %2, %209)\n"));
+    // Each of the seven loads allocated, at offset 16, for its data check,
+    // and only the pop and the removes check the count past allocated.
+    CHECK(count_of(main, "= const i64 16\n") == 7);
+    CHECK(count_of(main, "panic @str.") == 9 + 7 + 2 + 3 + 4 + 1);  // null, data, below 0, past, no memory, resize's
+    String quiet = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () #no_abc {\n"
+                                                               "    a : [..]int;\n"
+                                                               "    array_add(*a, 7);\n"
+                                                               "    x := array_pop(*a);\n"
+                                                               "    array_reserve(*a, 4);\n"
+                                                               "    array_resize(*a, 2);\n"
+                                                               "    array_insert(*a, 0, 5);\n"
+                                                               "    array_remove_ordered(*a, 0);\n"
+                                                               "    array_remove_unordered(*a, 0);\n"
+                                                               "}\n")),
+                           "main");
+    // Every check but the bounds checks stays: the pointer's null checks,
+    // the data checks, the counts past allocated, the no-memory ones and
+    // the resize's negative count's. Where a bounds check was, the count's
+    // check below 0 is: in the pop, the insert and the removes.
+    CHECK(contains(quiet, "  %8 = cmp eq ptr %2, %7\n"
+                          "  branch %8, b1, b2\n"
+                          "b1:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "  %25 = and i1 %22, %24\n"
+                          "  branch %25, b5, b6\n"
+                          "b5:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb6:\n"
+                          "  %26 = call @__array_add(%3, %2, %4, %5)\n"));
+    // The pop's count below 0, then its data check and its count past
+    // allocated.
+    CHECK(contains(quiet, "\nb10:\n"
+                          "  %35 = load i64 %2\n"
+                          "  %36 = const i64 0\n"
+                          "  %37 = cmp slt i64 %35, %36\n"
+                          "  branch %37, b11, b12\n"
+                          "b11:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "  %51 = and i1 %48, %50\n"
+                          "  branch %51, b13, b14\n"
+                          "b13:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb14:\n"
+                          "  %52 = cmp sgt i64 %35, %43\n"
+                          "  %53 = and i1 %47, %52\n"
+                          "  branch %53, b15, b16\n"
+                          "b15:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb16:\n"
+                          "  call @__array_pop(%30, %2, %31, %32)\n"));
+    CHECK(contains(quiet, "  %74 = and i1 %71, %73\n"
+                          "  branch %74, b19, b20\n"
+                          "b19:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb20:\n"
+                          "  %75 = call @__array_reserve(%55, %2, %56, %57)\n"));
+    CHECK(contains(quiet, "\nb28:\n"
+                          "  %100 = const i64 0\n"
+                          "  %101 = cmp slt i64 %80, %100\n"
+                          "  branch %101, b29, b30\n"
+                          "b29:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb30:\n"
+                          "  %102 = call @__array_resize(%78, %2, %79, %80)\n"));
+    CHECK(contains(quiet, "\nb34:\n"
+                          "  %112 = load i64 %2\n"
+                          "  %113 = const i64 0\n"
+                          "  %114 = cmp slt i64 %112, %113\n"
+                          "  branch %114, b35, b36\n"
+                          "b35:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb38:\n"
+                          "  %129 = call @__array_insert(%105, %2, %106, %107, %108)\n"));
+    CHECK(contains(quiet, "\nb42:\n"
+                          "  %137 = load i64 %2\n"
+                          "  %138 = const i64 0\n"
+                          "  %139 = cmp slt i64 %137, %138\n"
+                          "  branch %139, b43, b44\n"));
+    CHECK(contains(quiet, "\nb48:\n"
+                          "  call @__array_remove_ordered(%132, %2, %133, %134)\n"));
+    CHECK(contains(quiet, "\nb50:\n"
+                          "  %161 = load i64 %2\n"
+                          "  %162 = const i64 0\n"
+                          "  %163 = cmp slt i64 %161, %162\n"
+                          "  branch %163, b51, b52\n"));
+    CHECK(contains(quiet, "\nb56:\n"
+                          "  call @__array_remove_unordered(%156, %2, %157, %158)\n"));
+    CHECK(!contains(quiet, "__rig_bounds_failed"));
+    CHECK(count_of(quiet, "= const i64 16\n") == 7);
+    CHECK(count_of(quiet, "panic @str.") == 7 + 7 + 6 + 3 + 4 + 1);
+    arena_free(&a);
+}

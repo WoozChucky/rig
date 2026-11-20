@@ -1,0 +1,10 @@
+// array_remove_ordered of a resizable array whose count says it has
+// elements but whose data is null, with bounds checks off (issue #158,
+// spec 3.17, 8.4; resizable_array_null_data_unchecked.flags): its data is
+// checked as a view's is, bounds checks on or off, and the program stops
+// at the built-in's name.
+main :: () {
+    a : [..]int;
+    a.count = 2;
+    array_remove_ordered(*a, 0);
+}

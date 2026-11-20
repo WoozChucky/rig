@@ -1,0 +1,1 @@
+tests/run/resizable_array_count_past_allocated.rig:9:10: runtime error: 'array_pop' was given an array with more elements than its memory holds

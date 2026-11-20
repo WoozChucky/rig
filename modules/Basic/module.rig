@@ -5,17 +5,17 @@
 // copying, setting and comparing bytes in memory, numbers to text and back,
 // views and copies of strings and their UTF-8, allocators (an arena and a
 // pool, over Preload's heap), the context's temporary storage, a string
-// builder, a growable array, hash tables, sorting and searching, paths,
-// files, the clock and the calendar, random numbers, the environment's
-// variables and commands run by the system's shell, and formatted printing
-// to standard output, to a string builder and to a string. Whatever hands
-// back memory it allocates takes it from the context's allocator unless it
-// is given another (spec 7.10); talloc and tprint take theirs from the
-// context's temporary storage instead. sprint's and print_to_builder's
-// scratch builders and the file procedures' C copies of a path come from
-// the heap, and are freed before the call returns; sort's scratch memory
-// and the environment's C copies come from the allocator the call is
-// given, the context's unless another is.
+// builder, hash tables, sorting and searching, paths, files, the clock and
+// the calendar, random numbers, the environment's variables and commands
+// run by the system's shell, and formatted printing to standard output, to
+// a string builder and to a string. Whatever hands back memory it allocates
+// takes it from the context's allocator unless it is given another (spec
+// 7.10); talloc and tprint take theirs from the context's temporary storage
+// instead. sprint's and print_to_builder's scratch builders and the file
+// procedures' C copies of a path come from the heap, and are freed before
+// the call returns; sort's scratch memory and the environment's C copies
+// come from the allocator the call is given, the context's unless another
+// is.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):

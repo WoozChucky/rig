@@ -3455,6 +3455,35 @@ TEST(broken_struct_behind_a_view_says_nothing_more) {
     arena_free(&a);
 }
 
+TEST(broken_struct_in_a_resizable_array_says_nothing_more) {
+    // So too for one held in a resizable array. A global before the struct
+    // takes [..]Bad then, and so does a late field a body a #run reaches
+    // needs then; made again (made_again), the [..]Bad has no type, and
+    // converting it says nothing (a stale [..]Bad would say it doesn't
+    // convert).
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "g : [..]Bad;\n"
+                                 "Good :: struct { r: [..]Bad; }\n"
+                                 "x : Good;\n"
+                                 "j : [..]Big;\n"
+                                 "Holder :: struct { r: [..]Big; }\n"
+                                 "y : Holder;\n"
+                                 "f :: () -> int { k := x.r; l := y.r; return 1; }\n"
+                                 "C :: #run f();\n"
+                                 "Bad :: struct { n: int; again: Bad; }\n"
+                                 "Big :: struct { x: [1099511627776]u8; y: u8; }\n"
+                                 "main :: () {\n"
+                                 "    k : [..]int = x.r;\n"
+                                 "    m : [..]int = g;\n"
+                                 "    n : int = j;\n"
+                                 "    z : int = y.r;\n"
+                                 "}\n"),
+              "9:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "10:1: 'Big' is too big\n");
+    arena_free(&a);
+}
+
 TEST(array_count_rules) {
     // [N]T: N an integer known while compiling, from 0 up; the type at most
     // 2^40 bytes.
@@ -7284,8 +7313,9 @@ struct Preload_Field {
     const char *type;
 };
 
-// One struct Preload declares for type information, and its layout as
-// types.h mirrors it: its size and its fields, in order.
+// One struct Preload declares for type information (or for a resizable
+// array's layout, issue #158), and its layout as types.h mirrors it: its
+// size and its fields, in order.
 struct Preload_Struct {
     const char *name;
     s64 size;
@@ -7298,7 +7328,9 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // program reads it through Preload's structs, which the checker lays
     // out as any struct. The two must agree: each struct's size, alignment,
     // field offsets and field types, and each tag's value. Each kind's struct starts
-    // with its Type_Info, info, so a *Type_Info casts to it.
+    // with its Type_Info, info, so a *Type_Info casts to it. Resizable_Array
+    // is a [..]T's layout (spec 3.17), which lowering and Preload's helpers
+    // read alike.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
@@ -7345,6 +7377,13 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
           {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
          4},
         {"Any", ANY_SIZE, {{"type", ANY_TYPE_OFFSET, "*Type_Info"}, {"value_pointer", ANY_VALUE_OFFSET, "*void"}}, 2},
+        {"Resizable_Array",
+         RESIZABLE_SIZE,
+         {{"count", VIEW_COUNT_OFFSET, "int"},
+          {"data", VIEW_DATA_OFFSET, "*void"},
+          {"allocated", RESIZABLE_ALLOCATED_OFFSET, "int"},
+          {"allocator", RESIZABLE_ALLOCATOR_OFFSET, "Allocator"}},
+         4},
     };
     for (s64 i = 0; i < (s64)(sizeof structs / sizeof structs[0]); i++) {
         Preload_Struct *s = &structs[i];
@@ -7380,6 +7419,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         {"TYPE_INFO_ARRAY", TYPE_INFO_ARRAY},
         {"ARRAY_FIXED", ARRAY_FIXED},
         {"ARRAY_VIEW", ARRAY_VIEW},
+        {"ARRAY_RESIZABLE", ARRAY_RESIZABLE},
     };
     for (s64 i = 0; i < (s64)(sizeof constants / sizeof constants[0]); i++) {
         Ast *k = top_level_named(tree, constants[i].name);
@@ -8670,5 +8710,287 @@ TEST(the_temporary_allocator_while_compiling) {
     Ast *shared = top_level_named(tree, "SHARED");
     CHECK(first->is_constant && shared->is_constant);
     CHECK(shared->constant > first->constant);
+    arena_free(&a);
+}
+
+// Issue #158: resizable arrays (spec 3.17).
+
+TEST(resizable_array_type_is_made_once) {
+    // [..]T is made once per T, as []T is, so two are the same type when
+    // their T's are. It's a view's count and data, then allocated and the
+    // allocator: 40 bytes, aligned to 8, an aggregate, laid out as a view
+    // where a view's fields are.
+    Arena a = arena_make();
+    Type *ints = type_resizable_of(&type_int);
+    CHECK(ints == type_resizable_of(&type_int));
+    CHECK_EQ(ints->kind, TYPE_RESIZABLE);
+    CHECK(ints->element == &type_int);
+    CHECK_EQ(ints->size, RESIZABLE_SIZE);
+    CHECK_EQ(ints->size, 40);
+    CHECK_EQ(ints->align, 8);
+    CHECK(type_is_aggregate(ints));
+    CHECK(type_has_view_fields(ints));
+    CHECK(!type_is_view_or_string(ints));
+    // Named as written, inside other types and around them.
+    Type *u8 = type_from_name(str("u8"));
+    CHECK_STR(type_name(&a, ints), "[..]int");
+    CHECK_STR(type_name(&a, type_pointer_to(ints)), "*[..]int");
+    CHECK_STR(type_name(&a, type_resizable_of(type_array_of(type_pointer_to(u8), 3))), "[..][3]*u8");
+    CHECK_STR(type_name(&a, type_view_of(ints)), "[][..]int");
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_type) {
+    // A struct may hold one, of its own type's elements too: they lie
+    // elsewhere, so it's a late field, 40 bytes at the next multiple of 8.
+    // A global may be one. The checker keeps Preload's Resizable_Array on
+    // the tree, as it keeps Context.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Node :: struct { name: string; kids: [..]Node; }\n"
+                                 "g : [..]int;\n"
+                                 "main :: () { n : Node; }\n",
+                                 &tree),
+              "");
+    Type *node = ((Ast_Struct *)top_level_named(tree, "Node"))->declared;
+    CHECK_EQ(node->size, 56);
+    CHECK_EQ(node->align, 8);
+    CHECK_EQ(node->fields.count, 2);
+    CHECK_EQ(node->fields[1].offset, 16);
+    CHECK(((Ast_Struct *)top_level_named(tree, "Node"))->fields[1]->is_late);
+    CHECK(node->fields[1].type == type_resizable_of(node));
+    CHECK_STR(type_name(&a, ((Ast_Var *)top_level_named(tree, "g"))->type), "[..]int");
+    CHECK(tree->resizable_array_type == ((Ast_Struct *)top_level_named(tree, "Resizable_Array"))->declared);
+    arena_free(&a);
+}
+
+TEST(a_resizable_array_needs_preload) {
+    // Its allocator is Preload's: without Preload (a test's single file),
+    // the type is refused, at its '['. Its element is resolved first: one
+    // that's wrong says so, and nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "main :: () {\n    a : [..]int;\n}\n"),
+              "2:9: a resizable array needs Preload's 'Resizable_Array', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n    a : [..]Nope;\n}\n"), "2:13: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+// How messages name the type of main's local `name` in a program checked
+// with Preload (check_with_preload's tree); "?" when the checker found none.
+static String type_of_main_local(Arena *a, Ast_File *tree, const char *name) {
+    Ast *local = find_local(((Ast_Proc *)top_level_named(tree, "main"))->body, name);
+    RIG_ASSERT(local);
+    return local->type ? type_name(a, local->type) : str("?");
+}
+
+TEST(resizable_array_members) {
+    // A view's count and data, then allocated and the allocator, Preload's
+    // Allocator: each a place when the array is one, so each can be
+    // assigned. It indexes and loops as a view does, its elements places.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    a : [..]int;\n"
+                                 "    n := a.count;\n"
+                                 "    d := a.data;\n"
+                                 "    r := a.allocated;\n"
+                                 "    k := a.allocator;\n"
+                                 "    a.count = 0;\n"
+                                 "    a.data = null;\n"
+                                 "    a.allocated = 0;\n"
+                                 "    a.allocator = HEAP_ALLOCATOR;\n"
+                                 "    x := a[1];\n"
+                                 "    a[0] = 3;\n"
+                                 "    p := *a[0];\n"
+                                 "    for a { y := it + it_index; }\n"
+                                 "    for * a { it.* = 1; }\n"
+                                 "    for e: a { }\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    CHECK_STR(type_of_main_local(&a, tree, "n"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "d"), "*int");
+    CHECK_STR(type_of_main_local(&a, tree, "r"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "k"), "Allocator");
+    CHECK_STR(type_of_main_local(&a, tree, "x"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "p"), "*int");
+    CHECK_STR(type_of_main_local(&a, tree, "e"), "int");
+    arena_free(&a);
+}
+
+TEST(resizable_array_converts_to_its_view) {
+    // A [..]T converts to the []T of its elements, wherever a view goes: a
+    // view's slot, a cast, a []T parameter; a spread passes that view. An
+    // Any holds it as any value.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "sum :: (v: []int) -> int { return v.count; }\n"
+                                 "all :: (v: ..int) -> int { return v.count; }\n"
+                                 "main :: () {\n"
+                                 "    a : [..]int;\n"
+                                 "    v : []int = a;\n"
+                                 "    w := cast([]int) a;\n"
+                                 "    n := sum(a) + all(..a);\n"
+                                 "    q : Any = a;\n"
+                                 "}\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(resizable_array_parameter) {
+    // A parameter is read-only, as a view parameter is: its members can't
+    // be assigned, nor its address taken, but its elements can, lying
+    // elsewhere, so 'for *' goes over them too.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (a: [..]int) {\n"
+                                 "    a[0] = 1;\n"
+                                 "    for * a { it.* = 1; }\n"
+                                 "    q := *a[0];\n"
+                                 "    d := a.data;\n"
+                                 "    a.count = 2;\n"
+                                 "    p := *a;\n"
+                                 "}\n"
+                                 "main :: () { }\n"),
+              "6:5: can't assign to 'a': it's a parameter\n"
+              "7:11: can't take the address of 'a': it's a parameter\n");
+    arena_free(&a);
+}
+
+TEST(resizable_array_members_are_its_own) {
+    // Only a [..]T has .allocated and .allocator: a view, a string and an
+    // array don't, and a pointer to a view gives a pointer's message, not
+    // the one that says to write .* first.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    v : []int;\n"
+                                 "    p := *v;\n"
+                                 "    s := \"hi\";\n"
+                                 "    x : [3]int;\n"
+                                 "    b := v.allocated;\n"
+                                 "    c := p.allocated;\n"
+                                 "    d := s.allocator;\n"
+                                 "    e := x.allocated;\n"
+                                 "}\n"),
+              "6:12: '[]int' has no field 'allocated'\n"
+              "7:12: '.allocated' needs a struct or a pointer to one, not '*[]int'\n"
+              "8:12: 'string' has no field 'allocator'\n"
+              "9:12: '[3]int' has no field 'allocated'\n");
+    arena_free(&a);
+}
+
+TEST(resizable_array_members_and_views_are_exact) {
+    // None of the four members is reached through a pointer, and a pointer
+    // has no other: .size on one is a pointer's message. A [..]T is a view
+    // of its own T only, and a *[..]T is no *[]T. A copy is a [..]T, and
+    // the allocator's fields are places too.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (p: *[..]int) {\n"
+                                 "    d := p.data;\n"
+                                 "    r := p.allocated;\n"
+                                 "    s := p.size;\n"
+                                 "}\n"
+                                 "main :: () {\n"
+                                 "    a : [..]int;\n"
+                                 "    v : []u8 = a;\n"
+                                 "    q : *[]int = *a;\n"
+                                 "    b : [..]int = a;\n"
+                                 "    a.allocator.proc = null;\n"
+                                 "}\n"),
+              "2:12: '.data' isn't reached through a pointer, '*[..]int'; write .*.data\n"
+              "3:12: '.allocated' isn't reached through a pointer, '*[..]int'; write .*.allocated\n"
+              "4:12: '.size' needs a struct or a pointer to one, not '*[..]int'\n"
+              "8:16: a value of type '[..]int' doesn't convert to '[]u8' implicitly\n"
+              "9:18: a value of type '*[..]int' doesn't convert to '*[]int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(preload_declares_the_array_helpers) {
+    // What the built-in procedures call (spec 3.17): Preload's nine helpers,
+    // each taking the untyped array and its element's size, then what the
+    // built-in takes after the array, an item by its address; __array_pop
+    // takes the address its last element is copied to. Those that can grow
+    // the array say whether the allocator gave memory.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    struct {
+        const char *name;
+        const char *type;
+    } helpers[] = {
+        {"__array_add", "(*Resizable_Array, int, *void) -> bool"},
+        {"__array_insert", "(*Resizable_Array, int, int, *void) -> bool"},
+        {"__array_pop", "(*Resizable_Array, int, *void)"},
+        {"__array_remove_ordered", "(*Resizable_Array, int, int)"},
+        {"__array_remove_unordered", "(*Resizable_Array, int, int)"},
+        {"__array_reserve", "(*Resizable_Array, int, int) -> bool"},
+        {"__array_resize", "(*Resizable_Array, int, int) -> bool"},
+        {"__array_reset", "(*Resizable_Array, int)"},
+        {"__array_free", "(*Resizable_Array, int)"},
+    };
+    for (s64 i = 0; i < (s64)(sizeof helpers / sizeof helpers[0]); i++) {
+        Ast_Proc *found = nullptr;
+        for (s64 j = 0; j < tree->procs.count; j++) {
+            if (string_eq(tree->procs[j]->name, str(helpers[i].name))) found = tree->procs[j];
+        }
+        CHECK(found != nullptr);
+        if (!found) continue;
+        CHECK_STR(type_name(&a, found->type), helpers[i].type);
+    }
+    arena_free(&a);
+}
+
+TEST(the_array_procedures_are_predeclared) {
+    // The nine built-ins are predeclared, as OS is: a top-level declaration
+    // of one's name is refused, and a local may hide one, silently: the
+    // local is what its name then finds, assigned to or called. A built-in
+    // is no value, and its name, a procedure's, is no place.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "array_add :: () { }\n"
+                                 "main :: () {\n"
+                                 "    array_free := 1;\n"
+                                 "    array_free += 1;\n"
+                                 "    array_insert := g;\n"
+                                 "    array_insert(1);\n"
+                                 "    f := array_pop;\n"
+                                 "    array_reset = 2;\n"
+                                 "}\n"
+                                 "g :: (n: int) { }\n"),
+              "1:1: 'array_add' is predeclared: it's built into the language, for resizable arrays\n"
+              "7:10: 'array_pop' can't be a value: it's built into the language\n"
+              "8:5: can't assign to 'array_reset': it's a procedure\n");
+    arena_free(&a);
+}
+
+TEST(array_procedure_calls_are_typed_by_their_array) {
+    // A built-in's call is checked against the signature its first
+    // argument's element type makes: an item converts to that type, and
+    // array_pop returns one. The call's callee_type is that signature.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "main :: () {\n"
+                                 "    a : [..]u8;\n"
+                                 "    array_add(*a, 3);\n"
+                                 "    array_insert(*a, 0, 255);\n"
+                                 "    b := array_pop(*a);\n"
+                                 "    array_reserve(*a, 10);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    CHECK_STR(type_of_main_local(&a, tree, "b"), "u8");
+    Ast *add = ((Ast_Proc *)top_level_named(tree, "main"))->body->statements[1];
+    CHECK_EQ(add->kind, AST_CALL);
+    if (add->kind == AST_CALL) {
+        Ast_Call *call = (Ast_Call *)add;
+        CHECK(call->builtin != nullptr && call->proc == nullptr);
+        CHECK(call->callee_type != nullptr);
+        if (call->callee_type) CHECK_STR(type_name(&a, call->callee_type), "(*[..]u8, u8)");
+    }
     arena_free(&a);
 }

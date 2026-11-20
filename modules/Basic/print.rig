@@ -16,8 +16,8 @@
 //
 // print_item writes a value of any type, through its type info (spec
 // 3.16): it reads an Any by its description, as the type's kind says, and
-// writes a struct's fields and an array's or a view's elements each as an
-// Any of its own.
+// writes a struct's fields and an array's, a view's or a resizable array's
+// elements each as an Any of its own.
 //
 // print, print_to_builder, sprint and tprint write a format whose {}
 // placeholders take ..Any arguments, each written by print_item, through
@@ -164,10 +164,10 @@ print_quoted :: (builder: *String_Builder, s: string) {
 //   - A struct, {name = value, ...}, its fields in order, and {} for one
 //     with none. An Any field is the value it holds, written as the field
 //     would be.
-//   - An array or a view, [value, ...], and [] for one with no elements,
-//     or a view with a count of 0 or less.
+//   - An array, a view or a resizable array, [value, ...], and [] for one
+//     with no elements, or a view's or resizable array's count of 0 or less.
 //
-// nested says the value is inside a struct, an array or a view, or among
+// nested says the value is inside a struct or an array of any kind, or among
 // the arguments a format leaves over, {!EXTRA: ...}, where a string is
 // quoted so that its bytes can't be mistaken for the punctuation around
 // it. Fields and elements are written by calling print_item again, nested,
@@ -179,13 +179,13 @@ print_quoted :: (builder: *String_Builder, s: string) {
 // description of void, which only an Any made by hand can hold, writes
 // void; and a tag that isn't one of the nine writes nothing.
 //
-// A pointer isn't followed, but a view's data and an Any's value_pointer
-// are, so a view or an Any that reaches a value it is part of makes a
-// cycle: a struct whose view field views an array holding it
-// (nodes[0].kids = nodes;), the struct an Any is a field of (h.a = h;),
-// the array it is an element of (arr[0] = arr;), or anything that
-// contains it deeper down. Writing that one recurses until the stack runs
-// out, as recursion that never ends does.
+// A pointer isn't followed, but a view's data (a resizable array's too)
+// and an Any's value_pointer are, so a view or an Any that reaches a value
+// it is part of makes a cycle: a struct whose view field views an array
+// holding it (nodes[0].kids = nodes;), the struct an Any is a field of
+// (h.a = h;), the array it is an element of (arr[0] = arr;), or anything
+// that contains it deeper down. Writing that one recurses until the stack
+// runs out, as recursion that never ends does.
 print_item :: (builder: *String_Builder, item: Any, nested: bool) {
     t := item.type;
     p := item.value_pointer;
@@ -282,13 +282,13 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
         a := cast(*Type_Info_Array) t;
         data := cast(*u8) p;
         count := a.count;
-        if a.array_kind == ARRAY_VIEW {
-            // Every view is a count and a data pointer, whatever its
-            // elements, so it's read as a []u8. When its count says it has
-            // elements, its first is reached before any of it is written,
-            // so a view with null data stops the program here, with the
-            // language's null pointer dereference (spec 8.4), as indexing
-            // it would, rather than after its "[".
+        if a.array_kind != ARRAY_FIXED {
+            // A view, or a resizable array, which starts as a view does, is
+            // a count and a data pointer, whatever its elements, so it's
+            // read as a []u8. When its count says it has elements, its
+            // first is reached before any of it is written, so null data
+            // stops the program here, with the language's null pointer
+            // dereference (spec 8.4), as indexing it would, not after "[".
             view := (cast(*[]u8) p).*;
             count = view.count;
             // tests/run/basic_print_null_view.err names this line.

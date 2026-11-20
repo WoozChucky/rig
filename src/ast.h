@@ -43,6 +43,7 @@ enum Ast_Kind : u8 {
     AST_TYPE_POINTER,  // Ast_Type: *pointee
     AST_TYPE_ARRAY,    // Ast_Type: [count]element
     AST_TYPE_VIEW,     // Ast_Type: []element
+    AST_TYPE_RESIZABLE,  // Ast_Type: [..]element
     AST_TYPE_PROC,     // Ast_Type: (params) -> results #c_call, a procedure's type
     AST_BLOCK,         // Ast_Block: { statement; ... }
     AST_CALL,          // Ast_Call: callee(args)
@@ -80,6 +81,7 @@ enum Ast_Kind : u8 {
     AST_TYPE_INFO,     // Ast_Type_Info: type_info(T)
     AST_CONTEXT,       // a plain Ast: context
     AST_PUSH_CONTEXT,  // Ast_Push_Context: push_context e { ... }
+    AST_BUILTIN,       // Ast_Builtin: a predeclared procedure of the resizable arrays (spec 3.17)
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -108,12 +110,12 @@ struct Ast {
 };
 
 // A type as written. Its node is at its first token: the name, the '*', an
-// array's or a view's '[', or a procedure type's '('.
+// array's, a view's or a resizable array's '[', or a procedure type's '('.
 struct Ast_Type : Ast {
     String name;        // AST_TYPE_NAME
     Ast_Type *pointee;  // AST_TYPE_POINTER
     Ast *count;         // AST_TYPE_ARRAY: N in [N]T, an expression the checker needs to be a constant
-    Ast_Type *element;  // AST_TYPE_ARRAY and AST_TYPE_VIEW: T in [N]T and []T
+    Ast_Type *element;  // AST_TYPE_ARRAY, AST_TYPE_VIEW and AST_TYPE_RESIZABLE: T in [N]T, []T and [..]T
     bool count_checked; // AST_TYPE_ARRAY: N has been checked, once (a struct's layout may need
                         // it before the field's type is made: checker.cpp's array_count)
     bool count_fine;    // ... and is a count, count_value
@@ -389,6 +391,24 @@ struct Ast_Binary : Ast {
                          // operands', the result an int)
 };
 
+// The procedures built into the language for resizable arrays (spec 3.17),
+// each predeclared as an Ast_Builtin; BUILTIN_ARRAY_COUNT counts them.
+// Each calls a helper of Preload's (Ast_File.array_procs), in this order.
+enum Array_Builtin : u8 {
+    BUILTIN_ARRAY_ADD, BUILTIN_ARRAY_INSERT, BUILTIN_ARRAY_POP, BUILTIN_ARRAY_REMOVE_ORDERED,
+    BUILTIN_ARRAY_REMOVE_UNORDERED, BUILTIN_ARRAY_RESERVE, BUILTIN_ARRAY_RESIZE, BUILTIN_ARRAY_RESET,
+    BUILTIN_ARRAY_FREE, BUILTIN_ARRAY_COUNT,
+};
+
+// A procedure built into the language: predeclared, never declared, written
+// nowhere (0:0). The checker types each call of one from its first
+// argument's element type (checker.h's "Resizable arrays"), since no Rig
+// signature could take every [..]T.
+struct Ast_Builtin : Ast {
+    String name;
+    Array_Builtin builtin;
+};
+
 struct Ast_Call : Ast {
     Ast *callee;
     Array<Ast *> args;
@@ -396,9 +416,12 @@ struct Ast_Call : Ast {
                         // constant naming one (OP :: add;), is a call of the procedure itself;
                         // a call of one without a '..T' parameter that gives fewer arguments
                         // than `proc` has parameters passes the rest's default values (spec 5.10)
+    Ast_Builtin *builtin;  // the built-in called, or null; then `proc` is null and `callee_type` is the
+                           // signature the checker made for this call's element type (spec 3.17)
     Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a
                         // call's result): the value's procedure type, found by the checker;
-                        // null when `proc` is the procedure called
+                        // or a built-in's signature for this call (`builtin`); null when
+                        // `proc` is the procedure called
     Type *gathered;     // the [N]T a call's one-by-one '..' arguments go into (N from 0), set by
                         // the checker, laid out; lowering builds it in a temporary of the
                         // caller's (none for N = 0: the view is zeroed); null when the
@@ -408,7 +431,8 @@ struct Ast_Call : Ast {
 struct Ast_Name : Ast {
     String name;
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
-                // or an Ast_Struct, whose name is a type, not a value (reported)
+                // or an Ast_Struct, whose name is a type, not a value (reported), or an
+                // Ast_Builtin, which only a call's callee may name (spec 3.17)
 };
 
 struct Ast_String : Ast {
@@ -629,11 +653,16 @@ struct Ast_File {
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
     // Preload's, found by the checker (checker.cpp's declare_top_level), spec
-    // 7.10; all null without Preload, whose programs have no context:
+    // 7.10 and 3.17; all null without Preload, whose programs have no context
+    // and no resizable arrays:
     Type *context_type;        // Preload's Context struct: what context is, and push_context takes
     Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
                                // #c_call procedure pushes for itself
     Ast_Proc *runtime_init;    // Preload's __runtime_init, which sets it up: main and each #run call it first
+    Type *resizable_array_type;  // Preload's Resizable_Array (spec 3.17): a [..]T's layout, untyped, and
+                                 // its allocator field's type; null without Preload
+    Ast_Proc *array_procs[BUILTIN_ARRAY_COUNT];  // Preload's __array_add ..., what each built-in calls,
+                                                 // by its Array_Builtin; null without Preload
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
@@ -700,6 +729,7 @@ Token_Kind compound_operator(Token_Kind op);
 //   (member (name p) x)   p.x;    (literal Vec2 (int 1) (int 2))   Vec2.{1, 2}
 //   (literal _ (x (int 1)) (y (int 2)))   .{x = 1, y = 2}
 //   (array (int 3) int)  [3]int    (view int)  []int    (index (name a) (int 1))  a[1]
+//   (resizable int)  [..]int
 //   (literal-array int (int 1) (int 2))   int.[1, 2]    (literal-array _ (int 1))   .[1]
 //   (for it (name a) (block ...))      for a { ... }      (for x (name a) ...)  for x: a { ... }
 //   (for * it (name a) (block ...))    for * a { ... }

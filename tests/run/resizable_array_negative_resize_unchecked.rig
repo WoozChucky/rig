@@ -1,0 +1,7 @@
+// array_resize to a negative count with bounds checks off (issue #158,
+// spec 3.17, 8.1; resizable_array_negative_resize_unchecked.flags): the
+// count is still checked, and the program stops at the built-in's name.
+main :: () {
+    a : [..]int;
+    array_resize(*a, -1);
+}

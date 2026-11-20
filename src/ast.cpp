@@ -72,8 +72,9 @@ static void dump_results(Array<u8> *buffer, Array<Ast_Type *> results) {
 }
 
 // (ptr int), (array (int 3) int) with the count as written, (view int),
-// (proc-type (params int) (returns int) (c_call)), or a name. A procedure
-// type whose last parameter is ..T has it as (.. T): (params int (.. int)).
+// (resizable int), (proc-type (params int) (returns int) (c_call)), or a
+// name. A procedure type whose last parameter is ..T has it as (.. T):
+// (params int (.. int)).
 static void dump_type(Array<u8> *buffer, Ast_Type *type) {
     switch (type->kind) {
     case AST_TYPE_PROC:
@@ -103,6 +104,11 @@ static void dump_type(Array<u8> *buffer, Ast_Type *type) {
         break;
     case AST_TYPE_VIEW:
         out(buffer, "(view ");
+        dump_type(buffer, type->element);
+        out(buffer, ")");
+        break;
+    case AST_TYPE_RESIZABLE:
+        out(buffer, "(resizable ");
         dump_type(buffer, type->element);
         out(buffer, ")");
         break;
@@ -173,6 +179,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_TYPE_POINTER:
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
     case AST_TYPE_PROC:
         dump_type(buffer, (Ast_Type *)node);
         break;
@@ -511,6 +518,13 @@ static void dump(Array<u8> *buffer, Ast *node) {
         // (spread E) for ..e.
         out(buffer, "(spread ");
         dump(buffer, ((Ast_Spread *)node)->operand);
+        out(buffer, ")");
+        break;
+    case AST_BUILTIN:
+        // (builtin array_add): a built-in procedure, which the checker
+        // predeclares; no file holds one, but a name may mean one.
+        out(buffer, "(builtin ");
+        out(buffer, ((Ast_Builtin *)node)->name);
         out(buffer, ")");
         break;
     }

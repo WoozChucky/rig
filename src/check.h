@@ -16,9 +16,11 @@ struct Checker {
                                  // check()'s own
     Table<Ast *> top_level;      // every procedure, global variable, top-level constant and
                                  // struct, by name: visible everywhere (Ast_Proc, Ast_Var,
-                                 // Ast_Const, Ast_Struct); and the predeclared constants, OS,
-                                 // OS_WINDOWS and OS_LINUX (spec 2.5), each an Ast_Const put
-                                 // first (checker.cpp's declare_predeclared)
+                                 // Ast_Const, Ast_Struct); and the predeclared names, put first
+                                 // (checker.cpp's declare_predeclared): the constants OS,
+                                 // OS_WINDOWS and OS_LINUX (spec 2.5), each an Ast_Const, and
+                                 // the resizable arrays' procedures (spec 3.17), each an
+                                 // Ast_Builtin
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
                                  // declared in each so far (Ast_Var, Ast_Const, Ast_Param); only the
                                  // innermost body's, a body checked on demand and a declaration
@@ -80,7 +82,26 @@ struct Checker {
                                  // without Preload
 };
 
+// A procedure built into the language for resizable arrays (spec 3.17),
+// predeclared as an Ast_Builtin (checker.cpp's declare_predeclared): what
+// its calls give after the array, of which check_builtin_call makes the
+// call's signature for its element type T, and the helper of Preload's it
+// calls (Ast_File.array_procs). Its parameters are the array, a *[..]T,
+// then an int when takes_int, then a T when takes_item.
+struct Builtin_Procedure {
+    const char *name;      // array_add, ...
+    Array_Builtin builtin; // its index in BUILTIN_PROCEDURES too
+    const char *helper;    // Preload's procedure it calls: __array_add, ...
+    bool takes_int;        // an int after the array: an index (array_insert, the removes) or a count
+                           // (array_reserve, array_resize)
+    bool takes_item;       // then a T, the item added or inserted (array_add, array_insert)
+    bool returns_item;     // returns a T, the element removed (array_pop)
+};
+
 // checker.cpp
+
+// The nine built-ins, by their Array_Builtin.
+extern const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT];
 
 // The declaration `name` means where the checker is: the innermost block's
 // that declares it, else the top level's (a procedure, a global or a
@@ -205,8 +226,9 @@ void report_no_conversion(Checker *c, Ast *value, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
 // implicitly to `to`: the same type, an integer that widens, a float32 to a
-// float64 (spec 6.4), a *void to or from any pointer, or [N]T to []T (spec
-// 6.5). True when either is unknown (null): the error was reported already.
+// float64 (spec 6.4), a *void to or from any pointer, or [N]T or [..]T to
+// []T (spec 6.5, 3.17). True when either is unknown (null): the error was
+// reported already.
 bool type_converts(Type *from, Type *to);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a

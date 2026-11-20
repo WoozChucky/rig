@@ -1,1 +1,1 @@
-@MODULES@/Basic/array.rig:43:23: runtime error: index 0 is out of bounds (count 0)
+@MODULES@/Basic/array.rig:27:23: runtime error: index 0 is out of bounds (count 0)

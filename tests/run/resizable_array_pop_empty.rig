@@ -1,0 +1,7 @@
+// array_pop of an empty resizable array (issue #158, spec 3.17, 8.1): the
+// last index it pops, -1, is out of bounds, and the program stops at the
+// built-in's name.
+main :: () {
+    a : [..]int;
+    x := array_pop(*a);
+}

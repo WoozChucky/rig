@@ -1,0 +1,8 @@
+// A for over a resizable array whose count says it has elements but whose
+// data is null stops the program, as a view's does (issue #158, spec 3.17,
+// 6.8, 8.4).
+main :: () {
+    a : [..]int;
+    a.count = 2;
+    for a { }
+}

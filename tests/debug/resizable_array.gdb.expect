@@ -1,0 +1,20 @@
+__array_add (context=0x
+at @ROOT@/modules/Preload/module.rig:
+#1
+in main () at @ROOT@/tests/debug/resizable_array.rig:9
+resizable_array.rig:14
+= 3
+= 8
+= {3, 5, 8}
+<heap_allocator_proc>
+type = struct [..]int {
+int count;
+int *data;
+int allocated;
+struct Allocator allocator;
+= {x = 1, y = 2}
+resizable_array.rig:25
+= (struct [..]int *) 0x
+= 3
+!The program being debugged
+!.debug_names not created by gdb

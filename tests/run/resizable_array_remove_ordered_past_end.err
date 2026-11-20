@@ -1,0 +1,1 @@
+tests/run/resizable_array_remove_ordered_past_end.rig:8:5: runtime error: index 2 is out of bounds (count 2)

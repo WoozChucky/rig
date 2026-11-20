@@ -32,6 +32,10 @@
 //   is built for", at its name, and it isn't declared. A broken entry
 //   (below) of one of their names isn't declared either, and says nothing.
 //   A local may hide one, as it may any of the top level's names.
+// - So are the nine procedures of the resizable arrays (spec 3.17;
+//   Resizable arrays, below), array_add and the others, the same way:
+//   "'array_add' is predeclared: it's built into the language, for
+//   resizable arrays".
 // - A name declared in a block (a variable or a constant) is visible from
 //   after its declaration to the end of the block. An inner block may
 //   declare the same name again, hiding the outer one; the same block may
@@ -335,12 +339,12 @@
 //   A field that holds a struct with no type (one in a circle, or too
 //   big), in any way, in a view or an array of pointers too, has none
 //   either, so its uses say nothing more.
-// - a[i] is an element of an array, a view or a string (below), or of what
-//   a pointer points at (C's p[i], unchecked); i is any integer, read by its
-//   sign, an untyped one an int. Otherwise: "'[]' needs an array, a view, a
-//   string or a pointer, not 'int'", "can't index a '*void'; cast it to a
-//   pointer to something first", at the '['; "an index must be an integer,
-//   not 'bool'", at i. A constant i of an array is checked here: "index 3 is
+// - a[i] is an element of an array, a view, a string or a resizable array
+//   (below), or of what a pointer points at (C's p[i], unchecked); i is any
+//   integer, read by its sign, an untyped one an int. Otherwise: "'[]' needs
+//   an array, a view, a string or a pointer, not 'int'", "can't index a
+//   '*void'; cast it to a pointer to something first", at the '['; "an
+//   index must be an integer, not 'bool'", at i. A constant i of an array is checked here: "index 3 is
 //   out of bounds for '[3]int'", at i; so is one of a string that is
 //   constant data (below), against its bytes, none when a literal leaves it
 //   out: "index 5 is out of bounds for a string of 3 bytes". Every other
@@ -369,9 +373,9 @@
 //   address stays data, read where it's used.
 // - [N]T converts implicitly to []T, a view of its N elements, wherever a
 //   value converts (a declaration, an assignment, an argument, a return, a
-//   cast); nothing else converts to or from either but its own type, and
-//   either converts to Any (Type information and Any, below). No
-//   operator takes them ("'==' needs numbers, bools, pointers, procedure
+//   cast); nothing else converts to or from either but its own type (and a
+//   [..]T to []T: Resizable arrays, below), and either converts to Any
+//   (Type information and Any, below). No operator takes them ("'==' needs numbers, bools, pointers, procedure
 //   values or strings, not '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
@@ -380,11 +384,11 @@
 //   Anything else: "a '.[' literal needs an array or a view type, not
 //   'int'"; with no type: "this literal's type isn't known; write it before
 //   the '.', as in int.[1, 2]".
-// - for a goes over an array, a view or a string a, worked out once: it is
-//   each element, a copy, it_index its index. for * a makes it a pointer to
-//   each, which needs a's elements to have an address, as *a[i] does:
-//   "can't take the address of 'a': it's a parameter", "only a variable, a
-//   field or an element has an address". On anything else: "'for' needs a
+// - for a goes over an array, a view, a string or a resizable array a
+//   (below), worked out once: it is each element, a copy, it_index its
+//   index. for * a makes it a pointer to each, which needs a's elements to
+//   have an address, as *a[i] does: "can't take the address of 'a': it's a
+//   parameter", "only a variable, a field or an element has an address". On anything else: "'for' needs a
 //   range, an array, a view or a string, not 'int'"; a range's numbers have
 //   none: "'for *' needs an array, a view or a string, not a range".
 // - A foreign procedure takes no array or view: "a foreign procedure can't
@@ -819,6 +823,86 @@
 // - a, b = f(); converts no result to an Any, for now: "a value of type
 //   'int' doesn't convert to 'Any' implicitly", at the target, as for any
 //   other type a result doesn't convert to.
+//
+// Resizable arrays (issue #158, spec 3.17).
+// - [..]T is a type of its own, made once per T (type_resizable_of), so two
+//   are the same type when their T's are: a view's count and data, then
+//   allocated, an int, and the allocator its memory came from. 40 bytes,
+//   aligned to 8, an aggregate.
+// - Its T is any type a view's elements may be, so not void ("'void' is
+//   only a pointer's target, as in *void", at it). The elements lie
+//   elsewhere, so a struct may hold a [..]T of itself (Node :: struct {
+//   kids: [..]Node; }): such a field is a late field, as a view's is, 40
+//   bytes at the next multiple of 8.
+// - The checker finds Preload's struct Resizable_Array by name at the top
+//   level, in a module's file, as Context, and keeps it on the tree
+//   (Ast_File.resizable_array_type): the layout, untyped, whose last field
+//   is the allocator's type. Without Preload, [..]T is "a resizable array
+//   needs Preload's 'Resizable_Array', which the program doesn't have", at
+//   its '['.
+// - A [..]T is a value, an aggregate: assigning, passing or returning one
+//   copies its 40 bytes, not its elements, so two copies share them. A
+//   parameter is read-only as a view parameter is: its members can't be
+//   assigned ("can't assign to 'a': it's a parameter"), nor its address
+//   taken, but its elements can, lying elsewhere.
+// - It converts implicitly to the []T of the same T, the view of its count
+//   elements at its data (type_converts): into a []T's slot, a parameter, a
+//   cast (cast([]int) a), and a spread, ..a, passes that view as a [N]T's
+//   would. Nothing converts to a [..]T but a [..]T: "a value of type
+//   '[]int' doesn't convert to '[..]int' implicitly", "can't cast '[]int'
+//   to '[..]int'", and a '.[' literal makes none ("a '.[' literal needs an
+//   array or a view type, not '[..]int'"). A *[..]T is no *[]T. == doesn't
+//   compare one (it compares no aggregate but a string), and C takes none
+//   ("a foreign procedure can't take a '[..]int'; pass its .data").
+// - Its members are .count (an int) and .data (a *T), a view's, then
+//   .allocated (an int) and .allocator (Preload's Allocator, the type of
+//   Resizable_Array's last field): each a place when the array is one, so
+//   a program may set the allocator before the first growth, or adopt
+//   memory by setting data and count. Any other name is "'[..]int' has no
+//   field 'size'"; Ast_Member.index stays -1, lowering knowing the four by
+//   name. Through a pointer they aren't reached, as a view's aren't:
+//   "'.count' isn't reached through a pointer, '*[..]int'; write .*.count".
+// - Indexing and for are a view's (type_has_view_fields): a[i] is an
+//   element, always a place, of a parameter too; for a, for * a, a named
+//   iterator and it_index go over its elements. A for over a *[..]T is
+//   "'for' needs a range, an array, a view or a string, not '*[..]int'".
+// - Nine procedures grow and shrink one: array_add(array, item),
+//   array_insert(array, index, item), array_pop(array) -> T,
+//   array_remove_ordered(array, index), array_remove_unordered(array,
+//   index), array_reserve(array, count), array_resize(array, count),
+//   array_reset(array) and array_free(array), each array a *[..]T. They're
+//   the language's, not Basic's, because Rig has no generics: a
+//   parameter has one type, so no procedure written in Rig takes both a
+//   *[..]int and a *[..]Vec2; a '..T' gathers values of the one T its
+//   procedure names; and an Any says a value's type only at run time, so
+//   array_add(*numbers, "x") would compile, and 3 added to a [..]u8 would
+//   be an int. So the checker types each call. Each is predeclared
+//   (checker.cpp's BUILTIN_PROCEDURES, declare_predeclared), an Ast_Builtin
+//   at 0:0 in the top level, refused as a top-level declaration's name, as
+//   the predeclared constants are; a local may hide one. It's no value:
+//   "'array_add' can't be a value: it's built into the language". Its name
+//   is a procedure's where a place is wanted: "can't assign to
+//   'array_reset': it's a procedure".
+// - A call of one (check_expr.cpp's check_builtin_call) checks its
+//   arguments as values first, as any call's, and refuses a spread among
+//   them ("only the arguments of a '..' parameter can be spread, as in
+//   f(..values)"). Their count is the procedure's ("'array_add' takes 2
+//   arguments, but 1 was given"). Then argument 1 must be a *[..]T:
+//   "argument 1 of 'array_add' must be a pointer to a resizable array
+//   (*[..]T), not '[..]int'", at it; one with no type, its own mistake
+//   ("can't take the address of 'p': it's a parameter"), says nothing
+//   more, and the call has no type. Its T makes the call's signature
+//   (Ast_Call.builtin, callee_type), (*[..]T, item: T), (*[..]T, index:
+//   int, item: T), (*[..]T) -> T, ..., never #c_call: the other arguments
+//   convert to it as a call through a value's do ("argument 2 of
+//   'array_add' has type 'string', which can't be converted to 'int'",
+//   "300 doesn't fit in 'u8'"), the call needs a context ("'array_add'
+//   needs a context; a #c_call procedure has none until it pushes one, as
+//   in push_context default_context { ... }"), and one that returns
+//   nothing has no value ("'array_add' returns nothing, so it has no
+//   value"). Each calls the helper of Preload's that does the work, in Rig
+//   (__array_add, ...), which the checker keeps on the tree
+//   (Ast_File.array_procs), and a #run's walk reaches.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

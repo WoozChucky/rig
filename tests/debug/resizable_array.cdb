@@ -1,0 +1,20 @@
+l+t
+l+s
+l+l
+bp resizable_array!__array_add
+g
+k 2
+bc *
+bp `resizable_array.rig:14`
+g
+dv /t
+?? numbers.count
+?? numbers.data[2]
+?? numbers.allocated
+dx numbers.allocator.proc
+?? points.data[0].y
+bp `resizable_array.rig:25`
+g
+dv /t a
+?? a->count
+q

@@ -1,0 +1,6 @@
+tests/errors/resizable_array_run_result.rig:7:10: error: #run's result holds a resizable array, which can't be baked, for now
+    EMPTY :: #run empty();
+             ^
+tests/errors/resizable_array_run_result.rig:8:9: error: #run's result holds a resizable array, which can't be baked, for now
+    HELD :: #run held();
+            ^

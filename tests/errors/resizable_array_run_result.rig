@@ -1,0 +1,10 @@
+// A #run's result can't hold a resizable array, for now (issue #158, spec
+// 7.8): its memory would be the compiler's. A view of its elements bakes.
+Holder :: struct { items: [..]int; }
+empty :: () -> [..]int { a : [..]int; return a; }
+held :: () -> Holder { h : Holder; return h; }
+viewed :: () -> []int { a : [..]int; return a; }
+EMPTY :: #run empty();
+HELD :: #run held();
+VIEWED :: #run viewed();
+main :: () { }

@@ -1,0 +1,10 @@
+// array_pop of a resizable array that owns memory and whose count was set
+// past allocated (issue #158, spec 3.17, 8.1): its last element would be
+// read past its memory, so the program stops at the built-in's name,
+// bounds checks on or off.
+main :: () {
+    a : [..]int;
+    array_add(*a, 7);
+    a.count = a.allocated + 1;
+    x := array_pop(*a);
+}

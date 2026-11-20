@@ -1,0 +1,129 @@
+// The resizable arrays' built-in procedures on elements whose size isn't a
+// multiple of 8 (issue #158, spec 3.17): each helper is given the
+// element's size, so a wrong one would move, copy or zero the wrong bytes,
+// which the printed elements would show. For a [..]u8 (1 byte), a [..]S3
+// (3 bytes, aligned to 1) and a [..]Empty (0 bytes), in turn: ten adds,
+// which grow it to 8 and 16 elements; an insert at the start and one in
+// the middle; a pop; an ordered remove and an unordered one; a reserve; a
+// resize up, which zeroes the elements it adds, and one down; a reset,
+// which keeps the memory; and a free. An Empty array points at Preload's
+// __array_no_bytes, not null, once it grows, and takes no memory: its
+// allocator, which counts what it's asked, is never asked anything.
+// Then [..][..]int: an outer array that grows while the inner arrays it
+// holds grow too, each inner one moved, its own count, data and
+// allocated with it, whenever the outer one grows; an inner array
+// inserted, popped and removed whole; then each inner array freed through
+// a for *, and the outer one.
+#import "Basic";
+
+S3 :: struct { a: u8; b: u8; c: u8; }
+
+Empty :: struct {}
+
+// How often counting_proc was asked anything.
+asked := 0;
+
+// The heap, counting what it's asked.
+counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    asked += 1;
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+// The sum of every element of the inner arrays of a.
+total :: (a: [..][..]int) -> int {
+    sum := 0;
+    for a { for it { sum += it; } }
+    return sum;
+}
+
+main :: () {
+    bytes : [..]u8;
+    for 1..10 { array_add(*bytes, cast(u8) it); }
+    print("u8 {} {} {}\n", bytes.count, bytes.allocated, bytes);
+    array_insert(*bytes, 0, 100);
+    array_insert(*bytes, 5, 105);
+    popped := array_pop(*bytes);
+    print("u8 {} {}\n", popped, bytes);
+    array_remove_ordered(*bytes, 1);
+    array_remove_unordered(*bytes, 0);
+    print("u8 {}\n", bytes);
+    array_reserve(*bytes, 40);
+    array_resize(*bytes, 12);
+    print("u8 {} {}\n", bytes.allocated, bytes);
+    array_resize(*bytes, 3);
+    print("u8 {} {}\n", bytes.allocated, bytes);
+    array_reset(*bytes);
+    array_add(*bytes, 7);
+    print("u8 {} {}\n", bytes.allocated, bytes);
+    array_free(*bytes);
+    print("u8 {} {} {}\n", bytes.count, bytes.data == null, bytes.allocated);
+
+    print("S3 {}\n", size_of(S3));
+    s : [..]S3;
+    for 1..10 { array_add(*s, S3.{cast(u8) it, cast(u8) (it + 10), cast(u8) (it + 20)}); }
+    print("S3 {} {} {}\n", s.count, s.allocated, s);
+    array_insert(*s, 0, S3.{100, 110, 120});
+    array_insert(*s, 5, s[9]);
+    last := array_pop(*s);
+    print("S3 {} {}\n", last, s);
+    array_remove_ordered(*s, 1);
+    array_remove_unordered(*s, 0);
+    print("S3 {}\n", s);
+    array_reserve(*s, 40);
+    array_resize(*s, 11);
+    print("S3 {} {}\n", s.allocated, s);
+    array_resize(*s, 2);
+    print("S3 {} {}\n", s.allocated, s);
+    array_reset(*s);
+    array_add(*s, S3.{1, 2, 3});
+    print("S3 {} {}\n", s.allocated, s);
+    array_free(*s);
+    print("S3 {} {} {}\n", s.count, s.data == null, s.allocated);
+
+    print("Empty {}\n", size_of(Empty));
+    e : [..]Empty;
+    e.allocator = Allocator.{counting_proc, null};
+    for 1..10 { array_add(*e, Empty.{}); }
+    print("Empty {} {} {}\n", e.count, e.allocated, e.data == cast(*Empty) *__array_no_bytes);
+    array_insert(*e, 0, Empty.{});
+    array_insert(*e, 5, e[9]);
+    nothing := array_pop(*e);
+    print("Empty {} {}\n", e.count, nothing);
+    array_remove_ordered(*e, 1);
+    array_remove_unordered(*e, 0);
+    print("Empty {}\n", e.count);
+    array_reserve(*e, 40);
+    array_resize(*e, 50);
+    print("Empty {} {}\n", e.count, e.allocated);
+    array_resize(*e, 3);
+    print("Empty {} {} {}\n", e.count, e.allocated, e);
+    array_reset(*e);
+    array_add(*e, Empty.{});
+    print("Empty {} {}\n", e.count, e.allocated);
+    array_free(*e);
+    print("Empty {} {} {} {}\n", e.count, e.data == null, e.allocated, asked);
+
+    outer : [..][..]int;
+    for i: 0..9 {
+        empty : [..]int;
+        array_add(*outer, empty);
+        for j: 0..i { array_add(*outer[j], i * 10 + j); }
+    }
+    print("nested {} {} {} {}\n", outer.count, outer.allocated, outer[0].allocated, total(outer));
+    print("nested {} {}\n", outer[0], outer[9]);
+    inner : [..]int;
+    for 1..3 { array_add(*inner, it * 1000); }
+    array_insert(*outer, 0, inner);
+    array_add(*outer[0], 4000);
+    print("nested {} {} {}\n", outer.count, outer[0], inner);
+    out := array_pop(*outer);
+    print("nested {} {}\n", outer.count, out);
+    array_free(*out);
+    array_remove_ordered(*outer, 1);
+    print("nested {} {} {}\n", outer.count, outer[1], total(outer));
+    array_remove_unordered(*outer, 1);
+    print("nested {} {} {}\n", outer.count, outer[1], total(outer));
+    for * outer { array_free(it); }
+    array_free(*outer);
+    print("nested {} {}\n", outer.count, outer.data == null);
+}

@@ -77,11 +77,11 @@ Every description starts with a `Type_Info`. Each kind's struct holds it as its 
   - `name: string`: the field's name.
   - `type: *Type_Info`: its type's description.
   - `offset: int`: where it is, in bytes from the struct's start (spec 3.9).
-- `Type_Info_Array` (`TYPE_INFO_ARRAY`, for an array `[N]T` and a view `[]T` alike):
+- `Type_Info_Array` (`TYPE_INFO_ARRAY`, for an array `[N]T`, a view `[]T` and a resizable array `[..]T` alike):
   - `info: Type_Info`.
   - `element_type: *Type_Info`: `T`'s description.
-  - `array_kind: int`: `ARRAY_FIXED` (0) for an array, `ARRAY_VIEW` (1) for a view.
-  - `count: int`: the array's `N`, or -1 for a view. A string isn't described as a view: it has its own tag.
+  - `array_kind: int`: `ARRAY_FIXED` (0) for an array, `ARRAY_VIEW` (1) for a view, `ARRAY_RESIZABLE` (2) for a resizable array (spec 3.17), in Jai's order.
+  - `count: int`: the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A string isn't described as a view: it has its own tag.
 
 `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`:
 
@@ -176,6 +176,31 @@ It prints:
 ```
 
 `__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with; it's not for programs.
+
+### Resizable arrays
+
+A resizable array, `[..]T` (issue #158, spec 3.17), is laid out as Preload's `Resizable_Array`, Jai's layout, and the compiler needs that struct for the type: a program without Preload has no `[..]T`.
+
+- `Resizable_Array`:
+  - `count: int`, `data: *void`: a view's count and data, where a view has them, so whatever reads a view's reads a resizable array's.
+  - `allocated: int`: how many elements `data`'s memory holds. The array owns that memory when `allocated` is above 0 and its elements take bytes; at 0 it owns none, though a program may have set `data` and `count` by hand, and an array of elements of 0 bytes owns none either, whatever its `allocated`, since they take no memory.
+  - `allocator: Allocator`: where that memory came from, and where it goes back.
+
+It's the untyped form, `data` a `*void`, which every `[..]T` has whatever its `T`.
+
+The built-in procedures that grow and shrink a `[..]T` (`array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset`, `array_free`; spec 3.17) call Preload's helpers of the same names with two underscores before them, `__array_add` and so on, written in Rig so they work the same compiled, interpreted and while compiling. Each takes the array as a `*Resizable_Array` and its element's size in bytes, which only the caller's `T` says, then what the built-in takes after the array: `__array_add` and `__array_insert` take the item by the address of a copy of its own, and `__array_pop` takes the address its last element is copied to, the built-in's result. The compiler checks the pointer and `array_resize`'s count before the call, at the built-in's name, and the index and `array_pop`'s count too unless bounds checks are off (`#no_abc`, `--no-bounds-checks`; spec 7.7), when an index outside the array is a memory error no check catches (spec 8.6). For every built-in but `array_reset` and `array_free`, which use no element, it checks too, bounds checks on or off, what the helpers trust the array to say of itself:
+
+- a count of 0 or more, but in `array_reserve`, which places no element from it: `'array_add' was given an array with a negative count`, where no bounds check failed it first;
+- `data` not null while the count or `allocated` is above 0: such a count says elements are there and such an `allocated` says room is, which no memory holds, so the built-in stops as indexing would, with `null pointer dereference` (spec 8.4), even where its helper would touch nothing;
+- in `array_pop` and the removes, the count not past `allocated` when the array owns memory, since they read and move its last elements: `'array_pop' was given an array with more elements than its memory holds`. The others grow before they write past `allocated`.
+
+It checks the result of those that grow. The helpers check none of these. They're Preload's own, not for programs, and so are `__array_grow`, which asks for the memory, `__array_no_bytes` and `__memset`, C's `memset`, which `__array_resize` zeroes new elements with.
+
+- **The allocator.** A zeroed array's allocator has a null procedure. When the array first grows, it takes the caller's `context.allocator` and keeps it, even when that gives no memory, so it grows and goes back to that allocator wherever it's used later. Setting `.allocator` before the first growth chooses another; changing it while the array holds memory is a memory error no check catches (spec 8.6).
+- **Growth.** Adding or inserting into a full array, its count at least `allocated`, grows it to the larger of 8 and twice `allocated`, so `n` elements added one at a time are moved about `n` times in all; past half of `int`'s largest, to `int`'s largest. `array_reserve` and `array_resize` grow to exactly the count they're given, or to the array's count when that is more, as for an array whose `data` and `count` a program set by hand. Room whose bytes pass `int`'s largest asks for `int`'s largest bytes, which no allocator gives.
+- **Asking for memory.** An array that owns none is given it with `ALLOCATE`, copying the elements whose `data` and `count` a program set by hand, which stay where they were; one that owns some has it resized with `RESIZE`, from `allocated` elements' bytes. An allocator's null leaves the array as it was, and the built-in stops the program with `the array's allocator has no memory to give`.
+- **Giving back.** `array_free` gives the memory with `FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them. The array is then empty, `data` null and `allocated` 0, and keeps its allocator. It gives nothing back for an array that owns no memory.
+- **Elements of no size** (`[..]Empty`, for a struct with no fields) take no memory: growing asks for nothing, and `data` becomes `__array_no_bytes`'s address, so indexing and `for` find it not null. It's an `int`, for its 8-byte alignment, which an element of 0 bytes can still need (a struct holding a `[0]int`).
 
 ## Waiting on the language
 

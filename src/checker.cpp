@@ -109,13 +109,14 @@ static void report_variadic_refused(Checker *c, Type *view, Position dots, const
 // A parameter's or, with `result`, a result's type t, at `at`, of `who`, "a
 // foreign procedure" or "a #c_call procedure", which C calls or is called by
 // (spec 7.6): what C can't take is reported.
-// - A struct, an array, a view or a string: C passes a struct by value by
-//   rules of its own on each platform, which come with milestone 6's
-//   bindings ("a foreign procedure can't take a 'Vec2' yet; pass a pointer
-//   to it", "... can't return a 'Vec2' yet"). A pointer to one is a C
-//   pointer to a C struct of the same layout, which passes. C has no views,
-//   and takes an array as a pointer to its first element: "a foreign
-//   procedure can't take a '[3]int'; pass its .data" (or a view's .data,
+// - A struct, an array, a view, a resizable array or a string: C passes a
+//   struct by value by rules of its own on each platform, which come with
+//   milestone 6's bindings ("a foreign procedure can't take a 'Vec2' yet;
+//   pass a pointer to it", "... can't return a 'Vec2' yet"). A pointer to
+//   one is a C pointer to a C struct of the same layout, which passes. C has
+//   no views nor resizable arrays (spec 3.17), and takes an array as a
+//   pointer to its first element: "a foreign procedure can't take a
+//   '[3]int'; pass its .data" (or a view's or a resizable array's .data,
 //   with its count if C needs it). A C string is a pointer to bytes ending
 //   with a zero, which a literal converts to, but another string's bytes
 //   needn't end with one: "a foreign procedure can't take a 'string'; pass
@@ -202,12 +203,13 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // entry's name may have been anything, so nothing is said about it. A
 // struct found to contain itself has no type: its uses say nothing more.
 //
-// behind_pointer: the type is what a pointer points at, or a view's
-// elements, which lie elsewhere: a struct named right there needs only its
-// Type, not its layout, which isn't worked out here. An array's Type holds
-// its size, so it needs its elements' layout, behind a pointer too: *[2]Node
-// lays Node out. (A struct's own fields never need that while it's laid
-// out: one holding a pointer or a view has its type made later, lay_out.)
+// behind_pointer: the type is what a pointer points at, or a view's or a
+// resizable array's elements, which lie elsewhere: a struct named right
+// there needs only its Type, not its layout, which isn't worked out here.
+// An array's Type holds its size, so it needs its elements' layout, behind
+// a pointer too: *[2]Node lays Node out. (A struct's own fields never need
+// that while it's laid out: one holding a pointer or a view has its type
+// made later, lay_out.)
 static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer) {
     switch (written->kind) {
     case AST_TYPE_POINTER: {
@@ -218,6 +220,19 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     case AST_TYPE_VIEW: {
         Type *element = resolve_element(c, written->element, true);
         return element ? type_view_of(element) : nullptr;
+    }
+    case AST_TYPE_RESIZABLE: {
+        // A resizable array's elements lie elsewhere, as a view's do (spec
+        // 3.17). Its allocator field is Preload's Allocator, which the
+        // program has only with Preload's Resizable_Array (declare_top_level).
+        Type *element = resolve_element(c, written->element, true);
+        if (!element) return nullptr;
+        if (!c->file->resizable_array_type) {
+            diag_error(c->diag, written->pos,
+                       "a resizable array needs Preload's 'Resizable_Array', which the program doesn't have");
+            return nullptr;
+        }
+        return type_resizable_of(element);
     }
     case AST_TYPE_ARRAY: {
         // The count's mistakes first, then the element type's: source order.
@@ -574,6 +589,11 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   literal of its elements (Ast_Literal.is_baked). A #run's array, baked
 //   too, is no view: a view of it is written, as a view of a written
 //   array is.
+// - A resizable array is never one: no literal makes one, and a constant
+//   holds one only as a struct literal's left-out field, zeroed, which is
+//   never checked here. A value in its slot, a constant's field included
+//   (E :: H.items), is "a constant can't hold a resizable array; no literal
+//   makes one" (spec 3.17).
 // - A string, a struct or an array is a literal whose values are checked in
 //   turn, a string literal, or anything else constant_data finds a value
 //   for: a constant holding it, a field or an element of one, a cast. The
@@ -618,6 +638,11 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
             return true;
         }
         diag_error(c->diag, value->start, "a constant can't hold a view; only a string or an array can be one");
+        return false;
+    }
+    if (t->kind == TYPE_RESIZABLE) {
+        if (!type_converts(value->type, t)) return false;  // reported
+        diag_error(c->diag, value->start, "a constant can't hold a resizable array; no literal makes one");
         return false;
     }
     if (t == &type_string || t->kind == TYPE_STRUCT || t->kind == TYPE_ARRAY) {
@@ -962,29 +987,35 @@ static s64 align_up(s64 offset, s32 align) {
     return (offset + align - 1) & ~(s64)(align - 1);
 }
 
-// Whether a written type holds a pointer or a view: is one, or a procedure
-// type (its value, the address of code, is a pointer), or is an array of
-// what holds one. Such a field is a late field.
+// Whether a written type holds a pointer or a view: is one, or a resizable
+// array (a view and more, spec 3.17), or a procedure type (its value, the
+// address of code, is a pointer), or is an array of what holds one. Such a
+// field is a late field.
 static bool holds_pointer_or_view(Ast_Type *written) {
     Ast_Kind kind = written->kind;
-    if (kind == AST_TYPE_POINTER || kind == AST_TYPE_VIEW || kind == AST_TYPE_PROC) return true;
+    if (kind == AST_TYPE_POINTER || kind == AST_TYPE_VIEW || kind == AST_TYPE_RESIZABLE || kind == AST_TYPE_PROC) {
+        return true;
+    }
     if (written->kind == AST_TYPE_ARRAY) return holds_pointer_or_view(written->element);
     return false;
 }
 
 // The size and alignment of a type that holds a pointer or a view
 // (holds_pointer_or_view), from what's written, before the type is made: a
-// pointer or a procedure value is 8 bytes, a view 16 (all aligned to 8), and an array N times
-// its element's, at its element's alignment. Nothing behind a pointer or in
-// a view is looked at, so no struct is laid out here. An array's count is
-// checked (array_count), and kept for the type; one that's wrong, or makes
-// the array too big, takes no room (the type, made later, says it's too
-// big).
+// pointer or a procedure value is 8 bytes, a view 16, a resizable array
+// RESIZABLE_SIZE (all aligned to 8), and an array N times its element's, at
+// its element's alignment. Nothing behind a pointer, in a view or in a
+// resizable array is looked at, so no struct is laid out here. An array's
+// count is checked (array_count), and kept for the type; one that's wrong,
+// or makes the array too big, takes no room (the type, made later, says
+// it's too big).
 static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
     if (written->kind != AST_TYPE_ARRAY) {
         RIG_ASSERT(written->kind == AST_TYPE_POINTER || written->kind == AST_TYPE_VIEW ||
-                   written->kind == AST_TYPE_PROC);
-        *size = written->kind == AST_TYPE_VIEW ? 16 : 8;
+                   written->kind == AST_TYPE_RESIZABLE || written->kind == AST_TYPE_PROC);
+        *size = written->kind == AST_TYPE_VIEW        ? 16
+                : written->kind == AST_TYPE_RESIZABLE ? RESIZABLE_SIZE
+                                                      : 8;
         *align = 8;
         return;
     }
@@ -1219,17 +1250,18 @@ static Type *proc_made_again(Type *t) {
 }
 
 // Type t, made before every struct was laid out, made again now that they
-// are: the same pointers, views, arrays (the same counts: nothing is
-// checked or said twice) and procedure types of what the structs in it
-// have become, so null if one of those has no type now. A struct taken
-// behind a pointer or in a view before its layout (resolve_written's
-// behind_pointer) may since have been found in a circle, or too big.
-// Nothing else changes. In a loop: a type the checker infers has no limit
-// to its levels (6.1).
+// are: the same pointers, views, resizable arrays, arrays (the same
+// counts: nothing is checked or said twice) and procedure types of what the
+// structs in it have become, so null if one of those has no type now. A
+// struct taken behind a pointer, in a view or in a resizable array before
+// its layout (resolve_written's behind_pointer) may since have been found
+// in a circle, or too big. Nothing else changes. In a loop: a type the
+// checker infers has no limit to its levels (6.1).
 static Type *made_again(Type *t) {
-    Array<Type *> levels = {};  // t's pointers, views and arrays, outermost first
+    Array<Type *> levels = {};  // t's pointers, views, resizable arrays and arrays, outermost first
     Type *inner = t;
-    while (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_VIEW || inner->kind == TYPE_ARRAY)) {
+    while (inner && (inner->kind == TYPE_POINTER || inner->kind == TYPE_VIEW || inner->kind == TYPE_RESIZABLE ||
+                     inner->kind == TYPE_ARRAY)) {
         array_add(&levels, inner);
         inner = inner->kind == TYPE_POINTER ? inner->pointee : inner->element;
     }
@@ -1241,6 +1273,8 @@ static Type *made_again(Type *t) {
             inner = type_pointer_to(inner);
         } else if (level->kind == TYPE_VIEW) {
             inner = type_view_of(inner);
+        } else if (level->kind == TYPE_RESIZABLE) {
+            inner = type_resizable_of(inner);
         } else {
             inner = type_array_of(inner, level->count);
         }
@@ -1574,13 +1608,14 @@ static Type *check_range(Checker *c, Ast_For *loop) {
     return t;
 }
 
-// for a: a is an array, a view or a string, worked out once, before the
-// first iteration (lowering), and the iterator is each element in turn, a
-// copy (a string's, each byte, a u8); for * a, a pointer to each, through
-// which the body can change it. So `for * a` needs a's elements to have an
-// address, as *a[i] does: an array's when the array has one (not a
-// parameter's, nor a call's or a literal's: "can't take the address of 'a':
-// it's a parameter"), a view's always, and a string's unless it's part of a
+// for a: a is an array, a view, a string or a resizable array (as its view,
+// spec 3.17), worked out once, before the first iteration (lowering), and
+// the iterator is each element in turn, a copy (a string's, each byte, a
+// u8); for * a, a pointer to each, through which the body can change it. So
+// `for * a` needs a's elements to have an address, as *a[i] does: an
+// array's when the array has one (not a parameter's, nor a call's or a
+// literal's: "can't take the address of 'a': it's a parameter"), a view's
+// and a resizable array's always, and a string's unless it's part of a
 // constant (constant_root), whose bytes are no place: "can't take the
 // address of 'NAME': it's a constant". Anything else is "'for' needs a
 // range, an array, a view or a string, not 'int'", at it.
@@ -1588,7 +1623,7 @@ static Type *check_sequence(Checker *c, Ast_For *loop) {
     Ast *sequence = loop->sequence;
     Type *t = check_operand(c, sequence);
     if (!t) return nullptr;
-    if (t->kind != TYPE_ARRAY && !type_is_view_or_string(t)) {
+    if (t->kind != TYPE_ARRAY && !type_has_view_fields(t)) {
         check_default_type(c, sequence);  // `for 10` names the type 10 has: int
         diag_error(c->diag, sequence->start, "'for' needs a range, an array, a view or a string, not '" STR_FMT "'",
                    STR_ARG(type_name(c->arena, sequence->type)));
@@ -2324,23 +2359,46 @@ static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
     {"OS_LINUX", SYSTEM_LINUX, "Linux, one of the systems OS may be"},
 };
 
-// Whether `name` is a predeclared constant's; its entry through *entry.
-static bool is_predeclared(String name, const Predeclared_Constant **entry) {
+// The resizable arrays' procedures (spec 3.17), built into the language,
+// since Rig has no generics to write them in: no Rig procedure's parameter
+// takes both a *[..]int and a *[..]Vec2. Each call is typed by its array's
+// element type (check_expr.cpp's check_builtin_call), and calls the helper
+// of Preload's named here, which does the work, in Rig. The names and the
+// order of array_insert's arguments are Basic v0's, whose untyped Array
+// they replace.
+const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT] = {
+    {"array_add", BUILTIN_ARRAY_ADD, "__array_add", false, true, false},
+    {"array_insert", BUILTIN_ARRAY_INSERT, "__array_insert", true, true, false},
+    {"array_pop", BUILTIN_ARRAY_POP, "__array_pop", false, false, true},
+    {"array_remove_ordered", BUILTIN_ARRAY_REMOVE_ORDERED, "__array_remove_ordered", true, false, false},
+    {"array_remove_unordered", BUILTIN_ARRAY_REMOVE_UNORDERED, "__array_remove_unordered", true, false, false},
+    {"array_reserve", BUILTIN_ARRAY_RESERVE, "__array_reserve", true, false, false},
+    {"array_resize", BUILTIN_ARRAY_RESIZE, "__array_resize", true, false, false},
+    {"array_reset", BUILTIN_ARRAY_RESET, "__array_reset", false, false, false},
+    {"array_free", BUILTIN_ARRAY_FREE, "__array_free", false, false, false},
+};
+
+// What a predeclared name is, as the refusal of a top-level declaration of
+// it says: a predeclared constant's meaning, or a built-in procedure's;
+// null for any other name.
+static const char *predeclared_meaning(String name) {
     for (const Predeclared_Constant &constant : PREDECLARED_CONSTANTS) {
-        if (string_eq(name, str(constant.name))) {
-            *entry = &constant;
-            return true;
-        }
+        if (string_eq(name, str(constant.name))) return constant.meaning;
     }
-    return false;
+    for (const Builtin_Procedure &builtin : BUILTIN_PROCEDURES) {
+        if (string_eq(name, str(builtin.name))) return "built into the language, for resizable arrays";
+    }
+    return nullptr;
 }
 
-// Puts the predeclared constants in c->top_level, before the program's
-// names. Each is an Ast_Const as a checked `NAME :: 2;` would be: untyped,
-// folded, done, its value an integer literal of the same number (so
-// #run's walk, which reaches a constant's value, finds one). It's written
-// nowhere: its position is 0:0. OS's value is the program's system, the
-// host's when the tree names none.
+// Puts the predeclared names in c->top_level, before the program's. Each
+// predeclared constant is an Ast_Const as a checked `NAME :: 2;` would be:
+// untyped, folded, done, its value an integer literal of the same number
+// (so #run's walk, which reaches a constant's value, finds one). OS's
+// value is the program's system, the host's when the tree names none. Each
+// built-in procedure is an Ast_Builtin, which only a call's callee may
+// name (check_expr.cpp's check_callee). Both are written nowhere: their
+// position is 0:0.
 static void declare_predeclared(Checker *c, Ast_File *file) {
     for (const Predeclared_Constant &entry : PREDECLARED_CONSTANTS) {
         System value = entry.value;
@@ -2359,6 +2417,12 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
         constant->resolve = RESOLVE_DONE;
         table_put(&c->top_level, constant->name, (Ast *)constant);
     }
+    for (const Builtin_Procedure &entry : BUILTIN_PROCEDURES) {
+        Ast_Builtin *builtin = ast_new<Ast_Builtin>(c->arena, AST_BUILTIN, {0, 0, 0});
+        builtin->name = str(entry.name);
+        builtin->builtin = entry.builtin;
+        table_put(&c->top_level, builtin->name, (Ast *)builtin);
+    }
 }
 
 // The name a top-level declaration declares.
@@ -2374,10 +2438,11 @@ static String declared_name(Ast *decl) {
 
 // The top level's names, so procedures, globals, constants and structs can
 // be used before they're declared. They share one table: a global can't
-// have a procedure's name. The predeclared constants come first
-// (declare_predeclared): a top-level declaration of one of their names is
-// refused, at its name, and isn't declared, so every use means the
-// constant. (A local may hide one, as it may any of the top level's names.)
+// have a procedure's name. The predeclared names, the constants and the
+// built-in procedures, come first (declare_predeclared): a top-level
+// declaration of one of their names is refused, at its name, and isn't
+// declared, so every use means the predeclared one. (A local may hide one,
+// as it may any of the top level's names.)
 // Then the whole declarations of `declarations`, in order: a name declared
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
@@ -2415,12 +2480,9 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             }
         }
         String name = declared_name(decl);
-        const Predeclared_Constant *predeclared = nullptr;
-        if (is_predeclared(name, &predeclared)) {
-            if (report) {
-                diag_error(c->diag, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name),
-                           predeclared->meaning);
-            }
+        const char *meaning = predeclared_meaning(name);
+        if (meaning) {
+            if (report) diag_error(c->diag, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name), meaning);
             continue;
         }
         Ast **earlier = table_get(&c->top_level, name);
@@ -2457,6 +2519,18 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             if (decl->kind == AST_PROC && string_eq(name, str("__runtime_init"))) {
                 c->file->runtime_init = (Ast_Proc *)decl;
             }
+            // And the resizable arrays' layout (spec 3.17), whose last field
+            // is the allocator a [..]T holds: without it, no [..]T.
+            if (decl->kind == AST_STRUCT && string_eq(name, str("Resizable_Array"))) {
+                c->file->resizable_array_type = ((Ast_Struct *)decl)->declared;
+            }
+            // And the helpers the built-in procedures call, which lowering
+            // and the walk of a #run read.
+            if (decl->kind == AST_PROC) {
+                for (const Builtin_Procedure &builtin : BUILTIN_PROCEDURES) {
+                    if (string_eq(name, str(builtin.helper))) c->file->array_procs[builtin.builtin] = (Ast_Proc *)decl;
+                }
+            }
         }
     }
     // Then the broken ones (parser.h), the names of declarations the parser
@@ -2466,8 +2540,8 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
     // twice declared because of the syntax error, and calls are better
     // checked against the whole declaration, wherever it is. One with no
     // name could have declared anything, main included. One with a
-    // predeclared constant's name isn't declared either, silently: the
-    // name is the constant's.
+    // predeclared name isn't declared either, silently: the name is the
+    // predeclared constant's or built-in's.
     bool lost_a_name = false;
     for (s64 i = 0; i < declarations.count; i++) {
         if (declarations[i]->kind != AST_PROC) continue;

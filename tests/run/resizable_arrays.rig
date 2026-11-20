@@ -1,0 +1,225 @@
+// Resizable arrays and their built-in procedures (issue #158, spec 3.17),
+// a line of output per case, each on arrays of its own:
+// - adds: twenty adds to a zeroed [..]int, which grows to 8, 16 and 32
+//   elements, doubling when it's full.
+// - ops: an insert at the start and one at the end, an ordered remove, an
+//   unordered one, which moves the last element into the gap, and a pop,
+//   which returns the last element.
+// - reserve: a reserve grows to exactly what it asks, a smaller one does
+//   nothing, and a resize past the count adds zeroed elements; reset
+//   empties the array and keeps its memory.
+// - negative: a reserve below 0 does nothing either: a zeroed array stays
+//   zeroed, the context's allocator not taken.
+// - remembered: an array that first grows under a pushed context's
+//   allocator keeps that allocator: it grows there and is freed there
+//   once the context's allocator is another, which is never asked.
+// - own element: an item that is the array's own element is copied before
+//   the array grows (an add when it's full) or its elements move up (an
+//   insert). The array's allocator moves it when it grows and fills the
+//   block it left, and the element inserted is one whose place the element
+//   below it moves into, so an item read only after the change would
+//   differ.
+// - pop: array_pop of a struct, into a variable and as an argument.
+// - loop: a for whose body adds to the array it goes over, with room
+//   reserved, goes over the elements the array had when it started.
+// - view: a [..]T goes where a view goes, to Basic's join and to a []int
+//   parameter.
+// - converts: an item converts to the element's type, and an index to
+//   int: an s32 item and index are widened, an untyped 2 becomes a
+//   float64, a [2]int and a [..]int become []int views, and an int and a
+//   string become Anys.
+// - tree: a struct holding a resizable array of its own type, its
+//   children's arrays grown through its own, summed and printed whole.
+// - free, again: array_free gives the memory back and empties the array,
+//   which grows again from the allocator it kept.
+// - constant, globals: a constant whose struct leaves its [..]int field
+//   out holds the empty array, which a copy of it grows, the constant's
+//   own staying empty; a global [..]int and a global's [..]int field grow
+//   as a local does.
+#import "Basic";
+
+Point :: struct { x: int; y: int; }
+
+Node :: struct { v: int; kids: [..]Node; }
+
+// The sum of n's value and its descendants'.
+tree_sum :: (n: *Node) -> int {
+    sum := n.v;
+    for * n.kids { sum += tree_sum(it); }
+    return sum;
+}
+
+// Frees the arrays of n and its descendants.
+free_tree :: (n: *Node) {
+    for * n.kids { free_tree(it); }
+    array_free(*n.kids);
+}
+
+Holder :: struct { items: [..]int; n: int; }
+H :: Holder.{n = 2};
+g : [..]int;
+gh := Holder.{n = 3};
+
+// The sum of v's elements.
+total :: (v: []int) -> int {
+    sum := 0;
+    for v { sum += it; }
+    return sum;
+}
+
+// What first_proc was asked, by mode, and how often second_proc was asked
+// anything.
+first_allocations : int;
+first_resizes : int;
+first_frees : int;
+second_calls : int;
+
+// The heap, counting what it's asked by mode.
+first_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { first_allocations += 1; }
+    if mode == RESIZE { first_resizes += 1; }
+    if mode == FREE { first_frees += 1; }
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+// The heap, counting each time it's asked anything.
+second_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    second_calls += 1;
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+// The heap, but a resize always moves: it takes new memory, copies the old
+// block's bytes there, and fills the old block with 0xEE bytes before it
+// frees it.
+moving_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode != RESIZE { return heap_allocator_proc(mode, size, old_size, old_memory, data); }
+    memory := heap_allocator_proc(ALLOCATE, size, 0, null, data);
+    if memory == null { return null; }
+    kept := old_size;
+    if size < kept { kept = size; }
+    copy_memory(memory, old_memory, kept);
+    set_memory(old_memory, 0xEE, old_size);
+    heap_allocator_proc(FREE, 0, old_size, old_memory, data);
+    return memory;
+}
+
+main :: () {
+    squares : [..]int;
+    for 0..19 { array_add(*squares, it * it); }
+    print("adds {} {} {}\n", squares.count, squares.allocated, squares[19]);
+    array_free(*squares);
+
+    n : [..]int;
+    for 1..5 { array_add(*n, it); }
+    array_insert(*n, 0, 0);
+    array_insert(*n, n.count, 6);
+    array_remove_ordered(*n, 1);
+    array_remove_unordered(*n, 0);
+    p := array_pop(*n);
+    print("ops {} {}\n", n, p);
+
+    array_reserve(*n, 100);
+    array_reserve(*n, 3);
+    array_resize(*n, 6);
+    print("reserve {} {} {}\n", n.allocated, n.count, n);
+    array_reset(*n);
+    print("reset {} {}\n", n.count, n.allocated);
+    z : [..]int;
+    array_reserve(*z, -5);
+    print("negative {} {} {} {}\n", z.count, z.allocated, z.data == null, z.allocator.proc == null);
+
+    r : [..]int;
+    push_context .{Allocator.{first_proc, null}, context.temporary_storage} {
+        array_add(*r, 0);
+    }
+    saved := context.allocator;
+    context.allocator = Allocator.{second_proc, null};
+    for 1..20 { array_add(*r, it); }
+    array_free(*r);
+    context.allocator = saved;
+    print("remembered {} {} {} {}\n", first_allocations, first_resizes, first_frees, second_calls);
+
+    points : [..]Point;
+    points.allocator = Allocator.{moving_proc, null};
+    for 1..8 { array_add(*points, Point.{it, it}); }
+    array_add(*points, points[7]);
+    array_insert(*points, 0, points[3]);
+    print("own element {} {} {} {}\n", points[9], points[0], points[1], points.count);
+    array_free(*points);
+
+    pairs : [..]Point;
+    for 1..3 { array_add(*pairs, Point.{it, it * 10}); }
+    last := array_pop(*pairs);
+    print("pop {} {}\n", last, array_pop(*pairs));
+    array_free(*pairs);
+
+    l : [..]int;
+    array_reserve(*l, 16);
+    for 0..2 { array_add(*l, it); }
+    for l { array_add(*l, it + 10); }
+    print("loop {}\n", l);
+    array_free(*l);
+
+    names : [..]string;
+    array_add(*names, "a");
+    array_add(*names, "b");
+    m : [..]int;
+    for 1..3 { array_add(*m, it); }
+    joined := join(names, ",");
+    print("view {} {}\n", joined, total(m));
+    free(joined.data);
+    array_free(*names);
+    array_free(*m);
+
+    c : [..]int;
+    small : s32 = -5;
+    array_add(*c, small);
+    array_insert(*c, cast(s32) 0, small);
+    f : [..]float64;
+    array_add(*f, 2);
+    fixed := int.[1, 2];
+    nine : [..]int;
+    array_add(*nine, 9);
+    views : [..][]int;
+    array_add(*views, fixed);
+    array_add(*views, nine);
+    // Each Any points at a variable, which lives past the print: one of a
+    // value that isn't a place points at a temporary that ends with its
+    // statement (spec 3.16).
+    five := 5;
+    text := "x";
+    anys : [..]Any;
+    array_add(*anys, five);
+    array_add(*anys, text);
+    print("converts {} {} {} {} {}\n", c, f, views, anys[0], anys[1]);
+    array_free(*c);
+    array_free(*f);
+    array_free(*nine);
+    array_free(*views);
+    array_free(*anys);
+
+    root := Node.{v = 1};
+    array_add(*root.kids, Node.{v = 10});
+    array_add(*root.kids, Node.{v = 20});
+    array_add(*root.kids[1].kids, Node.{v = 100});
+    array_add(*root.kids, Node.{v = 30});
+    print("tree {} {}\n", tree_sum(*root), root);
+    free_tree(*root);
+
+    array_free(*n);
+    print("free {} {} {}\n", n.count, n.allocated, n.data == null);
+    array_add(*n, 1);
+    print("again {} {}\n", n.count, n.allocated);
+    array_free(*n);
+
+    h := H;
+    array_add(*h.items, 1);
+    array_add(*h.items, 2);
+    array_add(*g, 7);
+    array_add(*gh.items, 9);
+    print("constant {} {} {}\n", h.items, h.n, H.items.count);
+    print("globals {} {} {}\n", g, gh.items, gh.n);
+    array_free(*h.items);
+    array_free(*g);
+    array_free(*gh.items);
+}

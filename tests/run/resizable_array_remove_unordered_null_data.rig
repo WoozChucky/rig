@@ -1,0 +1,10 @@
+// array_remove_unordered of a resizable array whose count says it has
+// elements but whose data is null (issue #158, spec 3.17, 8.4): that count
+// claims elements no memory holds, so the built-in stops as indexing such
+// a view would, at its name, rather than moving its last element through
+// null.
+main :: () {
+    a : [..]int;
+    a.count = 2;
+    array_remove_unordered(*a, 0);
+}

@@ -1,0 +1,155 @@
+// Preload's helpers for resizable arrays (issue #158, spec 3.17), called
+// by hand through the untyped Resizable_Array, as the built-in procedures
+// call them: the growth policy, the allocator the first growth takes from
+// the context and keeps, elements of no size and their alignment, adopted
+// memory, an allocator that refuses, and growth past int's range.
+#import "Basic";
+
+// The heap, saying what the arrays ask of it.
+printing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == ALLOCATE { print("allocate {}\n", size); }
+    if mode == RESIZE { print("resize {} to {}\n", old_size, size); }
+    if mode == FREE { print("free {}\n", old_size); }
+    return heap_allocator_proc(mode, size, old_size, old_memory, data);
+}
+
+// The heap, but for RESIZE, which it refuses.
+refusing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == RESIZE { print("refuse {} to {}\n", old_size, size); return null; }
+    return printing_proc(mode, size, old_size, old_memory, data);
+}
+
+Empty :: struct { }
+
+// 0 bytes, but aligned as an int.
+Aligned :: struct { a: [0]int; }
+
+// How far the address of an Aligned element is from a multiple of 8.
+misalignment :: () -> int {
+    a : [..]Aligned;
+    x : Aligned;
+    __array_add(cast(*Resizable_Array) *a, 0, *x);
+    return cast(int) *a[0] % 8;
+}
+
+main :: () {
+    printing := Allocator.{printing_proc, null};
+    a : [..]int;
+    r := cast(*Resizable_Array) *a;
+    push_context .{printing, context.temporary_storage} {
+        for 1..9 { n := it; __array_add(r, 8, *n); }
+    }
+    __array_reserve(r, 8, 20);
+    print("remembered {} {} {}\n", a.count, a.allocated, a.allocator.proc == printing_proc);
+    zero := 0;
+    __array_insert(r, 8, 0, *zero);
+    __array_remove_ordered(r, 8, 1);
+    __array_remove_unordered(r, 8, 0);
+    last := 0;
+    __array_pop(r, 8, *last);
+    print("{} {}\n", a, last);
+    __array_resize(r, 8, 9);
+    print("{}\n", a);
+    __array_resize(r, 8, 2);
+    print("{} {}\n", a, a.allocated);
+    __array_reset(r, 8);
+    print("{} {}\n", a.count, a.allocated);
+    __array_free(r, 8);
+    print("{} {} {}\n", a.data == null, a.allocated, a.allocator.proc == printing_proc);
+
+    // Resizing past allocated grows to exactly the count, by ALLOCATE and
+    // then by RESIZE, zeroing every element it adds, those in the memory
+    // the array had as well as those in the memory it was given.
+    z : [..]int;
+    z.allocator = printing;
+    rz := cast(*Resizable_Array) *z;
+    __array_resize(rz, 8, 3);
+    print("grown {} {}\n", z, z.allocated);
+    z[0] = 1;
+    z[1] = 2;
+    z[2] = 3;
+    __array_resize(rz, 8, 1);
+    __array_resize(rz, 8, 5);
+    print("grown {} {}\n", z, z.allocated);
+    __array_free(rz, 8);
+
+    e : [..]Empty;
+    e.allocator = printing;
+    for 1..3 { x : Empty; __array_add(cast(*Resizable_Array) *e, 0, *x); }
+    seen := 0;
+    for e { seen += 1; }
+    print("nothing {} {} {} {}\n", e.count, e.data != null, e.allocated, seen);
+    __array_free(cast(*Resizable_Array) *e, 0);
+
+    // Elements of 0 bytes still have their type's alignment, compiled and
+    // while compiling.
+    print("aligned {} {}\n", misalignment(), #run misalignment());
+
+    // An array whose data and count are set by hand owns none of that
+    // memory: freeing it gives nothing back, and its first growth copies
+    // the elements into memory of its own, to at least its count plus one.
+    buffer := int.[7, 8];
+    h : [..]int;
+    h.allocator = printing;
+    rh := cast(*Resizable_Array) *h;
+    h.data = *buffer[0];
+    h.count = 2;
+    __array_free(rh, 8);
+    print("kept {} {} {} {}\n", h.data == null, h.count, h.allocated, buffer);
+    h.data = *buffer[0];
+    h.count = 2;
+    three := 3;
+    __array_add(rh, 8, *three);
+    print("adopted {} {} {}\n", h, buffer[1], h.data != cast(*void) *buffer[0]);
+    __array_free(rh, 8);
+    nine := int.[1, 2, 3, 4, 5, 6, 7, 8, 9];
+    h.data = *nine[0];
+    h.count = 9;
+    ten := 10;
+    __array_add(rh, 8, *ten);
+    print("adopted {} {} {}\n", h, h.allocated, nine[8]);
+    __array_free(rh, 8);
+    five := int.[1, 2, 3, 4, 5];
+    h.data = *five[0];
+    h.count = 5;
+    __array_reserve(rh, 8, 3);
+    print("adopted {} {}\n", h, h.allocated);
+    __array_free(rh, 8);
+
+    // An allocator that refuses leaves the array as it was: its count,
+    // allocated, data and elements.
+    f : [..]int;
+    f.allocator = Allocator.{refusing_proc, null};
+    rf := cast(*Resizable_Array) *f;
+    for 1..8 { n := it; __array_add(rf, 8, *n); }
+    old := f.data;
+    added := __array_add(rf, 8, *three);
+    print("refused {} {} {} {} {}\n", added, f.count, f.allocated, f.data == old, f);
+    resized := __array_resize(rf, 8, 20);
+    print("refused {} {} {} {} {}\n", resized, f.count, f.allocated, f.data == old, f);
+    __array_free(rf, 8);
+
+    // Growth past int's range asks for int's largest bytes, with ALLOCATE
+    // while the array owns no memory, which the heap doesn't give. The
+    // allocator the first growth took from the context stays. A count of
+    // int's largest has no room for one more: the add is false without
+    // asking the allocator, so no line is printed for it.
+    huge : [..]int;
+    huge.count = 1152921504606846976;
+    huge.allocated = 1152921504606846976;
+    g := cast(*Resizable_Array) *huge;
+    push_context .{printing, context.temporary_storage} {
+        grown := __array_add(g, 8, *three);
+        print("{} {} {} {}\n", grown, huge.count, huge.allocated, huge.data == null);
+    }
+    print("kept {}\n", huge.allocator.proc == printing_proc);
+    huge.count = 4611686018427387904;
+    huge.allocated = 4611686018427387904;
+    print("{}\n", __array_add(g, 1, *three));
+    huge.count = 0;
+    huge.allocated = 0;
+    print("{}\n", __array_reserve(g, 8, 2305843009213693953));
+    huge.count = 9223372036854775807;
+    huge.allocated = 9223372036854775807;
+    print("{}\n", __array_add(g, 8, *three));
+}

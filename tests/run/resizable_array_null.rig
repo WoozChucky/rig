@@ -1,0 +1,7 @@
+// A built-in procedure given a null pointer to a resizable array (issue
+// #158, spec 3.17, 8.1): a null pointer dereference, at the built-in's
+// name.
+main :: () {
+    p : *[..]int;
+    array_add(p, 1);
+}

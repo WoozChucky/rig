@@ -1,0 +1,92 @@
+// What passes the resizable array built-ins' checks of what an array says
+// of itself (issue #158, spec 3.17, 8.4), which stop a count below 0, a
+// count or allocated above 0 over a null data, and, in array_pop and the
+// removes, a count past allocated in an array that owns memory:
+// - zeroed: an empty array, its data null, its count and allocated 0,
+//   through every built-in that checks it.
+// - adopted: an array whose data and count were set by hand over a buffer,
+//   allocated 0, through every built-in that checks it. Its first growth
+//   copies the buffer's elements into memory of its own, leaving the
+//   buffer as it was.
+// - full: an array that owns memory, its count at allocated, popped and
+//   removed from.
+// - no bytes: an array of elements of 0 bytes owns no memory, so a count
+//   set past its allocated is no error.
+// - reset, free: array_reset and array_free use no element, so a count
+//   above 0 over a null data is no error for them: each empties the
+//   array.
+#import "Basic";
+
+main :: () {
+    z : [..]int;
+    array_reserve(*z, 0);
+    array_resize(*z, 0);
+    array_insert(*z, 0, 5);
+    array_remove_unordered(*z, 0);
+    array_add(*z, 6);
+    array_remove_ordered(*z, 0);
+    array_add(*z, 7);
+    x := array_pop(*z);
+    print("zeroed {} {} {}\n", x, z.count, z.allocated);
+    array_free(*z);
+
+    buffer := int.[1, 2, 3, 4, 5];
+    a : [..]int;
+    a.data = *buffer[0];
+    a.count = 5;
+    y := array_pop(*a);
+    array_remove_ordered(*a, 0);
+    array_remove_unordered(*a, 0);
+    print("adopted {} {} {} {}\n", y, a, a.allocated, buffer);
+    array_reserve(*a, 2);
+    print("adopted {} {} {}\n", a, a.allocated, a.data == *buffer[0]);
+    b : [..]int;
+    b.data = *buffer[0];
+    b.count = 2;
+    array_insert(*b, 1, 9);
+    print("adopted {} {} {}\n", b, b.allocated, buffer);
+    c : [..]int;
+    c.data = *buffer[0];
+    c.count = 2;
+    array_resize(*c, 4);
+    print("adopted {} {} {}\n", c, c.allocated, buffer);
+    d : [..]int;
+    d.data = *buffer[0];
+    d.count = 2;
+    array_add(*d, 8);
+    print("adopted {} {} {}\n", d, d.allocated, buffer);
+    array_free(*a);
+    array_free(*b);
+    array_free(*c);
+    array_free(*d);
+
+    full : [..]int;
+    for 1..8 { array_add(*full, it); }
+    last := array_pop(*full);
+    array_add(*full, last);
+    array_remove_ordered(*full, 0);
+    array_add(*full, 9);
+    array_remove_unordered(*full, 0);
+    print("full {} {} {}\n", last, full, full.allocated);
+    array_free(*full);
+
+    none : [..]Empty;
+    array_add(*none, Empty.{});
+    none.count = none.allocated + 2;
+    array_pop(*none);
+    array_remove_ordered(*none, 0);
+    array_remove_unordered(*none, 0);
+    print("no bytes {} {}\n", none.count, none.allocated);
+    array_free(*none);
+
+    r : [..]int;
+    r.count = 3;
+    array_reset(*r);
+    print("reset {} {}\n", r.count, r.data == null);
+    f : [..]int;
+    f.count = 3;
+    array_free(*f);
+    print("free {} {}\n", f.count, f.data == null);
+}
+
+Empty :: struct {}

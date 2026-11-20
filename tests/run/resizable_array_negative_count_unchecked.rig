@@ -1,0 +1,11 @@
+// array_insert into a resizable array whose count was set below 0, with
+// bounds checks off (issue #158, spec 3.17, 8.1;
+// resizable_array_negative_count_unchecked.flags): no bounds check fails
+// the count, but the array's count is still checked, and the program
+// stops at the built-in's name.
+main :: () {
+    a : [..]int;
+    array_add(*a, 7);
+    a.count = -1;
+    array_insert(*a, 0, 5);
+}

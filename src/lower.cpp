@@ -113,11 +113,12 @@
 //   divisor not known while compiling is compared with 0, and a signed one
 //   with -1 (lower_division); a cast checks that the number survives
 //   (lower_cast); a pointer is compared with null before anything is read
-//   or written through it (emit_null_check), and so is a view's or a
-//   string's data before an element is read (lower_index_address,
-//   emit_data_check, lower_string_comparison). A check that fails is a
-//   runtime error: a block of its own panics with "PATH:LINE:COL: runtime
-//   error: MESSAGE" (emit_runtime_check).
+//   or written through it (emit_null_check), and so is a view's, a
+//   resizable array's or a string's data before an element is read
+//   (lower_index_address, emit_data_check, lower_string_comparison,
+//   lower_builtin_call). A check that fails is a runtime error: a block of
+//   its own panics with "PATH:LINE:COL: runtime error: MESSAGE"
+//   (emit_runtime_check).
 // - Pointers (spec 6.5) are ptr values. Since every variable is a slot
 //   already, *x is x's slot (a global's addr), and p.* a load or store
 //   through p, once it's checked not to be null (lower_address finds the
@@ -174,11 +175,23 @@
 //   (lower_variadic_argument), so a view kept past the call may see it
 //   rebuilt, or dangle once the caller returns; the language promises it
 //   only until the end of the statement holding the call (spec 5.10). A
-//   spread, ..e, is an array or a view argument as any other
-//   (lower_variadic_argument). for over an array, a view or a string takes
-//   its data and count once, then counts an index up to the count
-//   (lower_for_sequence). A global view of a literal, or of an array
-//   constant, points at a global array of its own (constant_bytes).
+//   spread, ..e, is an array, a resizable array or a view argument as any
+//   other (lower_variadic_argument). for over an array, a resizable array,
+//   a view or a string takes its data and count once, then counts an index
+//   up to the count (lower_for_sequence). A global view of a literal, or of
+//   an array constant, points at a global array of its own (constant_bytes).
+// - A resizable array, [..]T (spec 3.17), is an aggregate of 40 bytes
+//   whose first 16 are a view's, its count and data, then allocated at 16
+//   and allocator, Preload's Allocator, at 24. Indexing, for, .count and
+//   .data read it as a view (type_has_view_fields). Where it meets a []T
+//   (an argument, a spread, an assignment, a cast, a multi-assign), its
+//   count and data are read there, into a view slot of its own
+//   (lower_view_of_resizable); its elements lie elsewhere, so unlike an
+//   array's view (view_of_copy) nothing more is copied. A call of a
+//   built-in procedure (array_add, ...) is a call of Preload's helper
+//   (__array_add, ...), given the element's size and an item by the address
+//   of a copy, with the checks that need the call's T or place around it,
+//   at the built-in's name (lower_builtin_call).
 // - A string (spec 3.8) is a view of bytes, laid out as one: s[i], .count,
 //   .data and for are a view's. A literal's bytes are a constant global of
 //   their own, str.N, one per literal however often it's reached
@@ -471,6 +484,9 @@ struct Lowering {
                                // the body's, or the innermost push_context block's (lower_push_context);
                                // -1 without one: a #c_call procedure outside its pushes, the
                                // compiler's own, no Preload
+    Ast_Proc **array_procs;    // Preload's helpers the built-in procedures call (spec 3.17), by
+                               // Array_Builtin: the tree's Ast_File.array_procs (lower_builtin_call);
+                               // null without a tree
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
                                 // and the runs' (set_source, ir_lowering_source)
@@ -1059,12 +1075,40 @@ static s32 lower_view_of(Lowering *l, Ast *e) {
     return view_of_copy(l, e->type, lower_expr(l, e));
 }
 
+// The []T a [..]T converts to (spec 3.17): a view slot of its own holding
+// the array's count and data, read now. `array` is the [..]T's address
+// (its value, as every aggregate's). The elements lie elsewhere, so the
+// view sees them where they are, whatever the array is (a place, a call's
+// result, a parameter): nothing is copied but the two. The view is read
+// where the conversion is, as v[f()] reads v before f runs: it doesn't see
+// a later change of the array's count, and is invalid once the array grows
+// or is freed, its memory given back (a memory error, spec 8.6).
+//
+//     %v = local 16 align 8
+//     %n = load i64 %array             (its count, at 0)
+//     %8 = const i64 8
+//     %a = ptradd %array, %8
+//     %d = load ptr %a                 (its data, at 8)
+//     store i64 %n, %v
+//     %8b = const i64 8
+//     %vd = ptradd %v, %8b
+//     store ptr %d, %vd
+static s32 lower_view_of_resizable(Lowering *l, Type *resizable, s32 array) {
+    s32 view = emit_slot(l, type_view_of(resizable->element));
+    s32 count = load_view_count(l, array);
+    s32 data = load_view_data(l, array);
+    emit_store(l, IR_I64, count, emit_field_address(l, view, VIEW_COUNT_OFFSET));
+    emit_store(l, IR_PTR, data, emit_field_address(l, view, VIEW_DATA_OFFSET));
+    return view;
+}
+
 static s32 lower_any(Lowering *l, Ast *e, Type *any);
 
 // The value of `e`, of the type `to` its use wants (the checker said it
 // converts): an Any holding it (lower_any) where the checker converted it
 // to one, a constant made at that type, e's value widened to it, an
-// array's view (lower_view_of), or, where a string meets a *u8, the address
+// array's view (lower_view_of), a resizable array's, read here
+// (lower_view_of_resizable), or, where a string meets a *u8, the address
 // of the string literal's bytes it is (literal_address): a literal, or
 // constant data holding one, the only strings the checker lets become a
 // pointer (spec 3.8). Returns the value's number.
@@ -1075,6 +1119,9 @@ static s32 lower_value(Lowering *l, Ast *e, Type *to) {
     if (e->to_any != ANY_NONE && to != e->type) return lower_any(l, e, to);
     if (e->is_constant) return emit_constant(l, ir_type_of(to), e->constant);
     if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_ARRAY) return lower_view_of(l, e);
+    if (to && to->kind == TYPE_VIEW && e->type->kind == TYPE_RESIZABLE) {
+        return lower_view_of_resizable(l, e->type, lower_expr(l, e));
+    }
     if (to && type_is_pointer(to) && e->type == &type_string) return literal_bytes(l, literal_address(e));
     return resize(l, lower_expr(l, e), e->type, ir_type_of(to));
 }
@@ -1407,14 +1454,20 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //   unchecked (spec 3.14).
 // - cast(Any) e is e's conversion to Any (lower_any), as where it meets an
 //   Any without a cast (spec 3.14, 3.16), a constant e included.
+// - cast([]T) e of an array or a resizable array is its view, as where it
+//   meets a []T without a cast (lower_view_of, lower_view_of_resizable:
+//   a resizable array's count and data read at the cast, spec 3.17).
 // The value may be a constant even when the cast isn't (cast(*int) 4096):
 // it's made at its own type.
 static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     Type *from = cast->value->type, *to = cast->type;
-    // A value to an Any, an array to a view, and a string literal, or a
-    // string constant, to *u8 convert as anywhere else.
+    // A value to an Any, an array or a resizable array to a view (its view
+    // read here, spec 3.17), and a string literal, or a string constant, to
+    // *u8 convert as anywhere else.
     if (cast->value->to_any != ANY_NONE) return lower_value(l, cast->value, to);
-    if (from->kind == TYPE_ARRAY && to->kind == TYPE_VIEW) return lower_value(l, cast->value, to);
+    if ((from->kind == TYPE_ARRAY || from->kind == TYPE_RESIZABLE) && to->kind == TYPE_VIEW) {
+        return lower_value(l, cast->value, to);
+    }
     if (type_is_pointer(to) && from == &type_string) return lower_value(l, cast->value, to);
     Ir_Type have = ir_type_of(from), want = ir_type_of(to);
     s32 v = lower_value(l, cast->value, from);
@@ -1569,17 +1622,21 @@ static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
 
 // The address of the field e.x. Through a pointer, p.x is p.*.x: p's value,
 // checked not to be null at the field's name (as p.* is at its '.'), before
-// anything is read or written. Otherwise e is a struct, whose value is its
+// anything is read or written. Otherwise e is a struct, or a view, a string
+// or a resizable array, laid out as one (types.h), whose value is its
 // address already: a variable's slot, a parameter's copy, a call's or a
 // literal's temporary, a constant's read-only global, a field of an outer
 // struct. Then x's offset is added.
 static s32 lower_member_address(Lowering *l, Ast_Member *m) {
     Ast *operand = m->operand;
     Type *t = operand->type;
-    if (type_is_view_or_string(t)) {
-        // A view's (or a string's) two fields, by name (the checker left
-        // m->index -1).
-        s64 offset = string_eq(m->name, str("count")) ? VIEW_COUNT_OFFSET : VIEW_DATA_OFFSET;
+    if (type_has_view_fields(t)) {
+        // A view's (or a string's) two fields, and a resizable array's
+        // four (spec 3.17), by name (the checker left m->index -1).
+        s64 offset = string_eq(m->name, str("count"))       ? VIEW_COUNT_OFFSET
+                     : string_eq(m->name, str("data"))      ? VIEW_DATA_OFFSET
+                     : string_eq(m->name, str("allocated")) ? RESIZABLE_ALLOCATED_OFFSET
+                                                            : RESIZABLE_ALLOCATOR_OFFSET;
         return emit_field_address(l, lower_expr(l, operand), offset);
     }
     s32 base;
@@ -1595,10 +1652,11 @@ static s32 lower_member_address(Lowering *l, Ast_Member *m) {
 
 static s32 bounds_failed_proc(Lowering *l);
 
-// A bounds check (spec 6.5): when the i1 %fails is 1, a block of its own
-// calls __rig_bounds_failed with where the check is (at, the '['), the
-// index %index and the count %count, both i64s, and whether the index's
-// type is signed, which says how to write it; the call never returns.
+// A bounds check (spec 5.11, 8.1): when the i1 %fails is 1, a block of its own
+// calls __rig_bounds_failed with where the check is (at, an index's '[', or
+// a built-in procedure's name: lower_builtin_call), the index %index and
+// the count %count, both i64s, and whether the index's type is signed,
+// which says how to write it; the call never returns.
 // Otherwise the code goes on in a new block:
 //
 //     branch %fails, fail, ok
@@ -1656,7 +1714,8 @@ static void emit_bounds_check(Lowering *l, s32 fails, Position at, s32 index, s3
 //   index inside it, so that fails the check too. Then its data is checked
 //   for null, as a pointer is (a count set by hand, a failed allocation),
 //   with or without bounds checks. A string is a view of bytes, checked the
-//   same way.
+//   same way, and a resizable array starts as a view (spec 3.17): its
+//   count and data are read and checked as a view's.
 // - A pointer is checked for null, not bounds: p[i] is C's, p.* moved by i
 //   elements, which may be anywhere.
 // The check compares unsigned: i as an unsigned number is below the count
@@ -1677,7 +1736,8 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
     s32 base = pointer ? lower_value(l, operand, t) : lower_expr(l, operand);
     // A view's count and data are read before the index is worked out, as a
     // pointer's value is: v[f()] indexes v as it was, whatever f does to it.
-    bool view = type_is_view_or_string(t);
+    // A resizable array's are read the same way (spec 3.17).
+    bool view = type_has_view_fields(t);
     s32 count = -1, data = base;
     if (view) {
         count = load_view_count(l, base);
@@ -1976,8 +2036,243 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
     return emit_view(l, view, array->count, temporary);
 }
 
+// A built-in procedure's call (spec 3.17): a call of the helper of
+// Preload's it stands for (Lowering.array_procs), which does the work in
+// Rig, with the checks that need the call's T or its place around it. In
+// this order:
+// - The caller's current context, which the helper takes as any Rig
+//   procedure does; then the arguments, left to right, as a call's: the
+//   array's pointer, then an index or a count, an int, then an item,
+//   converted to T and put into a temporary of its own, whose address goes.
+//   The item is always a copy, so one that is the array's own element is
+//   read before the helper grows the array or moves its elements, and the
+//   helper takes any T by its address and size. array_pop's result gets a
+//   temporary of T, whose address goes where an item's would.
+// - The checks, each at the built-in's name, the place its message names
+//   (emit_runtime_check, emit_bounds_check): the pointer, for null, always.
+//   When bounds are checked (not under #no_abc or --no-bounds-checks, spec
+//   7.7), the index, as a view's is (lower_index_address): array_insert's
+//   against the count plus one, since it may insert at the end; the
+//   removes' against the count; array_pop's last index, the count less one,
+//   against the count, so an empty array's is -1. A count below 0 (set by
+//   hand) fails them too. Then, for every built-in but array_reset and
+//   array_free, what the array says of itself, bounds checks on or off
+//   (below): its count not below 0, but in array_reserve and where the
+//   bounds check made sure ("'array_add' was given an array with a
+//   negative count"); its data not null while its count or allocated is
+//   above 0, as a view's is (spec 8.4: "null pointer dereference"); and,
+//   in array_pop and the removes, its count not past allocated when it
+//   owns memory ("'array_pop' was given an array with more elements than
+//   its memory holds"). Then array_resize's count below 0, always: the
+//   helper would make a count no array has.
+// - The call of the helper, at the statement, as any call is: the
+//   context, the pointer, the element's size, an i64 constant, then the
+//   rest. The helpers index nothing themselves, so #no_abc changes nothing
+//   in them.
+// - For array_add, array_insert, array_reserve and array_resize, whose
+//   helpers say whether the allocator gave the memory they needed: false
+//   is a runtime error at the name, "the array's allocator has no memory to
+//   give".
+// - array_pop's value, into `results`: its temporary's, loaded when T is a
+//   scalar.
+//
+//     array_add(*a, 7);          %3 = load ptr %0          (the context; a, a [..]int, in %2)
+//                                %4 = const i64 8          (an int's size)
+//                                %5 = local i64            (the item's copy)
+//                                %6 = const i64 7
+//                                store i64 %6, %5
+//                                %7 = const ptr 0
+//                                %8 = cmp eq ptr %2, %7
+//                                branch %8, fail, ok       (emit_null_check)
+//                              ok:
+//                                %9 = load i64 %2          (the count)
+//                                %10 = const i64 0
+//                                %11 = cmp slt i64 %9, %10
+//                                branch %11, fail, ok      (below 0)
+//                              ok:
+//                                %12 = const i64 8
+//                                %13 = ptradd %2, %12
+//                                %14 = load ptr %13        (the data)
+//                                %15 = const i64 16
+//                                %16 = ptradd %2, %15
+//                                %17 = load i64 %16        (allocated)
+//                                ...
+//                                branch %25, fail, ok      (the data check)
+//                              ok:
+//                                %26 = call @__array_add(%3, %2, %4, %5)
+//                                %27 = const i1 1
+//                                %28 = xor i1 %26, %27     (false: no memory given)
+//                                branch %28, fail, ok      (emit_runtime_check)
+//
+//     x := array_pop(*a);        %30 = load ptr %0         (x in %29)
+//                                %31 = const i64 8
+//                                %32 = local i64           (the result's temporary)
+//                                ...                       (the null check)
+//                                %35 = load i64 %2         (the count)
+//                                %36 = const i64 1
+//                                %37 = sub i64 %35, %36    (the last index)
+//                                %38 = cmp uge i64 %37, %35
+//                                %39 = const i64 0
+//                                %40 = cmp slt i64 %35, %39
+//                                %41 = or i1 %38, %40
+//                                branch %41, fail, ok      (emit_bounds_check)
+//                              ok:
+//                                ...                       (the data check, of %35 and
+//                                                           allocated, %50)
+//                              ok:
+//                                %59 = cmp sgt i64 %35, %50
+//                                %60 = and i1 %54, %59     (%54: allocated above 0)
+//                                branch %60, fail, ok      (past allocated)
+//                              ok:
+//                                call @__array_pop(%30, %2, %31, %32)
+//                                %61 = load i64 %32
+//                                store i64 %61, %29
+static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results) {
+    Array_Builtin builtin = call->builtin->builtin;
+    Type *signature = call->callee_type;
+    Type *element = signature->params[0]->pointee->element;
+    Ast_Proc *helper = l->array_procs[builtin];
+    Position at = call->callee->pos;
+    bool takes_item = builtin == BUILTIN_ARRAY_ADD || builtin == BUILTIN_ARRAY_INSERT;
+    Array<s32> args = {};  // the call instruction keeps it
+    if (takes_context(l, helper)) array_add(&args, load_context(l));
+    s32 array = lower_value(l, call->args[0], signature->params[0]);
+    array_add(&args, array);
+    array_add(&args, emit_constant(l, IR_I64, (u64)element->size));
+    s32 index = -1;  // the index or the count, an i64
+    for (s64 i = 1; i < call->args.count; i++) {
+        if (takes_item && i == call->args.count - 1) {
+            s32 copy = emit_slot(l, element);
+            emit_put(l, element, lower_value(l, call->args[i], element), copy);
+            array_add(&args, copy);
+        } else {
+            index = lower_value(l, call->args[i], signature->params[i]);
+            array_add(&args, index);
+        }
+    }
+    s32 popped = -1;
+    if (builtin == BUILTIN_ARRAY_POP) {
+        popped = emit_slot(l, element);
+        array_add(&args, popped);
+    }
+    emit_null_check(l, array, at);
+    bool indexes = builtin == BUILTIN_ARRAY_INSERT || builtin == BUILTIN_ARRAY_POP ||
+                   builtin == BUILTIN_ARRAY_REMOVE_ORDERED || builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
+    bool removes = builtin == BUILTIN_ARRAY_POP || builtin == BUILTIN_ARRAY_REMOVE_ORDERED ||
+                   builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
+    // The helpers trust what the array says of itself (Preload's
+    // Resizable_Array): a count of 0 or more, a null data only with a
+    // count and an allocated of 0, and an owned memory (allocated above 0,
+    // data not null, elements of bytes) that holds the count's elements.
+    // A program may set any member by hand, so each of these is checked,
+    // bounds checks on or off, wherever a helper would otherwise read or
+    // write outside memory. array_reset and array_free need none of them:
+    // reset only sets the count to 0, and free gives data's memory back
+    // only when allocated is above 0 and data isn't null, then zeroes the
+    // three. Every other built-in keeps the array's elements, reading,
+    // moving or copying them at data, so it loads the count, and the
+    // checks come after the index's, as a view's data check does
+    // (lower_index_address): an empty array's pop is out of bounds.
+    bool keeps = builtin != BUILTIN_ARRAY_RESET && builtin != BUILTIN_ARRAY_FREE;
+    s32 count = keeps ? load_view_count(l, array) : -1;
+    bool bounded = indexes && l->checking_bounds;
+    if (bounded) {
+        s32 bound = count;
+        if (builtin == BUILTIN_ARRAY_INSERT) bound = emit_binary(l, IR_ADD, IR_I64, count, emit_constant(l, IR_I64, 1));
+        if (builtin == BUILTIN_ARRAY_POP) index = emit_binary(l, IR_SUB, IR_I64, count, emit_constant(l, IR_I64, 1));
+        s32 fails = emit_compare(l, IR_UGE, IR_I64, index, bound);
+        s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
+        emit_bounds_check(l, emit_binary(l, IR_OR, IR_I1, fails, negative), at, index, bound, true);
+    }
+    // A count below 0: the helpers place and find elements from the count,
+    // so an add would write its item before data's memory, a resize zero
+    // from there, and a pop or a remove read there. An index's bounds check
+    // fails such a count already (its count has no index inside it), so
+    // this one is made where there's none: in array_add and array_resize,
+    // which take no index, and with bounds checks off. Always, as
+    // array_resize's check of the count it's given is (below), and with
+    // its message's form. array_reserve needs none: it only grows, to at
+    // least its count, and its growth copies elements only from a count
+    // above 0 (__array_grow).
+    if (keeps && builtin != BUILTIN_ARRAY_RESERVE && !bounded) {
+        s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
+        String message = string_printf(l->arena, "'" STR_FMT "' was given an array with a negative count",
+                                       STR_ARG(call->builtin->name));
+        emit_runtime_check(l, negative, at, message);
+    }
+    if (keeps) {
+        // A null data, while the count or allocated is above 0. A count
+        // above 0 says there are elements at data, which no memory holds,
+        // so the built-in stops as indexing such a view would (spec 8.4),
+        // with its message: the data is checked as a view's is when
+        // indexing or a for reads it (emit_data_check), but before the
+        // helper runs, whatever it would do, even nothing (an
+        // array_reserve within allocated, a shrinking array_resize).
+        // allocated above 0 says data's memory has room for that many,
+        // which null has not, so it's in the same check, with the same
+        // message: it's the same claim on memory that isn't there, and an
+        // add or an insert into such an array, its count below allocated,
+        // would write its item through null without growing, as a resize
+        // within allocated would zero there. A zeroed or freed array, both
+        // 0, passes, and so does an adopted one (data set by hand,
+        // allocated 0) and an array of elements of 0 bytes that grew, which
+        // points at __array_no_bytes. An allocated below 0 owns nothing, as
+        // 0 does: growing allocates anew, and nothing is written at data
+        // without growing.
+        //
+        //     %d = load ptr (array + 8)            (the data)
+        //     %a = load i64 (array + 16)           (allocated)
+        //     %some = cmp sgt i64 %count, 0
+        //     %room = cmp sgt i64 %a, 0
+        //     %claims = or i1 %some, %room
+        //     %null = cmp eq ptr %d, null
+        //     %fails = and i1 %claims, %null
+        //     branch %fails, fail, ok        (emit_runtime_check)
+        s32 data = load_view_data(l, array);
+        s32 allocated = emit_load(l, IR_I64, emit_field_address(l, array, RESIZABLE_ALLOCATED_OFFSET));
+        s32 some = emit_compare(l, IR_SGT, IR_I64, count, emit_constant(l, IR_I64, 0));
+        s32 room = emit_compare(l, IR_SGT, IR_I64, allocated, emit_constant(l, IR_I64, 0));
+        s32 claims = emit_binary(l, IR_OR, IR_I1, some, room);
+        s32 null = emit_compare(l, IR_EQ, IR_PTR, data, emit_constant(l, IR_PTR, 0));
+        emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, claims, null), at, str("null pointer dereference"));
+        // A count past allocated, in an array that owns memory (allocated
+        // above 0, %room, so data isn't null, as just checked): its memory
+        // holds allocated elements, and the count claims more. A pop or a
+        // remove reads its last element, past the memory, and a remove
+        // moves elements there, so each is checked, always, as the
+        // negative count is. An add, an insert, a reserve and a resize need
+        // no check: whichever would write past allocated grows first, to
+        // room for at least the count it leaves (__array_insert,
+        // __array_grow), the elements past the old memory then being
+        // whatever the new memory held. Elements of 0 bytes take no memory
+        // to be past, so their arrays own none (Preload's Resizable_Array)
+        // and aren't checked. An adopted array, allocated 0, owns none
+        // either: its count says how many elements its data holds. An
+        // allocated set by hand above what data's memory holds is a memory
+        // error no check catches (spec 8.6).
+        if (removes && element->size > 0) {
+            s32 past = emit_compare(l, IR_SGT, IR_I64, count, allocated);
+            String message = string_printf(l->arena,
+                                           "'" STR_FMT "' was given an array with more elements than its memory holds",
+                                           STR_ARG(call->builtin->name));
+            emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, room, past), at, message);
+        }
+    }
+    if (builtin == BUILTIN_ARRAY_RESIZE) {
+        s32 negative = emit_compare(l, IR_SLT, IR_I64, index, emit_constant(l, IR_I64, 0));
+        emit_runtime_check(l, negative, at, str("'array_resize' was given a negative count"));
+    }
+    s32 result = emit_call(l, proc_index_of(l, helper), args)->result;
+    if (takes_item || builtin == BUILTIN_ARRAY_RESERVE || builtin == BUILTIN_ARRAY_RESIZE) {
+        s32 failed = emit_binary(l, IR_XOR, IR_I1, result, emit_constant(l, IR_I1, 1));
+        emit_runtime_check(l, failed, at, str("the array's allocator has no memory to give"));
+    }
+    if (popped >= 0) array_add(results, emit_get(l, element, popped));
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
-// scalar's IR value, or an aggregate's address.
+// scalar's IR value, or an aggregate's address. A built-in procedure's is
+// lower_builtin_call's.
 // - A call through a procedure value works the value out first, the
 //   procedure called.
 // - Then a temporary for each aggregate result, passed as the hidden
@@ -2076,6 +2371,10 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                              ok:
 //                                call %1(%2)
 static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results) {
+    if (call->builtin) {
+        lower_builtin_call(l, call, results);
+        return;
+    }
     Ast_Proc *proc = call->proc;
     Type *callee = call->callee_type;  // through a value
     s32 function = callee ? lower_value(l, call->callee, callee) : -1;
@@ -2496,12 +2795,13 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 // one, and %it + 1 is never computed for it. Testing it <= last after
 // adding instead would never end when last is the type's largest value
 // (for 0..255 on a u8: 255 + 1 wraps to 0, which is <= 255 again).
-// for a { B } over an array, a view or a string, `for * a` with it a
-// pointer to each element:
+// for a { B } over an array, a view, a string or a resizable array, `for *
+// a` with it a pointer to each element:
 //
 //     %a = ...                        a, once
-//     %data, %count                   an array's address and N; a view's or a string's, loaded
-//     (a view or a string: emit_data_check, its data null with a count above 0 fails)
+//     %data, %count                   an array's address and N; a view's, a string's or a
+//                                     resizable array's, loaded
+//     (but an array: emit_data_check, its data null with a count above 0 fails)
 //     it_index = 0
 //     jump test
 //   test:
@@ -2519,11 +2819,14 @@ static void lower_while(Lowering *l, Ast_While *loop, Ast_Proc *source) {
 //
 // a is worked out once, before the first iteration, and its data and count
 // taken then: the body may change a view (or call what does), which the
-// loop doesn't see. it is a copy of each element, an aggregate one copied
-// whole, so the body reading it sees the element as it was when its
-// iteration began. A view's data is checked for null once, before the
-// loop, when its count says there are elements to read (emit_data_check),
-// at the sequence: a zeroed view runs no iteration and reads nothing.
+// loop doesn't see. It may grow a resizable array too (spec 3.17): the
+// loop goes on over the elements the array had, where they were, memory
+// that growing past the room it had gives back (a memory error, spec 8.6).
+// it is a copy of each element, an aggregate one copied whole, so the body
+// reading it sees the element as it was when its iteration began. A view's
+// data is checked for null once, before the loop, when its count says
+// there are elements to read (emit_data_check), at the sequence: a zeroed
+// view runs no iteration and reads nothing.
 //
 // Either for is at its `for`, and is a scope of its own starting there,
 // holding it (or the named iterator) and it_index, and the body's
@@ -2538,7 +2841,7 @@ static void lower_for_sequence(Lowering *l, Ast_For *loop, Ast_Proc *source) {
     Type *t = sequence->type, *element = t->element;  // a string's element is u8
     s32 base = lower_expr(l, sequence);
     s32 data = base, count;
-    if (type_is_view_or_string(t)) {
+    if (type_has_view_fields(t)) {  // a resizable array's too (spec 3.17)
         count = load_view_count(l, base);
         data = load_view_data(l, base);
         emit_data_check(l, count, data, sequence->pos);
@@ -2706,9 +3009,14 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
         s32 address = lower_address(l, target);
         Type *from = call_result_type(call, i);
         // An array result going into a view: a view of a copy of it, never
-        // of the call's own temporary (view_of_copy).
+        // of the call's own temporary (view_of_copy). A resizable array
+        // result's view is read from the call's temporary, here, where it
+        // converts (lower_view_of_resizable): its elements lie elsewhere,
+        // so nothing more is copied (spec 3.17).
         s32 value = from->kind == TYPE_ARRAY && target->type->kind == TYPE_VIEW
                         ? view_of_copy(l, from, results[i])
+                    : from->kind == TYPE_RESIZABLE && target->type->kind == TYPE_VIEW
+                        ? lower_view_of_resizable(l, from, results[i])
                         : resize(l, results[i], from, ir_type_of(target->type));
         emit_put(l, target->type, value, address);
     }
@@ -2952,10 +3260,10 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // returns.
 
 // The tag of the description of a type of t's kind: integers, floats,
-// bool, string, pointers, procedure types, void, structs, and arrays and
-// views, which share one. The checker gave every value a type of its own
-// before lowering, so the untyped types, null's and a literal's without its
-// type never get here.
+// bool, string, pointers, procedure types, void, structs, and arrays, views
+// and resizable arrays (spec 3.17), which share one. The checker gave every
+// value a type of its own before lowering, so the untyped types, null's and
+// a literal's without its type never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
     RIG_ASSERT(!type_is_untyped(t));
     switch (t->kind) {
@@ -2968,7 +3276,8 @@ static Type_Info_Tag type_info_tag(Type *t) {
     case TYPE_VOID: return TYPE_INFO_VOID;
     case TYPE_STRUCT: return TYPE_INFO_STRUCT;
     case TYPE_ARRAY:
-    case TYPE_VIEW: return TYPE_INFO_ARRAY;
+    case TYPE_VIEW:
+    case TYPE_RESIZABLE: return TYPE_INFO_ARRAY;
     default: RIG_ASSERT(!"a type with no description"); return TYPE_INFO_VOID;
     }
 }
@@ -3079,8 +3388,9 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, St
 
 // Writes the description `global` of type t: its kind's tag, t's size and
 // alignment (void's 0 and 1), and what its kind adds: an integer's sign; a
-// pointer's pointee's description (a *void's, void's); an array's or a
-// view's element's description, its kind and its count (-1 for a view); a
+// pointer's pointee's description (a *void's, void's); an array's, a view's
+// or a resizable array's element's description, its kind and its count (-1
+// for a view or a resizable array, whose count is its value's); a
 // struct's name and members; a procedure type's parameters' and results'
 // descriptions (a ..T parameter's []T), #c_call and whether its last
 // parameter is a ..T. Its names' str.N and its arrays' globals are made
@@ -3103,10 +3413,13 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
         break;
     case TYPE_ARRAY:
     case TYPE_VIEW:
+    case TYPE_RESIZABLE: {
+        s64 kind = t->kind == TYPE_ARRAY ? ARRAY_FIXED : t->kind == TYPE_VIEW ? ARRAY_VIEW : ARRAY_RESIZABLE;
         array_add(&relocs, Ir_Reloc{TYPE_INFO_ELEMENT_OFFSET, type_info_global(l, t->element), false});
-        write_bits(bytes + TYPE_INFO_ARRAY_KIND_OFFSET, (u64)(t->kind == TYPE_ARRAY ? ARRAY_FIXED : ARRAY_VIEW), 8);
+        write_bits(bytes + TYPE_INFO_ARRAY_KIND_OFFSET, (u64)kind, 8);
         write_bits(bytes + TYPE_INFO_COUNT_OFFSET, (u64)(t->kind == TYPE_ARRAY ? t->count : -1), 8);
         break;
+    }
     case TYPE_STRUCT:
         write_bits(bytes + TYPE_INFO_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
         array_add(&relocs, Ir_Reloc{TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
@@ -3922,6 +4235,19 @@ static void release_lowering(Lowering *l) {
     array_free(&l->waiting);
 }
 
+// Preload's Allocator, the type of a [..]T's allocator field: that of the
+// last field of Resizable_Array, the layout every [..]T has (spec 3.17),
+// for the backend's debug type of one (Ir_Module.allocator_type). Null
+// without Preload, and while the checker hasn't finished laying the struct
+// out, when its fields are only some of them, or none: so for a world's
+// lowering made at a #run in the declarations pass (ir_lowering_new),
+// whose module the interpreter runs, with no debug information.
+static Type *allocator_type_of(Ast_File *f) {
+    Type *layout = f->resizable_array_type;
+    if (!layout || layout->decl->resolve != RESOLVE_DONE || !layout->fields.count) return nullptr;
+    return layout->fields[layout->fields.count - 1].type;
+}
+
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     Ir_Module *m = arena_new<Ir_Module>(a);
     Lowering l = {};
@@ -3938,8 +4264,10 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.context_type = f->context_type;
     l.default_context = f->default_context;
     l.runtime_init = f->runtime_init;
+    l.array_procs = f->array_procs;
     l.context = -1;
     m->context_type = f->context_type;
+    m->allocator_type = allocator_type_of(f);
 
     // The source files, for a debugger (ir.h), every one the program was
     // loaded from, in its order, so a position's file indexes them: the
@@ -4013,12 +4341,15 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->bounds_failed = -1;
     l->string_equal = -1;
     l->block = -1;
-    // The tree's context, as ir_lower takes it; none without a tree.
+    // The tree's context, and a [..]T's allocator type, as ir_lower takes
+    // them; none without a tree.
     if (file) {
         l->context_type = file->context_type;
         l->default_context = file->default_context;
         l->runtime_init = file->runtime_init;
+        l->array_procs = file->array_procs;
         m->context_type = file->context_type;
+        m->allocator_type = allocator_type_of(file);
     }
     l->context = -1;
     // The longest prefix a bounds check can pass __rig_bounds_failed, from

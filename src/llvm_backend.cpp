@@ -108,6 +108,10 @@ struct Backend {
     Type *context_type;       // Preload's Context (Ir_Module.context_type), for the debug types of
                               // procedure types: one that isn't #c_call takes a *Context
                               // (spec 10.7); null without Preload
+    Type *allocator_type;     // Preload's Allocator (Ir_Module.allocator_type), the debug type of a
+                              // [..]T's allocator member (spec 10.7); null without Preload (a
+                              // compile-time module, which can lack it even with Preload,
+                              // never comes here)
 };
 
 static LLVMTypeRef llvm_type(LLVMContextRef c, Ir_Type t) {
@@ -825,8 +829,8 @@ static LLVMMetadataRef debug_file(Backend *b, Position pos) {
 
 // Where a type is declared, the DIFile it and its members are in and its
 // line: a struct's are its declaration's. Any other type (a view, a string,
-// an array's stand-in), which no line declares, is in the main file, the
-// compile unit's, at line 0.
+// a resizable array, an array's stand-in), which no line declares, is in
+// the main file, the compile unit's, at line 0.
 static LLVMMetadataRef type_debug_file(Backend *b, Type *t) {
     return t->kind == TYPE_STRUCT ? debug_file(b, t->decl->pos) : b->files[0];
 }
@@ -846,11 +850,11 @@ static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, LLVMMetadata
 
 // What stands for t below DEBUG_TYPE_LEVELS levels: one level, with no
 // parts. A pointer is a pointer to no type, as *void's (a debugger shows
-// the address). Anything else, a struct, a view, a string or an array, is
-// a declaration (DW_AT_declaration; LLVMDIFlagFwdDecl) of its name, as Rig
-// names it, and its size, with no members: a debugger shows it as a struct
-// it doesn't know the inside of, unless it finds a struct of that name
-// defined (gdb looks a declared struct up by name).
+// the address). Anything else, a struct, a view, a string, a resizable
+// array or an array, is a declaration (DW_AT_declaration; LLVMDIFlagFwdDecl)
+// of its name, as Rig names it, and its size, with no members: a debugger
+// shows it as a struct it doesn't know the inside of, unless it finds a
+// struct of that name defined (gdb looks a declared struct up by name).
 static Debug_Type stand_in_debug_type(Backend *b, Type *t) {
     if (t->kind == TYPE_POINTER) return {LLVMDIBuilderCreatePointerType(b->debug, nullptr, 64, 0, 0, nullptr, 0), 1};
     String name = type_name(b->arena, t);
@@ -877,9 +881,10 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 }
 
 // A struct type, t, named `name`, made `depth` levels down, in its file at
-// its line (type_debug_file, type_debug_line: a view or a string, which no
-// line declares, is in the main file at line 0). A struct can hold a
-// pointer to itself (Node's next: *Node), or a view of itself, so making a
+// its line (type_debug_file, type_debug_line: a view, a string or a
+// resizable array, which no line declares, is in the main file at line 0).
+// A struct can hold a pointer to itself (Node's next: *Node), or a view or a
+// resizable array of itself (Tree's children: []Tree), so making a
 // member's type can lead back to the struct before it's made. So it's made
 // in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
@@ -904,7 +909,7 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
         b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
     remember_debug_type(b, t, Debug_Type{temporary, 1});
-    s64 most = t->kind == TYPE_STRUCT ? t->fields.count : 2;
+    s64 most = t->kind == TYPE_STRUCT ? t->fields.count : t->kind == TYPE_RESIZABLE ? 4 : 2;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, most ? most : 1);
     s32 levels = 1;
     s64 count = make_members(b, t, depth, temporary, file, members, &levels);
@@ -952,6 +957,23 @@ static s64 view_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVM
     members[0] = debug_member(b, in, file, str("count"), 0, 8, VIEW_COUNT_OFFSET, count);
     members[1] = debug_member(b, in, file, str("data"), 0, 8, VIEW_DATA_OFFSET, data);
     return 2;
+}
+
+// A resizable array, [..]T (spec 3.17): the struct it's laid out as
+// (types.h), a view's count and data, then allocated, an int, and
+// allocator, Preload's Allocator (Backend.allocator_type). A debugger shows
+// its members as a view's (a.count, a.data[i]), and a.allocated, and the
+// allocator's procedure and data.
+static s64 resizable_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef file,
+                             LLVMMetadataRef *members, s32 *levels) {
+    RIG_ASSERT(b->allocator_type);  // the checker refused a [..]T without Preload's Resizable_Array
+    view_members(b, t, depth, in, file, members, levels);
+    LLVMMetadataRef count = part_debug_type(b, &type_int, depth, levels);
+    LLVMMetadataRef allocator = part_debug_type(b, b->allocator_type, depth, levels);
+    members[2] = debug_member(b, in, file, str("allocated"), 0, 8, RESIZABLE_ALLOCATED_OFFSET, count);
+    members[3] = debug_member(b, in, file, str("allocator"), 0, b->allocator_type->size, RESIZABLE_ALLOCATOR_OFFSET,
+                              allocator);
+    return 4;
 }
 
 // A pointer to the debug type `to`, 64 bits (null for `to`: void *).
@@ -1017,8 +1039,9 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 //   debugger shows as an address only).
 // - A struct is a struct type of its fields, each a member at its offset.
 // - [N]T is an array of N T's.
-// - []T and string are the structs they're laid out as, named as Rig names
-//   them ("[]int", "string").
+// - []T, string and [..]T are the structs they're laid out as, named as
+//   Rig names them ("[]int", "string", "[..]int"): a [..]T's four members
+//   are a view's two, then allocated and allocator (resizable_members).
 // - A procedure type is a pointer to the subroutine type of its signature
 //   (debug_signature), as a C function pointer is: a debugger shows a
 //   value as the address and the procedure there (gdb: `(int (*)(int,
@@ -1101,6 +1124,7 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
     }
     case TYPE_VIEW:
     case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), depth, view_members);
+    case TYPE_RESIZABLE: return debug_struct(b, t, type_name(b->arena, t), depth, resizable_members);
     case TYPE_STRUCT: return debug_struct(b, t, t->name, depth, struct_members);
     default: RIG_ASSERT(!"a type no variable has"); return {};
     }
@@ -1906,6 +1930,7 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     b->optimize = optimize;
     b->arena = a;
     b->context_type = m->context_type;  // here, since part_debug_type sees only b
+    b->allocator_type = m->allocator_type;
     b->context = LLVMContextCreate();
     b->module = LLVMModuleCreateWithNameInContext("rig", b->context);
     LLVMSetTarget(b->module, triple);

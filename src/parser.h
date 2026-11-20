@@ -22,8 +22,8 @@
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, the last;
 //                                                                  the expression: a default value
-//   type        = '*' type | '[' expression ']' type | '[' ']' type | proc_type | IDENT
-//                                                                  (*void: a pointer to anything)
+//   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
+//               | proc_type | IDENT                                (*void: a pointer to anything)
 //   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
@@ -77,10 +77,10 @@
 // at the first that breaks the pattern.
 //
 // Arrays and views are Jai's (spec 6.5): [N]T is an array of N T's, N an
-// expression (the checker needs a constant), []T a view of T's, and [..]T,
-// a growable array, "growable arrays ([..]T) come with the Basic module, in
-// milestone 4", at its '['. a[i] is an element, a postfix operator as a call
-// is (*a[0] is *(a[0]), a[i].x[j] is ((a[i]).x)[j]), at its '['. An array
+// expression (the checker needs a constant), []T a view of T's, and [..]T
+// a resizable array of T's (spec 3.17), which the checker needs Preload
+// for. a[i] is an element, a postfix operator as a call is (*a[0] is
+// *(a[0]), a[i].x[j] is ((a[i]).x)[j]), at its '['. An array
 // literal is T.[a, b] (T the elements' type, a name, as a struct literal's
 // is) or .[a, b], which takes its type where it's used; its values are in
 // order, never named. `for a { ... }` goes over a's elements: the

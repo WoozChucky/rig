@@ -1,0 +1,16 @@
+adds 20 32 361
+ops [6, 2, 3, 4] 5
+reserve 100 6 [6, 2, 3, 4, 0, 0]
+reset 0 100
+negative 0 0 true true
+remembered 1 2 1 0
+own element {x = 8, y = 8} {x = 4, y = 4} {x = 1, y = 1} 10
+pop {x = 3, y = 30} {x = 2, y = 20}
+loop [0, 1, 2, 10, 11, 12]
+view a,b 6
+converts [-5, -5] [2.0] [[1, 2], [9]] 5 x
+tree 161 {v = 1, kids = [{v = 10, kids = []}, {v = 20, kids = [{v = 100, kids = []}]}, {v = 30, kids = []}]}
+free 0 0 true
+again 1 8
+constant [1, 2] 2 0
+globals [7] [9] 3

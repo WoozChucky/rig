@@ -11,7 +11,8 @@
 //
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values, a
-// reached procedure's default values, which its callers' code holds), and
+// reached procedure's default values, which its callers' code holds), the
+// helper of Preload's a built-in procedure's call calls (spec 3.17), and
 // Preload's __runtime_init, which every run's procedure calls first (spec
 // 7.10), so whatever the #run's code is lowered with is checked, whether or
 // not it runs. A type's description (type_info(T), a value converted to Any) is
@@ -215,6 +216,19 @@ static bool walk_expression(Reach *r, Ast *e) {
     }
     case AST_CALL: {
         Ast_Call *call = (Ast_Call *)e;
+        if (call->builtin) {
+            // A built-in's call (spec 3.17) is a call of Preload's helper,
+            // which lowering makes: it's reached, and its body checked
+            // before the run is lowered, as __runtime_init's is. The
+            // callee's name has no type, and isn't walked. Lowering passes
+            // the element's size, so the array type the first argument
+            // points at is reached: an element struct is laid out even
+            // when nothing in the run holds one by value.
+            reach_type(r, call->callee_type->params[0]->pointee);
+            for (s64 i = call->args.count - 1; i >= 0; i--) array_add(&r->nodes, call->args[i]);
+            reach_decl(r, r->c->file->array_procs[call->builtin->builtin]);
+            return true;
+        }
         if (!call->proc) break;  // through a procedure value: its callee is walked as any value
         if (string_eq(call->proc->name, str("main"))) {
             diag_error(r->c->diag, r->run->pos, "main is where the program starts; #run can't call it");
@@ -363,18 +377,21 @@ static bool walk_struct(Reach *r, Type *t, void (*reach)(Reach *r, Type *t)) {
     return true;
 }
 
-// A type reached: each struct in it, held by value, through arrays and
-// views, has every field's type made now (check_late_field). The #run may
-// come in the declaration pass, before resolve_late_fields has made a late
-// field's type, and lowering and baking need them all. A pointer's target
-// isn't looked behind: holding one needs no more than its address (code
-// that moves it reaches its target where it does, walk_expression). False
-// when a struct has no layout (a circle, too big, too deep), or is still
-// being laid out (a circle through this #run, check_finished_layout), or a
-// field has no type: errors, said.
+// A type reached: each struct in it, held by value, through arrays,
+// views and resizable arrays, has every field's type made now
+// (check_late_field). The #run may come in the declaration pass, before
+// resolve_late_fields has made a late field's type, and lowering and
+// baking need them all. A resizable array (spec 3.17) reaches Preload's
+// Resizable_Array too, its layout, whose last field is its allocator's
+// type. A pointer's target isn't looked behind: holding one needs no more
+// than its address (code that moves it reaches its target where it does,
+// walk_expression). False when a struct has no layout (a circle, too big,
+// too deep), or is still being laid out (a circle through this #run,
+// check_finished_layout), or a field has no type: errors, said.
 static bool walk_type(Reach *r, Type *t) {
-    if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW) {
+    if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) {
         reach_type(r, t->element);
+        if (t->kind == TYPE_RESIZABLE) reach_type(r, r->c->file->resizable_array_type);
         return true;
     }
     if (t->kind != TYPE_STRUCT) return true;
@@ -386,7 +403,8 @@ static bool walk_type(Reach *r, Type *t) {
 // at the descriptions of the types it's made of, which lowering makes too
 // (lower.cpp's describe_type), before the interpreter maps them into its
 // own memory. So every struct it reaches, behind a pointer too, and
-// through arrays, views and procedure types' parameters and results, is
+// through arrays, views, resizable arrays (Resizable_Array too, as
+// walk_type) and procedure types' parameters and results, is
 // laid out (check_finished_layout) and has its late fields made
 // (check_late_field), as walk_type does for a struct held by value: a #run
 // may describe a struct declared after it, reached only through another's
@@ -399,6 +417,10 @@ static bool walk_described(Reach *r, Type *t) {
     case TYPE_POINTER: reach_described(r, t->pointee); return true;
     case TYPE_ARRAY:
     case TYPE_VIEW: reach_described(r, t->element); return true;
+    case TYPE_RESIZABLE:
+        reach_described(r, t->element);
+        reach_described(r, r->c->file->resizable_array_type);
+        return true;
     case TYPE_PROC:
         for (s64 i = 0; i < t->param_count; i++) reach_described(r, t->params[i]);
         for (s64 i = 0; i < t->result_count; i++) reach_described(r, t->results[i]);

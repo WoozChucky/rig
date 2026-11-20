@@ -13,8 +13,10 @@
 // is allowed and reads nothing more, just as a #load of this file by its
 // path reads nothing more: a file is read once.
 //
-// It holds the allocator's shape and the heap, type information and Any,
-// and the context, with the temporary storage and its allocator.
+// It holds the allocator's shape and the heap, type information, Any, the
+// context, the temporary storage and its allocator, and for [..]T, the
+// language's resizable array type, its layout, Resizable_Array, and the
+// helpers its built-in procedures call.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -145,14 +147,16 @@ Type_Info_Struct :: struct { info: Type_Info; name: string; members: []Type_Info
 // in the struct, in bytes from its start (spec 3.9).
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 
-// TYPE_INFO_ARRAY: an array, [N]T, or a view, []T, which array_kind tells
-// apart (ARRAY_FIXED or ARRAY_VIEW); the description of T; and N, or -1 for
-// a view. A string is no view here: it has its own tag, TYPE_INFO_STRING.
+// TYPE_INFO_ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T,
+// which array_kind tells apart (ARRAY_FIXED, ARRAY_VIEW or ARRAY_RESIZABLE);
+// the description of T; and N, or -1 for a view or a resizable array. A
+// string is no view here: it has its own tag, TYPE_INFO_STRING.
 Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: int; count: int; }
 
-// A Type_Info_Array's array_kind.
+// A Type_Info_Array's array_kind, in Jai's order.
 ARRAY_FIXED :: 0;
 ARRAY_VIEW :: 1;
+ARRAY_RESIZABLE :: 2;
 
 // A value of any type: its type's description and its address. Every value
 // converts to an Any implicitly (spec 3.16), a place by its own address, any
@@ -349,3 +353,236 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
 // The temporary storage as an Allocator. Its procedure finds the storage
 // through the context, so it needs no data.
 TEMPORARY_ALLOCATOR :: Allocator.{temporary_allocator_proc, null};
+
+// Resizable arrays (spec 3.17): [..]T, Jai's Resizable_Array. Its layout,
+// which the compiler mirrors (src/types.h's RESIZABLE_ALLOCATED_OFFSET,
+// RESIZABLE_ALLOCATOR_OFFSET and RESIZABLE_SIZE): a view's count and data,
+// where a view has them, so whatever reads a view's reads a resizable
+// array's, then allocated, how many elements data's memory holds, and the
+// allocator that memory came from and goes back to. The array owns that
+// memory when allocated is above 0 and its elements take bytes; at 0 it
+// owns none, though a program may have set data and count by hand, and an
+// array of elements of 0 bytes owns none either (__array_no_bytes). This
+// is the untyped form, data a *void, which every [..]T has whatever its T,
+// so code that works on any of them takes one; the compiler needs it for a
+// [..]T at all, its allocator field being this one's.
+Resizable_Array :: struct {
+    count: int;
+    data: *void;
+    allocated: int;
+    allocator: Allocator;
+}
+
+// What the resizable arrays' built-in procedures call (spec 3.17):
+// array_add calls __array_add, array_insert __array_insert, and so on for
+// the nine. They're written here, in Rig, so the growth policy and the
+// allocator rule are the same compiled and interpreted, and while
+// compiling. Each takes the untyped array, which every [..]T is laid out
+// as, and its element's size in bytes, which only the caller's T says;
+// lowering passes the size as a constant, add's and insert's item by the
+// address of a copy of its own, so an item that is one of the array's own
+// elements is read before the array grows or its elements move, and pop
+// the address its last element is copied to, the built-in's result.
+// Lowering checks the pointer and resize's count first, at the built-in's
+// name, and the index and pop's count too unless bounds checks are off
+// (#no_abc, --no-bounds-checks; spec 7.7), when an index outside the array
+// is a memory error no check catches (spec 8.6). For every built-in but
+// array_reset and array_free, which use no element, it checks too, bounds
+// checks on or off, what the helpers trust the array to say of itself: a
+// count of 0 or more (but in array_reserve, which places no element from
+// it); a data that isn't null when the count or allocated is above 0,
+// since that count says elements are there and that allocated says room
+// is, which no memory holds, so the built-in stops as indexing would; and
+// in array_pop and the removes, a count not past allocated when the array
+// owns memory, since they read and move its last elements. The helpers
+// check none of them, and a program that calls one by hand gets no check.
+//
+// The allocator: an array whose allocator's procedure is null, a zeroed
+// one, takes the caller's context.allocator when it first grows, and keeps
+// it, even when it gives no memory, so it grows and goes back to that
+// allocator wherever it is used later. A program that sets .allocator
+// before the first growth chooses another; changing it while the array
+// holds memory is a memory error no check catches (spec 8.6).
+//
+// Owning memory: the array owns data's memory when allocated is above 0
+// and its elements take bytes, and gives it back with FREE, its old_size
+// allocated elements' bytes, so an allocator that records sizes gets them.
+// An array whose data and count a program set by hand, allocated 0, owns
+// none: its first growth copies its elements into memory of its own,
+// leaving theirs alone, and array_free gives nothing back for it. Elements
+// of 0 bytes take no memory at all, so an array of them owns none, whatever
+// its allocated (__array_no_bytes).
+
+// C's memset, under Preload's own name, as __memmove is: __array_resize
+// zeroes the elements it adds with it.
+__memset :: (destination: *void, value: s32, count: u64) -> *void #foreign libc "memset";
+
+// Where an array of elements of 0 bytes ([..]Empty, for a struct Empty
+// with no fields) points once it has grown: they take no memory, but an
+// array holding some isn't null, so indexing and for find its data, and
+// every element's address is this one's. Nothing reads or writes it. It's
+// an int, not a byte, for its alignment: an element of 0 bytes can still
+// need 8-byte alignment, as a struct holding a [0]int does, and its
+// address must have it (spec 3.11).
+__array_no_bytes : int;
+
+// Makes room in array for room elements of size bytes, or for its count
+// when that is more, and says whether the allocator gave the memory. On
+// false the array is as it was, but for the allocator it took.
+//
+// An array that owns no memory (allocated 0, or data null) is given new
+// memory with ALLOCATE, and its count elements at data, unless data is
+// null, are copied there; one that owns some has it resized with RESIZE,
+// from its allocated elements' bytes. Room whose bytes pass int's largest
+// is more than any memory holds: it asks for int's largest bytes, which
+// no allocator gives. Elements of 0 bytes ask for nothing.
+__array_grow :: (array: *Resizable_Array, size: int, room: int) -> bool {
+    LARGEST :: 9223372036854775807; // int's largest value
+    if array.allocator.proc == null { array.allocator = context.allocator; }
+    elements := room;
+    if elements < array.count { elements = array.count; }
+    if size <= 0 {
+        array.data = *__array_no_bytes;
+        array.allocated = elements;
+        return true;
+    }
+    bytes := LARGEST;
+    if elements <= LARGEST / size { bytes = elements * size; }
+    allocator := array.allocator;
+    memory : *void;
+    if array.allocated <= 0 || array.data == null {
+        memory = allocator.proc(ALLOCATE, bytes, 0, null, allocator.data);
+        if memory == null { return false; }
+        // Within bytes, since elements is at least the count. A count of 0
+        // or less copies nothing, and never reaches C as a size_t that
+        // wrapped.
+        if array.data != null && array.count > 0 {
+            __memmove(memory, array.data, cast(u64) (array.count * size));
+        }
+    } else {
+        memory = allocator.proc(RESIZE, bytes, array.allocated * size, array.data, allocator.data);
+        if memory == null { return false; }
+    }
+    array.data = memory;
+    array.allocated = elements;
+    return true;
+}
+
+// array_add: a copy of the size bytes at item as the new last element.
+// False when the array was full and its allocator had no memory to give,
+// or its count is int's largest (__array_insert): the array is as it was,
+// but for the allocator it took.
+__array_add :: (array: *Resizable_Array, size: int, item: *void) -> bool {
+    return __array_insert(array, size, array.count, item);
+}
+
+// array_insert: a copy of the size bytes at item as element index, from 0
+// to the count, the elements from index on moving up one. False when the
+// array was full and its allocator had no memory to give, or its count is
+// int's largest (below): the array is as it was, but for the allocator it
+// took.
+//
+// A full array, its count at least allocated, grows to the larger of 8
+// and twice allocated: doubling, rather than growing by one, means n
+// elements added one at a time are moved about n times in all, not about
+// n * n / 2. Doubling past half of int's largest would wrap, so room past
+// it is int's largest. The room is never below the count plus one, since
+// an array whose data and count were set by hand may count more than its
+// allocated 0; a count of int's largest has no room for one more.
+__array_insert :: (array: *Resizable_Array, size: int, index: int, item: *void) -> bool {
+    LARGEST :: 9223372036854775807; // int's largest value
+    HALF :: LARGEST / 2;
+    if array.count >= array.allocated {
+        room := LARGEST;
+        if array.allocated <= HALF { room = array.allocated * 2; }
+        if room < 8 { room = 8; }
+        if room <= array.count {
+            if array.count == LARGEST { return false; }
+            room = array.count + 1;
+        }
+        if !__array_grow(array, size, room) { return false; }
+    }
+    at := cast(*u8) array.data + index * size;
+    moved := (array.count - index) * size;
+    if moved > 0 { __memmove(at + size, at, cast(u64) moved); }
+    if size > 0 { __memmove(at, item, cast(u64) size); }
+    array.count += 1;
+    return true;
+}
+
+// array_pop: copies the last element into the size bytes at item, and
+// removes it. The array has one: lowering checks, unless bounds checks are
+// off.
+__array_pop :: (array: *Resizable_Array, size: int, item: *void) {
+    array.count -= 1;
+    if size > 0 { __memmove(item, cast(*u8) array.data + array.count * size, cast(u64) size); }
+}
+
+// array_remove_ordered: removes element index, moving the later elements
+// down one, so they keep their order.
+__array_remove_ordered :: (array: *Resizable_Array, size: int, index: int) {
+    at := cast(*u8) array.data + index * size;
+    moved := (array.count - 1 - index) * size;
+    if moved > 0 { __memmove(at, at + size, cast(u64) moved); }
+    array.count -= 1;
+}
+
+// array_remove_unordered: removes element index by moving the last element
+// into its place, which copies one element rather than all the later ones,
+// and changes their order.
+__array_remove_unordered :: (array: *Resizable_Array, size: int, index: int) {
+    array.count -= 1;
+    if index != array.count && size > 0 {
+        data := cast(*u8) array.data;
+        __memmove(data + index * size, data + array.count * size, cast(u64) size);
+    }
+}
+
+// array_reserve: makes allocated at least count, growing to exactly count
+// when it is more, or to the array's count when that is more still, as for
+// an array whose data and count were set by hand (__array_grow), so that
+// many elements are added without growing again.
+// A count within allocated, or below 0, does nothing. False when the
+// allocator had no memory to give: the array is as it was, but for the
+// allocator it took.
+__array_reserve :: (array: *Resizable_Array, size: int, count: int) -> bool {
+    if count <= array.allocated { return true; }
+    return __array_grow(array, size, count);
+}
+
+// array_resize: makes count the array's count, growing to exactly count
+// when it's past allocated, or to the array's count when that is more, as
+// for an array whose data and count were set by hand (__array_grow). The
+// elements it adds are zeroed; shrinking
+// keeps the memory. The count isn't below 0: lowering checks. False when
+// the allocator had no memory to give: the array is as it was, but for the
+// allocator it took.
+__array_resize :: (array: *Resizable_Array, size: int, count: int) -> bool {
+    if count > array.allocated {
+        if !__array_grow(array, size, count) { return false; }
+    }
+    added := (count - array.count) * size;
+    if added > 0 { __memset(cast(*u8) array.data + array.count * size, 0, cast(u64) added); }
+    array.count = count;
+    return true;
+}
+
+// array_reset: empties the array for reuse, its count 0 and its memory
+// kept, so as many elements are added again without growing. It doesn't
+// use size, which every helper takes.
+__array_reset :: (array: *Resizable_Array, size: int) {
+    array.count = 0;
+}
+
+// array_free: gives the memory the array owns back to its allocator, with
+// FREE and its size. The array is then empty, data null and allocated 0,
+// and keeps its allocator, so it can grow again from it.
+__array_free :: (array: *Resizable_Array, size: int) {
+    if array.allocated > 0 && array.data != null && size > 0 {
+        allocator := array.allocator;
+        allocator.proc(FREE, 0, array.allocated * size, array.data, allocator.data);
+    }
+    array.count = 0;
+    array.data = null;
+    array.allocated = 0;
+}

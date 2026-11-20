@@ -1,0 +1,10 @@
+// array_add to a resizable array whose allocated says its memory has room
+// but whose data is null (issue #158, spec 3.17, 8.4): its count is below
+// allocated, so the add wouldn't grow it and would write its item through
+// null. Its data is checked with the count and allocated, and the program
+// stops at the built-in's name.
+main :: () {
+    a : [..]int;
+    a.allocated = 4;
+    array_add(*a, 1);
+}

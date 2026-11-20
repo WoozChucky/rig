@@ -65,7 +65,7 @@
 // rig looks for a module in. Before comparing, the runner puts the
 // placeholders in place of the places in what was printed (bin/unit-tests's
 // places for an interpreted run), and on Windows makes each '\' in the rest
-// of such a path '/', so `@MODULES@/Basic/array.rig:43:23:` serves both
+// of such a path '/', so `@MODULES@/Basic/array.rig:27:23:` serves both
 // hosts (with_module_placeholders). The tests assume the repository's
 // layout, bin/ beside modules/.
 //
@@ -371,7 +371,7 @@ static void module_places_of(Arena *a, String program, String *modules, String *
 // and .../bin/modules), so the order they're tried in doesn't matter. On
 // Windows the rest of that path, up to the first ':', '\'', ')', space or
 // line break, has each '\' made '/', so one expectation serves both hosts:
-// @MODULES@/Basic/array.rig:43:23: runtime error: ...
+// @MODULES@/Basic/array.rig:27:23: runtime error: ...
 static String with_module_placeholders(Arena *a, String text, String modules, String bin_modules) {
     String places[2] = {bin_modules, modules};
     const char *holders[2] = {"@BIN_MODULES@", "@MODULES@"};

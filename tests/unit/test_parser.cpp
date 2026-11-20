@@ -1507,18 +1507,35 @@ TEST(parses_array_and_view_types) {
     arena_free(&a);
 }
 
-TEST(growable_array_is_reported) {
-    // [..]T, an array that grows, needs the context's allocator: it comes
-    // with the Basic module (spec 6.5). Said at the '[', in a body or out.
+TEST(parses_resizable_array_type) {
+    // [..]T, a resizable array (spec 3.17), is a type wherever a view's is:
+    // a global's, a parameter's, a result's, behind a pointer, its element
+    // any type.
     Arena a = arena_make();
     String errors;
-    String dump = parse_src(&a, "g : [..]int;\nmain :: () { }\n", &errors);
-    CHECK_STR(errors, "1:5: growable arrays ([..]T) come with the Basic module, in milestone 4\n");
-    CHECK_STR(dump, "(broken g)\n(proc main (params) (block))\n");
-    body_dump(&a, "x : [..]u8;", &errors);
-    CHECK_STR(errors, "2:9: growable arrays ([..]T) come with the Basic module, in milestone 4\n");
-    parse_src(&a, "f :: (a: [..]int) { }\n", &errors);
-    CHECK_STR(errors, "1:10: growable arrays ([..]T) come with the Basic module, in milestone 4\n");
+    CHECK_STR(parse_src(&a, "g : [..]int;\nf :: (a: *[..]Vec2, b: [..][]u8) -> [..]int { }\n", &errors),
+              "(var g (resizable int))\n"
+              "(proc f (params (a (ptr (resizable Vec2))) (b (resizable (view u8)))) (returns (resizable int)) "
+              "(block))\n");
+    CHECK_STR(errors, "");
+    // In a body too, size_of's included.
+    CHECK_STR(body_dump(&a, "x := size_of([..]int) + 1; y : [..]u8 = ---;", &errors),
+              "(block (var x _ (binary + (size_of (resizable int)) (int 1))) (var y (resizable u8) ---))");
+    CHECK_STR(errors, "");
+    // The type is at its '['; its element is a node of its own.
+    Token_List *list = src("g : [..]int;\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    Ast_Type *resizable = ((Ast_Var *)file->globals[0])->type_expr;
+    CHECK_EQ(resizable->kind, AST_TYPE_RESIZABLE);
+    CHECK_EQ(resizable->pos.col, 5);
+    CHECK(!resizable->count);
+    CHECK_EQ(resizable->element->kind, AST_TYPE_NAME);
+    CHECK_EQ(resizable->element->pos.col, 9);
+    CHECK_STR(resizable->element->name, "int");
+    token_list_free(list);
+    // The '..' takes no count: its ']' comes right after it.
+    parse_src(&a, "g : [..5]int;\n", &errors);
+    CHECK_STR(errors, "1:8: expected ']', found integer literal\n");
     arena_free(&a);
 }
 
@@ -1692,6 +1709,21 @@ TEST(types_nest_at_most_max_depth) {
         CHECK_STR(check_source(&a, nested_source(&a, local, shape.pattern, n, more, "", local_after)),
                   types_too_deep(&a, 2, (s64)strlen("    x : ") + at));
     }
+    arena_free(&a);
+}
+
+TEST(resizable_array_types_nest_at_most_max_depth) {
+    // So is each [..]: a global of 1000 levels checks (with Preload, which
+    // a resizable array needs); 1001 is one message, at the '[' one too
+    // many, from the parser.
+    Arena a = arena_make();
+    const char *after = "int;\nmain :: () { }\n";
+    CHECK_STR(check_with_preload(&a, nested_source(&a, "g : ", "[..]", MAX_DEPTH, after, "", "")), "");
+    CHECK_STR(check_with_preload(&a, nested_source(&a, "g : ", "[..]", MAX_DEPTH + 1, after, "", "")),
+              types_too_deep(&a, 1, 5 + 4 * MAX_DEPTH));
+    String errors = {};
+    parse_src(&a, nested_source(&a, "g : ", "[..]", MAX_DEPTH + 1, after, "", ""), &errors);
+    CHECK_STR(errors, types_too_deep(&a, 1, 5 + 4 * MAX_DEPTH));
     arena_free(&a);
 }
 
