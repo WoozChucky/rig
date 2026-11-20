@@ -1,11 +1,16 @@
 // Where an allocation is asked for: Basic's helpers put their caller's place
 // in context.allocation_location while they call the allocator, and put the
-// one before back after; a direct call of an allocator's procedure leaves it
-// as it is; an arena's procedure passes it on to its parent, so a block has
-// the place of the request that needed it.
+// one before back after, here outer:1:2 or the place of the helper call the
+// allocator is answering; resizing null or to 0 passes the place to the alloc
+// or free it is; a direct call of an allocator's procedure leaves it as it
+// is; an arena's procedure and a pool's pass it on to their parent, so a
+// block or the slots have the place of the request that needed them.
 #import "Basic";
 
+// Calls a helper of its own before it reads the place, which must then be
+// put back to the one it was called with.
 seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    free(alloc(1, HEAP_ALLOCATOR), HEAP_ALLOCATOR);
     at := context.allocation_location;
     print("{} {} {}:{}:{}\n", mode, size, at.file, at.line, at.column);
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
@@ -14,17 +19,25 @@ seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *voi
 main :: () {
     seen := context;
     seen.allocator = Allocator.{seen_proc, null};
+    seen.allocation_location = Source_Code_Location.{"outer", 1, 2};
     push_context seen {
         p := alloc(8);
         p = resize(p, 8, 16);
         free(p);
         free_all();
+        r := resize(null, 0, 8);
+        r = resize(r, 8, 0);
         q := context.allocator.proc(ALLOCATE, 4, 0, null, context.allocator.data);
         heap_allocator_proc(FREE, 0, 0, q, null);
         arena : Arena;
         arena_init(*arena, 64);
         a := alloc(8, arena_allocator(*arena));
         free_all(arena_allocator(*arena));
-        print("{}\n", context.allocation_location.line);
+        pool : Pool;
+        pool_init(*pool, 8, 4);
+        b := alloc(8, pool_allocator(*pool));
+        free_all(pool_allocator(*pool));
+        at := context.allocation_location;
+        print("{}:{}:{}\n", at.file, at.line, at.column);
     }
 }

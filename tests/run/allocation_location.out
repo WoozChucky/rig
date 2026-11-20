@@ -1,8 +1,12 @@
-0 8 tests/run/allocation_location.rig:18:14
-1 16 tests/run/allocation_location.rig:19:13
-2 0 tests/run/allocation_location.rig:20:9
-3 0 tests/run/allocation_location.rig:21:9
-0 4 :0:0
-0 80 tests/run/allocation_location.rig:26:14
-2 0 tests/run/allocation_location.rig:27:9
-0
+0 8 tests/run/allocation_location.rig:24:14
+1 16 tests/run/allocation_location.rig:25:13
+2 0 tests/run/allocation_location.rig:26:9
+3 0 tests/run/allocation_location.rig:27:9
+0 8 tests/run/allocation_location.rig:28:14
+2 0 tests/run/allocation_location.rig:29:13
+0 4 outer:1:2
+0 80 tests/run/allocation_location.rig:34:14
+2 0 tests/run/allocation_location.rig:35:9
+0 32 tests/run/allocation_location.rig:38:14
+2 0 tests/run/allocation_location.rig:39:9
+outer:1:2
