@@ -1751,8 +1751,9 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         // Where the '{' should be: parse_block reports it. A #run or an #if
         // starting the next line is where the recovery resumes, as a #load
-        // is.
-        if (is_top_level_directive(t)) break;
+        // is. A #caller_location is a value, as a #run is, so it's no
+        // unknown directive here either (spec 2.7).
+        if (is_top_level_directive(t) || is_directive(t, "caller_location")) break;
         bool compiler = is_directive(t, "compiler");
         if (!compiler && !string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));

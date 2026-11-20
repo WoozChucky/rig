@@ -3930,3 +3930,25 @@ TEST(caller_location_is_a_primary) {
     token_list_free(list);
     arena_free(&a);
 }
+
+TEST(caller_location_after_a_signature) {
+    // A directive Rig knows, so not "unknown directive" there: where the body
+    // should be it's what was expected, as a #run there is, also starting the
+    // next line, and the declaration is given up. At the top level, where no
+    // value goes, it's no declaration.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "f :: () #caller_location { }\nmain :: () {}\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    parse_src(&a, "f :: () #caller_location;\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    parse_src(&a, "f :: () #no_abc #caller_location { }\n", &errors);
+    CHECK_STR(errors, "1:17: expected '{', found directive\n");
+    CHECK_STR(parse_src(&a, "f :: ()\n#caller_location;\nmain :: () {}\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:1: expected '{', found directive\n");
+    parse_src(&a, "#caller_location;\n", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found directive\n");
+    arena_free(&a);
+}
