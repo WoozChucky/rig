@@ -6759,3 +6759,87 @@ TEST(an_array_procedure_calls_its_preload_helper) {
     CHECK(count_of(quiet, "panic @str.") == 7 + 7 + 6 + 3 + 4 + 1);
     arena_free(&a);
 }
+
+// Issue #194: caller locations (spec 7.2).
+
+TEST(a_call_fills_in_its_own_place) {
+    // Each call that leaves loc out passes a temporary Source_Code_Location
+    // of its own, 32 bytes, filled where the call is: the file's path, the
+    // bytes of a constant global, "test.rig" (str.N below), and the line and
+    // column of the callee's name, 4:10 and 5:14. It's the caller's fresh
+    // copy already, so it's passed as it is. The two calls share the path's
+    // bytes, one copy per file.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "here :: (loc: Source_Code_Location = #caller_location) -> int {\n"
+                                          "    return loc.line; }\n"
+                                          "main :: () {\n"
+                                          "    n := here();\n"
+                                          "    k := 1 + here();\n"
+                                          "}\n");
+    s64 path = -1, paths = 0;
+    for (s64 i = 0; i < m->globals.count; i++) {
+        if (string_eq(message_of(m, i), str("test.rig"))) {
+            path = i;
+            paths++;
+        }
+    }
+    CHECK_EQ(paths, 1);
+    if (path < 0) {
+        arena_free(&a);
+        return;
+    }
+    char expected[2048];
+    snprintf(expected, sizeof expected,
+             "proc @main() -> i32 {\n"
+             "b0:\n"
+             "  call @__runtime_init()\n"
+             "  %%0 = local ptr\n"
+             "  %%1 = addr @default_context\n"
+             "  store ptr %%1, %%0\n"
+             "  %%2 = local i64\n"
+             "  %%3 = load ptr %%0\n"
+             "  %%4 = local 32 align 8\n"
+             "  %%5 = const i64 8\n"
+             "  store i64 %%5, %%4\n"
+             "  %%6 = addr @" STR_FMT "\n"
+             "  %%7 = const i64 8\n"
+             "  %%8 = ptradd %%4, %%7\n"
+             "  store ptr %%6, %%8\n"
+             "  %%9 = const i64 4\n"
+             "  %%10 = const i64 16\n"
+             "  %%11 = ptradd %%4, %%10\n"
+             "  store i64 %%9, %%11\n"
+             "  %%12 = const i64 10\n"
+             "  %%13 = const i64 24\n"
+             "  %%14 = ptradd %%4, %%13\n"
+             "  store i64 %%12, %%14\n"
+             "  %%15 = call @here(%%3, %%4)\n"
+             "  store i64 %%15, %%2\n"
+             "  %%16 = local i64\n"
+             "  %%17 = const i64 1\n"
+             "  %%18 = load ptr %%0\n"
+             "  %%19 = local 32 align 8\n"
+             "  %%20 = const i64 8\n"
+             "  store i64 %%20, %%19\n"
+             "  %%21 = addr @" STR_FMT "\n"
+             "  %%22 = const i64 8\n"
+             "  %%23 = ptradd %%19, %%22\n"
+             "  store ptr %%21, %%23\n"
+             "  %%24 = const i64 5\n"
+             "  %%25 = const i64 16\n"
+             "  %%26 = ptradd %%19, %%25\n"
+             "  store i64 %%24, %%26\n"
+             "  %%27 = const i64 14\n"
+             "  %%28 = const i64 24\n"
+             "  %%29 = ptradd %%19, %%28\n"
+             "  store i64 %%27, %%29\n"
+             "  %%30 = call @here(%%18, %%19)\n"
+             "  %%31 = add i64 %%17, %%30\n"
+             "  store i64 %%31, %%16\n"
+             "  %%32 = const i32 0\n"
+             "  ret %%32\n"
+             "}\n",
+             STR_ARG(m->globals[path].name), STR_ARG(m->globals[path].name));
+    CHECK_STR(proc_ir(ir_print(&a, m), "main"), expected);
+    arena_free(&a);
+}

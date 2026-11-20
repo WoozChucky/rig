@@ -1,0 +1,33 @@
+// #caller_location: a parameter's default value that is the place of each
+// call leaving the parameter out, the callee's name in it, in the file that
+// holds the call, named as runtime errors name it (spec 8.1). A call in
+// another default is at its own place there, a #run's call is in the
+// run's code, and a value given is passed as any argument is.
+#import "Basic";
+#load "load/caller_location.rig";
+
+here :: (loc: Source_Code_Location = #caller_location) -> Source_Code_Location {
+    return loc;
+}
+
+// here()'s place is in this declaration, whichever call leaves this out.
+twice_removed :: (loc: Source_Code_Location = here()) -> Source_Code_Location {
+    return loc;
+}
+
+show :: (loc: Source_Code_Location) {
+    print("{}:{}:{}\n", loc.file, loc.line, loc.column);
+}
+
+AT :: #run here();
+
+main :: () {
+    show(here());
+    n := 1; show(here());
+    show(twice_removed());
+    show(AT);
+    show(from_loaded());
+    show(here(.{"given", 7, 8}));
+    for 1..2 { show(here()); }
+    print("{}\n", here());
+}

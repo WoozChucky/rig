@@ -487,6 +487,14 @@ struct Lowering {
     Ast_Proc **array_procs;    // Preload's helpers the built-in procedures call (spec 3.17), by
                                // Array_Builtin: the tree's Ast_File.array_procs (lower_builtin_call);
                                // null without a tree
+    // A call's place (spec 7.2): Preload's Source_Code_Location, from the
+    // tree (Ast_File's), null without Preload, whose programs have no
+    // #caller_location; and each source file's path's bytes, the str.N a
+    // place's file views, by the file's index in diag->files, made the
+    // first time a place there needs them (lower_source_location), -1 until
+    // then: one copy per file, however many places name it.
+    Type *source_code_location_type;
+    Array<s32> path_globals;
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
                                 // and the runs' (set_source, ir_lowering_source)
@@ -1215,6 +1223,45 @@ static Ir_Op ir_op_of(Token_Kind op, Type *t) {
 static String runtime_error_prefix(Lowering *l, Position at) {
     String path = l->diag->files[at.file].path;
     return string_printf(l->arena, STR_FMT ":%d:%d: runtime error: ", STR_ARG(path), at.line, at.col);
+}
+
+// The place `at` as a value of Preload's Source_Code_Location (spec 7.2),
+// what a default #caller_location is at a call that leaves its parameter
+// out: the address of a temporary of its own, filled here. file views the
+// path messages name `at`'s file by, as runtime_error_prefix's PATH does,
+// so a place and a runtime error at it name the same file; its bytes are
+// a constant global, one per file (Lowering.path_globals), made the first
+// time. line and column are `at`'s, counted from 1 (spec 2.2). Each field
+// is put at its offset in Preload's struct, `file: string; line: int;
+// column: int;`, 32 bytes:
+//
+//     %p = local 32 align 8
+//     %n = const i64 COUNT          (the path's count)
+//     store i64 %n, %p
+//     %d = addr @str.N              (its bytes)
+//     %8 = const i64 8
+//     %f = ptradd %p, %8
+//     store ptr %d, %f
+//     %l = const i64 LINE           (then line, at 16, and column, at 24)
+//     ...
+static s32 lower_source_location(Lowering *l, Position at) {
+    Type *t = l->source_code_location_type;
+    RIG_ASSERT(t && t->fields.count == 3);  // the checker refused #caller_location without Preload's
+    while (l->path_globals.count <= at.file) array_add(&l->path_globals, -1);
+    String path = l->diag->files[at.file].path;
+    if (l->path_globals[at.file] < 0) l->path_globals[at.file] = add_bytes(l, path);
+    s32 place = emit_slot(l, t);
+    s32 file = emit_field_address(l, place, t->fields[0].offset);
+    s32 count = emit_constant(l, IR_I64, (u64)path.count);
+    emit_store(l, IR_I64, count, emit_field_address(l, file, VIEW_COUNT_OFFSET));
+    Ir_Instr *bytes = emit(l, IR_ADDR, IR_PTR);
+    bytes->target = l->path_globals[at.file];
+    emit_store(l, IR_PTR, bytes->result, emit_field_address(l, file, VIEW_DATA_OFFSET));
+    s32 line = emit_constant(l, IR_I64, (u64)at.line);
+    emit_store(l, IR_I64, line, emit_field_address(l, place, t->fields[1].offset));
+    s32 column = emit_constant(l, IR_I64, (u64)at.col);
+    emit_store(l, IR_I64, column, emit_field_address(l, place, t->fields[2].offset));
+    return place;
 }
 
 // A runtime check (spec 6.4). The current block ends with a branch on the
@@ -2303,7 +2350,11 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //   default is written in; a runtime check in it still names its own place
 //   in its message (runtime_error_prefix), and while compiling its failure
 //   is there too (fail_in_place). Its bounds checks follow the #no_abc of
-//   the procedure declaring it.
+//   the procedure declaring it. A default that is #caller_location is the
+//   place of the call leaving it out, its callee's name, in a temporary
+//   Source_Code_Location of its own (lower_source_location); so in another
+//   default, `= here()`, it's that inner call's place, where the default
+//   is written, whichever call leaves the outer default out.
 // - Through a procedure value, right before the call, a null value is a
 //   runtime error at the call's '(' (spec 8.4: "null procedure call"); then
 //   the call of the value, as the procedure it holds expects to be called
@@ -2414,8 +2465,16 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
             l->filled_at = l->pos;
         }
         l->checking_bounds = l->bounds_checks && !proc->no_bounds_checks;
+        // A default #caller_location is this call's place, its callee's
+        // name (spec 7.2): a temporary made for it, the caller's fresh copy
+        // already, passed as it is.
         for (s64 i = fixed; i < params; i++) {
-            array_add(&args, lower_argument(l, proc->params[i]->default_value, proc->params[i]->type));
+            Ast *value = proc->params[i]->default_value;
+            if (value->kind == AST_CALLER_LOCATION) {
+                array_add(&args, lower_source_location(l, call->callee->pos));
+            } else {
+                array_add(&args, lower_argument(l, value, proc->params[i]->type));
+            }
         }
         l->filling = outer;
         l->checking_bounds = checking;
@@ -4222,6 +4281,7 @@ static void release_lowering(Lowering *l) {
     table_free(&l->proc_index);
     table_free(&l->global_index);
     table_free(&l->literal_globals);
+    array_free(&l->path_globals);
     table_free(&l->constant_globals);
     table_free(&l->constant_index);
     table_free(&l->used_foreign);
@@ -4265,6 +4325,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.default_context = f->default_context;
     l.runtime_init = f->runtime_init;
     l.array_procs = f->array_procs;
+    l.source_code_location_type = f->source_code_location_type;
     l.context = -1;
     m->context_type = f->context_type;
     m->allocator_type = allocator_type_of(f);
@@ -4348,6 +4409,7 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
         l->default_context = file->default_context;
         l->runtime_init = file->runtime_init;
         l->array_procs = file->array_procs;
+        l->source_code_location_type = file->source_code_location_type;
         m->context_type = file->context_type;
         m->allocator_type = allocator_type_of(file);
     }
