@@ -33,6 +33,11 @@
 // neither it nor an allocator with no memory to give is told apart from an
 // empty result: each gives the zeroed string.
 //
+// Each procedure that copies takes loc last, the place of the call that
+// leaves it out (#caller_location, spec 7.2), and passes it to alloc
+// (allocators.rig): so an allocator that records where it is asked from
+// sees the program's line, not this file's.
+//
 // Only utf8_decode, utf8_count and utf8_encode know UTF-8: they read and
 // write a code point's sequence of one to four bytes, and treat a byte that
 // isn't part of a well-formed one as U+FFFD, the replacement character, one
@@ -214,8 +219,8 @@ split_from_left :: (s: string, separator: u8) -> bool, string, string {
 // there. A caller handing C a name, such as a file's, refuses a string
 // with a zero in it first (find_byte(s, 0) >= 0), rather than have C use a
 // shorter name, another file's.
-to_c_string :: (s: string, allocator: Allocator = context.allocator) -> *u8 {
-    c := cast(*u8) alloc(s.count + 1, allocator);
+to_c_string :: (s: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> *u8 {
+    c := cast(*u8) alloc(s.count + 1, allocator, loc);
     if c == null { return null; }
     copy_memory(c, s.data, s.count);
     c[s.count] = 0;
@@ -262,7 +267,7 @@ count_of :: (s: string, sub: string) -> int {
 // added up past int's largest would wrap to a smaller size than the bytes
 // copied into it, and no memory holds that many bytes anyway, so then
 // nothing is asked for, and the result is the zeroed string.
-join :: (parts: []string, separator: string, allocator: Allocator = context.allocator) -> string {
+join :: (parts: []string, separator: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     LARGEST :: 9223372036854775807; // int's largest value
     joined : string;
     if parts.count <= 0 { return joined; }
@@ -278,7 +283,7 @@ join :: (parts: []string, separator: string, allocator: Allocator = context.allo
     if gaps > 0 && separator.count > (LARGEST - count) / gaps { return joined; }
     count += separator.count * gaps;
     if count == 0 { return joined; }
-    data := cast(*u8) alloc(count, allocator);
+    data := cast(*u8) alloc(count, allocator, loc);
     if data == null { return joined; }
 
     at := 0;
@@ -310,7 +315,7 @@ join :: (parts: []string, separator: string, allocator: Allocator = context.allo
 //
 // The matches are counted first, so the size is known and the memory asked
 // for once; then they are found again as the copy is filled.
-replace :: (s: string, old: string, new: string, allocator: Allocator = context.allocator) -> string {
+replace :: (s: string, old: string, new: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     LARGEST :: 9223372036854775807; // int's largest value
     replaced : string;
     matches := count_of(s, old);
@@ -327,7 +332,7 @@ replace :: (s: string, old: string, new: string, allocator: Allocator = context.
         count -= (old.count - new.count) * matches;
     }
     if count == 0 { return replaced; }
-    data := cast(*u8) alloc(count, allocator);
+    data := cast(*u8) alloc(count, allocator, loc);
     if data == null { return replaced; }
 
     // As many matches as were counted are found again, each in the rest of
@@ -358,14 +363,14 @@ replace :: (s: string, old: string, new: string, allocator: Allocator = context.
 // nothing, and so does an allocator with no memory to give, or a size that
 // would pass int's largest. Otherwise the result is a copy, even for an n
 // of 1.
-repeat :: (s: string, n: int, allocator: Allocator = context.allocator) -> string {
+repeat :: (s: string, n: int, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     LARGEST :: 9223372036854775807; // int's largest value
     repeated : string;
     if n <= 0 || s.count == 0 { return repeated; }
     // Checked by division, so the product can't wrap.
     if s.count > LARGEST / n { return repeated; }
     count := s.count * n;
-    data := cast(*u8) alloc(count, allocator);
+    data := cast(*u8) alloc(count, allocator, loc);
     if data == null { return repeated; }
 
     for i: 0..n - 1 { copy_memory(data + i * s.count, s.data, s.count); }
@@ -380,10 +385,10 @@ repeat :: (s: string, n: int, allocator: Allocator = context.allocator) -> strin
 // unless given, and the caller gives it back with
 // free(result.data, allocator). An empty s gives the zeroed string, which
 // allocates nothing, and so does an allocator with no memory to give.
-to_upper_copy :: (s: string, allocator: Allocator = context.allocator) -> string {
+to_upper_copy :: (s: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     upper : string;
     if s.count == 0 { return upper; }
-    data := cast(*u8) alloc(s.count, allocator);
+    data := cast(*u8) alloc(s.count, allocator, loc);
     if data == null { return upper; }
 
     for s { data[it_index] = to_upper(it); }
@@ -398,10 +403,10 @@ to_upper_copy :: (s: string, allocator: Allocator = context.allocator) -> string
 // with free(result.data, allocator). An empty s gives the zeroed string,
 // which allocates nothing, and so does an allocator with no memory to
 // give.
-to_lower_copy :: (s: string, allocator: Allocator = context.allocator) -> string {
+to_lower_copy :: (s: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     lower : string;
     if s.count == 0 { return lower; }
-    data := cast(*u8) alloc(s.count, allocator);
+    data := cast(*u8) alloc(s.count, allocator, loc);
     if data == null { return lower; }
 
     for s { data[it_index] = to_lower(it); }

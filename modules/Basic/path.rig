@@ -98,8 +98,10 @@ path_without_extension :: (path: string) -> string {
 // null, which allocates nothing, as builder_to_string's empty text does,
 // and freeing it gives the allocator nothing. When the allocator has no
 // memory to give, the result is the zeroed string too. The size is worked
-// out first, so the memory is asked for once.
-path_join :: (a: string, b: string, allocator: Allocator = context.allocator) -> string {
+// out first, so the memory is asked for once, with loc, the place of the
+// call unless given (#caller_location, spec 7.2), so an allocator that
+// records where it is asked from sees the caller's line (allocators.rig).
+path_join :: (a: string, b: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     joined : string;
     separator := 1;
     if a.count == 0 || b.count == 0 { separator = 0; }
@@ -108,7 +110,7 @@ path_join :: (a: string, b: string, allocator: Allocator = context.allocator) ->
 
     count := a.count + separator + b.count;
     if count == 0 { return joined; }
-    data := cast(*u8) alloc(count, allocator);
+    data := cast(*u8) alloc(count, allocator, loc);
     if data == null { return joined; }
 
     copy_memory(data, a.data, a.count);
