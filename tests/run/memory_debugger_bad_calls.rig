@@ -1,15 +1,19 @@
 // Basic's memory debugger (issue #159): a free or a resize of memory it
 // never gave out, or gave and has taken back, is written as it happens,
 // at the call's place, counted, and not passed on; a resize given another
-// old_size is too, and gives null. A freed address handed out again is
-// the new allocation's.
+// old_size is too, and gives null, and the allocation keeps its size. A
+// freed address handed out again is the new allocation's. A second
+// debugger under the first sees what the first passes on: no bad call.
 #import "Basic";
 
 main :: () {
     outside := alloc(8);                     // the heap's, before the debugger
     on_stack : int;
+    inner : Memory_Debugger;
+    memory_debugger_init(*inner);
+    defer memory_debugger_free(*inner);
     debugger : Memory_Debugger;
-    memory_debugger_init(*debugger);
+    memory_debugger_init(*debugger, memory_debugger_allocator(*inner));
     defer memory_debugger_free(*debugger);
     old := context.allocator;
     context.allocator = memory_debugger_allocator(*debugger);
@@ -24,8 +28,11 @@ main :: () {
     print("{}\n", resize(outside, 8, 16) == null);
     b := alloc(1);                           // 2
     print("{}\n", resize(b, 4, 8) == null);    // the wrong old_size: null
-    free(b);                                 // still allocation 2, 1 byte
+    b = resize(b, 1, 8);                     // still 1 byte: a good resize
+    print("{}\n", b != null);
+    free(b);
     print("{}\n", memory_debugger_report(*debugger));
+    print("{}\n", memory_debugger_report(*inner));
 
     // A freed slot handed out again: the second free of x frees y, the
     // allocation now at its address, and y's own free is then the bad one.

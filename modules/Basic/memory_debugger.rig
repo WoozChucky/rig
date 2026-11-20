@@ -145,7 +145,9 @@ memory_debugger_bad_call :: (debugger: *Memory_Debugger, at: Source_Code_Locatio
 // and a resize whose old_size isn't the allocation's size, are bad calls:
 // each is written at its place and counted, and isn't passed on. A resize
 // gives null, which leaves the memory as it was and still the caller's to
-// free, as the protocol says of a null, and a free does nothing.
+// free, as the protocol says of a null, and a free does nothing. The
+// address a resize moved an allocation from is taken back: its record
+// stays there, freed, with the allocation's number and its size there.
 //
 // The place is copied first, before the procedure calls anything of
 // Basic's: each of Basic's helpers puts the field back after its own call,
