@@ -1,12 +1,18 @@
-// What passes the resizable array built-ins' check of data (issue #158,
-// spec 3.17, 8.4), which stops a count above 0 over a null data:
-// - zeroed: an empty array, its data null and its count 0, through every
-//   built-in that checks it.
+// What passes the resizable array built-ins' checks of what an array says
+// of itself (issue #158, spec 3.17, 8.4), which stop a count below 0, a
+// count or allocated above 0 over a null data, and, in array_pop and the
+// removes, a count past allocated in an array that owns memory:
+// - zeroed: an empty array, its data null, its count and allocated 0,
+//   through every built-in that checks it.
 // - adopted: an array whose data and count were set by hand over a buffer,
 //   allocated 0, through every built-in that checks it. Its first growth
 //   copies the buffer's elements into memory of its own, leaving the
 //   buffer as it was.
-// - reset, free: array_reset and array_free read no element, so a count
+// - full: an array that owns memory, its count at allocated, popped and
+//   removed from.
+// - no bytes: an array of elements of 0 bytes owns no memory, so a count
+//   set past its allocated is no error.
+// - reset, free: array_reset and array_free use no element, so a count
 //   above 0 over a null data is no error for them: each empties the
 //   array.
 #import "Basic";
@@ -44,9 +50,34 @@ main :: () {
     c.count = 2;
     array_resize(*c, 4);
     print("adopted {} {} {}\n", c, c.allocated, buffer);
+    d : [..]int;
+    d.data = *buffer[0];
+    d.count = 2;
+    array_add(*d, 8);
+    print("adopted {} {} {}\n", d, d.allocated, buffer);
     array_free(*a);
     array_free(*b);
     array_free(*c);
+    array_free(*d);
+
+    full : [..]int;
+    for 1..8 { array_add(*full, it); }
+    last := array_pop(*full);
+    array_add(*full, last);
+    array_remove_ordered(*full, 0);
+    array_add(*full, 9);
+    array_remove_unordered(*full, 0);
+    print("full {} {} {}\n", last, full, full.allocated);
+    array_free(*full);
+
+    none : [..]Empty;
+    array_add(*none, Empty.{});
+    none.count = none.allocated + 2;
+    array_pop(*none);
+    array_remove_ordered(*none, 0);
+    array_remove_unordered(*none, 0);
+    print("no bytes {} {}\n", none.count, none.allocated);
+    array_free(*none);
 
     r : [..]int;
     r.count = 3;
@@ -57,3 +88,5 @@ main :: () {
     array_free(*f);
     print("free {} {}\n", f.count, f.data == null);
 }
+
+Empty :: struct {}

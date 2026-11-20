@@ -1,0 +1,9 @@
+// array_add to a resizable array whose count was set below 0 (issue #158,
+// spec 3.17, 8.1): the add would write its item before data's memory, and
+// no index of its own is checked, so the array's count is, and the program
+// stops at the built-in's name.
+main :: () {
+    a : [..]int;
+    a.count = -3;
+    array_add(*a, 1);
+}

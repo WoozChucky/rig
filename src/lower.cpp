@@ -116,9 +116,9 @@
 //   or written through it (emit_null_check), and so is a view's, a
 //   resizable array's or a string's data before an element is read
 //   (lower_index_address, emit_data_check, lower_string_comparison,
-//   lower_builtin_call). A
-//   check that fails is a runtime error: a block of its own panics with
-//   "PATH:LINE:COL: runtime error: MESSAGE" (emit_runtime_check).
+//   lower_builtin_call). A check that fails is a runtime error: a block of
+//   its own panics with "PATH:LINE:COL: runtime error: MESSAGE"
+//   (emit_runtime_check).
 // - Pointers (spec 6.5) are ptr values. Since every variable is a slot
 //   already, *x is x's slot (a global's addr), and p.* a load or store
 //   through p, once it's checked not to be null (lower_address finds the
@@ -2056,10 +2056,15 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   removes' against the count; array_pop's last index, the count less one,
 //   against the count, so an empty array's is -1. A count below 0 (set by
 //   hand) fails them too. Then, for every built-in but array_reset and
-//   array_free, the array's data, as a view's is (emit_data_check, spec
-//   8.4), bounds checks on or off: a count above 0 with data null fails.
-//   Then array_resize's count below 0, always: the helper would make a
-//   count no array has.
+//   array_free, what the array says of itself, bounds checks on or off
+//   (below): its count not below 0, but in array_reserve and where the
+//   bounds check made sure ("'array_add' was given an array with a
+//   negative count"); its data not null while its count or allocated is
+//   above 0, as a view's is (spec 8.4: "null pointer dereference"); and,
+//   in array_pop and the removes, its count not past allocated when it
+//   owns memory ("'array_pop' was given an array with more elements than
+//   its memory holds"). Then array_resize's count below 0, always: the
+//   helper would make a count no array has.
 // - The call of the helper, at the statement, as any call is: the
 //   context, the pointer, the element's size, an i64 constant, then the
 //   rest. The helpers index nothing themselves, so #no_abc changes nothing
@@ -2081,35 +2086,47 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                                branch %8, fail, ok       (emit_null_check)
 //                              ok:
 //                                %9 = load i64 %2          (the count)
-//                                %10 = const i64 8
-//                                %11 = ptradd %2, %10
-//                                %12 = load ptr %11        (the data)
+//                                %10 = const i64 0
+//                                %11 = cmp slt i64 %9, %10
+//                                branch %11, fail, ok      (below 0)
+//                              ok:
+//                                %12 = const i64 8
+//                                %13 = ptradd %2, %12
+//                                %14 = load ptr %13        (the data)
+//                                %15 = const i64 16
+//                                %16 = ptradd %2, %15
+//                                %17 = load i64 %16        (allocated)
 //                                ...
-//                                branch %17, fail, ok      (emit_data_check)
+//                                branch %25, fail, ok      (the data check)
 //                              ok:
-//                                %18 = call @__array_add(%3, %2, %4, %5)
-//                                %19 = const i1 1
-//                                %20 = xor i1 %18, %19     (false: no memory given)
-//                                branch %20, fail, ok      (emit_runtime_check)
+//                                %26 = call @__array_add(%3, %2, %4, %5)
+//                                %27 = const i1 1
+//                                %28 = xor i1 %26, %27     (false: no memory given)
+//                                branch %28, fail, ok      (emit_runtime_check)
 //
-//     x := array_pop(*a);        %22 = load ptr %0         (x in %21)
-//                                %23 = const i64 8
-//                                %24 = local i64           (the result's temporary)
+//     x := array_pop(*a);        %30 = load ptr %0         (x in %29)
+//                                %31 = const i64 8
+//                                %32 = local i64           (the result's temporary)
 //                                ...                       (the null check)
-//                                %27 = load i64 %2         (the count)
-//                                %28 = const i64 1
-//                                %29 = sub i64 %27, %28    (the last index)
-//                                %30 = cmp uge i64 %29, %27
-//                                %31 = const i64 0
-//                                %32 = cmp slt i64 %27, %31
-//                                %33 = or i1 %30, %32
-//                                branch %33, fail, ok      (emit_bounds_check)
+//                                %35 = load i64 %2         (the count)
+//                                %36 = const i64 1
+//                                %37 = sub i64 %35, %36    (the last index)
+//                                %38 = cmp uge i64 %37, %35
+//                                %39 = const i64 0
+//                                %40 = cmp slt i64 %35, %39
+//                                %41 = or i1 %38, %40
+//                                branch %41, fail, ok      (emit_bounds_check)
 //                              ok:
-//                                ...                       (the data check, of %27)
+//                                ...                       (the data check, of %35 and
+//                                                           allocated, %50)
 //                              ok:
-//                                call @__array_pop(%22, %2, %23, %24)
-//                                %45 = load i64 %24
-//                                store i64 %45, %21
+//                                %59 = cmp sgt i64 %35, %50
+//                                %60 = and i1 %54, %59     (%54: allocated above 0)
+//                                branch %60, fail, ok      (past allocated)
+//                              ok:
+//                                call @__array_pop(%30, %2, %31, %32)
+//                                %61 = load i64 %32
+//                                store i64 %61, %29
 static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Array_Builtin builtin = call->builtin->builtin;
     Type *signature = call->callee_type;
@@ -2141,22 +2158,25 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
     emit_null_check(l, array, at);
     bool indexes = builtin == BUILTIN_ARRAY_INSERT || builtin == BUILTIN_ARRAY_POP ||
                    builtin == BUILTIN_ARRAY_REMOVE_ORDERED || builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
-    // Every built-in but array_reset and array_free keeps the array's
-    // elements, so its helper reads, moves or copies them at data: a pop
-    // or a remove reads them in place, an add or an insert moves them up,
-    // and a growth (an add's, an insert's, a reserve's, a resize's) copies
-    // them into the new memory. So data is checked as a view's is when
-    // indexing or a for reads it (emit_data_check, spec 8.4), bounds checks
-    // on or off: a count above 0 with data null (a count set by hand)
-    // fails, and an empty or zeroed array passes. array_reset and
-    // array_free read no element: they only empty the array, and free gives
-    // data's memory back only when data isn't null. An array of elements of
-    // 0 bytes that grew points at __array_no_bytes, not null, so it passes;
-    // one whose count was set by hand over a null data fails, as indexing
-    // such a view does, whatever its elements' size.
+    bool removes = builtin == BUILTIN_ARRAY_POP || builtin == BUILTIN_ARRAY_REMOVE_ORDERED ||
+                   builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
+    // The helpers trust what the array says of itself (Preload's
+    // Resizable_Array): a count of 0 or more, a null data only with a
+    // count and an allocated of 0, and an owned memory (allocated above 0,
+    // data not null, elements of bytes) that holds the count's elements.
+    // A program may set any member by hand, so each of these is checked,
+    // bounds checks on or off, wherever a helper would otherwise read or
+    // write outside memory. array_reset and array_free need none of them:
+    // reset only sets the count to 0, and free gives data's memory back
+    // only when allocated is above 0 and data isn't null, then zeroes the
+    // three. Every other built-in keeps the array's elements, reading,
+    // moving or copying them at data, so it loads the count, and the
+    // checks come after the index's, as a view's data check does
+    // (lower_index_address): an empty array's pop is out of bounds.
     bool keeps = builtin != BUILTIN_ARRAY_RESET && builtin != BUILTIN_ARRAY_FREE;
     s32 count = keeps ? load_view_count(l, array) : -1;
-    if (indexes && l->checking_bounds) {
+    bool bounded = indexes && l->checking_bounds;
+    if (bounded) {
         s32 bound = count;
         if (builtin == BUILTIN_ARRAY_INSERT) bound = emit_binary(l, IR_ADD, IR_I64, count, emit_constant(l, IR_I64, 1));
         if (builtin == BUILTIN_ARRAY_POP) index = emit_binary(l, IR_SUB, IR_I64, count, emit_constant(l, IR_I64, 1));
@@ -2164,9 +2184,80 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
         s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
         emit_bounds_check(l, emit_binary(l, IR_OR, IR_I1, fails, negative), at, index, bound, true);
     }
-    // After the index, as a view's data is checked after its index's
-    // bounds (lower_index_address): an empty array's pop is out of bounds.
-    if (keeps) emit_data_check(l, count, load_view_data(l, array), at);
+    // A count below 0: the helpers place and find elements from the count,
+    // so an add would write its item before data's memory, a resize zero
+    // from there, and a pop or a remove read there. An index's bounds check
+    // fails such a count already (its count has no index inside it), so
+    // this one is made where there's none: in array_add and array_resize,
+    // which take no index, and with bounds checks off. Always, as
+    // array_resize's check of the count it's given is (below), and with
+    // its message's form. array_reserve needs none: it only grows, to at
+    // least its count, and its growth copies elements only from a count
+    // above 0 (__array_grow).
+    if (keeps && builtin != BUILTIN_ARRAY_RESERVE && !bounded) {
+        s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
+        String message = string_printf(l->arena, "'" STR_FMT "' was given an array with a negative count",
+                                       STR_ARG(call->builtin->name));
+        emit_runtime_check(l, negative, at, message);
+    }
+    if (keeps) {
+        // A null data, while the count or allocated is above 0. A count
+        // above 0 says there are elements at data, which no memory holds,
+        // so the built-in stops as indexing such a view would (spec 8.4),
+        // with its message: the data is checked as a view's is when
+        // indexing or a for reads it (emit_data_check), but before the
+        // helper runs, whatever it would do, even nothing (an
+        // array_reserve within allocated, a shrinking array_resize).
+        // allocated above 0 says data's memory has room for that many,
+        // which null has not, so it's in the same check, with the same
+        // message: it's the same claim on memory that isn't there, and an
+        // add or an insert into such an array, its count below allocated,
+        // would write its item through null without growing, as a resize
+        // within allocated would zero there. A zeroed or freed array, both
+        // 0, passes, and so does an adopted one (data set by hand,
+        // allocated 0) and an array of elements of 0 bytes that grew, which
+        // points at __array_no_bytes. An allocated below 0 owns nothing, as
+        // 0 does: growing allocates anew, and nothing is written at data
+        // without growing.
+        //
+        //     %d = load ptr (array + 8)            (the data)
+        //     %a = load i64 (array + 16)           (allocated)
+        //     %some = cmp sgt i64 %count, 0
+        //     %room = cmp sgt i64 %a, 0
+        //     %claims = or i1 %some, %room
+        //     %null = cmp eq ptr %d, null
+        //     %fails = and i1 %claims, %null
+        //     branch %fails, fail, ok        (emit_runtime_check)
+        s32 data = load_view_data(l, array);
+        s32 allocated = emit_load(l, IR_I64, emit_field_address(l, array, RESIZABLE_ALLOCATED_OFFSET));
+        s32 some = emit_compare(l, IR_SGT, IR_I64, count, emit_constant(l, IR_I64, 0));
+        s32 room = emit_compare(l, IR_SGT, IR_I64, allocated, emit_constant(l, IR_I64, 0));
+        s32 claims = emit_binary(l, IR_OR, IR_I1, some, room);
+        s32 null = emit_compare(l, IR_EQ, IR_PTR, data, emit_constant(l, IR_PTR, 0));
+        emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, claims, null), at, str("null pointer dereference"));
+        // A count past allocated, in an array that owns memory (allocated
+        // above 0, %room, so data isn't null, as just checked): its memory
+        // holds allocated elements, and the count claims more. A pop or a
+        // remove reads its last element, past the memory, and a remove
+        // moves elements there, so each is checked, always, as the
+        // negative count is. An add, an insert, a reserve and a resize need
+        // no check: whichever would write past allocated grows first, to
+        // room for at least the count it leaves (__array_insert,
+        // __array_grow), the elements past the old memory then being
+        // whatever the new memory held. Elements of 0 bytes take no memory
+        // to be past, so their arrays own none (Preload's Resizable_Array)
+        // and aren't checked. An adopted array, allocated 0, owns none
+        // either: its count says how many elements its data holds. An
+        // allocated set by hand above what data's memory holds is a memory
+        // error no check catches (spec 8.6).
+        if (removes && element->size > 0) {
+            s32 past = emit_compare(l, IR_SGT, IR_I64, count, allocated);
+            String message = string_printf(l->arena,
+                                           "'" STR_FMT "' was given an array with more elements than its memory holds",
+                                           STR_ARG(call->builtin->name));
+            emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, room, past), at, message);
+        }
+    }
     if (builtin == BUILTIN_ARRAY_RESIZE) {
         s32 negative = emit_compare(l, IR_SLT, IR_I64, index, emit_constant(l, IR_I64, 0));
         emit_runtime_check(l, negative, at, str("'array_resize' was given a negative count"));

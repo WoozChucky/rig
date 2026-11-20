@@ -1,0 +1,1 @@
+tests/run/resizable_array_negative_count_unchecked.rig:10:5: runtime error: 'array_insert' was given an array with a negative count

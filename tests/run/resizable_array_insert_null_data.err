@@ -1,0 +1,1 @@
+tests/run/resizable_array_insert_null_data.rig:8:5: runtime error: null pointer dereference

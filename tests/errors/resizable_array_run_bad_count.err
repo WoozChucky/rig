@@ -1,0 +1,20 @@
+tests/errors/resizable_array_run_bad_count.rig:19:6: error: #run failed: runtime error: 'array_add' was given an array with a negative count
+    A :: #run add();
+         ^
+    in add (tests/errors/resizable_array_run_bad_count.rig:8:47)
+    in #run (tests/errors/resizable_array_run_bad_count.rig:19:6)
+tests/errors/resizable_array_run_bad_count.rig:20:6: error: #run failed: runtime error: 'array_resize' was given an array with a negative count
+    R :: #run resize();
+         ^
+    in resize (tests/errors/resizable_array_run_bad_count.rig:9:50)
+    in #run (tests/errors/resizable_array_run_bad_count.rig:20:6)
+tests/errors/resizable_array_run_bad_count.rig:21:6: error: #run failed: runtime error: 'array_pop' was given an array with a negative count
+    P :: #run pop();
+         ^
+    in pop (tests/errors/resizable_array_run_bad_count.rig:10:62)
+    in #run (tests/errors/resizable_array_run_bad_count.rig:21:6)
+tests/errors/resizable_array_run_bad_count.rig:22:6: error: #run failed: runtime error: 'array_remove_ordered' was given an array with more elements than its memory holds
+    X :: #run past();
+         ^
+    in past (tests/errors/resizable_array_run_bad_count.rig:15:5)
+    in #run (tests/errors/resizable_array_run_bad_count.rig:22:6)

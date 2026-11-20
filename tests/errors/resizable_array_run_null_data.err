@@ -1,5 +1,40 @@
-tests/errors/resizable_array_run_null_data.rig:11:6: error: #run failed: runtime error: null pointer dereference
-    X :: #run go();
+tests/errors/resizable_array_run_null_data.rig:21:6: error: #run failed: runtime error: null pointer dereference
+    P :: #run pop();
          ^
-    in go (tests/errors/resizable_array_run_null_data.rig:8:12)
-    in #run (tests/errors/resizable_array_run_null_data.rig:11:6)
+    in pop (tests/errors/resizable_array_run_null_data.rig:12:46)
+    in #run (tests/errors/resizable_array_run_null_data.rig:21:6)
+tests/errors/resizable_array_run_null_data.rig:22:6: error: #run failed: runtime error: null pointer dereference
+    A :: #run add();
+         ^
+    in add (tests/errors/resizable_array_run_null_data.rig:13:39)
+    in #run (tests/errors/resizable_array_run_null_data.rig:22:6)
+tests/errors/resizable_array_run_null_data.rig:23:6: error: #run failed: runtime error: null pointer dereference
+    I :: #run insert();
+         ^
+    in insert (tests/errors/resizable_array_run_null_data.rig:14:42)
+    in #run (tests/errors/resizable_array_run_null_data.rig:23:6)
+tests/errors/resizable_array_run_null_data.rig:24:6: error: #run failed: runtime error: null pointer dereference
+    O :: #run ordered();
+         ^
+    in ordered (tests/errors/resizable_array_run_null_data.rig:15:43)
+    in #run (tests/errors/resizable_array_run_null_data.rig:24:6)
+tests/errors/resizable_array_run_null_data.rig:25:6: error: #run failed: runtime error: null pointer dereference
+    U :: #run unordered();
+         ^
+    in unordered (tests/errors/resizable_array_run_null_data.rig:16:45)
+    in #run (tests/errors/resizable_array_run_null_data.rig:25:6)
+tests/errors/resizable_array_run_null_data.rig:26:6: error: #run failed: runtime error: null pointer dereference
+    S :: #run reserve();
+         ^
+    in reserve (tests/errors/resizable_array_run_null_data.rig:17:43)
+    in #run (tests/errors/resizable_array_run_null_data.rig:26:6)
+tests/errors/resizable_array_run_null_data.rig:27:6: error: #run failed: runtime error: null pointer dereference
+    R :: #run resize();
+         ^
+    in resize (tests/errors/resizable_array_run_null_data.rig:18:42)
+    in #run (tests/errors/resizable_array_run_null_data.rig:27:6)
+tests/errors/resizable_array_run_null_data.rig:28:6: error: #run failed: runtime error: null pointer dereference
+    M :: #run room();
+         ^
+    in room (tests/errors/resizable_array_run_null_data.rig:19:51)
+    in #run (tests/errors/resizable_array_run_null_data.rig:28:6)

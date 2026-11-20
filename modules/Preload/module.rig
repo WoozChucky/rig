@@ -387,11 +387,15 @@ Resizable_Array :: struct {
 // name, and the index and pop's count too unless bounds checks are off
 // (#no_abc, --no-bounds-checks; spec 7.7), when an index outside the array
 // is a memory error no check catches (spec 8.6). For every built-in but
-// array_reset and array_free, whose helpers read no element, it checks the
-// array's data too, as a view's is, bounds checks on or off: a count above
-// 0 with data null fails, since the helper would read, move or copy
-// elements there. The helpers check none of them, and a program that
-// calls one by hand gets no check.
+// array_reset and array_free, which use no element, it checks too, bounds
+// checks on or off, what the helpers trust the array to say of itself: a
+// count of 0 or more (but in array_reserve, which places no element from
+// it); a data that isn't null when the count or allocated is above 0,
+// since that count says elements are there and that allocated says room
+// is, which no memory holds, so the built-in stops as indexing would; and
+// in array_pop and the removes, a count not past allocated when the array
+// owns memory, since they read and move its last elements. The helpers
+// check none of them, and a program that calls one by hand gets no check.
 //
 // The allocator: an array whose allocator's procedure is null, a zeroed
 // one, takes the caller's context.allocator when it first grows, and keeps
