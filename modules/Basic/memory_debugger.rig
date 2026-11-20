@@ -207,7 +207,8 @@ memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
 // gives null, which leaves the memory as it was and still the caller's to
 // free, as the protocol says of a null, and a free does nothing. The
 // address a resize moved an allocation from is taken back: its record
-// stays there, freed, with the allocation's number and its size there.
+// stays there, freed, with the allocation's number and its size there,
+// unless the wrapped allocator handed that address out again meanwhile.
 //
 // The place is copied first, before the procedure calls anything of
 // Basic's: each of Basic's helpers puts the field back after its own call,
