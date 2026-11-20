@@ -395,6 +395,18 @@ An allocator that wraps another and records every allocation it gives, so a prog
 ```rig
 exit :: (status: s32) #foreign libc;
 
+greeting :: (name: string) -> string {
+    return join(string.["hello, ", name], "");
+}
+
+run :: () {
+    a := greeting("Ada");
+    print_line(a);
+    free(a.data);
+    g := greeting("Grace");      // never freed
+    print_line(g);
+}
+
 main :: () {
     debugger : Memory_Debugger;
     memory_debugger_init(*debugger);                // wraps main's allocator, the heap
@@ -409,6 +421,15 @@ main :: () {
 }
 ```
 
+As `tests/run/memory_debugger_example.rig`, which imports Basic first, it prints this, and ends with exit status 1:
+
+```text
+hello, Ada
+hello, Grace
+tests/run/memory_debugger_example.rig:10:12: memory debugger: allocation 2 (12 bytes) isn't freed
+memory debugger: 2 allocations, 1 not freed (12 bytes), 0 bad calls
+```
+
 Setting `context.allocator` works too, with `defer`s for the report and the free, which then run after the program's own code, the allocator put back first since `defer`s run last to first:
 
 ```rig
@@ -421,9 +442,11 @@ context.allocator = memory_debugger_allocator(*debugger);
 defer context.allocator = old;
 ```
 
+In a `#run`, push it rather than set `context.allocator`: every `#run` shares the compile-time world's default context (spec 7.8), so an assignment would stay for the runs after it, while a push is undone at the end of its block. Its memory there is the compile-time world's heap. An expression `#run` also runs in `rig check`, as often as an editor checks the program (spec 7.8), so one that reports gives the debugger a builder in `output` and hands back the text, as `tests/run/memory_debugger_run.rig` bakes its report as a string; a top-level `#run`, which only `rig build` runs, may print it.
+
 The debugger keeps a record of each allocation, by its address: its number, from 1, in the order the debugger gave them; its size; whether it was given back; and the place it was first asked for at. A resize that the wrapped allocator does is the same allocation, its number and place kept, at the address it has now, so the report's sizes are the sizes now. A free marks the record freed.
 
-The place is `context.allocation_location` when the debugger is called (Allocators, above): Basic's helpers set it to their caller's place, the built-in procedures of a resizable array to their own call's, and Basic's other procedures that allocate pass down the place of the program's call to them. So a leak names the program's line, not one of Basic's. A procedure of the program's own that allocates names its own line, unless it takes a `loc` and passes it on as Basic's do (`with_line_feed`, above). The procedures that take no `loc` (Allocators, above), `sprint` and `print_to_builder` above all, for now (a `..` parameter can't have default values yet), give a line of Basic's, whose file is named by its absolute path, as messages name a module's file (spec 8.1). A direct call of the debugger's procedure, from no helper, has whatever place the context holds: none, unless the program set the field. The debugger passes each call on by a direct call of the wrapped allocator's procedure, which leaves the place as it is, so an arena or a pool it wraps passes the program's place on to its parent.
+The place is `context.allocation_location` when the debugger is called (Allocators, above): Basic's helpers set it to their caller's place, the built-in procedures of a resizable array to their own call's, and Basic's other procedures that allocate pass down the place of the program's call to them. So a leak names the program's line, not one of Basic's. A procedure of the program's own that allocates names its own line, the call inside it, unless it takes `loc: Source_Code_Location = #caller_location` and passes it on as Basic's do (`with_line_feed`, above): the example's `greeting` doesn't, so its leak names `greeting`'s `join`, line 10, not `run`'s call of it; `greeting :: (name: string, loc: Source_Code_Location = #caller_location) -> string`, passing `loc` to `join`, would name `run`'s line. The procedures that take no `loc` (Allocators, above), `sprint` and `print_to_builder` above all, for now (a `..` parameter can't have default values yet), give a line of Basic's, `print.rig`'s, whose file is named by its absolute path, as messages name a module's file (spec 8.1). A direct call of the debugger's procedure, from no helper, has whatever place the context holds: none, unless the program set the field. The debugger passes each call on by a direct call of the wrapped allocator's procedure, which leaves the place as it is, so an arena or a pool it wraps passes the program's place on to its parent.
 
 The report writes a line for each allocation not freed, in number order, at its place, and then a line that counts them, which has no place:
 

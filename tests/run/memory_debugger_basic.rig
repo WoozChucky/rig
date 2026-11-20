@@ -1,0 +1,91 @@
+// Basic's memory debugger (issue #159) over every procedure of Basic that
+// allocates, each called with its allocator left out, so its memory comes
+// through the debugger in the context, and what each gives freed as
+// Basic's README says. The report is clean: Basic frees all it allocates,
+// and passes every resize the size it gave. Nothing is written but the
+// report's count, so print_to_builder's and sprint's allocations, whose
+// places are lines of print.rig, belong here too.
+#import "Basic";
+
+main :: () {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        p := alloc(8);
+        p = resize(p, 8, 64);
+        p = resize(p, 64, 4);
+        free(p);
+        q := resize(null, 0, 16);
+        q = resize(q, 16, 0);
+        free_all();
+
+        arena : Arena;
+        arena_init(*arena, 64);
+        alloc(8, arena_allocator(*arena));
+        alloc(200, arena_allocator(*arena));
+        arena_reset(*arena);
+        free_all(arena_allocator(*arena));
+
+        pool : Pool;
+        pool_init(*pool, 16, 4);
+        slot := alloc(8, pool_allocator(*pool));
+        free(slot, pool_allocator(*pool));
+        free_all(pool_allocator(*pool));
+
+        builder : String_Builder;
+        builder_init(*builder);
+        for 0..100 { append_int(*builder, it, 10); }
+        s := builder_to_string(*builder);
+        free(s.data);
+        builder_free(*builder);
+        print_to_builder(*builder, "{} {}", 1, "x");
+        builder_free(*builder);
+
+        numbers : [..]int;
+        for 0..100 { array_add(*numbers, it); }
+        array_free(*numbers);
+
+        n := 1;
+        names : Table;
+        table_init(*names, size_of(int));
+        for 0..100 { table_set(*names, tprint("k{}", it), *n); }
+        table_remove(*names, "k3");
+        table_free(*names);
+        ints : Int_Table;
+        int_table_init(*ints, size_of(int));
+        for 0..100 { int_table_set(*ints, it, *n); }
+        int_table_free(*ints);
+
+        c := to_c_string("abc");
+        free(c);
+        j := join(string.["a", "b", "c"], ", ");
+        free(j.data);
+        r := replace("abab", "a", "xyz");
+        free(r.data);
+        t := repeat("ab", 3);
+        free(t.data);
+        u := to_upper_copy("ab");
+        free(u.data);
+        l := to_lower_copy("AB");
+        free(l.data);
+        pj := path_join("a", "b");
+        free(pj.data);
+
+        write_entire_file(".build/tests/memory_debugger_basic.txt", "data");
+        contents, ok :=read_entire_file(".build/tests/memory_debugger_basic.txt");
+        free(contents.data);
+        value, found := get_environment("RIG_BASIC_TEST");
+        free(value.data);
+        run_command("exit 0");
+
+        unsorted := int.[5, 3, 9, 1, 7, 2, 8];
+        sort(unsorted.data, unsorted.count, size_of(int), less_int);
+        formatted := sprint("{}-{}", "a", 7);
+        free(formatted.data);
+        reset_temporary_storage();
+    }
+    memory_debugger_report(*debugger);
+    memory_debugger_free(*debugger);
+}

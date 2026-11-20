@@ -1,0 +1,4 @@
+hello, Ada
+hello, Grace
+tests/run/memory_debugger_example.rig:10:12: memory debugger: allocation 2 (12 bytes) isn't freed
+memory debugger: 2 allocations, 1 not freed (12 bytes), 0 bad calls

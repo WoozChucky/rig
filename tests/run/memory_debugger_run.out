@@ -1,0 +1,6 @@
+tests/run/memory_debugger_run.rig:21:9: memory debugger: free of allocation 2 (4 bytes), which is already freed
+tests/run/memory_debugger_run.rig:18:17: memory debugger: allocation 1 (13 bytes) isn't freed
+memory debugger: 2 allocations, 1 not freed (13 bytes), 1 bad call
+tests/run/memory_debugger_run.rig:21:9: memory debugger: free of allocation 2 (4 bytes), which is already freed
+tests/run/memory_debugger_run.rig:18:17: memory debugger: allocation 1 (13 bytes) isn't freed
+memory debugger: 2 allocations, 1 not freed (13 bytes), 1 bad call

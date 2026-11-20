@@ -1,0 +1,32 @@
+// Basic's memory debugger (issue #159), as its README shows it: pushed
+// once in main, reported at the end, and the exit status 1 when the
+// report isn't clean. greeting passes no place on, so its own join's
+// line is the leak's.
+#import "Basic";
+
+exit :: (status: s32) #foreign libc;
+
+greeting :: (name: string) -> string {
+    return join(string.["hello, ", name], "");
+}
+
+run :: () {
+    a := greeting("Ada");
+    print_line(a);
+    free(a.data);
+    g := greeting("Grace");      // never freed
+    print_line(g);
+}
+
+main :: () {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        run();
+    }
+    clean := memory_debugger_report(*debugger);
+    memory_debugger_free(*debugger);
+    if !clean { exit(1); }
+}
