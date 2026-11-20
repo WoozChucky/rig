@@ -392,13 +392,13 @@ print :: (format: string, args: ..Any) {
 // on the heap, and then appended at once, so nothing of builder moves
 // while it is read. The heap's memory is freed before it returns.
 //
-// Unlike append_string and builder_to_string, it takes no loc: a
-// procedure with a '..' parameter can't have default values, for now
-// (spec 7.2), so the place builder's allocator sees is the append_string
-// call below, this file's line, not the caller's. The helpers above that
-// write into a builder they are given take none either, so theirs is
-// print_or_append's append_string call.
-print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
+// Like append_string, it takes loc, after its '..' arguments, where only
+// its default ever fills it (spec 7.2): the caller's place, which it passes
+// to the append_string call below, so the place builder's allocator sees
+// is the caller's, not this file's line. The helpers above that write into
+// a builder they are given take none, so theirs is print_or_append's
+// append_string call.
+print_to_builder :: (builder: *String_Builder, format: string, args: ..Any, loc: Source_Code_Location = #caller_location) {
     // A null builder is standard output to print_formatted, so it's read
     // here first, whatever the format, to stop the program with a null
     // pointer dereference (spec 8.4) rather than print to standard output.
@@ -410,7 +410,7 @@ print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
     text : string;
     text.data = scratch.data;
     text.count = scratch.count;
-    append_string(builder, text);
+    append_string(builder, text, loc);
     builder_free(*scratch);
 }
 
@@ -422,13 +422,13 @@ print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
 // heap's memory is freed before it returns. Nothing written gives the
 // zeroed string, count 0 and data null, and allocates nothing.
 //
-// Like print_to_builder, it takes no loc, so the place the context's
-// allocator sees is the builder_to_string call below, this file's line.
-sprint :: (format: string, args: ..Any) -> string {
+// Like print_to_builder, it takes loc after its '..' arguments and passes
+// it to builder_to_string: the context's allocator sees the caller's place.
+sprint :: (format: string, args: ..Any, loc: Source_Code_Location = #caller_location) -> string {
     scratch : String_Builder;
     builder_init(*scratch, HEAP_ALLOCATOR);
     print_formatted(*scratch, format, args);
-    text := builder_to_string(*scratch);
+    text := builder_to_string(*scratch, context.allocator, loc);
     builder_free(*scratch);
     return text;
 }

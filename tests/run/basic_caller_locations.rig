@@ -9,11 +9,11 @@
 // last, is listed under its name: the callee's name in the call on that
 // line. What each gave is freed with Basic's helpers, the context's, on a
 // line of its own after it, so those frees are listed too.
-// print_to_builder and sprint, last, take no loc for now, nor do
-// print.rig's other procedures that write into a builder they are given:
-// their allocations name print.rig's own line, in an absolute path that
-// differs from machine to machine, so for a place in print.rig the
-// allocator prints that file's name rather than the path.
+// print_to_builder and sprint, last, take theirs after their ..Any
+// arguments (issue #197). A place left in print.rig would be named by an
+// absolute path that differs from machine to machine, so for a place in
+// print.rig the allocator prints that file's name rather than the path,
+// and the test fails the same way on every host.
 #import "Basic";
 
 // The file read_entire_file reads, under .build/tests/, which the runner
@@ -150,15 +150,24 @@ main :: () {
         print("{}\n", "int_table_free");
         int_table_free(*u);
 
-        // The builder's growth is append_string's, called in print.rig.
+        // The builder's growth is append_string's, given the caller's place.
         builder_init(*b);
         print("{}\n", "print_to_builder");
         print_to_builder(*b, "{}", 7);
         builder_free(*b);
-        // The string is builder_to_string's, called in print.rig.
+        // The string is builder_to_string's, given the caller's place.
         print("{}\n", "sprint");
         s = sprint("{}", 7);
         free(s.data);
+        print("{}\n", "sprint through a wrapper");
+        s = say("{}", 8);
+        free(s.data);
     }
     delete_file(PATH);
+}
+
+// A procedure of the program's own that takes ..Any can't pass a place on
+// to sprint (spec 7.2): its allocation names this call of sprint.
+say :: (format: string, args: ..Any) -> string {
+    return sprint(format, ..args);
 }

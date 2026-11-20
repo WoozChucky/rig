@@ -106,8 +106,11 @@ int_table_set
 int_table_free
     FREE 151:9
 print_to_builder
-    ALLOCATE print.rig 413:5
+    ALLOCATE 156:9
     FREE 157:9
 sprint
-    ALLOCATE print.rig 431:13
+    ALLOCATE 160:13
     FREE 161:9
+sprint through a wrapper
+    ALLOCATE 172:12
+    FREE 164:9
