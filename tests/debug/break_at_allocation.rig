@@ -22,6 +22,9 @@ main :: () {
         free(first.data);
         free(first.data);
         free(second.data);
+        third := alloc(4);
+        resize(third, 2, 8);
+        free(third);
     }
     memory_debugger_free(*debugger);
 }

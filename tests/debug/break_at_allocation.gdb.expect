@@ -13,5 +13,10 @@ in memory_debugger_allocator_proc (
 in free (
 in main () at
 break_at_allocation.rig:23
+memory_debugger_break (
+in memory_debugger_allocator_proc (
+in resize (
+in main () at
+break_at_allocation.rig:26
 !The program being debugged
 !.debug_names not created by gdb
