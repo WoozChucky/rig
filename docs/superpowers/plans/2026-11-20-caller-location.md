@@ -25,29 +25,29 @@
   - Expected files (`tests/errors/NAME.err`, `tests/run/NAME.out`, ...) are what rig or the program prints. Generate them by running it once the behaviour is right, then read them line by line against this plan. They are LF only. A place a test prints must be the callee's name in that test's call: check each one by hand.
   - Lines that expected files name must not move silently. At d75299c, `tests/run/*.err` name `Basic/builder.rig:88`, `Basic/memory.rig:46`, `Basic/numbers.rig:92`, `Basic/print.rig:112`, `:295` and `:399` (and `Basic/array.rig:43` and `:89`, which #158 changes), and `tests/errors/preload_name_taken.err` names `Preload/module.rig:56:1`. Re-measure them on this branch's base (`grep -rhno 'MODULES@[^ ]*' tests`). Add Preload's new struct after its last line, and change `Context`'s declaration on its own line. A signature that gains `loc` keeps its line. If an edit moves a named line anyway, regenerate those files in the same commit and check that only the number changed.
 - **Both hosts for every commit.** Run Windows before you push and Linux right after, since Linux pulls from origin. Fix a Linux failure in a new commit. Everything passes with no warnings. The debugger tests must PASS, not SKIP.
-  - **Windows** (PowerShell, cwd `C:\dev\rig-wt\caller-location`):
-    - `$env:RIG_LLVM_DIR = 'C:\dev\rig\deps\llvm-windows'; cmd /c "C:\dev\rig-wt\caller-location\build.bat"`
+  - **Windows** (PowerShell, cwd `C:\dev\rig-wt\194`):
+    - `$env:RIG_LLVM_DIR = 'C:\dev\rig\deps\llvm-windows'; cmd /c "C:\dev\rig-wt\194\build.bat"`
     - `.\bin\unit-tests.exe`
     - `.\bin\run-tests.exe`
     - Whenever `tests/` or `editors/vscode` changes: `node editors/vscode/test/check.js`.
-  - **Linux** (WSL), in `~/rig-wt/caller-location`, tracking the branch on origin (make it with `git -C ~/rig fetch origin && git -C ~/rig worktree add ~/rig-wt/caller-location issue/NNN-caller-location` the first time):
+  - **Linux** (WSL), in `~/rig-wt/194`, tracking the branch on origin (make it with `git -C ~/rig fetch origin && git -C ~/rig worktree add ~/rig-wt/194 issue/194-caller-location` the first time):
     - Work in WSL's own files only: never through a Windows path (no `/mnt/c`, no script file on the Windows side). From Git Bash, give each Linux step to bash on stdin with a quoted heredoc, so `$` survives:
       ```bash
       MSYS_NO_PATHCONV=1 wsl -e bash -s <<'EOF'
-      cd ~/rig-wt/caller-location && git pull -q --ff-only
+      cd ~/rig-wt/194 && git pull -q --ff-only
       RIG_LLVM_DIR=$HOME/rig/deps/llvm-linux ./build.sh && bin/unit-tests && bin/run-tests
       $(ls -d ~/.vscode-server/bin/*/node | head -1) editors/vscode/test/check.js
       EOF
       ```
     - Linux-side experiments go under `~/rig-scratch`.
-  - Before the final review, build `release` too: `cmd /c "C:\dev\rig-wt\caller-location\build.bat release"` and `./build.sh release`, each followed by both test programs.
+  - Before the final review, build `release` too: `cmd /c "C:\dev\rig-wt\194\build.bat release"` and `./build.sh release`, each followed by both test programs.
 - **Output that is the same on both hosts.** The runner has no per-host expected files. A test prints only the places of its own files, named by the paths the runner gives (`tests/run/NAME.rig`, and `tests/run/load/...` for a file it loads), never a module's file, which is named by its absolute path (spec 2.14). `bin/run-tests` runs every `tests/run` program compiled, then interpreted, held to the same `.build.out`, `.out`, `.exit` and `.err`, and runs `rig check` on each, which must print nothing.
 - **Messages, verbatim**, each at the `#caller_location` directive:
   - `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location`
   - `'#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have`
   - Today's, unchanged: `a parameter needs its type, as in n: int = 0` for `loc := #caller_location` (default; Q2), and `a value of type 'Source_Code_Location' doesn't convert to 'int' implicitly` for `loc: int = #caller_location`.
 - **Work flow:**
-  - This issue comes after #158 and before #159. Branch `issue/NNN-caller-location` (NNN the issue's number), worktree `C:\dev\rig-wt\caller-location`, made from `main` once #158 has merged. This plan is its first commit, as `docs/superpowers/plans/2026-11-20-caller-location.md`. Push it, then open a draft PR: `Fixes #194`, labels `language` and `enhancement`, milestone `4: The Basic module`. Push after each commit.
+  - This issue comes after #158 and before #159. Branch `issue/194-caller-location`, worktree `C:\dev\rig-wt\194`, made from `main` once #158 has merged. This plan is its first commit, as `docs/superpowers/plans/2026-11-20-caller-location.md`. Push it, then open a draft PR: `Fixes #194`, labels `language` and `enhancement`, milestone `4: The Basic module`. Push after each commit.
   - **Commit messages:** a short imperative summary line, a blank line, an optional body, and nothing else. No trailers, no attribution lines. Commit as the personal identity the repository is configured with: check `git config user.email` before the first commit.
   - Before the PR is marked ready, an independent review runs. Fix every finding in production code and tests, minor ones included, and any wrong comment or doc. Comment and doc *polish* never holds the PR: it becomes GitHub issues labelled `documentation`.
 
