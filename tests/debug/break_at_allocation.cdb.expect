@@ -8,7 +8,9 @@ break_at_allocation!main+
 break_at_allocation!memory_debugger_bad_call+
 break_at_allocation!free+
 break_at_allocation!main+
+[@ROOT@\tests\debug\break_at_allocation.rig @ 24]
 break_at_allocation!memory_debugger_break
 break_at_allocation!memory_debugger_allocator_proc+
 break_at_allocation!resize+
 break_at_allocation!main+
+[@ROOT@\tests\debug\break_at_allocation.rig @ 27]
