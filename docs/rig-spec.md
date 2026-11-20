@@ -154,7 +154,7 @@ return        struct        true          union         using         while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has eight:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has nine:
 
 - `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
@@ -163,9 +163,10 @@ A directive is `#` followed immediately by a name, made of letters, digits and `
 - `#load`, which makes another file part of the program (section 2.13);
 - `#import`, which makes a module that ships with rig part of the program (section 2.14);
 - `#run`, which runs code while compiling (section 7.8);
-- `#if`, which compiles code for one system and not the other, or on any other condition known while compiling (section 4.9).
+- `#if`, which compiles code for one system and not the other, or on any other condition known while compiling (section 4.9);
+- `#caller_location`, a parameter's default value that is the place of each call leaving the parameter out (section 7.2).
 
-The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. `#caller_location` is an expression, but the only place it may be is a parameter's whole default value, `loc: Source_Code_Location = #caller_location` (section 7.2): anywhere else, a body, a global's or a constant's value, an argument or part of a larger default, it is `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location`, at its `#`. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -328,7 +329,7 @@ Hello from Basic
 - **An `#import` that fails**, with one of the errors above, leaves the program without the module, as a `#load` that fails leaves it without its file: while one has failed, no name anywhere in the program is reported as unknown, nor `main` as missing (section 2.13).
 - **One top level.** For now a module's declarations join the program's one top level, as a loaded file's do (section 4.6): a program that imports Basic can't declare a procedure, struct or constant of a name Basic declares, and no program can declare one of a name Preload declares (below). Modules with scopes of their own come later, with `#import` of a program's own modules and of modules fetched from elsewhere.
 - **The modules that ship with rig** are three. `Preload` is what the language itself refers to, and every program imports it (below). `Basic` is Rig's first library, written in Rig over a thin layer of C. `Compiler` is what a build program uses to build other programs (section 7.9). The `README.md` in the directories of `Preload` and `Basic` lists what each declares.
-- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`, type information and `Any` (section 3.16), the context: `Context`, the default context, and the temporary storage with its allocator (section 7.10), and the resizable arrays' layout, `Resizable_Array`, with the procedures that do the work of their built-in procedures (section 3.17). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`; `__runtime_init`, which sets the default context up, section 7.10; and `__array_add` and the other helpers the resizable arrays' built-in procedures call, section 3.17), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags, `ARRAY_FIXED`, `ARRAY_VIEW` and `ARRAY_RESIZABLE`; `Context`, `default_context`, `Temporary_Storage`, `Temporary_Storage_Page`, `TEMPORARY_STORAGE_SIZE`, `temporary_allocator_proc` and `TEMPORARY_ALLOCATOR`; `Resizable_Array`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
+- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`, type information and `Any` (section 3.16), the context: `Context`, the default context, and the temporary storage with its allocator (section 7.10), the resizable arrays' layout, `Resizable_Array`, with the procedures that do the work of their built-in procedures (section 3.17), and `Source_Code_Location`, a place in the program's source, what a default `#caller_location` is (section 7.2). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`; `__runtime_init`, which sets the default context up, section 7.10; and `__array_add` and the other helpers the resizable arrays' built-in procedures call, section 3.17), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags, `ARRAY_FIXED`, `ARRAY_VIEW` and `ARRAY_RESIZABLE`; `Context`, `default_context`, `Temporary_Storage`, `Temporary_Storage_Page`, `TEMPORARY_STORAGE_SIZE`, `temporary_allocator_proc` and `TEMPORARY_ALLOCATOR`; `Resizable_Array`; `Source_Code_Location`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
 
 So a program that imports nothing has Preload's allocator:
 
@@ -841,6 +842,8 @@ When a call runs, its arguments are worked out left to right, as a call's are (s
 After the work, an `array_add`, `array_insert`, `array_reserve` or `array_resize` that had to grow the array and was given no memory by the allocator stops the program: `the array's allocator has no memory to give`. With bounds checks off, an index outside the array, or a pop of an empty one, is a memory error that no check catches (section 8.6). So is an array whose `allocated` was set by hand above 0 over memory its allocator didn't give, or above what that memory holds, and one whose `data` and `count` were set by hand over fewer elements than the count says: the checks can't see the memory itself.
 
 **The allocator.** A zeroed array has no allocator. The first time it must grow it takes `context.allocator`, the allocator of the context of the code that grows it (section 7.10), and keeps it, even when that gives no memory: it grows from that allocator, and gives its memory back to it, wherever it is used later and whatever the context is by then. A program chooses another by setting `.allocator` before the array first grows. Memory goes back to the allocator the array holds, so changing `.allocator` while the array holds memory is the program's mistake, a memory error (section 8.6).
+
+**The place.** While a built-in procedure calls the allocator, to grow the array or to give its memory back, `context.allocation_location` is the place of the built-in's name in its call, made as a default `#caller_location` is (section 7.2), and the place before it is put back after, as Basic's `alloc` and `free` do (section 7.10). So an allocator that records where it is asked from names the program's line, `array_add(*numbers, 3)`'s, not Preload's: each call its own, and a loop's call the same each time it grows the array. A built-in takes no place to pass on, for now, so a procedure of the program's own that calls `array_add` for its callers gives its own line, not theirs.
 
 **Growth.** Adding or inserting into a full array, its count at least `allocated`, makes room for the larger of 8 and twice `allocated` elements: doubling means that `n` elements added one at a time are moved about `n` times in all. Past half of `int`'s largest value, the room is `int`'s largest. `array_reserve` and `array_resize` grow to exactly the count they are given. An array that owns no memory is given it with the allocator's `ALLOCATE`, and one that owns some has it resized with `RESIZE`, from its `allocated` elements' bytes; room whose bytes are past `int`'s largest asks for `int`'s largest number of bytes, which no allocator gives. `array_free` gives the memory back with `FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them.
 
@@ -2001,6 +2004,55 @@ ho ho ho
 ho-ho-ho
 ```
 
+**The caller's place.** A parameter whose default value is `#caller_location`, `loc: Source_Code_Location = #caller_location`, is given the place of each call that leaves it out, as in Jai: where in the program the procedure was called from, for a message, a log or an allocator to name (section 7.10). Its type is Preload's (section 2.14):
+
+```text
+Source_Code_Location :: struct { file: string; line: int; column: int; }
+```
+
+- **`file`** is the path messages name the call's file by, as a runtime error there would (section 8.1): the main file's as `rig build` was given it, a loaded file's as its `#load` made it, a module's file by its absolute path (sections 2.13, 2.14). **`line` and `column`** are those of the callee's name in the call, counted from 1 (section 2.2), where a reader sees the call start, so two calls on one line have two places. A zeroed one, `file` empty and `line` 0, is no place.
+- Each call that leaves the parameter out has its own place, and a call in a loop the same one each time it runs. A call in another procedure's default value, as `here()` in `(loc: Source_Code_Location = here())`, `here` taking a default `#caller_location` itself, has its own place there, in the file that declares that default, whichever call leaves the outer default out, as a default's code is (above). In a `#run`'s code it is the call's place in that code, and a `#run`'s result that holds one is baked as any struct of a string and two `int`s is (section 7.8); compiled, interpreted and while compiling, the place is the same.
+- The place is made from the call alone: it needs no context (section 7.10). A call that gives the parameter passes what it gives, as for any default, so a procedure that takes a place itself can pass it on to name its own caller, as `warn` does below. A call through a procedure value gives every argument (above), so it passes a place itself, `.{}` for none.
+- It is written with its type, as every default is for now: `loc := #caller_location` is `a parameter needs its type, as in n: int = 0`. It converts to its parameter's type as any default does, so a parameter of another type is `a value of type 'Source_Code_Location' doesn't convert to 'int' implicitly`, but for `Any`, which would take a copy of any value (section 3.16): the place is made at the call as a `Source_Code_Location`, not put in an `Any`, so `loc: Any = #caller_location` is `'#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'`, at the `#`. A procedure that can't have default values (above) can't take one, and neither can a foreign or a `#c_call` procedure, which can't take a struct (`a #c_call procedure can't take a 'Source_Code_Location' yet; pass a pointer to it`, section 7.6).
+- A parameter's whole default value is the only place `#caller_location` may be (section 2.7).
+
+```rig
+#import "Basic";
+
+trace :: (message: string, loc: Source_Code_Location = #caller_location) {
+    print("{}:{}:{}: {}\n", loc.file, loc.line, loc.column, message);
+}
+
+// A procedure that takes a place too, and passes it on, names its own caller.
+warn :: (message: string, loc: Source_Code_Location = #caller_location) {
+    trace(message, loc);
+}
+
+main :: () {
+    trace("starting");
+    warn("almost done");
+}
+```
+
+```text
+example.rig:13:5: starting
+example.rig:14:5: almost done
+```
+
+Anywhere but a default value it is refused:
+
+```rig error
+main :: () {
+    x := #caller_location;
+}
+```
+
+```text
+example.rig:2:10: error: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location
+        x := #caller_location;
+             ^
+```
+
 ### 7.3 Results
 
 A procedure returns zero, one or several results, given by `return` (section 6.10). A call used as a value gives the first result (section 5.10); all of them are received by a declaration or an assignment with as many names or targets (sections 6.2, 6.4). Results of any type are returned by value, structs and arrays included.
@@ -2457,14 +2509,15 @@ The other errors, said of the build program as diagnostics (section 9.1) once it
 
 ### 7.10 The context
 
-The **context** is what code deep in a call chain needs without every caller handing it down, as in Jai: for now, the allocator code takes its memory from when it is handed none, and the temporary storage. Every Rig procedure but `main` and a `#c_call` one is given its caller's context without naming it, and `context` names it there. So a procedure allocates from `context.allocator`, and its callers decide where that memory comes from, the heap, an arena or the temporary storage, without passing it down: they push another context (section 6.13), or change the current one's allocator.
+The **context** is what code deep in a call chain needs without every caller handing it down, as in Jai: for now, the allocator code takes its memory from when it is handed none, the temporary storage, and the place an allocation is asked from. Every Rig procedure but `main` and a `#c_call` one is given its caller's context without naming it, and `context` names it there. So a procedure allocates from `context.allocator`, and its callers decide where that memory comes from, the heap, an arena or the temporary storage, without passing it down: they push another context (section 6.13), or change the current one's allocator.
 
-The context is a struct of Preload's (section 2.14), with two fields for now:
+The context is a struct of Preload's (section 2.14), with three fields for now:
 
 ```text
 Context :: struct {
-    allocator: Allocator;                    // HEAP_ALLOCATOR in the default context
-    temporary_storage: *Temporary_Storage;   // Preload's one storage in the default context
+    allocator: Allocator;                        // HEAP_ALLOCATOR in the default context
+    temporary_storage: *Temporary_Storage;       // Preload's one storage in the default context
+    allocation_location: Source_Code_Location;   // zeroed, no place, in the default context
 }
 ```
 
@@ -2525,6 +2578,48 @@ defer context.allocator = old;
 ```
 
 Either way every call in the stretch, and in what it calls, that takes its memory from `context.allocator` takes it from there. Memory goes back to the allocator that gave it: giving it back to the current context's allocator when another gave it, because the context changed in between, is the program's mistake, as in Jai, and no check catches it.
+
+**Where an allocation is asked from.** `context.allocation_location` is the place the allocation being asked for was asked from, a `Source_Code_Location` (section 7.2), while an allocator is called, and zeroed, no place, otherwise. An allocator's procedure, Jai's shape, which every allocator is written to, takes no place, so the context carries it, and an allocator that records where it is asked from, as a memory debugger does, reads it there:
+
+- Basic's `alloc`, `resize`, `free` and `free_all` take `loc: Source_Code_Location = #caller_location` last (section 7.2). Each saves the field, sets it to its `loc`, calls the allocator, and puts back the one it saved, so the allocator reads the place of the helper's call, and once the helper returns the field is as it was before, also when the allocator itself called Basic.
+- Basic's other procedures that allocate or free through an allocator take `loc` too, and pass it on, so the place is the program's own call, not a line of Basic's. Its arena and its pool pass the place they were asked from on to the allocator under them, so a block has the place of the request that needed it. `print_to_builder` and `sprint` take none, for now, since they end in a `..Any` parameter and so can't have default values (section 7.2): their allocator reads a line of Basic's. Basic's `README.md` lists them all.
+- The resizable arrays' built-in procedures set it to their call's place (section 3.17).
+- A direct call of an allocator's procedure, `a.proc(ALLOCATE, 64, 0, null, a.data)`, leaves it as it is: in a program's own call, zeroed.
+
+`default_context` starts with it zeroed, so a copy of the context made outside such a call, as a program makes to push one, holds no place either.
+
+```rig
+#import "Basic";
+
+// An allocator over the heap that says where each allocation is asked from.
+traced_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    at := context.allocation_location;
+    if mode == ALLOCATE { print("{} bytes for {}:{}:{}\n", size, at.file, at.line, at.column); }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+main :: () {
+    traced := context;
+    traced.allocator = Allocator.{traced_proc, null};
+    push_context traced {
+        p := alloc(16);
+        numbers : [..]int;
+        array_add(*numbers, 1);
+        free(p);
+        array_free(*numbers);
+        q := context.allocator.proc(ALLOCATE, 8, 0, null, null);
+        free(q);
+    }
+}
+```
+
+```text
+16 bytes for example.rig:14:14
+64 bytes for example.rig:16:9
+8 bytes for :0:0
+```
+
+`alloc` and `array_add` name their own calls; the direct call of the allocator's procedure names none.
 
 **Temporary storage.** `context.temporary_storage` is memory handed out one allocation after another and given back all at once, Jai's temporary storage, which suits memory a program is done with by a point it knows: a frame's end, a request's, a command's. Preload holds it (`Temporary_Storage`, with its pages, `Temporary_Storage_Page`), and its allocator, `TEMPORARY_ALLOCATOR`, `Allocator.{temporary_allocator_proc, null}`, which allocates from the storage of the context it is called with, so its `data` is unused and a context pushed with another storage makes it allocate from that one. Preload's `README.md` has the details:
 
@@ -2767,6 +2862,8 @@ The sections defining each construct give its messages. Some of those met most o
 | `'separator' needs a default value, since a parameter before it has one` | 7.2 |
 | `a default value can't use the parameter 'times'` | 7.2 |
 | `a procedure type can't have default values` | 3.15 |
+| `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location` | 2.7, 7.2 |
+| `'#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'` | 7.2 |
 | `can't assign to 'a': it's a parameter` | 6.4 |
 | `'f' must return a value on every path, and this one reaches its end` | 6.11 |
 | `'A' is defined in terms of itself` | 4.8 |
@@ -3017,7 +3114,7 @@ Besides those, generated code calls the C library's `memmove`, `memset` and `mem
 
 Preload's `__runtime_init`, which `main` and each `#run`'s code call first to set the default context up (section 7.10), is a procedure of Preload's, written in Rig, not one the compiler adds, but it has no debug information either, as the internal procedures above have none (section 10.7): a debugger steps over it, and `break main` stops at `main`'s first line with the context already set up.
 
-The resizable arrays' built-in procedures (section 3.17) are calls of Preload's procedures too, written in Rig, which do the work: `array_add` calls `__array_add`, `array_insert` `__array_insert`, and so on for the nine. Each is passed the context, the array's pointer as a `*Resizable_Array`, the element's size in bytes, a constant, and then the built-in's other arguments, an item by the address of the caller's copy of it, and `array_pop` the address of the caller's temporary its last element is copied to. The compiler makes the checks of section 3.17 around the call, at the built-in's name, and the helpers make none of them. Unlike `__runtime_init` they have debug information, as every other procedure of Preload's has: a debugger steps into `__array_add`, and `break __array_add` stops there. They work the same compiled, interpreted and while compiling (section 10.8), since they are the program's own code in each.
+The resizable arrays' built-in procedures (section 3.17) are calls of Preload's procedures too, written in Rig, which do the work: `array_add` calls `__array_add`, `array_insert` `__array_insert`, and so on for the nine. Each is passed the context, the array's pointer as a `*Resizable_Array`, the element's size in bytes, a constant, and then the built-in's other arguments, an item by the address of the caller's copy of it, and `array_pop` the address of the caller's temporary its last element is copied to. The five that can reach the allocator, `__array_add`, `__array_insert`, `__array_reserve`, `__array_resize` and `__array_free`, are passed last the place of the built-in's name in its call, a `Source_Code_Location` made as a default `#caller_location` is (section 7.2), which they put in `context.allocation_location` while they call the allocator (section 3.17). The compiler makes the checks of section 3.17 around the call, at the built-in's name, and the helpers make none of them. Unlike `__runtime_init` they have debug information, as every other procedure of Preload's has: a debugger steps into `__array_add`, and `break __array_add` stops there. They work the same compiled, interpreted and while compiling (section 10.8), since they are the program's own code in each.
 
 ### 10.6 Linking
 
@@ -3273,6 +3370,7 @@ Primary       = identifier
               | int_lit | float_lit | string_lit
               | "true" | "false" | "null"
               | "context"
+              | "#caller_location"
               | "size_of" "(" Type ")"
               | "type_info" "(" Type ")"
               | "(" Expression ")"
@@ -3284,7 +3382,7 @@ Field         = [ identifier "=" ] Expression .
 ArrayBody     = "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
+Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
 
 ## Appendix B: Index of keywords and operators
 
@@ -3313,6 +3411,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#import` | a module that ships with rig | 2.14 |
 | `#run` | code run while compiling | 7.8 |
 | `#if` | conditional compilation | 4.9 |
+| `#caller_location` | the place of the call leaving out a parameter it is the default value of | 7.2, 2.7 |
 | `size_of` | a type's size | 5.16 |
 | `type_info` | a type's description | 5.19, 3.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
