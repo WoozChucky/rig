@@ -9,23 +9,41 @@
 // what it gives has no place. A debugger over it takes a resize to 0 bytes
 // as a free, whatever old_size it is given, and so the one under it sees
 // the memory freed. Given a string builder, it writes its report there.
-// Freed and made ready again, it starts afresh. Over an allocator that
-// allocates through the context while it resizes, so through the debugger,
-// whose records then grow, it keeps the resize's record right, and it asks
-// that allocator a free for a resize to 0 bytes.
+// Freed and made ready again, after a bad call and with break_at set, it
+// starts afresh. Over an allocator that allocates through the context while
+// it resizes, so through the debugger, whose records then grow, it keeps
+// the resize's record right, though the table's old entries are given back
+// and written over before the resize returns; it asks that allocator a free
+// for a resize to 0 bytes, and passes a free's old_size on as given, here a
+// resizable array's bytes.
 #import "Basic";
 
-// An allocator over the heap whose data is an int it sets to the mode of
-// each call it is given. A resize to more than 0 bytes first takes 16
-// notes from the context's allocator, the debugger over it here, and gives
-// them back, as an allocator that traces its calls might, and then moves
-// the memory.
+// What watching_allocator_proc saw of the last call it was given: its mode
+// and its old_size.
+Watched :: struct {
+    mode: int;
+    old_size: int;
+}
+
+// An allocator over the heap whose data is a *Watched it sets to each call
+// it is given. A resize to more than 0 bytes first takes 16 notes from the
+// context's allocator, the debugger over it here, and gives them back, as
+// an allocator that traces its calls might, and then moves the memory. The
+// notes grow the debugger's records past 12, so its table moves them and
+// gives its old entries, 16 of 80 bytes, back to the heap; the junk then
+// takes that memory again and fills it with 255s, so a debugger that read
+// its record there after the resize would read junk, not the record.
 watching_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    (cast(*int) data).* = mode;
+    watched := cast(*Watched) data;
+    watched.mode = mode;
+    watched.old_size = old_size;
     if mode == RESIZE && old_memory != null && size > 0 {
         notes : [16]*void;
         for 0..15 { notes[it] = alloc(1); }
         for 0..15 { free(notes[it]); }
+        junk := alloc(1280, HEAP_ALLOCATOR);
+        set_memory(junk, 255, 1280);
+        free(junk, HEAP_ALLOCATOR);
         memory := alloc(size, HEAP_ALLOCATOR);
         if memory == null { return null; }
         kept := old_size;
@@ -78,6 +96,8 @@ main :: () {
     written : String_Builder;
     builder_init(*written, HEAP_ALLOCATOR);
     debugger.output = *written;
+    local := 0;
+    free(*local);                                // a bad call, before 26
     clean := memory_debugger_report(*debugger);
     text := builder_to_string(*written, HEAP_ALLOCATOR);
     print("from the builder: {}{}\n", text, clean);
@@ -85,18 +105,25 @@ main :: () {
     builder_free(*written);
     free(a);
 
+    debugger.break_at = 1;
     memory_debugger_free(*debugger);
     memory_debugger_init(*debugger, old);
     again := alloc(8);                           // 1 again
-    print("{}\n", memory_debugger_report(*debugger));
+    print("{} {}\n", memory_debugger_report(*debugger), debugger.break_at);
     free(again);
 
     memory_debugger_free(*debugger);
-    watched := 0;
+    watched : Watched;
     memory_debugger_init(*debugger, Allocator.{watching_allocator_proc, *watched});
     moved := alloc(16);                          // 1
     moved = resize(moved, 16, 32);               // still 1, after 2 to 17
     print("{}\n", memory_debugger_report(*debugger));
+    watched.mode = 0;
     gone = d.proc(RESIZE, 0, 0, moved, d.data);         // a free of 1
-    print("{} {}\n", gone == null, watched == FREE);
+    print("{} {}\n", gone == null, watched.mode == FREE);
+    numbers : [..]int;
+    array_add(*numbers, 1);                      // 18
+    bytes := numbers.allocated * size_of(int);
+    array_free(*numbers);
+    print("{} {} {}\n", watched.mode == FREE, watched.old_size == bytes, bytes > 0);
 }

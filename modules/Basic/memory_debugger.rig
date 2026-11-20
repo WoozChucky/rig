@@ -185,9 +185,9 @@ memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
 //   heap keeps its records, as the heap kept the memory.
 //
 // A resize or a free of memory the debugger never gave, or has taken back,
-// and a resize whose old_size isn't the allocation's size, are bad calls:
-// each is written at its place and counted, memory_debugger_break is
-// called, and the call isn't passed on. A resize
+// and a resize to more than 0 bytes whose old_size isn't the allocation's
+// size, are bad calls: each is written at its place and counted,
+// memory_debugger_break is called, and the call isn't passed on. A resize
 // gives null, which leaves the memory as it was and still the caller's to
 // free, as the protocol says of a null, and a free does nothing. The
 // address a resize moved an allocation from is taken back: its record

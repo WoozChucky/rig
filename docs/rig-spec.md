@@ -2796,7 +2796,7 @@ These are memory errors, which the program must avoid and no check catches:
 
 Reading a variable declared with `---` before assigning it gives an unspecified value, not a memory error, though using that value may be one: as a pointer or a procedure value, it points nowhere in particular.
 
-Basic's memory debugger (Basic's `README.md`) finds, while a program runs, three mistakes with memory that no check catches either, in the memory it is given to watch, each at its place, read from `context.allocation_location` (section 7.10): memory never given back, at the place it was asked for; memory given back twice; and memory given back to it that it never gave, such as another allocator's because the context changed in between (the program's mistake, section 7.10), each at the place it was given back. It refuses a resize of such memory with null, and one given another size than the allocation's as its old size.
+Basic's memory debugger (Basic's `README.md`) finds, while a program runs, three mistakes with memory that no check catches either, in the memory it is given to watch, each at its place, read from `context.allocation_location` (section 7.10): memory never given back, at the place it was asked for; memory given back twice; and memory given back to it that it never gave, such as another allocator's because the context changed in between (the program's mistake, section 7.10), each at the place it was given back. It refuses a resize of such memory with null, and a resize to more than 0 bytes given another size than the allocation's as its old size.
 
 ## 9. Compile-time errors
 
