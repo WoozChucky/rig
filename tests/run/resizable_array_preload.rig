@@ -1,9 +1,10 @@
 // Preload's helpers for resizable arrays (issue #158, spec 3.17), called
 // by hand through the untyped Resizable_Array, as the built-in procedures
-// call them, but with no place for the allocator (.{}): the growth
-// policy, the allocator the first growth takes from the context and keeps,
-// elements of no size and their alignment, adopted memory, an allocator
-// that refuses, and growth past int's range.
+// call them, but with no place for the allocator (.{}) except in one
+// refused growth: the growth policy, the allocator the first growth takes
+// from the context and keeps, elements of no size and their alignment,
+// adopted memory, an allocator that refuses, which leaves the place before
+// in the context, and growth past int's range.
 #import "Basic";
 
 // The heap, saying what the arrays ask of it.
@@ -128,6 +129,15 @@ main :: () {
     print("refused {} {} {} {} {}\n", added, f.count, f.allocated, f.data == old, f);
     resized := __array_resize(rf, 8, 20, .{});
     print("refused {} {} {} {} {}\n", resized, f.count, f.allocated, f.data == old, f);
+    // A refused growth puts the place before back too, here outer:1:2,
+    // not the place the helper was given.
+    placed := context;
+    placed.allocation_location = Source_Code_Location.{"outer", 1, 2};
+    push_context placed {
+        resized = __array_resize(rf, 8, 20, Source_Code_Location.{"inner", 7, 1});
+        at := context.allocation_location;
+        print("refused {} at {}:{}:{}\n", resized, at.file, at.line, at.column);
+    }
     __array_free(rf, 8, .{});
 
     // Growth past int's range asks for int's largest bytes, with ALLOCATE
