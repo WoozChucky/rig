@@ -76,12 +76,19 @@ Memory_Debugger :: struct {
 // unless given: no allocations and no bad calls, writing to standard
 // output, breaking at no allocation, its records an empty table on the
 // heap. Like table_init, it doesn't give back records a debugger already
-// had: memory_debugger_free does. A debugger made ready again while it is
-// the context's allocator must be given what it wraps: left out, wrapped
-// is the debugger itself, which calls itself at its first allocation until
-// the stack runs out.
+// had: memory_debugger_free does. A debugger can't wrap itself, which would
+// call itself at its first allocation until the stack runs out: when
+// wrapped is the debugger, or a debugger over it, followed down the
+// debuggers each wraps, as when it is made ready again while it or one
+// over it is the context's allocator and no allocator is given, it keeps
+// the allocator it wraps already. So a debugger is made ready, over what
+// it is to wrap, before it is the context's allocator.
 memory_debugger_init :: (debugger: *Memory_Debugger, wrapped: Allocator = context.allocator) {
-    debugger.wrapped = wrapped;
+    under := wrapped;
+    while under.proc == memory_debugger_allocator_proc && under.data != debugger {
+        under = (cast(*Memory_Debugger) under.data).wrapped;
+    }
+    if under.proc != memory_debugger_allocator_proc { debugger.wrapped = wrapped; }
     int_table_init(*debugger.records, size_of(Memory_Debugger_Record), HEAP_ALLOCATOR);
     debugger.allocations = 0;
     debugger.bad_calls = 0;
@@ -177,16 +184,21 @@ memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
 //   on, and the wrapped allocator's null is passed on with the record as
 //   it was; anything else is the same allocation, its number and place
 //   kept, its size the new one, at the result's address. When the result
-//   moved, the record at the old address is marked freed.
+//   moved, the record at the old address is marked freed, unless an
+//   allocation made through the debugger while the wrapped allocator
+//   resized, through the context, was given that address: its record is
+//   then there, and it is live.
 // - FREE of null does nothing. Of an allocation the debugger gave and
 //   hasn't taken back, the record is marked freed, and the free is passed
 //   on with its old_size as given: Basic's free passes 0, and a resizable
 //   array's free the array's bytes.
-// - FREE_ALL is passed on, and then every record is marked freed when the
-//   wrapped allocator gives back everything it gave
+// - FREE_ALL is passed on, and then every allocation given before it is
+//   marked freed when the wrapped allocator gives back everything it gave
 //   (memory_debugger_gives_back_all): an arena's, a pool's or the
 //   temporary storage's does, the heap's doesn't, so a debugger over the
-//   heap keeps its records, as the heap kept the memory.
+//   heap keeps its records, as the heap kept the memory. An allocation the
+//   wrapped allocator makes through the debugger while it frees all,
+//   through the context, comes after it, and is live.
 //
 // A resize or a free of memory the debugger never gave, or has taken back,
 // and a resize to more than 0 bytes whose old_size isn't the allocation's
@@ -235,13 +247,16 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
         // old one is found again after it: a set may rehash the table and
         // move every record, the debugger's own below, and any allocation
         // the wrapped allocator makes through the context while it resizes,
-        // whose allocator is this debugger when the program pushed it.
+        // whose allocator is this debugger when the program pushed it. Such
+        // an allocation may be at the old address, which the wrapped
+        // allocator has taken back and handed out again, so the record there
+        // is marked freed only while it is still this allocation's.
         record := found.*;
         memory := wrapped.proc(RESIZE, size, old_size, old_memory, wrapped.data);
         if memory == null { return null; }
         if memory != old_memory {
             moved := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
-            moved.freed = true;
+            if moved.number == record.number { moved.freed = true; }
         }
         record.size = size;
         int_table_set(*debugger.records, cast(int) memory, *record);
@@ -259,12 +274,20 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
         return null;
     }
     if mode == FREE_ALL {
+        // What FREE_ALL gives back is what was given before it: an
+        // allocation the wrapped allocator makes through the context while
+        // it frees all, so through this debugger when the program pushed it,
+        // has a later number and is kept.
+        given := debugger.allocations;
         wrapped.proc(FREE_ALL, 0, 0, null, wrapped.data);
         if memory_debugger_gives_back_all(wrapped) {
             records := debugger.records;
             for 0..records.capacity - 1 {
                 used, key, value := int_table_entry(records, it);
-                if used { (cast(*Memory_Debugger_Record) value).freed = true; }
+                if used {
+                    record := cast(*Memory_Debugger_Record) value;
+                    if record.number <= given { record.freed = true; }
+                }
             }
         }
     }
