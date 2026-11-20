@@ -47,7 +47,7 @@
   - `'#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have`
   - Today's, unchanged: `a parameter needs its type, as in n: int = 0` for `loc := #caller_location` (default; Q2), and `a value of type 'Source_Code_Location' doesn't convert to 'int' implicitly` for `loc: int = #caller_location`.
 - **Work flow:**
-  - This issue comes after #158 and before #159. Branch `issue/NNN-caller-location` (NNN the issue's number), worktree `C:\dev\rig-wt\caller-location`, made from `main` once #158 has merged. This plan is its first commit, as `docs/superpowers/plans/2026-11-19-caller-location.md`. Push it, then open a draft PR: `Fixes #194`, labels `language` and `enhancement`, milestone `4: The Basic module`. Push after each commit.
+  - This issue comes after #158 and before #159. Branch `issue/NNN-caller-location` (NNN the issue's number), worktree `C:\dev\rig-wt\caller-location`, made from `main` once #158 has merged. This plan is its first commit, as `docs/superpowers/plans/2026-11-20-caller-location.md`. Push it, then open a draft PR: `Fixes #194`, labels `language` and `enhancement`, milestone `4: The Basic module`. Push after each commit.
   - **Commit messages:** a short imperative summary line, a blank line, an optional body, and nothing else. No trailers, no attribution lines. Commit as the personal identity the repository is configured with: check `git config user.email` before the first commit.
   - Before the PR is marked ready, an independent review runs. Fix every finding in production code and tests, minor ones included, and any wrong comment or doc. Comment and doc *polish* never holds the PR: it becomes GitHub issues labelled `documentation`.
 
