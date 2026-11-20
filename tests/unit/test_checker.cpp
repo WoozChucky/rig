@@ -9230,12 +9230,14 @@ TEST(a_dots_parameter_before_cs_dots_is_refused_as_before) {
 TEST(nothing_follows_a_spread_to_the_dots) {
     // A spread is all the '..' arguments, and the parameters after the '..T'
     // one take only their defaults: an argument after the spread is said at
-    // the first of them, and the call is checked as if it ended at the
-    // spread, however many follow it. A procedure with nothing after its
-    // '..T' one says what it always has of a spread that isn't the last
-    // argument, and so does any procedure of a spread in a fixed argument's
-    // place. '..' arguments both one by one and spread are said as before,
-    // and an argument after the spread besides.
+    // the first of them, however many follow it, and the arguments after it
+    // are checked as any expression is but given to no parameter, so a string
+    // that suits neither 'n' nor '..int' says nothing more, and an unknown
+    // name is said as anywhere. A procedure with nothing after its '..T' one
+    // says what it always has of a spread that isn't the last argument, and
+    // so does any procedure of a spread in a fixed argument's place. '..'
+    // arguments both one by one and spread are said as before, and an
+    // argument after the spread besides.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "log :: (format: string, args: ..int, n: int = 1, m: int = 2) { }\n"
                                "sum :: (first: int, rest: ..int) -> int { return first; }\n"
@@ -9246,6 +9248,8 @@ TEST(nothing_follows_a_spread_to_the_dots) {
                                "    log(..values, 3);\n"
                                "    log(\"a\", ..values, 3, 4);\n"
                                "    log(\"a\", 1, ..values, 3);\n"
+                               "    log(\"a\", ..values, \"x\");\n"
+                               "    log(\"a\", ..values, nope);\n"
                                "}\n"),
               "5:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
               "value\n"
@@ -9255,6 +9259,11 @@ TEST(nothing_follows_a_spread_to_the_dots) {
               "value\n"
               "9:17: 'log' takes its '..' arguments one by one or as one spread view, not both\n"
               "9:27: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n"
+              "10:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n"
+              "11:24: unknown identifier 'nope'\n"
+              "11:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
               "value\n");
     arena_free(&a);
 }

@@ -1157,8 +1157,9 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
 // spread among the '..' arguments of a call of such a procedure that more
 // arguments follow is "'log' takes no argument after a spread: 'loc',
 // after its '..' parameter, takes only its default value", at the first of
-// them, and the call is checked as if it ended at the spread. The call's
-// type is its first result's, void when there's none.
+// them, and the arguments after the spread, checked as any expression is,
+// are given to no parameter. The call's type is its first result's, void
+// when there's none.
 static Type *check_call(Checker *c, Ast_Call *call) {
     bool known = check_callee(c, call);
     for (s64 i = 0; i < call->args.count; i++) {
