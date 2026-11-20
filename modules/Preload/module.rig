@@ -14,7 +14,9 @@
 // path reads nothing more: a file is read once.
 //
 // It holds the allocator's shape and the heap, type information, Any, the
-// context, the temporary storage and its allocator, [..]T and its helpers.
+// context, the temporary storage and its allocator, and for [..]T, the
+// language's resizable array type, its layout, Resizable_Array, and the
+// helpers its built-in procedures call.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -358,11 +360,12 @@ TEMPORARY_ALLOCATOR :: Allocator.{temporary_allocator_proc, null};
 // where a view has them, so whatever reads a view's reads a resizable
 // array's, then allocated, how many elements data's memory holds, and the
 // allocator that memory came from and goes back to. The array owns that
-// memory when allocated is above 0; at 0 it owns none, though a program may
-// have set data and count by hand. This is the untyped form, data a *void,
-// which every [..]T has whatever its T, so code that works on any of them
-// takes one; the compiler needs it for a [..]T at all, its allocator field
-// being this one's.
+// memory when allocated is above 0 and its elements take bytes; at 0 it
+// owns none, though a program may have set data and count by hand, and an
+// array of elements of 0 bytes owns none either (__array_no_bytes). This
+// is the untyped form, data a *void, which every [..]T has whatever its T,
+// so code that works on any of them takes one; the compiler needs it for a
+// [..]T at all, its allocator field being this one's.
 Resizable_Array :: struct {
     count: int;
     data: *void;
@@ -383,8 +386,12 @@ Resizable_Array :: struct {
 // Lowering checks the pointer and resize's count first, at the built-in's
 // name, and the index and pop's count too unless bounds checks are off
 // (#no_abc, --no-bounds-checks; spec 7.7), when an index outside the array
-// is a memory error no check catches (spec 8.6). The helpers check none of
-// them, and a program that calls one by hand gets no check.
+// is a memory error no check catches (spec 8.6). For every built-in but
+// array_reset and array_free, whose helpers read no element, it checks the
+// array's data too, as a view's is, bounds checks on or off: a count above
+// 0 with data null fails, since the helper would read, move or copy
+// elements there. The helpers check none of them, and a program that
+// calls one by hand gets no check.
 //
 // The allocator: an array whose allocator's procedure is null, a zeroed
 // one, takes the caller's context.allocator when it first grows, and keeps
@@ -393,13 +400,14 @@ Resizable_Array :: struct {
 // before the first growth chooses another; changing it while the array
 // holds memory is a memory error no check catches (spec 8.6).
 //
-// Owning memory: the array owns data's memory when allocated is above 0,
-// and gives it back with FREE, its old_size allocated elements' bytes, so
-// an allocator that records sizes gets them. An array whose data and
-// count a program set by hand, allocated 0, owns none: its first growth
-// copies its elements into memory of its own, leaving theirs alone, and
-// array_free gives nothing back for it. Elements of 0 bytes take no memory
-// at all (__array_no_bytes).
+// Owning memory: the array owns data's memory when allocated is above 0
+// and its elements take bytes, and gives it back with FREE, its old_size
+// allocated elements' bytes, so an allocator that records sizes gets them.
+// An array whose data and count a program set by hand, allocated 0, owns
+// none: its first growth copies its elements into memory of its own,
+// leaving theirs alone, and array_free gives nothing back for it. Elements
+// of 0 bytes take no memory at all, so an array of them owns none, whatever
+// its allocated (__array_no_bytes).
 
 // C's memset, under Preload's own name, as __memmove is: __array_resize
 // zeroes the elements it adds with it.

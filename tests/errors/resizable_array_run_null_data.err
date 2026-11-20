@@ -1,0 +1,5 @@
+tests/errors/resizable_array_run_null_data.rig:11:6: error: #run failed: runtime error: null pointer dereference
+    X :: #run go();
+         ^
+    in go (tests/errors/resizable_array_run_null_data.rig:8:12)
+    in #run (tests/errors/resizable_array_run_null_data.rig:11:6)

@@ -1,0 +1,13 @@
+// A #run whose code pops a resizable array whose count says it has
+// elements but whose data is null (issue #158, spec 3.17, 7.8, 8.4): the
+// built-in checks the data as a view's is, so the #run fails at the
+// built-in's name, rather than the interpreter reading through null.
+go :: () -> int {
+    a : [..]int;
+    a.count = 2;
+    return array_pop(*a);
+}
+
+X :: #run go();
+
+main :: () { }

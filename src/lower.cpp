@@ -115,7 +115,8 @@
 //   (lower_cast); a pointer is compared with null before anything is read
 //   or written through it (emit_null_check), and so is a view's, a
 //   resizable array's or a string's data before an element is read
-//   (lower_index_address, emit_data_check, lower_string_comparison). A
+//   (lower_index_address, emit_data_check, lower_string_comparison,
+//   lower_builtin_call). A
 //   check that fails is a runtime error: a block of its own panics with
 //   "PATH:LINE:COL: runtime error: MESSAGE" (emit_runtime_check).
 // - Pointers (spec 6.5) are ptr values. Since every variable is a slot
@@ -2054,8 +2055,11 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //   against the count plus one, since it may insert at the end; the
 //   removes' against the count; array_pop's last index, the count less one,
 //   against the count, so an empty array's is -1. A count below 0 (set by
-//   hand) fails them too. Then array_resize's count below 0, always: the
-//   helper would make a count no array has.
+//   hand) fails them too. Then, for every built-in but array_reset and
+//   array_free, the array's data, as a view's is (emit_data_check, spec
+//   8.4), bounds checks on or off: a count above 0 with data null fails.
+//   Then array_resize's count below 0, always: the helper would make a
+//   count no array has.
 // - The call of the helper, at the statement, as any call is: the
 //   context, the pointer, the element's size, an i64 constant, then the
 //   rest. The helpers index nothing themselves, so #no_abc changes nothing
@@ -2076,27 +2080,36 @@ static s32 lower_variadic_argument(Lowering *l, Ast_Call *call, s64 fixed, Type 
 //                                %8 = cmp eq ptr %2, %7
 //                                branch %8, fail, ok       (emit_null_check)
 //                              ok:
-//                                %9 = call @__array_add(%3, %2, %4, %5)
-//                                %10 = const i1 1
-//                                %11 = xor i1 %9, %10      (false: no memory given)
-//                                branch %11, fail, ok      (emit_runtime_check)
-//
-//     x := array_pop(*a);        %13 = load ptr %0         (x in %12)
-//                                %14 = const i64 8
-//                                %15 = local i64           (the result's temporary)
-//                                ...                       (the null check)
-//                                %18 = load i64 %2         (the count)
-//                                %19 = const i64 1
-//                                %20 = sub i64 %18, %19    (the last index)
-//                                %21 = cmp uge i64 %20, %18
-//                                %22 = const i64 0
-//                                %23 = cmp slt i64 %18, %22
-//                                %24 = or i1 %21, %23
-//                                branch %24, fail, ok      (emit_bounds_check)
+//                                %9 = load i64 %2          (the count)
+//                                %10 = const i64 8
+//                                %11 = ptradd %2, %10
+//                                %12 = load ptr %11        (the data)
+//                                ...
+//                                branch %17, fail, ok      (emit_data_check)
 //                              ok:
-//                                call @__array_pop(%13, %2, %14, %15)
-//                                %28 = load i64 %15
-//                                store i64 %28, %12
+//                                %18 = call @__array_add(%3, %2, %4, %5)
+//                                %19 = const i1 1
+//                                %20 = xor i1 %18, %19     (false: no memory given)
+//                                branch %20, fail, ok      (emit_runtime_check)
+//
+//     x := array_pop(*a);        %22 = load ptr %0         (x in %21)
+//                                %23 = const i64 8
+//                                %24 = local i64           (the result's temporary)
+//                                ...                       (the null check)
+//                                %27 = load i64 %2         (the count)
+//                                %28 = const i64 1
+//                                %29 = sub i64 %27, %28    (the last index)
+//                                %30 = cmp uge i64 %29, %27
+//                                %31 = const i64 0
+//                                %32 = cmp slt i64 %27, %31
+//                                %33 = or i1 %30, %32
+//                                branch %33, fail, ok      (emit_bounds_check)
+//                              ok:
+//                                ...                       (the data check, of %27)
+//                              ok:
+//                                call @__array_pop(%22, %2, %23, %24)
+//                                %45 = load i64 %24
+//                                store i64 %45, %21
 static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results) {
     Array_Builtin builtin = call->builtin->builtin;
     Type *signature = call->callee_type;
@@ -2128,14 +2141,32 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
     emit_null_check(l, array, at);
     bool indexes = builtin == BUILTIN_ARRAY_INSERT || builtin == BUILTIN_ARRAY_POP ||
                    builtin == BUILTIN_ARRAY_REMOVE_ORDERED || builtin == BUILTIN_ARRAY_REMOVE_UNORDERED;
+    // Every built-in but array_reset and array_free keeps the array's
+    // elements, so its helper reads, moves or copies them at data: a pop
+    // or a remove reads them in place, an add or an insert moves them up,
+    // and a growth (an add's, an insert's, a reserve's, a resize's) copies
+    // them into the new memory. So data is checked as a view's is when
+    // indexing or a for reads it (emit_data_check, spec 8.4), bounds checks
+    // on or off: a count above 0 with data null (a count set by hand)
+    // fails, and an empty or zeroed array passes. array_reset and
+    // array_free read no element: they only empty the array, and free gives
+    // data's memory back only when data isn't null. An array of elements of
+    // 0 bytes that grew points at __array_no_bytes, not null, so it passes;
+    // one whose count was set by hand over a null data fails, as indexing
+    // such a view does, whatever its elements' size.
+    bool keeps = builtin != BUILTIN_ARRAY_RESET && builtin != BUILTIN_ARRAY_FREE;
+    s32 count = keeps ? load_view_count(l, array) : -1;
     if (indexes && l->checking_bounds) {
-        s32 count = load_view_count(l, array), bound = count;
+        s32 bound = count;
         if (builtin == BUILTIN_ARRAY_INSERT) bound = emit_binary(l, IR_ADD, IR_I64, count, emit_constant(l, IR_I64, 1));
         if (builtin == BUILTIN_ARRAY_POP) index = emit_binary(l, IR_SUB, IR_I64, count, emit_constant(l, IR_I64, 1));
         s32 fails = emit_compare(l, IR_UGE, IR_I64, index, bound);
         s32 negative = emit_compare(l, IR_SLT, IR_I64, count, emit_constant(l, IR_I64, 0));
         emit_bounds_check(l, emit_binary(l, IR_OR, IR_I1, fails, negative), at, index, bound, true);
     }
+    // After the index, as a view's data is checked after its index's
+    // bounds (lower_index_address): an empty array's pop is out of bounds.
+    if (keeps) emit_data_check(l, count, load_view_data(l, array), at);
     if (builtin == BUILTIN_ARRAY_RESIZE) {
         s32 negative = emit_compare(l, IR_SLT, IR_I64, index, emit_constant(l, IR_I64, 0));
         emit_runtime_check(l, negative, at, str("'array_resize' was given a negative count"));

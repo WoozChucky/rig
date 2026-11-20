@@ -1,0 +1,7 @@
+zeroed 7 0 8
+adopted 5 [4, 3] 0 [4, 3, 4, 4, 5]
+adopted [4, 3] 2 false
+adopted [4, 9, 3] 8 [4, 3, 4, 4, 5]
+adopted [4, 3, 0, 0] 4 [4, 3, 4, 4, 5]
+reset 0 true
+free 0 true

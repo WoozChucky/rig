@@ -1,0 +1,10 @@
+// array_add to a resizable array whose count says it has elements but
+// whose data is null (issue #158, spec 3.17, 8.4): growing would copy
+// those elements from null, so its data is checked as a view's is, and
+// the program stops at the built-in's name rather than keeping the count
+// over memory nothing wrote.
+main :: () {
+    a : [..]int;
+    a.count = 2;
+    array_add(*a, 1);
+}

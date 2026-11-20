@@ -6459,8 +6459,10 @@ TEST(an_array_procedure_calls_its_preload_helper) {
     // item, then fails when it gave false. array_pop checks the pointer and
     // its last index, then calls __array_pop with the address its result
     // goes to. array_reserve fails when its helper gave false, as the add
-    // does; array_resize checks its count for below 0 first. #no_abc leaves
-    // the bounds check out, never the others.
+    // does; array_resize checks its count for below 0 first. Each of them
+    // checks the array's data as a view's is, after the index: a count
+    // above 0 with data null fails. array_reset and array_free check only
+    // the pointer. #no_abc leaves the bounds check out, never the others.
     Arena a = arena_make();
     String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
                                                               "    a : [..]int;\n"
@@ -6468,6 +6470,8 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                                                               "    x := array_pop(*a);\n"
                                                               "    array_reserve(*a, 4);\n"
                                                               "    array_resize(*a, 2);\n"
+                                                              "    array_reset(*a);\n"
+                                                              "    array_free(*a);\n"
                                                               "}\n")),
                           "main");
     // a is %2; each check's failure, a panic or __rig_bounds_failed, is a
@@ -6482,50 +6486,101 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                          "  %7 = const ptr 0\n"
                          "  %8 = cmp eq ptr %2, %7\n"
                          "  branch %8, b1, b2\n"));
+    // The add's data check: the count above 0 and the data null fails.
     CHECK(contains(main, "b2:\n"
-                         "  %9 = call @__array_add(%3, %2, %4, %5)\n"
-                         "  %10 = const i1 1\n"
-                         "  %11 = xor i1 %9, %10\n"
-                         "  branch %11, b3, b4\n"));
-    CHECK(contains(main, "b4:\n"
-                         "  %12 = local i64\n"
-                         "  %13 = load ptr %0\n"
-                         "  %14 = const i64 8\n"
-                         "  %15 = local i64\n"
-                         "  %16 = const ptr 0\n"
-                         "  %17 = cmp eq ptr %2, %16\n"
-                         "  branch %17, b5, b6\n"));
+                         "  %9 = load i64 %2\n"
+                         "  %10 = const i64 8\n"
+                         "  %11 = ptradd %2, %10\n"
+                         "  %12 = load ptr %11\n"
+                         "  %13 = const i64 0\n"
+                         "  %14 = cmp sgt i64 %9, %13\n"
+                         "  %15 = const ptr 0\n"
+                         "  %16 = cmp eq ptr %12, %15\n"
+                         "  %17 = and i1 %14, %16\n"
+                         "  branch %17, b3, b4\n"
+                         "b3:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb4:\n"
+                         "  %18 = call @__array_add(%3, %2, %4, %5)\n"
+                         "  %19 = const i1 1\n"
+                         "  %20 = xor i1 %18, %19\n"
+                         "  branch %20, b5, b6\n"));
     CHECK(contains(main, "b6:\n"
-                         "  %18 = load i64 %2\n"
-                         "  %19 = const i64 1\n"
-                         "  %20 = sub i64 %18, %19\n"
-                         "  %21 = cmp uge i64 %20, %18\n"
-                         "  %22 = const i64 0\n"
-                         "  %23 = cmp slt i64 %18, %22\n"
-                         "  %24 = or i1 %21, %23\n"
-                         "  branch %24, b7, b8\n"));
-    CHECK(contains(main, "  call @__rig_bounds_failed(%25, %26, %20, %18, %27)\n"
+                         "  %21 = local i64\n"
+                         "  %22 = load ptr %0\n"
+                         "  %23 = const i64 8\n"
+                         "  %24 = local i64\n"
+                         "  %25 = const ptr 0\n"
+                         "  %26 = cmp eq ptr %2, %25\n"
+                         "  branch %26, b7, b8\n"));
+    // The pop's count, loaded once, is the bounds check's and the data
+    // check's, which comes after it.
+    CHECK(contains(main, "b8:\n"
+                         "  %27 = load i64 %2\n"
+                         "  %28 = const i64 1\n"
+                         "  %29 = sub i64 %27, %28\n"
+                         "  %30 = cmp uge i64 %29, %27\n"
+                         "  %31 = const i64 0\n"
+                         "  %32 = cmp slt i64 %27, %31\n"
+                         "  %33 = or i1 %30, %32\n"
+                         "  branch %33, b9, b10\n"));
+    CHECK(contains(main, "  call @__rig_bounds_failed(%34, %35, %29, %27, %36)\n"
                          "  unreachable\n"
-                         "b8:\n"
-                         "  call @__array_pop(%13, %2, %14, %15)\n"
-                         "  %28 = load i64 %15\n"
-                         "  store i64 %28, %12\n"));
-    CHECK(contains(main, "b10:\n"
-                         "  %34 = call @__array_reserve(%29, %2, %30, %31)\n"
-                         "  %35 = const i1 1\n"
-                         "  %36 = xor i1 %34, %35\n"
-                         "  branch %36, b11, b12\n"));
-    CHECK(contains(main, "b14:\n"
-                         "  %42 = const i64 0\n"
-                         "  %43 = cmp slt i64 %39, %42\n"
-                         "  branch %43, b15, b16\n"
+                         "b10:\n"
+                         "  %37 = const i64 8\n"
+                         "  %38 = ptradd %2, %37\n"
+                         "  %39 = load ptr %38\n"
+                         "  %40 = const i64 0\n"
+                         "  %41 = cmp sgt i64 %27, %40\n"
+                         "  %42 = const ptr 0\n"
+                         "  %43 = cmp eq ptr %39, %42\n"
+                         "  %44 = and i1 %41, %43\n"
+                         "  branch %44, b11, b12\n"));
+    CHECK(contains(main, "b12:\n"
+                         "  call @__array_pop(%22, %2, %23, %24)\n"
+                         "  %45 = load i64 %24\n"
+                         "  store i64 %45, %21\n"));
+    CHECK(contains(main, "  %59 = and i1 %56, %58\n"
+                         "  branch %59, b15, b16\n"
                          "b15:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb16:\n"
-                         "  %44 = call @__array_resize(%37, %2, %38, %39)\n"
-                         "  %45 = const i1 1\n"
-                         "  %46 = xor i1 %44, %45\n"
-                         "  branch %46, b17, b18\n"));
+                         "  %60 = call @__array_reserve(%46, %2, %47, %48)\n"
+                         "  %61 = const i1 1\n"
+                         "  %62 = xor i1 %60, %61\n"
+                         "  branch %62, b17, b18\n"));
+    // The resize's data check, then its count's.
+    CHECK(contains(main, "  %76 = and i1 %73, %75\n"
+                         "  branch %76, b21, b22\n"
+                         "b21:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb22:\n"
+                         "  %77 = const i64 0\n"
+                         "  %78 = cmp slt i64 %65, %77\n"
+                         "  branch %78, b23, b24\n"
+                         "b23:\n"
+                         "  panic @str."));
+    CHECK(contains(main, "\nb24:\n"
+                         "  %79 = call @__array_resize(%63, %2, %64, %65)\n"
+                         "  %80 = const i1 1\n"
+                         "  %81 = xor i1 %79, %80\n"
+                         "  branch %81, b25, b26\n"));
+    // The reset and the free check the pointer, and nothing else.
+    CHECK(contains(main, "b26:\n"
+                         "  %82 = load ptr %0\n"
+                         "  %83 = const i64 8\n"
+                         "  %84 = const ptr 0\n"
+                         "  %85 = cmp eq ptr %2, %84\n"
+                         "  branch %85, b27, b28\n"));
+    CHECK(contains(main, "b28:\n"
+                         "  call @__array_reset(%82, %2, %83)\n"
+                         "  %86 = load ptr %0\n"
+                         "  %87 = const i64 8\n"
+                         "  %88 = const ptr 0\n"
+                         "  %89 = cmp eq ptr %2, %88\n"
+                         "  branch %89, b29, b30\n"));
+    CHECK(contains(main, "b30:\n"
+                         "  call @__array_free(%86, %2, %87)\n"));
     String quiet = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () #no_abc {\n"
                                                                "    a : [..]int;\n"
                                                                "    array_add(*a, 7);\n"
@@ -6535,38 +6590,65 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                                                                "}\n")),
                            "main");
     // Every check but array_pop's bounds check stays: the pointer's null
-    // checks, the no-memory ones and the resize's negative count's.
+    // checks, the data checks, the no-memory ones and the resize's negative
+    // count's.
     CHECK(contains(quiet, "  %8 = cmp eq ptr %2, %7\n"
                           "  branch %8, b1, b2\n"
                           "b1:\n"
                           "  panic @str."));
-    CHECK(contains(quiet, "\nb2:\n"
-                          "  %9 = call @__array_add(%3, %2, %4, %5)\n"
-                          "  %10 = const i1 1\n"
-                          "  %11 = xor i1 %9, %10\n"
-                          "  branch %11, b3, b4\n"));
-    CHECK(contains(quiet, "  %17 = cmp eq ptr %2, %16\n"
-                          "  branch %17, b5, b6\n"
-                          "b5:\n"
+    CHECK(contains(quiet, "  %17 = and i1 %14, %16\n"
+                          "  branch %17, b3, b4\n"
+                          "b3:\n"
                           "  panic @str."));
-    CHECK(contains(quiet, "\nb6:\n"
-                          "  call @__array_pop(%13, %2, %14, %15)\n"));
-    CHECK(contains(quiet, "b8:\n"
-                          "  %24 = call @__array_reserve(%19, %2, %20, %21)\n"
-                          "  %25 = const i1 1\n"
-                          "  %26 = xor i1 %24, %25\n"
-                          "  branch %26, b9, b10\n"));
-    CHECK(contains(quiet, "b12:\n"
-                          "  %32 = const i64 0\n"
-                          "  %33 = cmp slt i64 %29, %32\n"
-                          "  branch %33, b13, b14\n"
+    CHECK(contains(quiet, "\nb4:\n"
+                          "  %18 = call @__array_add(%3, %2, %4, %5)\n"
+                          "  %19 = const i1 1\n"
+                          "  %20 = xor i1 %18, %19\n"
+                          "  branch %20, b5, b6\n"));
+    CHECK(contains(quiet, "  %26 = cmp eq ptr %2, %25\n"
+                          "  branch %26, b7, b8\n"
+                          "b7:\n"
+                          "  panic @str."));
+    // The pop's data check, with no bounds check before it.
+    CHECK(contains(quiet, "\nb8:\n"
+                          "  %27 = load i64 %2\n"
+                          "  %28 = const i64 8\n"
+                          "  %29 = ptradd %2, %28\n"
+                          "  %30 = load ptr %29\n"
+                          "  %31 = const i64 0\n"
+                          "  %32 = cmp sgt i64 %27, %31\n"
+                          "  %33 = const ptr 0\n"
+                          "  %34 = cmp eq ptr %30, %33\n"
+                          "  %35 = and i1 %32, %34\n"
+                          "  branch %35, b9, b10\n"
+                          "b9:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb10:\n"
+                          "  call @__array_pop(%22, %2, %23, %24)\n"));
+    CHECK(contains(quiet, "  %50 = and i1 %47, %49\n"
+                          "  branch %50, b13, b14\n"
                           "b13:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb14:\n"
-                          "  %34 = call @__array_resize(%27, %2, %28, %29)\n"
-                          "  %35 = const i1 1\n"
-                          "  %36 = xor i1 %34, %35\n"
-                          "  branch %36, b15, b16\n"));
+                          "  %51 = call @__array_reserve(%37, %2, %38, %39)\n"
+                          "  %52 = const i1 1\n"
+                          "  %53 = xor i1 %51, %52\n"
+                          "  branch %53, b15, b16\n"));
+    CHECK(contains(quiet, "  %67 = and i1 %64, %66\n"
+                          "  branch %67, b19, b20\n"
+                          "b19:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb20:\n"
+                          "  %68 = const i64 0\n"
+                          "  %69 = cmp slt i64 %56, %68\n"
+                          "  branch %69, b21, b22\n"
+                          "b21:\n"
+                          "  panic @str."));
+    CHECK(contains(quiet, "\nb22:\n"
+                          "  %70 = call @__array_resize(%54, %2, %55, %56)\n"
+                          "  %71 = const i1 1\n"
+                          "  %72 = xor i1 %70, %71\n"
+                          "  branch %72, b23, b24\n"));
     CHECK(!contains(quiet, "__rig_bounds_failed"));
     arena_free(&a);
 }
