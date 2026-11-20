@@ -1,5 +1,5 @@
-// Variadic Rig procedures (issue #150, spec 5.10, 7.2): a '..T' parameter,
-// the last, gathers a call's other arguments into a view, []T, of a
+// Variadic Rig procedures (issue #150, spec 5.10, 7.2): a '..T' parameter
+// gathers a call's arguments after the fixed ones into a view, []T, of a
 // temporary array of the caller's, each converted to T as an argument is;
 // '..e' spreads a view or an array into it instead: a place's or a
 // constant's elements not copied, a call's result copied to a temporary.
