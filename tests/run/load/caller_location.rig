@@ -3,3 +3,9 @@
 from_loaded :: () -> Source_Code_Location {
     return here();
 }
+
+// twice_removed()'s default is here() in the file that declares it, so its
+// place is there, not in this file.
+from_loaded_twice :: () -> Source_Code_Location {
+    return twice_removed();
+}

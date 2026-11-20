@@ -208,9 +208,11 @@ Temporary_Storage :: struct {
 // helpers do with their built-in's place (below), so an allocator procedure
 // can read where it is asked from, as a memory debugger records it, though
 // Jai's shape of the procedure, which every allocator is written to, gives
-// it no place. Outside such a call it is zeroed, no place: default_context
-// starts so, and a direct call of an allocator's procedure leaves it as it
-// is.
+// it no place. It is an ordinary field, which a program may set too:
+// default_context starts with it zeroed, no place, each helper puts back
+// the value it found, whatever that was, and a direct call of an
+// allocator's procedure leaves it as it is, so the allocator reads whatever
+// the context holds.
 Context :: struct { allocator: Allocator; temporary_storage: *Temporary_Storage; allocation_location: Source_Code_Location; }
 
 // The bytes of Preload's temporary storage's first block, and of the
