@@ -16,6 +16,6 @@ tests/errors/variadic_rig_signatures.rig:9:22: error: a #compiler procedure can'
 tests/errors/variadic_rig_signatures.rig:9:29: error: #compiler is only for the modules that ship with rig
     compiled :: (values: ..int) #compiler;
                                 ^
-tests/errors/variadic_rig_signatures.rig:11:22: error: '..' must be the last parameter
+tests/errors/variadic_rig_signatures.rig:11:29: error: 'count' needs a default value, since it comes after the '..' parameter
     not_last :: (values: ..int, count: int) { }
-                         ^
+                                ^

@@ -1,0 +1,16 @@
+// Where a default value may stand beside a '..' parameter (issue #197,
+// spec 7.2, 5.10, 3.15): every parameter after it needs one, and only its
+// default ever fills it; none before it may have one, nor may the '..'
+// parameter itself. A procedure with parameters after its '..' one can't
+// be a value, and a call of one gives nothing after a spread.
+after :: (values: ..int, total: int) { }
+before :: (first: int = 0, values: ..int) { }
+own :: (values: ..int = 1) { }
+log :: (format: string, args: ..Any, loc: Source_Code_Location = #caller_location) { }
+main :: () {
+    f := log;
+    args := Any.[1, 2];
+    log("{} {}", ..args, Source_Code_Location.{});
+}
+// Last: the parser gives this declaration up and skips to the next.
+twice :: (a: ..int, b: ..int) { }

@@ -488,12 +488,14 @@
 //   or a literal").
 //
 // Variadic Rig procedures (issue #150, spec 7.2, 5.10).
-// - A procedure's last parameter written `name: ..T` (the parser makes sure
-//   it's last) takes the rest of a call's arguments, any number of them. In
-//   the body it is a []T, read-only as every parameter. T is resolved as a
-//   view's element is, behind a pointer: a struct named there needs no
-//   layout yet, and void is "'void' is only a pointer's target, as in
-//   *void", at T.
+// - A procedure's parameter written `name: ..T` (the parser makes sure it
+//   has one at most) takes a call's arguments after the fixed ones, those
+//   before it, any number of them. In the body it is a []T, read-only as
+//   every parameter. T is resolved as a view's element is, behind a
+//   pointer: a struct named there needs no layout yet, and void is "'void'
+//   is only a pointer's target, as in *void", at T.
+// - Parameters may follow it (issue #197): no argument is left for them, so
+//   each takes only its default value, and needs one (below).
 // - C passes no view, so a foreign procedure can't take one: "a foreign
 //   procedure can't take '..int': C's other arguments are written '..'
 //   alone, as in (format: *u8, ..)"; nor can a #c_call one, "a #c_call
@@ -511,9 +513,14 @@
 //   procedure can't take a '(..int) -> int': C can't pass the view a '..'
 //   parameter takes" ("a #c_call procedure ...", "... can't return ..."),
 //   at the type.
-// - A call gives at least the fixed parameters, the others ("'sum' takes at
-//   least 1 argument, but 0 were given", at the callee), and then any
-//   number more, none included, each converting to T as an argument to a T
+// - A procedure with parameters after its '..T' one has no type: a
+//   procedure type keeps no defaults, which are all a call gives them. Its
+//   name as a value is "'log' can't be a value: its parameters after '..'
+//   take only their default values, which a procedure type doesn't keep",
+//   at the name.
+// - A call gives at least the fixed parameters ("'sum' takes at least 1
+//   argument, but 0 were given", at the callee), and then any number
+//   more, none included, each converting to T as an argument to a T
 //   parameter does ("argument 3 of 'sum' has type 'string', which can't be
 //   converted to 'int'", counted over all the arguments): an untyped
 //   constant or a .{...} takes T. They go, in order, into a [N]T of the
@@ -528,7 +535,13 @@
 //   '..int', ...". The spread is all the '..' arguments: the fixed ones
 //   come before it, all of them (the count doesn't include it), and no
 //   more: "'sum' takes its '..' arguments one by one or as one spread view,
-//   not both", at the '..'.
+//   not both", at the '..'. Nor do any follow it, the parameters after the
+//   '..T' one taking only their defaults: "'log' takes no argument after a
+//   spread: 'loc', after its '..' parameter, takes only its default value",
+//   at the first of them, and the call is checked as if it ended at the
+//   spread.
+// - The parameters after the '..T' one are left out of every call, which
+//   passes their defaults as any call passes those it leaves out (below).
 // - A spread anywhere else, an argument that isn't the last, one of a
 //   procedure with no '..T' (C's '..' included), a part of an argument, a
 //   variable's value, is "only the arguments of a '..' parameter can be
@@ -544,11 +557,18 @@
 //   default, every one after it has one: "'separator' needs a default
 //   value, since a parameter before it has one", at each one's name that
 //   doesn't.
+// - Beside a '..T' parameter (issue #197), each parameter after it takes
+//   only its default, so it needs one: "'loc' needs a default value, since
+//   it comes after the '..' parameter", at each one's name that doesn't.
+//   One before it would make a call ambiguous: "'first' can't have a
+//   default value, since a '..' parameter comes after it", at each one's
+//   '='. The '..T' parameter has none, being empty already without
+//   arguments: "a '..' parameter can't have a default value: given no
+//   arguments, it is empty", at its '='. Those refused go unchecked.
 // - A procedure with a body, a #c_call one included, and a foreign one may
 //   have defaults: a default is the caller's, so C sees a full call. One
-//   with a '..T' parameter, one that takes C's '..' and a #compiler one
-//   can't, for now: "a procedure with a '..' parameter can't have default
-//   values, for now" ("a procedure that takes C's '..' ...", "a #compiler
+//   that takes C's '..' and a #compiler one can't, for now: "a procedure
+//   that takes C's '..' can't have default values, for now" ("a #compiler
 //   procedure ..."), once, at the first default's '='. Its defaults are
 //   then unchecked, and no gap is said.
 // - A default's names are the top level's, Preload's and the predeclared
@@ -1078,6 +1098,12 @@ Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field);
 // that checked with a type.
 s64 call_result_count(Ast_Call *call);
 Type *call_result_type(Ast_Call *call, s64 i);
+
+// The index of the ..T parameter of the procedure `call` calls, directly
+// (any of its parameters, issue #197) or through a value (its type's last);
+// -1 when it takes none (C's '..' included). For a call that checked with a
+// callee.
+s64 call_variadic_index(Ast_Call *call);
 
 // The []T of the ..T parameter of the procedure `call` calls, directly or
 // through a value; null when it takes none (C's '..' included), or when T

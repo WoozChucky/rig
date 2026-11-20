@@ -7,6 +7,6 @@ callback :: (values: ..int) #c_call { }
 Handler :: struct { run: (..int) #c_call; }
 c_like :: (count: int, ..) -> int { return count; }
 compiled :: (values: ..int) #compiler;
-// Last: the parser gives this declaration up and skips to the next.
+// A parameter after a '..T' one takes only its default, so it needs one.
 not_last :: (values: ..int, count: int) { }
 main :: () { }
