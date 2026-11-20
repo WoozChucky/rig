@@ -1,28 +1,107 @@
-alloc 35:14
-resize 37:13
-free 39:9
-free_all 41:9
-append_string 47:9
-append_byte 50:9
-append_int 53:9
-append_u64 56:9
-append_float 59:9
-append_bool 62:9
-builder_to_string 64:14
-builder_free 67:9
-to_c_string 70:14
-join 73:13
-replace 76:13
-repeat 79:13
-to_upper_copy 82:13
-to_lower_copy 85:13
-path_join 88:13
-read_entire_file 93:17
-get_environment 96:17
-run_command 99:9
-sort 104:9
-table_set 110:9
-table_remove 112:9
-table_free 114:9
-int_table_set 118:9
-int_table_free 120:9
+alloc
+    ALLOCATE 47:14
+resize
+    RESIZE 49:13
+free
+    FREE 51:9
+free_all
+    FREE_ALL 53:9
+append_string
+    ALLOCATE 59:9
+    FREE 60:9
+append_byte
+    ALLOCATE 62:9
+    FREE 63:9
+append_int
+    ALLOCATE 65:9
+    FREE 66:9
+append_u64
+    ALLOCATE 68:9
+    FREE 69:9
+append_float
+    ALLOCATE 71:9
+    FREE 72:9
+append_bool
+    ALLOCATE 74:9
+builder_to_string
+    ALLOCATE 76:14
+    FREE 77:9
+builder_free
+    FREE 79:9
+to_c_string
+    ALLOCATE 82:14
+    FREE 83:9
+join
+    ALLOCATE 85:13
+    FREE 86:9
+replace
+    ALLOCATE 88:13
+    FREE 89:9
+repeat
+    ALLOCATE 91:13
+    FREE 92:9
+to_upper_copy
+    ALLOCATE 94:13
+    FREE 95:9
+to_lower_copy
+    ALLOCATE 97:13
+    FREE 98:9
+path_join
+    ALLOCATE 100:13
+    FREE 101:9
+read_entire_file
+    ALLOCATE 105:17
+    FREE 106:9
+get_environment
+    ALLOCATE 110:17
+    FREE 110:17
+    ALLOCATE 110:17
+    FREE 111:9
+run_command
+    ALLOCATE 113:9
+    FREE 113:9
+sort
+    ALLOCATE 118:9
+    FREE 118:9
+table_set
+    ALLOCATE 128:9
+    ALLOCATE 128:9
+table_set
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+    ALLOCATE 131:20
+table_set
+    ALLOCATE 133:9
+    ALLOCATE 133:9
+    FREE 133:9
+table_remove
+    FREE 135:9
+table_free
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+    FREE 137:9
+int_table_set
+    ALLOCATE 141:21
+int_table_set
+    ALLOCATE 143:9
+    FREE 143:9
+int_table_free
+    FREE 145:9
