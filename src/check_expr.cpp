@@ -653,15 +653,17 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
-// procedure type (a constant naming one too), one taking a '..T' included,
-// its type saying so (spec 3.15). One that takes C's bare '..' has no
-// procedure type: "'printf' can't be a value: it takes C's '..', which no
-// procedure type can say". Nor is main a value: "'main' can't be a value:
-// it's where the program starts"; nor a #compiler one: "'create_workspace'
-// can't be a value: the compiler does it". In a default value, a
-// parameter is "a default value can't use the parameter 'times'". Nor is a
-// built-in procedure a value: "'array_add' can't be a value: it's built
-// into the language".
+// procedure type (a constant naming one too), one taking a '..T' last
+// included, its type saying so (spec 3.15). One that takes C's bare '..' has
+// no procedure type: "'printf' can't be a value: it takes C's '..', which no
+// procedure type can say". Nor has one with parameters after its '..T'
+// (issue #197): "'log' can't be a value: its parameters after '..' take only
+// their default values, which a procedure type doesn't keep". Nor is main a
+// value: "'main' can't be a value: it's where the program starts"; nor a
+// #compiler one: "'create_workspace' can't be a value: the compiler does
+// it". In a default value, a parameter is "a default value can't use the
+// parameter 'times'". Nor is a built-in procedure a value: "'array_add'
+// can't be a value: it's built into the language".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -710,11 +712,13 @@ static Type *check_name(Checker *c, Ast_Name *name) {
             diag_error(c->diag, name->pos,
                        "'" STR_FMT "' can't be a value: it takes C's '..', which no procedure type can say",
                        STR_ARG(proc->name));
-        }
-        // A call through a value gives every parameter, but nothing gives
-        // one after a '..T' parameter: only its default fills it, which a
-        // procedure type doesn't keep (issue #197, spec 3.15).
-        if (has_params_after_dots(proc)) {
+        } else if (has_params_after_dots(proc) && !proc->is_foreign && !proc->is_c_call &&
+                   proc->params[variadic_index(proc)]->type) {
+            // A call through a value gives every parameter, but nothing
+            // gives one after a '..T' parameter: only its default fills it,
+            // which a procedure type doesn't keep (issue #197, spec 3.15).
+            // A '..T' refused at its '..' (a foreign or #c_call
+            // procedure's), or whose T is an error, was said already.
             diag_error(c->diag, name->pos,
                        "'" STR_FMT "' can't be a value: its parameters after '..' take only their default values, "
                        "which a procedure type doesn't keep",

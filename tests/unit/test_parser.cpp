@@ -3635,8 +3635,9 @@ TEST(parse_defers_nested_too_deeply) {
 // Issue #150: variadic Rig procedures, '..T' parameters and spreads (spec 5.10, 7.2).
 
 TEST(parses_variadic_parameters) {
-    // name: ..T, the last parameter: its type as written is T, marked. A
-    // foreign procedure's parses too: refusing it is the checker's.
+    // name: ..T, a procedure's one at most: its type as written is T,
+    // marked. A foreign procedure's parses too: refusing it is the
+    // checker's.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a,

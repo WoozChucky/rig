@@ -9177,10 +9177,53 @@ TEST(a_procedure_with_parameters_after_the_dots_is_no_value) {
     // never fill a parameter after the '..T' one: such a procedure has no
     // type, and its name used as a value is refused.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "log :: (args: ..int, n: int = 1) { }\n"
-                               "main :: () { f := log; }\n"),
+    Checked c = check_src(&a, "log :: (args: ..int, n: int = 1) { }\n"
+                              "main :: () { f := log; }\n");
+    CHECK_STR(messages(&a, &c.list->diag),
               "2:19: 'log' can't be a value: its parameters after '..' take only their default values, which a "
               "procedure type doesn't keep\n");
+    CHECK(!top_level_named(c.file, "log")->type);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_procedure_value_is_refused_once_beside_the_dots) {
+    // A '..T' refused at its '..' (a foreign or #c_call procedure's), or
+    // whose T is an error, was said already, so the procedure's name as a
+    // value says nothing more of the parameters after it; and one that also
+    // takes C's '..' is refused as a value for that alone.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "g :: (rest: ..int, n: int = 1) #foreign libc \"abs\";\n"
+                               "h :: (rest: ..int, n: int = 1) #c_call { }\n"
+                               "e :: (rest: ..Nope, n: int = 1) { }\n"
+                               "cf :: (a: int, rest: ..int, n: int = 1, ..) -> s32 #foreign libc \"printf\";\n"
+                               "main :: () { x := g; y := h; z := e; w := cf; }\n"),
+              "1:13: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in "
+              "(format: *u8, ..)\n"
+              "2:13: a #c_call procedure can't take '..int'\n"
+              "3:15: unknown type 'Nope'\n"
+              "4:22: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in "
+              "(format: *u8, ..)\n"
+              "4:36: a procedure that takes C's '..' can't have default values, for now\n"
+              "5:43: 'cf' can't be a value: it takes C's '..', which no procedure type can say\n");
+    arena_free(&a);
+}
+
+TEST(a_dots_parameter_before_cs_dots_is_refused_as_before) {
+    // C's '..' may follow a '..T' parameter in the parse; the checker
+    // refuses what it always has: a foreign procedure's '..T', and C's '..'
+    // on a Rig procedure. Calling either says nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "cf :: (a: int, rest: ..int, ..) -> s32 #foreign libc \"printf\";\n"
+                               "mixed :: (a: int, rest: ..int, ..) { }\n"
+                               "main :: () {\n"
+                               "    cf(1, 2, 3);\n"
+                               "    mixed(1, 2, 3);\n"
+                               "}\n"),
+              "1:22: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in "
+              "(format: *u8, ..)\n"
+              "2:32: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as "
+              "in (values: ..int)\n");
     arena_free(&a);
 }
 
@@ -9191,7 +9234,7 @@ TEST(nothing_follows_a_spread_to_the_dots) {
     // spread. A procedure with nothing after its '..T' one says what it
     // always has of a spread that isn't the last argument.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "log :: (format: string, args: ..int, n: int = 1) { }\n"
+    CHECK_STR(check_source(&a, "log :: (format: string, args: ..int, n: int = 1, m: int = 2) { }\n"
                                "sum :: (first: int, rest: ..int) -> int { return first; }\n"
                                "main :: () {\n"
                                "    values := int.[1];\n"

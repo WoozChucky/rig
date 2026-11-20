@@ -1986,18 +1986,14 @@ bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     return !proc->had_errors;
 }
 
-// The index of proc's '..T' parameter (spec 7.2), its one at most (the
-// parser makes sure), or -1 when it has none.
-static s64 variadic_index(Ast_Proc *proc) {
+s64 variadic_index(Ast_Proc *proc) {
     for (s64 i = 0; i < proc->params.count; i++) {
         if (proc->params[i]->is_variadic) return i;
     }
     return -1;
 }
 
-// Whether proc has parameters after its '..T' one (issue #197), which take
-// only their default values.
-static bool has_params_after_dots(Ast_Proc *proc) {
+bool has_params_after_dots(Ast_Proc *proc) {
     s64 dots = variadic_index(proc);
     return dots >= 0 && dots < proc->params.count - 1;
 }

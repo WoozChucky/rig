@@ -178,8 +178,9 @@ enum Ast_Resolve : u8 {
 // Ast.type is the procedure's type, a TYPE_PROC, once its signature is
 // checked, variadic for one whose last parameter is a '..T' (spec 3.15):
 // null for one that takes C's '..', which no procedure type can say, for
-// one refused a '..T' (a foreign, #c_call or #compiler procedure), and
-// when a parameter's or a result's type was an error.
+// one refused a '..T' (a foreign, #c_call or #compiler procedure), for one
+// with parameters after its '..T' (a procedure type keeps no defaults,
+// issue #197), and when a parameter's or a result's type was an error.
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;  // the named parameters (with C's '..', its fixed parameters)

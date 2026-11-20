@@ -503,7 +503,8 @@
 //   #compiler procedure can't take '..int', for now". Each at the '..',
 //   once (what C can't take isn't said of the []T too), and the procedure
 //   then has no type, so using a foreign or #c_call one as a value says
-//   nothing more (a #compiler one is never a value anyway).
+//   nothing more of it, nor of any parameters after it (a #compiler one is
+//   never a value anyway).
 // - Its procedure's type says ..T: (first: int, rest: ..int) -> int has
 //   type (int, ..int) -> int, a type of its own (Type.is_variadic), which
 //   neither converts to nor from (int, []int) -> int. A procedure type
@@ -517,7 +518,8 @@
 //   procedure type keeps no defaults, which are all a call gives them. Its
 //   name as a value is "'log' can't be a value: its parameters after '..'
 //   take only their default values, which a procedure type doesn't keep",
-//   at the name.
+//   at the name (but for one whose '..T' was refused, or whose T is an
+//   error, said already).
 // - A call gives at least the fixed parameters ("'sum' takes at least 1
 //   argument, but 0 were given", at the callee), and then any number
 //   more, none included, each converting to T as an argument to a T
