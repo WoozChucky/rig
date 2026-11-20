@@ -1,40 +1,65 @@
 // Basic's memory debugger (issue #159): it numbers what it gives, from 1,
 // and its report names what isn't freed, in that order, with the size it
-// has now. Its own records never come from the context's allocator, though
-// that is the debugger here: the count is the program's own allocations,
-// while the records grow past 16. Each record has the place it was asked
-// for at, which the report names; called straight, from no helper, its
-// procedure settles the edges as Basic's helpers do, and what it gives has
-// no place.
+// has now. Its own memory never comes from the context's allocator, though
+// that is the debugger here, as it is when it is made ready: its records
+// grow past 16, with 20 allocations live at once, and its report sorts 8,
+// and the count is the program's own allocations. Each record has the
+// place it was asked for at, which the report names; called straight, from
+// no helper, its procedure settles the edges as Basic's helpers do, and
+// what it gives has no place. A debugger over it passes a resize to 0
+// bytes on as a free. Freed and made ready again, it starts afresh.
 #import "Basic";
 
 main :: () {
     debugger : Memory_Debugger;
     memory_debugger_init(*debugger);
-    defer memory_debugger_free(*debugger);
     print("{}\n", memory_debugger_report(*debugger));
+    memory_debugger_free(*debugger);
     old := context.allocator;
     context.allocator = memory_debugger_allocator(*debugger);
     defer context.allocator = old;
+    memory_debugger_init(*debugger, old);
+    defer memory_debugger_free(*debugger);
 
-    a := alloc(16);                  // allocation 1
-    b := alloc(1);                   // 2
-    a = resize(a, 16, 64);           // still 1, 64 bytes now
+    a := alloc(16);                              // allocation 1
+    b := alloc(1);                               // 2
+    a = resize(a, 16, 64);                       // still 1, 64 bytes now
     free(b);
-    for 1..40 { free(alloc(it)); }   // 3 to 42
+    kept : [20]*void;
+    for 0..19 { kept[it] = alloc(it + 1); }      // 3 to 22, live at once
+    for 5..19 { free(kept[it]); }                // all but 3 to 7
     builder : String_Builder;
     builder_init(*builder);
-    append_string(*builder, "text"); // 43, 64 bytes
+    append_string(*builder, "text");             // 23, 64 bytes
     d := context.allocator;
     none := d.proc(ALLOCATE, 0, 0, null, d.data);       // no allocation
-    grown := d.proc(RESIZE, 8, 0, null, d.data);        // 44
-    gone := d.proc(RESIZE, 0, 8, grown, d.data);        // a free
+    over : Memory_Debugger;
+    memory_debugger_init(*over, d);
+    e := memory_debugger_allocator(*over);
+    grown := e.proc(RESIZE, 8, 0, null, e.data);        // 24
+    gone := e.proc(RESIZE, 0, 8, grown, e.data);        // a free of 24
+    memory_debugger_free(*over);
     d.proc(FREE, 0, 0, null, d.data);                   // nothing
-    loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 45, no place
+    loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 25, no place
     print("{} {}\n", none == null, gone == null);
     print("{}\n", memory_debugger_report(*debugger));
     free(a);
     free(loose);
     builder_free(*builder);
+    for 0..4 { free(kept[it]); }
+
+    written : String_Builder;
+    builder_init(*written, HEAP_ALLOCATOR);
+    debugger.output = *written;
+    clean := memory_debugger_report(*debugger);
+    text := builder_to_string(*written, HEAP_ALLOCATOR);
+    print("{}{}\n", text, clean);
+    free(text.data, HEAP_ALLOCATOR);
+    builder_free(*written);
+
+    memory_debugger_free(*debugger);
+    memory_debugger_init(*debugger, old);
+    again := alloc(8);                           // 1 again
     print("{}\n", memory_debugger_report(*debugger));
+    free(again);
 }

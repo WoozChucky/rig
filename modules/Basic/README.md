@@ -421,15 +421,15 @@ context.allocator = memory_debugger_allocator(*debugger);
 defer context.allocator = old;
 ```
 
-The debugger keeps a record of each allocation, by its address: its number, from 1, in the order the debugger gave them; its size; whether it was given back; and the place it was first asked for at. A resize that the wrapped allocator does is the same allocation, its number and place kept, at the address it has now, so the report's sizes are the sizes now. A free marks the record freed. Memory the debugger gave goes back through it: given back some other way, such as by a `free_all` of the arena it wraps rather than of the debugger, its records stay, and the report says it isn't freed.
+The debugger keeps a record of each allocation, by its address: its number, from 1, in the order the debugger gave them; its size; whether it was given back; and the place it was first asked for at. A resize that the wrapped allocator does is the same allocation, its number and place kept, at the address it has now, so the report's sizes are the sizes now. A free marks the record freed.
 
 The place is `context.allocation_location` when the debugger is called (Allocators, above): Basic's helpers set it to their caller's place, the built-in procedures of a resizable array to their own call's, and Basic's other procedures that allocate pass down the place of the program's call to them. So a leak names the program's line, not one of Basic's. A procedure of the program's own that allocates names its own line, unless it takes a `loc` and passes it on as Basic's do (`with_line_feed`, above). The procedures that take no `loc` (Allocators, above), `sprint` and `print_to_builder` above all, for now (a `..` parameter can't have default values yet), give a line of Basic's, whose file is named by its absolute path, as messages name a module's file (spec 8.1). A direct call of the debugger's procedure, from no helper, has whatever place the context holds: none, unless the program set the field. The debugger passes each call on by a direct call of the wrapped allocator's procedure, which leaves the place as it is, so an arena or a pool it wraps passes the program's place on to its parent.
 
 The report writes a line for each allocation not freed, in number order, at its place, and then a line that counts them, which has no place:
 
 ```text
-tests/run/memory_debugger_leaks.rig:20:10: memory debugger: allocation 1 (64 bytes) isn't freed
-memory debugger: 45 allocations, 3 not freed (136 bytes), 0 bad calls
+tests/run/memory_debugger_leaks.rig:24:10: memory debugger: allocation 1 (64 bytes) isn't freed
+memory debugger: 25 allocations, 8 not freed (151 bytes), 0 bad calls
 ```
 
 A place is written first, as `PATH:LINE:COL: `, as a diagnostic or a runtime error starts (spec 8.1), and left out for none; a count of 1 takes the singular. The report is for the end of the program, after its own code, or for any point before as a checkpoint: it may be called any number of times, and the numbering goes on. It says whether every allocation is freed and no bad call was made; what to do with that, such as the exit status, is the program's choice.

@@ -146,13 +146,13 @@
     - **An arena or a pool whose parent is the debugger**: their blocks and slot memory are its allocations, each at the place of the request that needed it (the arena and the pool pass it on, Fact 3), given back through it by `free_all`, `arena_reset` (at its own line, `allocators.rig:227:13`) and `pool`'s `FREE_ALL`. What they hand out isn't. **A debugger over an arena or a pool** sees each of their allocations, the arena's resize moving each one.
     - **Nested**: a debugger may wrap another, in a push inside a push; each records what it gave, the inner's allocations being the outer's too.
     - **Memory another allocator gave**, freed through the debugger because the context changed in between (spec 7.10's "the program's mistake"), is a free of memory it never gave out, and isn't passed on.
-    - **Memory the debugger gave, given back some other way** (`free_all` of the arena it wraps, not through it): its records stay, and the report says not freed. The README says to give everything back through it.
+    - **Memory the debugger gave, given back some other way** (`free_all` of the arena it wraps, not through it): its records stay, and the report says not freed, until the wrapped allocator hands an address out again through the debugger, when the new allocation's record takes the old one's place, as for a freed record (measured: a debugger over an arena, two allocations, the arena's own `free_all`, a third allocation: the report names only the second and third). The README says to give everything back through it, and says that limit; Task 3 adds this to the README with its `FREE_ALL`, not Task 1.
     - **#158's `[..]T`**: an array that first grows under the debugger keeps it as its allocator, so its growth and its `array_free` are the debugger's, at the built-in's place. It must not outlive the debugger.
 13. **Test names:** `tests/run/memory_debugger_leaks` (Task 1); `memory_debugger_bad_calls`, `memory_debugger_bad_resize` (Task 2); `memory_debugger_wrapping` (Task 3); `memory_debugger_basic`, `memory_debugger_run`, `memory_debugger_example` (Task 4); `tests/debug/break_at_allocation` (Task 5; not `memory_debugger`, which cdb would read as the module of `memory_debugger!memory_debugger_break` too).
 
 ## Review Focus
 
-1. **The debugger's own memory taken from the context's allocator,** or its own calls of Basic changing the place before it is read. Expected: neither; the records grow on the heap while `context.allocator` is the debugger, the count is the program's allocations, exactly, and each record has its caller's place. Test: Task 1's `memory_debugger_leaks` (45 allocations, the records past 16 entries, the report called while the debugger is the context's allocator), and Task 4's `memory_debugger_basic`.
+1. **The debugger's own memory taken from the context's allocator,** or its own calls of Basic changing the place before it is read. Expected: neither; the records grow on the heap while `context.allocator` is the debugger, the count is the program's allocations, exactly, and each record has its caller's place. Test: Task 1's `memory_debugger_leaks` (made ready while the debugger is the context's allocator, 20 allocations live at once so the records grow past 16 entries on every host, a report of 8 records, which `sort` merges with scratch, called while the debugger is the context's allocator, and a resize to 0 bytes through a debugger over it that the inner one sees freed), and Task 4's `memory_debugger_basic`.
 2. **A double free whose address was handed out again in between.** Expected: the second free is the new allocation's, which it frees; the new allocation's own free is then the bad one. Pinned as the documented limit, with a pool, whose freed slot is the next handed out. Test: Task 2's `memory_debugger_bad_calls`, its pool part.
 3. **`free_all` of a debugger over a debugger over the heap.** Expected: both keep their records, since the heap gave nothing back. Test: Task 3's `memory_debugger_wrapping`, its nested part.
 4. **A bad resize whose null the caller doesn't test.** Expected: the debugger's line, then the runtime error at the caller's dereference, compiled and interpreted, status 101. Test: Task 2's `memory_debugger_bad_resize`.
@@ -176,43 +176,68 @@
   ```rig
   // Basic's memory debugger (issue #159): it numbers what it gives, from 1,
   // and its report names what isn't freed, in that order, with the size it
-  // has now. Its own records never come from the context's allocator, though
-  // that is the debugger here: the count is the program's own allocations,
-  // while the records grow past 16. Each record has the place it was asked
-  // for at, which the report names; called straight, from no helper, its
-  // procedure settles the edges as Basic's helpers do, and what it gives has
-  // no place.
+  // has now. Its own memory never comes from the context's allocator, though
+  // that is the debugger here, as it is when it is made ready: its records
+  // grow past 16, with 20 allocations live at once, and its report sorts 8,
+  // and the count is the program's own allocations. Each record has the
+  // place it was asked for at, which the report names; called straight, from
+  // no helper, its procedure settles the edges as Basic's helpers do, and
+  // what it gives has no place. A debugger over it passes a resize to 0
+  // bytes on as a free. Freed and made ready again, it starts afresh.
   #import "Basic";
 
   main :: () {
       debugger : Memory_Debugger;
       memory_debugger_init(*debugger);
-      defer memory_debugger_free(*debugger);
       print("{}\n", memory_debugger_report(*debugger));
+      memory_debugger_free(*debugger);
       old := context.allocator;
       context.allocator = memory_debugger_allocator(*debugger);
       defer context.allocator = old;
+      memory_debugger_init(*debugger, old);
+      defer memory_debugger_free(*debugger);
 
-      a := alloc(16);                  // allocation 1
-      b := alloc(1);                   // 2
-      a = resize(a, 16, 64);           // still 1, 64 bytes now
+      a := alloc(16);                              // allocation 1
+      b := alloc(1);                               // 2
+      a = resize(a, 16, 64);                       // still 1, 64 bytes now
       free(b);
-      for 1..40 { free(alloc(it)); }   // 3 to 42
+      kept : [20]*void;
+      for 0..19 { kept[it] = alloc(it + 1); }      // 3 to 22, live at once
+      for 5..19 { free(kept[it]); }                // all but 3 to 7
       builder : String_Builder;
       builder_init(*builder);
-      append_string(*builder, "text"); // 43, 64 bytes
+      append_string(*builder, "text");             // 23, 64 bytes
       d := context.allocator;
       none := d.proc(ALLOCATE, 0, 0, null, d.data);       // no allocation
-      grown := d.proc(RESIZE, 8, 0, null, d.data);        // 44
-      gone := d.proc(RESIZE, 0, 8, grown, d.data);        // a free
+      over : Memory_Debugger;
+      memory_debugger_init(*over, d);
+      e := memory_debugger_allocator(*over);
+      grown := e.proc(RESIZE, 8, 0, null, e.data);        // 24
+      gone := e.proc(RESIZE, 0, 8, grown, e.data);        // a free of 24
+      memory_debugger_free(*over);
       d.proc(FREE, 0, 0, null, d.data);                   // nothing
-      loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 45, no place
+      loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 25, no place
       print("{} {}\n", none == null, gone == null);
       print("{}\n", memory_debugger_report(*debugger));
       free(a);
       free(loose);
       builder_free(*builder);
+      for 0..4 { free(kept[it]); }
+
+      written : String_Builder;
+      builder_init(*written, HEAP_ALLOCATOR);
+      debugger.output = *written;
+      clean := memory_debugger_report(*debugger);
+      text := builder_to_string(*written, HEAP_ALLOCATOR);
+      print("{}{}\n", text, clean);
+      free(text.data, HEAP_ALLOCATOR);
+      builder_free(*written);
+
+      memory_debugger_free(*debugger);
+      memory_debugger_init(*debugger, old);
+      again := alloc(8);                           // 1 again
       print("{}\n", memory_debugger_report(*debugger));
+      free(again);
   }
   ```
   Its `.out`:
@@ -220,13 +245,21 @@
   memory debugger: 0 allocations, 0 not freed (0 bytes), 0 bad calls
   true
   true true
-  tests/run/memory_debugger_leaks.rig:20:10: memory debugger: allocation 1 (64 bytes) isn't freed
-  tests/run/memory_debugger_leaks.rig:27:5: memory debugger: allocation 43 (64 bytes) isn't freed
-  memory debugger: allocation 45 (8 bytes) isn't freed
-  memory debugger: 45 allocations, 3 not freed (136 bytes), 0 bad calls
+  tests/run/memory_debugger_leaks.rig:24:10: memory debugger: allocation 1 (64 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 3 (1 byte) isn't freed
+  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 4 (2 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 5 (3 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 6 (4 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:29:28: memory debugger: allocation 7 (5 bytes) isn't freed
+  tests/run/memory_debugger_leaks.rig:33:5: memory debugger: allocation 23 (64 bytes) isn't freed
+  memory debugger: allocation 25 (8 bytes) isn't freed
+  memory debugger: 25 allocations, 8 not freed (151 bytes), 0 bad calls
   false
-  memory debugger: 45 allocations, 0 not freed (0 bytes), 0 bad calls
+  memory debugger: 25 allocations, 0 not freed (0 bytes), 0 bad calls
   true
+  tests/run/memory_debugger_leaks.rig:62:14: memory debugger: allocation 1 (8 bytes) isn't freed
+  memory debugger: 1 allocation, 1 not freed (8 bytes), 0 bad calls
+  false
   ```
 - [ ] **Step 2: Run** the build and `.\bin\run-tests.exe`. `memory_debugger_leaks` fails to check: `Memory_Debugger` is unknown.
 - [ ] **Step 3: Implement** Decision 3's Task 1 names in `memory_debugger.rig`, with the rules of Decisions 4 to 9 for good calls: `RESIZE` and `FREE` of memory with no live record give null and do nothing else until Task 2; `FREE_ALL` is passed on and nothing more until Task 3. The file's header comment says what the debugger is for, that it wraps another allocator and is pushed in the context (spec 6.13, 7.10), where its records' memory comes from and why (Decisions 4, 5), that it passes calls on by a direct call of what it wraps, so the place reaches that allocator unchanged (Decision 6), and that it changes nothing a program does but refuse its bad calls. Load it from `module.rig`. The README section:
@@ -469,7 +502,7 @@
   ```
   (216 is a 200-byte block with its 16-byte header, at the place of the `alloc` that needed it, which the arena's procedure passes on to its parent; the 116-byte block `arena_reset` gave back, at its own line, `allocators.rig:227:13`, a good free that writes nothing, is allocation 2 of `inner`, 3 of `over_heap`. A debugger passes calls on to what it wraps directly, so the outer one has the inner one's places. Measured at 00f3bb5, places included: Fact 9.)
 - [ ] **Step 2: Run** `.\bin\run-tests.exe`. The test fails at the second report: after `free_all(a)` the arena's allocations still show as not freed.
-- [ ] **Step 3: Implement** Decision 7. The README section gains `free_all` through the debugger (what each wrapped allocator does, the heap's rule, a debugger's, and a program's own allocator taken at its word), and Decision 12's list: the temporary storage, an arena or a pool as parent or wrapped, nesting, and that memory it gave goes back through it.
+- [ ] **Step 3: Implement** Decision 7. The README section gains `free_all` through the debugger (what each wrapped allocator does, the heap's rule, a debugger's, and a program's own allocator taken at its word), and Decision 12's list: the temporary storage, an arena or a pool as parent or wrapped, nesting, and that memory it gave goes back through it: given back some other way, its records stay and the report says not freed, until the wrapped allocator hands an address out again through the debugger (Decision 12).
 - [ ] **Step 4: Run all tests** on both hosts, `check.js` included.
 - [ ] **Step 5: Commit** `Follow free_all through what the memory debugger wraps`.
 
