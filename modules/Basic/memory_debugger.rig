@@ -8,8 +8,8 @@
 // made ready (the heap, in main) unless another is given, and keeps a
 // record of what it gave. memory_debugger_report then writes what isn't
 // freed. A free or a resize of memory it never gave, or has taken back,
-// and a resize given another old_size than the allocation's size, are
-// written as they happen, at the place of the call.
+// and a resize to more than 0 bytes given another old_size than the
+// allocation's size, are written as they happen, at the place of the call.
 //
 // The records are kept by the allocation's address in an Int_Table, so a
 // free or a resize finds its record at once however many there are. Their

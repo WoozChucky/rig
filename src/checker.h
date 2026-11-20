@@ -1118,8 +1118,9 @@ struct Builtin_Procedure {
                             // (array_reserve, array_resize)
     bool takes_item;        // then a T, the item added or inserted (array_add, array_insert)
     bool returns_item;      // returns a T, the element removed (array_pop)
-    bool indexes;           // reaches an element by index, bounds-checked against the count: the int
-                            // given (array_insert, the removes) or the last one (array_pop)
+    bool indexes;           // reaches an element by index, bounds-checked: the int given, against
+                            // the count (the removes) or the count plus one (array_insert), or the
+                            // last one (array_pop)
     bool places;            // its helper can reach the allocator, so it's passed the call's place
                             // (array_add, array_insert, array_reserve, array_resize, array_free)
     bool may_fail;          // its helper says whether the allocator gave the memory it needed
