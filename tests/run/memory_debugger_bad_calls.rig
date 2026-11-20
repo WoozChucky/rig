@@ -1,0 +1,48 @@
+// Basic's memory debugger (issue #159): a free or a resize of memory it
+// never gave out, or gave and has taken back, is written as it happens,
+// at the call's place, counted, and not passed on; a resize given another
+// old_size is too, and gives null. A freed address handed out again is
+// the new allocation's.
+#import "Basic";
+
+main :: () {
+    outside := alloc(8);                     // the heap's, before the debugger
+    on_stack : int;
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    defer memory_debugger_free(*debugger);
+    old := context.allocator;
+    context.allocator = memory_debugger_allocator(*debugger);
+    defer context.allocator = old;
+
+    free(*on_stack);                         // never given out, before 1
+    a := alloc(16);                          // 1
+    free(a);
+    free(a);                                 // already freed
+    print("{}\n", resize(a, 16, 32) == null);    // already freed: null
+    free(outside);                           // another allocator's, before 2
+    print("{}\n", resize(outside, 8, 16) == null);
+    b := alloc(1);                           // 2
+    print("{}\n", resize(b, 4, 8) == null);    // the wrong old_size: null
+    free(b);                                 // still allocation 2, 1 byte
+    print("{}\n", memory_debugger_report(*debugger));
+
+    // A freed slot handed out again: the second free of x frees y, the
+    // allocation now at its address, and y's own free is then the bad one.
+    pool : Pool;
+    pool_init(*pool, 16, 2, old);
+    over_pool : Memory_Debugger;
+    memory_debugger_init(*over_pool, pool_allocator(*pool));
+    p := memory_debugger_allocator(*over_pool);
+    x := alloc(8, p);                        // 1
+    free(x, p);
+    y := alloc(8, p);                        // 2, x's slot
+    free(x, p);
+    free(y, p);
+    memory_debugger_report(*over_pool);
+    memory_debugger_free(*over_pool);
+    free_all(pool_allocator(*pool));
+
+    context.allocator = old;
+    free(outside);
+}

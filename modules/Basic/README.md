@@ -434,15 +434,28 @@ memory debugger: 25 allocations, 8 not freed (151 bytes), 0 bad calls
 
 A place is written first, as `PATH:LINE:COL: `, as a diagnostic or a runtime error starts (spec 8.1), and left out for none; a count of 1 takes the singular. The report is for the end of the program, after its own code, or for any point before as a checkpoint: it may be called any number of times, and the numbering goes on. It says whether every allocation is freed and no bad call was made; what to do with that, such as the exit status, is the program's choice.
 
+A free or a resize of memory the debugger never gave out, or gave and has taken back, and a resize whose `old_size` isn't the size the allocation has, are bad calls. Each is written as it happens, at the call's place, and counted, and the program goes on; the call isn't passed on to the wrapped allocator. A bad free does nothing. A bad resize gives null, as an allocator that can't resize does: the memory is as it was, and still the caller's to free, so after a resize given the wrong `old_size`, the allocation's own free is a good one. Memory the debugger never gave out is named by `N`, the number the next allocation will have; memory it gave by its allocation's number, `K`, and size, `S`; `O` is the `old_size` the resize was given:
+
+```text
+PATH:LINE:COL: memory debugger: free of memory it never gave out, before allocation N
+PATH:LINE:COL: memory debugger: resize of memory it never gave out, before allocation N
+PATH:LINE:COL: memory debugger: free of allocation K (S bytes), which is already freed
+PATH:LINE:COL: memory debugger: resize of allocation K (S bytes), which is already freed
+PATH:LINE:COL: memory debugger: resize of allocation K (S bytes) given old_size O
+```
+
+Memory another allocator gave, freed or resized through the debugger because the context's allocator changed in between, is memory it never gave out: the program's mistake (spec 7.10), which the debugger refuses. An address the wrapped allocator hands out again after it was freed is the new allocation's, since the debugger knows memory only by its address: a second free of the old allocation then frees the new one, and the new one's own free is the bad call. A pool, whose freed slot is the next it hands out, does that at once.
+
 It writes to standard output, through `print`, as all of Basic does, or into the string builder in its `output`, through `print_to_builder`, when that isn't null; that builder's allocator must not be the debugger. Its records are kept in an `Int_Table` on the heap, `HEAP_ALLOCATOR`, whatever it wraps, and every call of Basic's it makes is given its allocator, so the allocations it counts are the program's alone, though the context's allocator is the debugger itself while the program runs: an allocator procedure is given its caller's context (spec 7.10).
 
 - `Memory_Debugger_Record`: `number: int`, `size: int` (its bytes now), `freed: bool` and `location: Source_Code_Location` (the place it was first asked for at, zeroed for none).
-- `Memory_Debugger`: `wrapped: Allocator` (the allocator it passes calls on to), `records: Int_Table` (its records, by address), `allocations: int` (the allocations made, so the last one's number), `bad_calls: int` and `output: *String_Builder` (where it writes, null for standard output).
+- `Memory_Debugger`: `wrapped: Allocator` (the allocator it passes calls on to), `records: Int_Table` (its records, by address), `allocations: int` (the allocations made, so the last one's number), `bad_calls: int` (the bad calls it was given) and `output: *String_Builder` (where it writes, null for standard output).
 - `memory_debugger_init(debugger: *Memory_Debugger, wrapped: Allocator = context.allocator)`: an empty debugger over `wrapped`, writing to standard output. It doesn't give back records a debugger already had: `memory_debugger_free` does.
-- `memory_debugger_allocator_proc`, `memory_debugger_allocator(debugger: *Memory_Debugger) -> Allocator`: each call passed on to `wrapped`, settling the edges as the helpers do (Allocators, above), and each allocation it gives recorded; `wrapped`'s null is passed on and isn't counted.
+- `memory_debugger_allocator_proc`, `memory_debugger_allocator(debugger: *Memory_Debugger) -> Allocator`: each call passed on to `wrapped`, settling the edges as the helpers do (Allocators, above), and each allocation it gives recorded; `wrapped`'s null is passed on and isn't counted. A bad call is written and counted, and isn't passed on.
 - `memory_debugger_report(debugger: *Memory_Debugger) -> bool`: writes what isn't freed and the counts, as above, and gives whether every allocation is freed and no bad call was made.
 - `memory_debugger_free(debugger: *Memory_Debugger)`: gives the records back to the heap, and nothing the debugger gave, which is the wrapped allocator's; the debugger forgets every allocation, and `memory_debugger_init` makes it ready again.
 - `memory_debugger_write(debugger: *Memory_Debugger, at: Source_Code_Location, format: string, args: ..Any)`: writes `at`'s place, when it has one, and then `format` with the arguments, as `print` does, where the debugger writes; every line of the debugger's goes through it.
+- `memory_debugger_bad_call(debugger: *Memory_Debugger, at: Source_Code_Location, what: string, found: *Memory_Debugger_Record)`: counts a bad `"free"` or `"resize"` (`what`) and writes it at `at`: of memory the debugger never gave out when `found` is null, and otherwise of the allocation `found` is the record of, which is already freed.
 - `memory_debugger_plural(n: int) -> string`: `""` for 1 and `"s"` for any other count.
 - `memory_debugger_less(a: *void, b: *void) -> bool`: whether the record at `a` has a lower number than the one at `b`, for `sort`.
 

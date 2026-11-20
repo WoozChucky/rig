@@ -1,0 +1,1 @@
+tests/run/memory_debugger_bad_resize.rig:15:5: memory debugger: resize of memory it never gave out, before allocation 1

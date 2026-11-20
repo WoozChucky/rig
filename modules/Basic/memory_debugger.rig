@@ -6,7 +6,8 @@
 // from the context's allocator then takes it through the debugger, which
 // passes each call on to the allocator it wraps, the heap unless another is
 // given, and keeps a record of what it gave. memory_debugger_report then
-// writes what isn't freed.
+// writes what isn't freed. A free or a resize of memory it never gave, or
+// has taken back, is written as it happens, at the place of the call.
 //
 // The records are kept by the allocation's address in an Int_Table, so a
 // free or a resize finds its record at once however many there are. Their
@@ -104,6 +105,20 @@ memory_debugger_write :: (debugger: *Memory_Debugger, at: Source_Code_Location, 
     }
 }
 
+// Counts a bad call the debugger was given, a "free" or a "resize" (what),
+// and writes it at its place, at: of memory it never gave out when found
+// is null, named by the allocation the debugger will give next, since it
+// has no number of its own; otherwise of the allocation found is the
+// record of, which is already freed. The caller doesn't pass the call on.
+memory_debugger_bad_call :: (debugger: *Memory_Debugger, at: Source_Code_Location, what: string, found: *Memory_Debugger_Record) {
+    debugger.bad_calls += 1;
+    if found == null {
+        memory_debugger_write(debugger, at, "memory debugger: {} of memory it never gave out, before allocation {}\n", what, debugger.allocations + 1);
+    } else {
+        memory_debugger_write(debugger, at, "memory debugger: {} of allocation {} ({} byte{}), which is already freed\n", what, found.number, found.size, memory_debugger_plural(found.size));
+    }
+}
+
 // A memory debugger's allocator procedure; data is its *Memory_Debugger.
 // Each call is passed on to the wrapped allocator by a direct call of its
 // procedure, and settles the edges as Basic's helpers do (allocators.rig),
@@ -115,11 +130,11 @@ memory_debugger_write :: (debugger: *Memory_Debugger, at: Source_Code_Location, 
 //   place, and returned.
 // - RESIZE of null is ALLOCATE. Of an allocation the debugger gave and
 //   hasn't taken back, to 0 bytes or less, it is FREE and gives null.
-//   Otherwise the resize is passed on, and the wrapped allocator's null is
-//   passed on with the record as it was; anything else is the same
-//   allocation, its number and place kept, its size the new one, at the
-//   result's address. When the result moved, the record at the old
-//   address is marked freed.
+//   Otherwise, its old_size the allocation's size, the resize is passed
+//   on, and the wrapped allocator's null is passed on with the record as
+//   it was; anything else is the same allocation, its number and place
+//   kept, its size the new one, at the result's address. When the result
+//   moved, the record at the old address is marked freed.
 // - FREE of null does nothing. Of an allocation the debugger gave and
 //   hasn't taken back, the record is marked freed, and the free is passed
 //   on with its old_size as given: Basic's free passes 0, and a resizable
@@ -127,9 +142,10 @@ memory_debugger_write :: (debugger: *Memory_Debugger, at: Source_Code_Location, 
 // - FREE_ALL is passed on.
 //
 // A resize or a free of memory the debugger never gave, or has taken back,
-// and a resize whose old_size isn't the allocation's size, aren't passed
-// on: a resize gives null, which leaves the memory as it was, as the
-// protocol says of a null, and a free does nothing.
+// and a resize whose old_size isn't the allocation's size, are bad calls:
+// each is written at its place and counted, and isn't passed on. A resize
+// gives null, which leaves the memory as it was and still the caller's to
+// free, as the protocol says of a null, and a free does nothing.
 //
 // The place is copied first, before the procedure calls anything of
 // Basic's: each of Basic's helpers puts the field back after its own call,
@@ -149,13 +165,20 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
     }
     if mode == RESIZE {
         found := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
-        if found == null || found.freed { return null; }
+        if found == null || found.freed {
+            memory_debugger_bad_call(debugger, at, "resize", found);
+            return null;
+        }
         if size <= 0 {
             found.freed = true;
             wrapped.proc(FREE, 0, 0, old_memory, wrapped.data);
             return null;
         }
-        if old_size != found.size { return null; }
+        if old_size != found.size {
+            debugger.bad_calls += 1;
+            memory_debugger_write(debugger, at, "memory debugger: resize of allocation {} ({} byte{}) given old_size {}\n", found.number, found.size, memory_debugger_plural(found.size), old_size);
+            return null;
+        }
         // The record is copied out before the resize is passed on, and the
         // old one is found again after it: a set may rehash the table and
         // move every record, the debugger's own below, and any allocation
@@ -175,7 +198,10 @@ memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memo
     if mode == FREE {
         if old_memory == null { return null; }
         found := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
-        if found == null || found.freed { return null; }
+        if found == null || found.freed {
+            memory_debugger_bad_call(debugger, at, "free", found);
+            return null;
+        }
         found.freed = true;
         wrapped.proc(FREE, 0, old_size, old_memory, wrapped.data);
         return null;
