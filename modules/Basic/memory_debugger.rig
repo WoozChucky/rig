@@ -4,10 +4,11 @@
 // at. A program checks itself by pushing the debugger's allocator in the
 // context once, in main (spec 6.13, 7.10): everything that takes its memory
 // from the context's allocator then takes it through the debugger, which
-// passes each call on to the allocator it wraps, the heap unless another is
-// given, and keeps a record of what it gave. memory_debugger_report then
-// writes what isn't freed. A free or a resize of memory it never gave, or
-// has taken back, is written as it happens, at the place of the call.
+// passes each call on to the allocator it wraps, the context's when it is
+// made ready (the heap, in main) unless another is given, and keeps a
+// record of what it gave. memory_debugger_report then writes what isn't
+// freed. A free or a resize of memory it never gave, or has taken back, is
+// written as it happens, at the place of the call.
 //
 // The records are kept by the allocation's address in an Int_Table, so a
 // free or a resize finds its record at once however many there are. Their
@@ -75,7 +76,10 @@ Memory_Debugger :: struct {
 // unless given: no allocations and no bad calls, writing to standard
 // output, breaking at no allocation, its records an empty table on the
 // heap. Like table_init, it doesn't give back records a debugger already
-// had: memory_debugger_free does.
+// had: memory_debugger_free does. A debugger made ready again while it is
+// the context's allocator must be given what it wraps: left out, wrapped
+// is the debugger itself, which calls itself at its first allocation until
+// the stack runs out.
 memory_debugger_init :: (debugger: *Memory_Debugger, wrapped: Allocator = context.allocator) {
     debugger.wrapped = wrapped;
     int_table_init(*debugger.records, size_of(Memory_Debugger_Record), HEAP_ALLOCATOR);
