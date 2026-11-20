@@ -1,0 +1,11 @@
+none:  (tag 1)
+three: 1, 2, 3 (tag 2)
+order: 3, 4 (tag 5)
+spread: 4, 5 (tag 6)
+tests/run/defaults_after_variadic.rig:45:10
+tests/run/defaults_after_variadic.rig:46:10
+tests/run/defaults_after_variadic.rig:48:10
+tests/run/defaults_after_variadic.rig:37:12
+2
+tests/run/defaults_after_variadic.rig:51:21
+tests/run/defaults_after_variadic.rig:51:21

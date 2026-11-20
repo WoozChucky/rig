@@ -2361,15 +2361,18 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //   and the temporary's address passed. So the callee's parameter is the
 //   value as it was then, whatever happens to the variable it came from (the
 //   callee may change the global it was given).
-// - A '..T' parameter (spec 5.10) is a []T one, passed last, after the
-//   fixed arguments: a spread's view, copied as any view argument is, or
-//   the view of a [N]T temporary the other arguments are built into, which
-//   is the caller's fresh copy already, or a zeroed view for none
-//   (lower_variadic_argument). The same through a procedure value.
+// - A '..T' parameter (spec 5.10) is a []T one, passed after the fixed
+//   arguments, those of the parameters before it: a spread's view, copied
+//   as any view argument is, or the view of a [N]T temporary the other
+//   arguments are built into, which is the caller's fresh copy already, or
+//   a zeroed view for none (lower_variadic_argument). The same through a
+//   procedure value, whose '..T' parameter is its type's last (spec 3.15).
 // - Then, in a direct call that leaves parameters out (spec 5.10, 7.2),
 //   each one's default value, in parameter order, passed as an argument
 //   is: its code is the caller's, worked out again at each call, after the
-//   arguments given, its context the caller's current one. All of it, the
+//   arguments given, its context the caller's current one. The parameters
+//   after a '..T' one (issue #197) are always left out, and passed after
+//   the view, the gathered arguments worked out before them. All of it, the
 //   defaults its own calls fill in too, is at the statement holding the
 //   outermost such call (Lowering.filling, emitted_at), whatever file the
 //   default is written in; a runtime check in it still names its own place
@@ -2428,6 +2431,15 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //                                ...
 //                                %10 = call @sum(%0, %6)
 //
+//     scaled(1, 2);              %0 = const i64 1          (scaled :: (first: int, rest: ..int, scale: int = 10))
+//                                %1 = local 8 align 8      (the [1]int)
+//                                %2 = const i64 2
+//                                store i64 %2, %1
+//                                %3 = local 16 align 8     (its view)
+//                                ...
+//                                %7 = const i64 10         (scale's default value, after the view)
+//                                %8 = call @scaled(%0, %3, %7)
+//
 //     n := f(1);                 %0 = local i64            (n; f :: (a: int, b: int = 7) -> int)
 //                                %1 = const i64 1
 //                                %2 = const i64 7          (b's default value)
@@ -2465,10 +2477,13 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
     // before the arguments. An argument may change the context's fields,
     // never which context is current, so the order can't show.
     if (proc ? takes_context(l, proc) : type_takes_context(l, callee)) array_add(&args, load_context(l));
-    // A '..T' parameter's []T, the last parameter; the arguments before it
-    // are the fixed ones (without one, all of them: C's extra ones too).
+    // A '..T' parameter's []T, at its index among the parameters (through a
+    // value, the last); the arguments before it are the fixed ones (without
+    // one, all of them: C's extra ones too). Every argument after them is
+    // the view's, so the parameters after the '..T' one are all left out
+    // (issue #197, spec 5.10): the first left out is the one after it.
     Type *view = call_variadic_type(call);
-    s64 fixed = view ? params - 1 : call->args.count;
+    s64 fixed = view ? call_variadic_index(call) : call->args.count;
     for (s64 i = 0; i < fixed; i++) {
         Type *t = i >= params ? extra_argument_type(call->args[i])
                   : proc      ? proc->params[i]->type
@@ -2476,9 +2491,13 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         array_add(&args, lower_argument(l, call->args[i], t));
     }
     if (view) array_add(&args, lower_variadic_argument(l, call, fixed, view));
-    if (proc && !view && fixed < params) {
+    s64 left_out = view ? fixed + 1 : fixed;
+    if (proc && left_out < params) {
         // The parameters left out, each passed its default value, worked
-        // out here, in parameter order, and converted as an argument is.
+        // out here, in parameter order, and converted as an argument is:
+        // after the view, those after a '..T' parameter, which take only
+        // their defaults (spec 7.2), so every argument, the gathered ones
+        // too, is worked out before them (spec 5.18).
         // The outermost such call's statement is where all of their code
         // is, a default's own calls' defaults included. Their bounds checks
         // are the procedure's that declares them, as its #no_abc says
@@ -2493,7 +2512,7 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         // A default #caller_location is this call's place, its callee's
         // name (spec 7.2): a temporary made for it, the caller's fresh copy
         // already, passed as it is.
-        for (s64 i = fixed; i < params; i++) {
+        for (s64 i = left_out; i < params; i++) {
             Ast *value = proc->params[i]->default_value;
             if (value->kind == AST_CALLER_LOCATION) {
                 array_add(&args, lower_source_location(l, call->callee->pos));

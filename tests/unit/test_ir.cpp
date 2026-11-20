@@ -5298,6 +5298,52 @@ TEST(variadic_arguments_are_gathered_into_a_temporary) {
     arena_free(&a);
 }
 
+TEST(a_default_after_the_dots_is_passed_after_the_view) {
+    // A parameter after the '..T' one takes no argument (issue #197, spec
+    // 5.10, 7.2): every argument after the fixed ones is gathered into the
+    // view, and the parameter is passed its default value after it, worked
+    // out in the caller once the view is, as any default left out is.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "sum :: (first: int, rest: ..int, scale: int = 10) -> int { return first; }\n"
+                                          "main :: () {\n"
+                                          "    a := sum(1);\n"
+                                          "    b := sum(1, 2, 3);\n"
+                                          "}\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 1\n"
+              "  %2 = local 16 align 8\n"
+              "  zero %2, 16\n"
+              "  %3 = const i64 10\n"
+              "  %4 = call @sum(%1, %2, %3)\n"
+              "  store i64 %4, %0\n"
+              "  %5 = local i64\n"
+              "  %6 = const i64 1\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = const i64 2\n"
+              "  store i64 %8, %7\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %7, %9\n"
+              "  %11 = const i64 3\n"
+              "  store i64 %11, %10\n"
+              "  %12 = local 16 align 8\n"
+              "  %13 = const i64 2\n"
+              "  store i64 %13, %12\n"
+              "  %14 = const i64 8\n"
+              "  %15 = ptradd %12, %14\n"
+              "  store ptr %7, %15\n"
+              "  %16 = const i64 10\n"
+              "  %17 = call @sum(%6, %12, %16)\n"
+              "  store i64 %17, %5\n"
+              "  %18 = const i32 0\n"
+              "  ret %18\n"
+              "}\n");
+    arena_free(&a);
+}
+
 TEST(a_spread_passes_the_view_not_the_elements) {
     // ..more passes a view of more itself, a place, copied as any view
     // argument is (16 bytes): the one 24-byte slot is more's own, so the

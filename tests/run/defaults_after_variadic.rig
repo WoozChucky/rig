@@ -1,0 +1,52 @@
+// Default values after a '..' parameter (issue #197, spec 7.2, 5.10): the
+// arguments after the fixed ones all go to the '..' parameter, one by one
+// or as one spread, and each parameter after it is always its default,
+// worked out at each call after the arguments, as any default is. So a
+// #caller_location there is the call's place, a #run's in the run's code,
+// and a Source_Code_Location given is one more '..' argument.
+#import "Basic";
+
+counter := 0;
+
+next :: () -> int {
+    counter += 1;
+    return counter;
+}
+
+tagged :: (label: string, values: ..int, tag: int = next(), separator: string = ", ") {
+    print("{}: ", label);
+    for values {
+        if it_index > 0 { print(separator); }
+        print("{}", it);
+    }
+    print(" (tag {})\n", tag);
+}
+
+where :: (args: ..Any, loc: Source_Code_Location = #caller_location) -> Source_Code_Location {
+    return loc;
+}
+
+gathered :: (args: ..Any, loc: Source_Code_Location = #caller_location) -> int {
+    return args.count;
+}
+
+show :: (loc: Source_Code_Location) {
+    print("{}:{}:{}\n", loc.file, loc.line, loc.column);
+}
+
+AT :: #run where(1, "two");
+
+main :: () {
+    tagged("none");
+    tagged("three", 1, 2, 3);
+    tagged("order", next(), next());
+    more := int.[4, 5];
+    tagged("spread", ..more);
+    show(where());
+    show(where(1, 2.5, "x"));
+    anys := Any.[1, "a"];
+    show(where(..anys));
+    show(AT);
+    print("{}\n", gathered(AT, 1));
+    for 1..2 { show(where(it)); }
+}
