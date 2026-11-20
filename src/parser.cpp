@@ -313,8 +313,8 @@ static Ast *parse_type_info(Parser *p) {
     return info;
 }
 
-// primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null'
-//         | 'size_of' '(' type ')' | 'type_info' '(' type ')'
+// primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
+//         | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //         | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //
 // A '.' starting an expression is a literal without its type, .{1, 2} or
@@ -374,6 +374,16 @@ static Ast *parse_primary(Parser *p) {
         // the name. Where it may be is the checker's to say.
         advance(p);
         return ast_new<Ast>(p->arena, AST_CONTEXT, t->pos);
+    case TOKEN_DIRECTIVE:
+        // #caller_location (spec 7.2): the place of a call that leaves out
+        // the parameter whose default it is. It's only that, which the
+        // checker says, so it parses wherever an expression starts.
+        if (is_directive(t, "caller_location")) {
+            advance(p);
+            return ast_new<Ast>(p->arena, AST_CALLER_LOCATION, t->pos);
+        }
+        error_expected_or_load(p, "an expression");
+        return nullptr;
     case TOKEN_DOT:
         if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
             Token *dot = advance(p);

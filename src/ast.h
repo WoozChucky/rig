@@ -80,6 +80,7 @@ enum Ast_Kind : u8 {
     AST_SPREAD,        // Ast_Spread: ..e, a view spread into a '..T' parameter
     AST_TYPE_INFO,     // Ast_Type_Info: type_info(T)
     AST_CONTEXT,       // a plain Ast: context
+    AST_CALLER_LOCATION,  // a plain Ast: #caller_location, only a parameter's default value (spec 7.2)
     AST_PUSH_CONTEXT,  // Ast_Push_Context: push_context e { ... }
     AST_BUILTIN,       // Ast_Builtin: a predeclared procedure of the resizable arrays (spec 3.17)
 };
@@ -653,8 +654,8 @@ struct Ast_File {
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
     // Preload's, found by the checker (checker.cpp's declare_top_level), spec
-    // 7.10 and 3.17; all null without Preload, whose programs have no context
-    // and no resizable arrays:
+    // 7.10, 3.17 and 7.2; all null without Preload, whose programs have no
+    // context, no resizable arrays and no caller locations:
     Type *context_type;        // Preload's Context struct: what context is, and push_context takes
     Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
                                // #c_call procedure pushes for itself
@@ -663,6 +664,8 @@ struct Ast_File {
                                  // its allocator field's type; null without Preload
     Ast_Proc *array_procs[BUILTIN_ARRAY_COUNT];  // Preload's __array_add ..., what each built-in calls,
                                                  // by its Array_Builtin; null without Preload
+    Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): what a default
+                                      // #caller_location is, a call's place; null without Preload
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

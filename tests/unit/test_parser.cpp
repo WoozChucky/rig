@@ -3902,3 +3902,31 @@ TEST(context_is_no_name) {
     }
     arena_free(&a);
 }
+
+// Issue #194: caller locations (spec 7.2).
+
+TEST(caller_location_is_a_primary) {
+    // #caller_location is a primary expression, a plain node at its '#',
+    // wherever an expression starts: a parameter's default value, and a
+    // body's variable too, which the checker refuses (only a default may be
+    // one).
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "f :: (loc: Source_Code_Location = #caller_location) { }\n", &errors),
+              "(proc f (params (loc Source_Code_Location (default (caller_location)))) (block))\n");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "x := #caller_location;", &errors), "(block (var x _ (caller_location)))");
+    CHECK_STR(errors, "");
+    Token_List *list = src("f :: (loc: Source_Code_Location = #caller_location) { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->procs.count, 1);
+    CHECK_EQ(file->procs.count == 1 ? file->procs[0]->params.count : 0, 1);
+    if (file->procs.count == 1 && file->procs[0]->params.count == 1) {
+        Ast *value = file->procs[0]->params[0]->default_value;
+        CHECK(value->kind == AST_CALLER_LOCATION);
+        CHECK_EQ(value->pos.line, 1);
+        CHECK_EQ(value->pos.col, 35);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}

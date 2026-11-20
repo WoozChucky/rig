@@ -202,6 +202,16 @@ It checks the result of those that grow. The helpers check none of these. They'r
 - **Giving back.** `array_free` gives the memory with `FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them. The array is then empty, `data` null and `allocated` 0, and keeps its allocator. It gives nothing back for an array that owns no memory.
 - **Elements of no size** (`[..]Empty`, for a struct with no fields) take no memory: growing asks for nothing, and `data` becomes `__array_no_bytes`'s address, so indexing and `for` find it not null. It's an `int`, for its 8-byte alignment, which an element of 0 bytes can still need (a struct holding a `[0]int`).
 
+### Caller locations
+
+A parameter whose default value is `#caller_location` (issue #194, spec 7.2), as Jai has it, is given the place of each call that leaves it out: `loc: Source_Code_Location = #caller_location`. The compiler needs Preload's struct for it: a program without Preload has no `#caller_location`.
+
+- `Source_Code_Location`, a place in the program's source:
+  - `file: string`: the path messages name the call's file by, as a runtime error there would (spec 8.1): the main file's path as `rig build` was given it, a loaded file's as its `#load` made it, a module's file by its absolute path.
+  - `line: int`, `column: int`: where the callee's name is in the call, counted from 1 (spec 2.2), so two calls on one line have two places.
+
+A zeroed `Source_Code_Location`, `file` empty and `line` 0, is no place.
+
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.

@@ -994,6 +994,20 @@ static Type *check_context(Checker *c, Ast *e) {
     return c->file->context_type;
 }
 
+// #caller_location where an expression is checked (spec 7.2): anywhere but
+// a parameter's whole default value, which check_defaults types itself (its
+// place is the call that leaves the parameter out, and nothing else has a
+// call to be the place of). So a body's value, a global's or a constant's,
+// an argument, a #run's operand and a part of a default (an argument of a
+// call in one) are each refused at the '#', with Preload or without. It
+// has no type, so nothing more is said of it.
+static Type *check_caller_location(Checker *c, Ast *e) {
+    diag_error(c->diag, e->pos,
+               "'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+               "#caller_location");
+    return nullptr;
+}
+
 // How many arguments a direct call of proc must give at least (spec 5.10):
 // its parameters up to and including the last one without a default value.
 // After a gap, refused with the signature (check_defaults), only the
@@ -2538,6 +2552,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_SIZE_OF: t = check_size_of(c, (Ast_Size_Of *)e); break;
     case AST_TYPE_INFO: t = check_type_info(c, (Ast_Type_Info *)e); break;
     case AST_CONTEXT: t = check_context(c, e); break;
+    case AST_CALLER_LOCATION: t = check_caller_location(c, e); break;
     case AST_MEMBER: t = check_member(c, (Ast_Member *)e); break;
     case AST_LITERAL: t = check_literal(c, (Ast_Literal *)e); break;
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;

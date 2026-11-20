@@ -504,6 +504,10 @@ static void dump(Array<u8> *buffer, Ast *node) {
         // (context): the current context, a keyword as null is.
         out(buffer, "(context)");
         break;
+    case AST_CALLER_LOCATION:
+        // (caller_location): the place of the call leaving its parameter out.
+        out(buffer, "(caller_location)");
+        break;
     case AST_PUSH_CONTEXT: {
         // (push_context E (block ...)): the block runs with E as its context.
         Ast_Push_Context *push = (Ast_Push_Context *)node;

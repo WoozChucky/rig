@@ -14,9 +14,9 @@
 // path reads nothing more: a file is read once.
 //
 // It holds the allocator's shape and the heap, type information, Any, the
-// context, the temporary storage and its allocator, and for [..]T, the
-// language's resizable array type, its layout, Resizable_Array, and the
-// helpers its built-in procedures call.
+// context, the temporary storage and its allocator, the resizable array
+// [..]T's layout, Resizable_Array, and the helpers of its built-ins, and
+// the place a default #caller_location is, Source_Code_Location.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -586,3 +586,13 @@ __array_free :: (array: *Resizable_Array, size: int) {
     array.data = null;
     array.allocated = 0;
 }
+
+// A place in the program's source, Jai's: what a parameter's default value
+// #caller_location is (spec 7.2), the place of each call that leaves the
+// parameter out, `loc: Source_Code_Location = #caller_location`. file is
+// the path messages name the call's file by, as a runtime error there would
+// (spec 8.1): the main file's as rig build was given it, a loaded file's
+// as its #load made it, a module's file by its absolute path. line and
+// column are those of the callee's name in the call, counted from 1 (spec
+// 2.2). A zeroed one, file empty and line 0, is no place.
+Source_Code_Location :: struct { file: string; line: int; column: int; }

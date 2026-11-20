@@ -53,7 +53,7 @@
 //                           | '.' '*' | '.' IDENT
 //                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name: the literal's type)
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
-//               | 'size_of' '(' type ')' | 'type_info' '(' type ')'
+//               | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //   fields      = [field {',' field} [',']]
 //   field       = [IDENT '='] expression
@@ -187,6 +187,13 @@
 // the procedure. A parameter needs its type still: `(n := 0)` is "a
 // parameter needs its type, as in n: int = 0", at the ':=', and the
 // declaration is given up.
+//
+// #caller_location (spec 7.2), Jai's, is a primary expression, a plain Ast
+// of AST_CALLER_LOCATION at its '#': as a parameter's default value,
+// `loc: Source_Code_Location = #caller_location`, it is the place of each
+// call that leaves the parameter out. That is the only place it may be,
+// which the checker says, so the parser takes it wherever an expression
+// starts (`x := #caller_location;` parses).
 //
 // A spread, ..e (spec 5.10), passes a view's or an array's elements as a
 // call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -

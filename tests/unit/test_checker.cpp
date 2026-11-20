@@ -8994,3 +8994,88 @@ TEST(array_procedure_calls_are_typed_by_their_array) {
     }
     arena_free(&a);
 }
+
+// Issue #194: caller locations (spec 7.2).
+
+TEST(caller_location_is_a_default_value) {
+    // A parameter's whole default value may be #caller_location, of Preload's
+    // Source_Code_Location, which the checker finds as it finds Context and
+    // keeps on the tree: a file's path and a line and a column.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "here :: (loc: Source_Code_Location = #caller_location) -> int { return loc.line; }\n"
+                                 "main :: () { n := here(); }\n",
+                                 &tree),
+              "");
+    Type *location = tree->source_code_location_type;
+    CHECK(location != nullptr);
+    if (!location) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_STR(location->decl->name, "Source_Code_Location");
+    CHECK_EQ(location->size, 32);
+    CHECK_EQ(location->fields[type_field_index(location, str("file"))].offset, 0);
+    CHECK_EQ(location->fields[type_field_index(location, str("line"))].offset, 16);
+    CHECK_EQ(location->fields[type_field_index(location, str("column"))].offset, 24);
+    CHECK(((Ast_Proc *)top_level_named(tree, "here"))->params[0]->default_value->type == location);
+    arena_free(&a);
+}
+
+TEST(caller_location_needs_no_context) {
+    // The place is the call's, known where the call is lowered: working it
+    // out reads no context, so a #c_call body may leave it out. A default
+    // that reads context still needs one.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "here :: (n: int, loc: Source_Code_Location = #caller_location,\n"
+                                 "         a: Allocator = context.allocator) -> int { return n; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    Ast_Proc *here = (Ast_Proc *)top_level_named(tree, "here");
+    CHECK_EQ(here->params.count, 3);
+    if (here->params.count == 3) {
+        CHECK(!here->params[1]->default_needs_context);
+        CHECK(here->params[2]->default_needs_context);
+    }
+    arena_free(&a);
+}
+
+TEST(caller_location_is_refused_elsewhere) {
+    // Anywhere but a parameter's whole default value it's refused at its
+    // '#', with no type, so nothing more is said of it: a body's variable, a
+    // global's or a constant's value, part of a default, a #run's operand.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "here :: (loc: Source_Code_Location = #caller_location) -> int { return loc.line; }\n"
+                                 "g :: (loc: Source_Code_Location) -> int { return loc.line; }\n"
+                                 "G := #caller_location;\n"
+                                 "C :: #caller_location;\n"
+                                 "f :: (n: int = g(#caller_location)) { }\n"
+                                 "X :: #run here(#caller_location);\n"
+                                 "main :: () {\n"
+                                 "    x := #caller_location;\n"
+                                 "}\n"),
+              "3:6: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "4:6: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "5:18: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "6:16: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "8:10: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n");
+    arena_free(&a);
+}
+
+TEST(caller_location_needs_preload) {
+    // Without Preload there's no Source_Code_Location for the place to be.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (n: int = #caller_location) { }\nmain :: () { }\n"),
+              "1:16: '#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have\n");
+    arena_free(&a);
+}
