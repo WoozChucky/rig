@@ -1,0 +1,30 @@
+// Where an allocation is asked for: Basic's helpers put their caller's place
+// in context.allocation_location while they call the allocator, and put the
+// one before back after; a direct call of an allocator's procedure leaves it
+// as it is; an arena's procedure passes it on to its parent, so a block has
+// the place of the request that needed it.
+#import "Basic";
+
+seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    at := context.allocation_location;
+    print("{} {} {}:{}:{}\n", mode, size, at.file, at.line, at.column);
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+main :: () {
+    seen := context;
+    seen.allocator = Allocator.{seen_proc, null};
+    push_context seen {
+        p := alloc(8);
+        p = resize(p, 8, 16);
+        free(p);
+        free_all();
+        q := context.allocator.proc(ALLOCATE, 4, 0, null, context.allocator.data);
+        heap_allocator_proc(FREE, 0, 0, q, null);
+        arena : Arena;
+        arena_init(*arena, 64);
+        a := alloc(8, arena_allocator(*arena));
+        free_all(arena_allocator(*arena));
+        print("{}\n", context.allocation_location.line);
+    }
+}

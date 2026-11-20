@@ -23,13 +23,34 @@
 // than 0 bytes, and only ever given memory that isn't null to resize or
 // free. An allocator that can't give memory returns null, and the helpers
 // pass that on.
+//
+// The helpers also tell the allocator where it is asked from. Each takes
+// loc last, the place of the call that leaves it out (#caller_location,
+// spec 7.2), and puts it in context.allocation_location while it calls the
+// allocator, putting the one before back after (spec 7.10): Jai's shape of
+// an allocator procedure has no parameter for it, and the context reaches
+// the procedure anyway. So an allocator, such as a memory debugger, can
+// record each allocation's place. A procedure that allocates for its
+// caller can take a loc of its own and pass it down, so the place is the
+// caller's line rather than the procedure's. An arena and a pool pass on
+// the place they are asked from to their parent, so a block or the slots
+// have the place of the request that needed them.
 #load "memory.rig";
 
 // size bytes from allocator, the context's unless given, or null when it
 // has none to give. A size of 0 or less gives null without asking the
 // allocator.
-alloc :: (size: int, allocator: Allocator = context.allocator) -> *void {
+//
+// While the allocator is called, context.allocation_location is loc, the
+// caller's place unless given, so the allocator can read where it is asked
+// from. The place before is put back by a defer, which runs once the
+// allocator's result is worked out (spec 6.12), so after the call the
+// context is as it was.
+alloc :: (size: int, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> *void {
     if size <= 0 { return null; }
+    saved := context.allocation_location;
+    context.allocation_location = loc;
+    defer context.allocation_location = saved;
     return allocator.proc(ALLOCATE, size, 0, null, allocator.data);
 }
 
@@ -47,28 +68,44 @@ alloc :: (size: int, allocator: Allocator = context.allocator) -> *void {
 // compiled program's C library and the interpreter's (the compiler's own,
 // linked statically) differ, one freeing the memory and the other keeping
 // it.
-resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator = context.allocator) -> *void {
-    if memory == null { return alloc(new_size, allocator); }
+//
+// context.allocation_location is loc while the allocator is called, and
+// put back after, as for alloc. The alloc and free that resizing null or
+// to 0 is are given loc, so they name the caller's place too.
+resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> *void {
+    if memory == null { return alloc(new_size, allocator, loc); }
     if new_size <= 0 {
-        free(memory, allocator);
+        free(memory, allocator, loc);
         return null;
     }
+    saved := context.allocation_location;
+    context.allocation_location = loc;
+    defer context.allocation_location = saved;
     return allocator.proc(RESIZE, new_size, old_size, memory, allocator.data);
 }
 
 // Gives memory back to allocator, the context's unless given, which must
 // be the allocator it came from: memory another allocator gave is freed
-// by passing that one. Freeing null does nothing.
-free :: (memory: *void, allocator: Allocator = context.allocator) {
+// by passing that one. Freeing null does nothing. context.allocation_location
+// is loc while the allocator is called, and put back after, as for alloc,
+// so an allocator that records places knows where memory is given back.
+free :: (memory: *void, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) {
     if memory == null { return; }
+    saved := context.allocation_location;
+    context.allocation_location = loc;
+    defer context.allocation_location = saved;
     allocator.proc(FREE, 0, 0, memory, allocator.data);
 }
 
 // Gives back everything allocator, the context's unless given, has given,
 // for the allocators that keep track of it: an arena, a pool and
 // TEMPORARY_ALLOCATOR do (the last is reset_temporary_storage's reset), the
-// heap doesn't.
-free_all :: (allocator: Allocator = context.allocator) {
+// heap doesn't. context.allocation_location is loc while the allocator is
+// called, and put back after, as for alloc.
+free_all :: (allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) {
+    saved := context.allocation_location;
+    context.allocation_location = loc;
+    defer context.allocation_location = saved;
     allocator.proc(FREE_ALL, 0, 0, null, allocator.data);
 }
 
@@ -123,6 +160,12 @@ arena_init :: (arena: *Arena, block_size: int, parent: Allocator = context.alloc
 //   it.
 // - FREE does nothing. The memory goes back with the rest of its block.
 // - FREE_ALL gives every block back to the parent.
+//
+// A block is asked of the parent, and FREE_ALL gives the newest back, with
+// the place the arena is asked from, context.allocation_location, as loc,
+// so a parent that records places has the request that needed the block
+// rather than this file's line. The older blocks go back through
+// arena_reset, at its own line.
 arena_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     LARGEST :: 9223372036854775807; // int's largest value
     arena := cast(*Arena) data;
@@ -137,7 +180,7 @@ arena_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void,
             if size > bytes { bytes = size; }
             // A block that big, with its header, has no int size.
             if bytes > LARGEST - size_of(Arena_Block) { return null; }
-            block := cast(*Arena_Block) alloc(size_of(Arena_Block) + bytes, arena.parent);
+            block := cast(*Arena_Block) alloc(size_of(Arena_Block) + bytes, arena.parent, context.allocation_location);
             if block == null { return null; }
             block.previous = arena.block;
             block.size = bytes;
@@ -159,7 +202,7 @@ arena_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void,
         // A reset gives back every block but the newest, so only that one
         // is left to give back.
         arena_reset(arena);
-        free(arena.block, arena.parent);
+        free(arena.block, arena.parent, context.allocation_location);
         arena.block = null;
     }
     return null;
@@ -244,6 +287,10 @@ pool_init :: (pool: *Pool, slot_size: int, slot_count: int, parent: Allocator = 
 //   handed out.
 // - FREE_ALL gives the slots' memory back to the parent. The pool can be
 //   used again, and takes memory anew at its next allocation.
+//
+// The slots' memory is asked of the parent, and given back, with the place
+// the pool is asked from, context.allocation_location, as loc, as an
+// arena's blocks are.
 pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     LARGEST :: 9223372036854775807; // int's largest value
     pool := cast(*Pool) data;
@@ -253,7 +300,7 @@ pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, 
             // The slots' bytes would have no int size. A slot_count of 0
             // or less asks for 0 bytes or less, which alloc gives as null.
             if pool.slot_count > LARGEST / pool.slot_size { return null; }
-            memory := cast(*u8) alloc(pool.slot_size * pool.slot_count, pool.parent);
+            memory := cast(*u8) alloc(pool.slot_size * pool.slot_count, pool.parent, context.allocation_location);
             if memory == null { return null; }
             pool.memory = memory;
             // Each slot goes on the front of the list, so they're put on
@@ -281,7 +328,7 @@ pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, 
         pool.free_list = slot;
     }
     if mode == FREE_ALL {
-        free(pool.memory, pool.parent);
+        free(pool.memory, pool.parent, context.allocation_location);
         pool.memory = null;
         pool.free_list = null;
     }

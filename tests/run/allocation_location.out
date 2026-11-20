@@ -1,0 +1,8 @@
+0 8 tests/run/allocation_location.rig:18:14
+1 16 tests/run/allocation_location.rig:19:13
+2 0 tests/run/allocation_location.rig:20:9
+3 0 tests/run/allocation_location.rig:21:9
+0 4 :0:0
+0 80 tests/run/allocation_location.rig:26:14
+2 0 tests/run/allocation_location.rig:27:9
+0

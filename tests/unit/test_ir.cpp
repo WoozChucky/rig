@@ -6147,18 +6147,18 @@ TEST(push_context_pushes_an_address) {
               "  %0 = local ptr\n"
               "  %1 = addr @default_context\n"
               "  store ptr %1, %0\n"
-              "  %2 = local 24 align 8\n"
+              "  %2 = local 56 align 8\n"
               "  %3 = load ptr %0\n"
-              "  copy %2, %3, 24\n"
+              "  copy %2, %3, 56\n"
               "  %4 = local ptr\n"
               "  store ptr %2, %4\n"
               "  %5 = load ptr %4\n"
               "  call @use(%5)\n"
-              "  %6 = local 24 align 8\n"
-              "  %7 = local 24 align 8\n"
+              "  %6 = local 56 align 8\n"
+              "  %7 = local 56 align 8\n"
               "  %8 = load ptr %0\n"
               "  call @make(%7, %8)\n"
-              "  copy %6, %7, 24\n"
+              "  copy %6, %7, 56\n"
               "  %9 = local ptr\n"
               "  store ptr %6, %9\n"
               "  %10 = load ptr %9\n"
@@ -6180,7 +6180,7 @@ TEST(push_context_pushes_an_address) {
     // its slot is filled. Each is named by its index in b0 above, from 0.
     struct { s64 n; s32 scope, line, col; } where[] = {
         {7, 1, 4, 5},  {8, 1, 4, 5},   // %4 = local ptr; store ptr %2, %4
-        {14, 0, 5, 5}, {15, 0, 5, 5},  // call @make(%7, %8); copy %6, %7, 24
+        {14, 0, 5, 5}, {15, 0, 5, 5},  // call @make(%7, %8); copy %6, %7, 56
         {16, 2, 5, 5}, {17, 2, 5, 5},  // %9 = local ptr; store ptr %6, %9
     };
     for (s64 i = 0; i < (s64)(sizeof where / sizeof where[0]); i++) {

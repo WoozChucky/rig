@@ -8248,8 +8248,9 @@ TEST(preload_declares_the_context) {
     // The checker finds Preload's Context, default_context and
     // __runtime_init as it finds Type_Info and Any, and keeps them on the
     // tree, for lowering. The structs are laid out as any struct: Context is
-    // an Allocator and a pointer, and the storage's header and page hold
-    // what the temporary allocator counts.
+    // an Allocator, a pointer and the place an allocation is asked from, a
+    // Source_Code_Location (issue #194), and the storage's header and page
+    // hold what the temporary allocator counts.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
@@ -8266,9 +8267,10 @@ TEST(preload_declares_the_context) {
     CHECK_STR(tree->runtime_init->name, "__runtime_init");
     CHECK(tree->runtime_init->is_c_call);
     Type *context = tree->context_type;
-    CHECK_EQ(context->size, 24);
+    CHECK_EQ(context->size, 56);
     CHECK_EQ(context->fields[type_field_index(context, str("allocator"))].offset, 0);
     CHECK_EQ(context->fields[type_field_index(context, str("temporary_storage"))].offset, 16);
+    CHECK_EQ(context->fields[type_field_index(context, str("allocation_location"))].offset, 24);
     Type *storage = ((Ast_Struct *)top_level_named(tree, "Temporary_Storage"))->declared;
     CHECK_EQ(storage->size, 56);
     CHECK_EQ(storage->fields[type_field_index(storage, str("overflow_allocator"))].offset, 32);

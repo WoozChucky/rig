@@ -120,12 +120,13 @@ Vec2 with 2 fields
 
 ### The context
 
-The context is what code deep in a call chain needs without every caller handing it down, as in Jai (issue #156, spec 7.10): the allocator code takes its memory from when it's handed none, and the temporary storage. Every Rig procedure but `main` and a `#c_call` one is given its caller's context, a `*Context` it isn't given in the source, and `context` names it (`main` starts with `default_context`); `push_context` runs a block with another (spec 6.13).
+The context is what code deep in a call chain needs without every caller handing it down, as in Jai (issue #156, spec 7.10): the allocator code takes its memory from when it's handed none, the temporary storage, and the place an allocation is asked from (issue #194). Every Rig procedure but `main` and a `#c_call` one is given its caller's context, a `*Context` it isn't given in the source, and `context` names it (`main` starts with `default_context`); `push_context` runs a block with another (spec 6.13).
 
 - `Context`:
   - `allocator: Allocator`: where code takes its memory from when it's handed no allocator.
   - `temporary_storage: *Temporary_Storage`: the temporary storage.
-- `default_context: Context`: the context `main` and each `#run` start with, and the one a `#c_call` procedure, which C calls with none, pushes for itself when it has no other (`push_context default_context { ... }`). Its allocator is the heap, and its temporary storage Preload's one.
+  - `allocation_location: Source_Code_Location` (Caller locations, below): the place the allocation being asked for was asked from, while an allocator is called. Basic's `alloc`, `resize`, `free` and `free_all` set it to their caller's place, or the `loc` they're given, around their call of the allocator, and put the one before back after ([`../Basic/README.md`](../Basic/README.md)). So an allocator procedure reads it to know where it is asked from, as a memory debugger records each allocation's place, though an allocator procedure's shape, Jai's, has no parameter for it. Otherwise it is zeroed, no place: `default_context` starts so, and a direct call of an allocator's procedure leaves it as it is.
+- `default_context: Context`: the context `main` and each `#run` start with, and the one a `#c_call` procedure, which C calls with none, pushes for itself when it has no other (`push_context default_context { ... }`). Its allocator is the heap, its temporary storage Preload's one, and its `allocation_location` zeroed.
 - `Temporary_Storage`, memory given out from one end and given back all at once:
   - `data: *u8`, `size: int`: its first block, `TEMPORARY_STORAGE_SIZE` bytes of Preload's.
   - `occupied: int`: how far into the storage's count allocations reach, from the first block's start through the pages after it, counting the padding that aligns them and the unused tails of regions a page replaced.
@@ -210,7 +211,7 @@ A parameter whose default value is `#caller_location` (issue #194, spec 7.2), as
   - `file: string`: the path messages name the call's file by, as a runtime error there would (spec 8.1): the main file's path as `rig build` was given it, a loaded file's as its `#load` made it, a module's file by its absolute path.
   - `line: int`, `column: int`: where the callee's name is in the call, counted from 1 (spec 2.2), so two calls on one line have two places.
 
-A zeroed `Source_Code_Location`, `file` empty and `line` 0, is no place.
+A zeroed `Source_Code_Location`, `file` empty and `line` 0, is no place. The context's `allocation_location` is one (The context, above).
 
 ## Waiting on the language
 
