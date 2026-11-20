@@ -1678,8 +1678,9 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
-// what's missing (error_expected_or_load). A #run there is "expected '{'"
-// (on the next line, it's the top-level run the recovery resumes at). A
+// what's missing (error_expected_or_load). A #run, an #if or a
+// #caller_location there is "expected '{'" (on the next line, a #run or an
+// #if is the top-level declaration the recovery resumes at). A
 // string after #foreign's library is the C function's name, when it isn't
 // the procedure's own (c_free :: (p: *void) #foreign libc "free";): the
 // procedure keeps its name in Rig. #compiler, Jai's directive, declares a
