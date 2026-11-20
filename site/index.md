@@ -14,6 +14,9 @@ hero:
       text: Install
       link: /install
     - theme: alt
+      text: Features
+      link: /features
+    - theme: alt
       text: Read the specification
       link: /spec/
     - theme: alt

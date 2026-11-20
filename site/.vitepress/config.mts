@@ -70,6 +70,7 @@ export default defineConfig({
     logo: { light: '/logo.svg', dark: '/logo-dark.svg', alt: '' },
     nav: [
       { text: 'Install', link: '/install' },
+      { text: 'Features', link: '/features' },
       { text: 'Specification', link: '/spec/', activeMatch: '^/spec/' },
       { text: 'Roadmap', link: `${repoUrl}/issues/85` }
     ],
