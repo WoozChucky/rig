@@ -49,4 +49,19 @@ main :: () {
     show(AT);
     print("{}\n", gathered(AT, 1));
     for 1..2 { show(where(it)); }
+    debugger: Memory_Debugger;
+    memory_debugger_init(*debugger);
+    inner := context;
+    inner.allocator = memory_debugger_allocator(*debugger);
+    outside := allocator_in_use(1);
+    push_context inner {
+        inside := allocator_in_use(1, 2);
+        print("{} {}\n", inside.data == cast(*void) *debugger, outside.data == cast(*void) *debugger);
+    }
+    memory_debugger_free(*debugger);
+}
+
+// A default after the '..' parameter reads the context of the call it fills.
+allocator_in_use :: (values: ..int, a: Allocator = context.allocator) -> Allocator {
+    return a;
 }

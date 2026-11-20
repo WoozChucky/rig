@@ -9,3 +9,4 @@ tests/run/defaults_after_variadic.rig:37:12
 2
 tests/run/defaults_after_variadic.rig:51:21
 tests/run/defaults_after_variadic.rig:51:21
+true false
