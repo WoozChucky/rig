@@ -1,0 +1,17 @@
+// Basic's memory debugger (issue #159): a resize of memory it never gave
+// out gives null, and a caller that doesn't test for it stops at the null:
+// the debugger's line comes out first.
+#import "Basic";
+
+main :: () {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    builder : String_Builder;
+    builder_init(*builder, HEAP_ALLOCATOR);
+    append_string(*builder, "from the heap");
+    // The builder's memory is the heap's; growing it through the debugger
+    // is a resize of memory it never gave out.
+    builder.allocator = memory_debugger_allocator(*debugger);
+    append_string(*builder, "a piece of text long enough to take the builder past its sixty-four bytes");
+    print_line("not reached");
+}

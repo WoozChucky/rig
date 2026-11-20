@@ -1,0 +1,10 @@
+true true
+tests/run/memory_debugger_reentrant.rig:55:10: memory debugger: allocation 1 (64 bytes) isn't freed
+tests/run/memory_debugger_reentrant.rig:36:24: memory debugger: allocation 2 (8 bytes) isn't freed
+memory debugger: 2 allocations, 2 not freed (72 bytes), 0 bad calls
+tests/run/memory_debugger_reentrant.rig:55:10: memory debugger: allocation 1 (64 bytes) isn't freed
+memory debugger: 2 allocations, 1 not freed (64 bytes), 0 bad calls
+tests/run/memory_debugger_reentrant.rig:41:30: memory debugger: allocation 3 (8 bytes) isn't freed
+memory debugger: 3 allocations, 1 not freed (8 bytes), 0 bad calls
+memory debugger: 3 allocations, 0 not freed (0 bytes), 0 bad calls
+true

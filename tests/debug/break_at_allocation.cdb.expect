@@ -1,0 +1,16 @@
+break_at_allocation!memory_debugger_break
+break_at_allocation!alloc+
+break_at_allocation!sprint+
+break_at_allocation!make_name+
+[@ROOT@\tests\debug\break_at_allocation.rig @ 10]
+break_at_allocation!main+
+[@ROOT@\tests\debug\break_at_allocation.rig @ 21]
+break_at_allocation!memory_debugger_bad_call+
+break_at_allocation!free+
+break_at_allocation!main+
+[@ROOT@\tests\debug\break_at_allocation.rig @ 24]
+break_at_allocation!memory_debugger_break
+break_at_allocation!memory_debugger_allocator_proc+
+break_at_allocation!resize+
+break_at_allocation!main+
+[@ROOT@\tests\debug\break_at_allocation.rig @ 27]

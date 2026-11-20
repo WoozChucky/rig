@@ -1,0 +1,70 @@
+// Basic's memory debugger (issue #159) over an allocator that allocates
+// through the context, so through the debugger, while it is asked a resize
+// or a free_all. A resize that moves hands the old address out again at
+// once, to the note the allocator takes while it resizes, as an allocator
+// that keeps freed memory in a list might: the old address is then the
+// note's, live, and freeing it later is a good call. The note the allocator
+// takes while it frees all comes after the free_all, and is live too.
+#import "Basic";
+
+// What reusing_allocator_proc keeps: the arena it gives memory from; the
+// memory a resize moved from, which it hands out at its next allocation;
+// and the notes it took through the context.
+Reusing :: struct {
+    arena: Arena;
+    kept: *void;
+    note: *void;
+    reset_note: *void;
+}
+
+// An allocator over an arena, whose resize always moves, and whose data is
+// a *Reusing. A resize to more than 0 bytes moves the memory, keeps the
+// old memory to hand out next, and then takes a note of 8 bytes from the
+// context's allocator, which gets the old memory. A free_all gives the
+// arena's blocks back and then takes a note of 8 bytes the same way.
+reusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    reusing := cast(*Reusing) data;
+    arena := arena_allocator(*reusing.arena);
+    if mode == ALLOCATE && reusing.kept != null {
+        kept := reusing.kept;
+        reusing.kept = null;
+        return kept;
+    }
+    if mode == RESIZE && old_memory != null && size > 0 {
+        memory := arena.proc(RESIZE, size, old_size, old_memory, arena.data);
+        reusing.kept = old_memory;
+        reusing.note = alloc(8);
+        return memory;
+    }
+    if mode == FREE_ALL {
+        arena.proc(FREE_ALL, 0, 0, null, arena.data);
+        reusing.reset_note = alloc(8);
+        return null;
+    }
+    return arena.proc(mode, size, old_size, old_memory, arena.data);
+}
+
+main :: () {
+    reusing : Reusing;
+    arena_init(*reusing.arena, 256);
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger, Allocator.{reusing_allocator_proc, *reusing});
+    old := context.allocator;
+    context.allocator = memory_debugger_allocator(*debugger);
+
+    a := alloc(48);                    // 1
+    first := a;
+    a = resize(a, 48, 64);             // still 1; the note, 2, at its old address
+    print("{} {}\n", a != first, reusing.note == first);
+    memory_debugger_report(*debugger);
+    free(reusing.note);
+    memory_debugger_report(*debugger);
+    free_all();                        // 1 freed; the reset note, 3, live
+    memory_debugger_report(*debugger);
+    free(reusing.reset_note);
+    print("{}\n", memory_debugger_report(*debugger));
+
+    context.allocator = old;
+    memory_debugger_free(*debugger);
+    free_all(arena_allocator(*reusing.arena));
+}

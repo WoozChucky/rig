@@ -1,0 +1,12 @@
+true
+tests/run/memory_debugger_reinit.rig:16:10: memory debugger: allocation 1 (16 bytes) isn't freed
+memory debugger: 1 allocation, 1 not freed (16 bytes), 0 bad calls
+true
+true
+tests/run/memory_debugger_reinit.rig:32:10: memory debugger: allocation 1 (4 bytes) isn't freed
+memory debugger: 1 allocation, 1 not freed (4 bytes), 0 bad calls
+tests/run/memory_debugger_reinit.rig:32:10: memory debugger: allocation 1 (4 bytes) isn't freed
+memory debugger: 1 allocation, 1 not freed (4 bytes), 0 bad calls
+memory debugger: 1 allocation, 0 not freed (0 bytes), 0 bad calls
+memory debugger: 1 allocation, 0 not freed (0 bytes), 0 bad calls
+true true

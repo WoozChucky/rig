@@ -1,0 +1,41 @@
+// Basic's memory debugger (issue #159) made ready again while it, or a
+// debugger over it, is the context's allocator, with no allocator given: it
+// can't wrap itself, which would call itself until the stack ran out, so
+// it keeps the allocator it wraps already, and starts afresh over it.
+#import "Basic";
+
+main :: () {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);   // the heap
+    old := context.allocator;
+    context.allocator = memory_debugger_allocator(*debugger);
+    free(alloc(8));
+    memory_debugger_free(*debugger);
+    memory_debugger_init(*debugger);   // the context's: the debugger itself
+    print("{}\n", debugger.wrapped.proc == heap_allocator_proc);
+    p := alloc(16);                    // 1 again
+    memory_debugger_report(*debugger);
+    free(p);
+
+    // A debugger over it in the context: made ready again, it keeps the
+    // heap, and the one over it still wraps it. Made ready again itself,
+    // the one over it keeps the debugger.
+    over : Memory_Debugger;
+    memory_debugger_init(*over);       // over the debugger
+    context.allocator = memory_debugger_allocator(*over);
+    memory_debugger_free(*debugger);
+    memory_debugger_init(*debugger);   // the context's: the one over it
+    print("{}\n", debugger.wrapped.proc == heap_allocator_proc);
+    memory_debugger_free(*over);
+    memory_debugger_init(*over);       // the context's: itself
+    print("{}\n", over.wrapped.data == cast(*void) *debugger);
+    q := alloc(4);                     // 1 of each
+    memory_debugger_report(*over);
+    memory_debugger_report(*debugger);
+    free(q);
+    print("{} {}\n", memory_debugger_report(*over), memory_debugger_report(*debugger));
+
+    context.allocator = old;
+    memory_debugger_free(*over);
+    memory_debugger_free(*debugger);
+}

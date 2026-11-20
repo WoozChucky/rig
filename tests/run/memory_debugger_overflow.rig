@@ -1,0 +1,50 @@
+// Basic's memory debugger (issue #159) as the context's temporary
+// storage's overflow_allocator: the pages the storage asks for when its
+// block is full are the debugger's allocations, each at the place of
+// talloc's own call, a line of allocators.rig. Going back to a mark gives
+// back the pages made since, the newer one here, and a reset gives back
+// the rest. The places in allocators.rig are named by an absolute path,
+// which differs from machine to machine, so the debugger writes its
+// reports into a builder, and each line is printed with its place cut to
+// the file's name.
+#import "Basic";
+
+// Writes debugger's report into the builder in its output, then prints it
+// line by line, cutting each line to what follows its last separator: the
+// place's file name, as the debugger's own words have none.
+report :: (debugger: *Memory_Debugger) {
+    memory_debugger_report(debugger);
+    text := builder_to_string(debugger.output, HEAP_ALLOCATOR);
+    builder_reset(debugger.output);
+    rest := text;
+    while rest.count > 0 {
+        end := find_byte(rest, "\n"[0]);
+        print("{}\n", path_file_name(slice(rest, 0, end)));
+        rest = advance(rest, end + 1);
+    }
+    free(text.data, HEAP_ALLOCATOR);
+}
+
+main :: () {
+    written : String_Builder;
+    builder_init(*written, HEAP_ALLOCATOR);
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugger.output = *written;
+    storage := context.temporary_storage;
+    old := storage.overflow_allocator;
+    storage.overflow_allocator = memory_debugger_allocator(*debugger);
+
+    talloc(40000);                     // a page, 1
+    mark := get_temporary_storage_mark();
+    talloc(50000);                     // a page, 2
+    report(*debugger);
+    set_temporary_storage_mark(mark);  // gives back 2
+    report(*debugger);
+    reset_temporary_storage();         // gives back 1
+    report(*debugger);
+
+    storage.overflow_allocator = old;
+    memory_debugger_free(*debugger);
+    builder_free(*written);
+}

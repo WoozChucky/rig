@@ -1,0 +1,51 @@
+// Basic's memory debugger (issue #159) while compiling: an expression
+// #run's report, written into a builder and baked as a string, and a
+// top-level #run's, printed as rig build runs it. Both run on the
+// compile-time world's heap, and a push leaves the world's default
+// context as it was for the runs after it.
+#import "Basic";
+
+// The report of a stretch of allocations, as text.
+names_report :: () -> string {
+    text : String_Builder;
+    builder_init(*text, HEAP_ALLOCATOR);
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugger.output = *text;
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        kept := join(string.["Ada", "Grace"], " and ");
+        dropped := repeat("ab", 2);
+        free(dropped.data);
+        free(dropped.data);
+    }
+    memory_debugger_report(*debugger);
+    memory_debugger_free(*debugger);
+    report := builder_to_string(*text, HEAP_ALLOCATOR);
+    builder_free(*text);
+    return report;
+}
+
+REPORT :: #run names_report();
+
+#run {
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        s := join(string.["a", "7"], "-");
+    }
+    memory_debugger_report(*debugger);
+    memory_debugger_free(*debugger);
+}
+
+#run {
+    print("{}\n", context.allocator.proc == heap_allocator_proc);
+}
+
+main :: () {
+    print_string(REPORT);
+    print_string(names_report());
+}

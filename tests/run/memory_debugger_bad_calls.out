@@ -1,0 +1,16 @@
+tests/run/memory_debugger_bad_calls.rig:22:5: memory debugger: free of memory it never gave out, before allocation 1
+tests/run/memory_debugger_bad_calls.rig:25:5: memory debugger: free of allocation 1 (16 bytes), which is already freed
+tests/run/memory_debugger_bad_calls.rig:26:19: memory debugger: resize of allocation 1 (16 bytes), which is already freed
+true
+tests/run/memory_debugger_bad_calls.rig:27:5: memory debugger: free of memory it never gave out, before allocation 2
+tests/run/memory_debugger_bad_calls.rig:28:19: memory debugger: resize of memory it never gave out, before allocation 2
+true
+tests/run/memory_debugger_bad_calls.rig:30:19: memory debugger: resize of allocation 2 (1 byte) given old_size 4
+true
+true
+memory debugger: 2 allocations, 0 not freed (0 bytes), 6 bad calls
+false
+memory debugger: 2 allocations, 0 not freed (0 bytes), 0 bad calls
+true
+tests/run/memory_debugger_bad_calls.rig:48:5: memory debugger: free of allocation 2 (8 bytes), which is already freed
+memory debugger: 2 allocations, 0 not freed (0 bytes), 1 bad call

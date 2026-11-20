@@ -1,0 +1,352 @@
+// Basic's memory debugger: an allocator that wraps another and records
+// every allocation it gives, so a program can learn what it never freed,
+// with each allocation's size, its number, and the place it was asked for
+// at. A program checks itself by pushing the debugger's allocator in the
+// context once, in main (spec 6.13, 7.10): everything that takes its memory
+// from the context's allocator then takes it through the debugger, which
+// passes each call on to the allocator it wraps, the context's when it is
+// made ready (the heap, in main) unless another is given, and keeps a
+// record of what it gave. memory_debugger_report then writes what isn't
+// freed. A free or a resize of memory it never gave, or has taken back, is
+// written as it happens, at the place of the call.
+//
+// The records are kept by the allocation's address in an Int_Table, so a
+// free or a resize finds its record at once however many there are. Their
+// memory is the heap's, HEAP_ALLOCATOR, whatever the debugger wraps: not
+// the context's, since an allocator procedure is given its caller's
+// context (spec 7.10), whose allocator is the debugger itself when the
+// program pushed it, so the records would be allocations of their own, or
+// recurse; and not the wrapped allocator's, since an arena's or the
+// temporary storage's FREE_ALL would take them back from under it. Every
+// call here that takes an allocator is given one for the same reason, and
+// so the allocations the debugger counts are the program's alone.
+//
+// Each allocation has a number, from 1, in the order the debugger gave
+// them, and the place it was asked for at: context.allocation_location
+// when the debugger's procedure is called, which Basic's helpers set to the
+// place of their call, and Basic's other procedures to the program's own
+// call (allocators.rig). The debugger passes each call on by calling the
+// wrapped allocator's procedure directly, not through Basic's helpers,
+// which would set the place to a line of this file: a direct call leaves
+// context.allocation_location as it is, so an arena or a pool it wraps
+// passes the program's place on to its parent, and a debugger over the
+// debugger records it too.
+//
+// The place is only the innermost call that passed one down. For the whole
+// stack, a program run under gdb or cdb sets break_at to an allocation's
+// number, from a report: the debugger calls memory_debugger_break when it
+// makes that allocation, and at every bad call, and a breakpoint there
+// shows every caller.
+//
+// The debugger changes nothing a program does but refuse its mistakes: a
+// call it takes as good reaches the wrapped allocator as the helpers would
+// have made it, and gives back what that allocator gives.
+#load "allocators.rig";
+#load "builder.rig";
+#load "table.rig";
+#load "sort.rig";
+#load "print.rig";
+
+// What the debugger knows of an allocation it gave: its number, from 1 in
+// the order they were given; its size in bytes now, after any resize;
+// whether it was given back; and the place it was first asked for at,
+// zeroed for none.
+Memory_Debugger_Record :: struct {
+    number: int;
+    size: int;
+    freed: bool;
+    location: Source_Code_Location;
+}
+
+// A memory debugger: the allocator it passes calls on to, wrapped; its
+// records, Memory_Debugger_Record values by address; the allocations it
+// has made, so the last one's number; the bad calls it was given; where it
+// writes, a string builder, or standard output when output is null; and the
+// number of the allocation to call memory_debugger_break at, 0 for none.
+Memory_Debugger :: struct {
+    wrapped: Allocator;
+    records: Int_Table;
+    allocations: int;
+    bad_calls: int;
+    output: *String_Builder;
+    break_at: int;
+}
+
+// Makes debugger an empty debugger over wrapped, the context's allocator
+// unless given: no allocations and no bad calls, writing to standard
+// output, breaking at no allocation, its records an empty table on the
+// heap. Like table_init, it doesn't give back records a debugger already
+// had: memory_debugger_free does. A debugger can't wrap itself, which would
+// call itself at its first allocation until the stack runs out: when
+// wrapped is the debugger, or a debugger over it, followed down the
+// debuggers each wraps, as when it is made ready again while it or one
+// over it is the context's allocator and no allocator is given, it keeps
+// the allocator it wraps already. So a debugger is made ready, over what
+// it is to wrap, before it is the context's allocator.
+memory_debugger_init :: (debugger: *Memory_Debugger, wrapped: Allocator = context.allocator) {
+    under := wrapped;
+    while under.proc == memory_debugger_allocator_proc && under.data != debugger {
+        under = (cast(*Memory_Debugger) under.data).wrapped;
+    }
+    if under.proc != memory_debugger_allocator_proc { debugger.wrapped = wrapped; }
+    int_table_init(*debugger.records, size_of(Memory_Debugger_Record), HEAP_ALLOCATOR);
+    debugger.allocations = 0;
+    debugger.bad_calls = 0;
+    debugger.output = null;
+    debugger.break_at = 0;
+}
+
+// Where a debugger attached to the program stops: the memory debugger
+// calls it when it makes the allocation its break_at names, after
+// recording it, and after writing each bad call. It does nothing itself. A
+// breakpoint on it, break memory_debugger_break in gdb or
+// bp PROGRAM!memory_debugger_break in cdb, shows the whole stack there,
+// every caller, where the place an allocation records is only the
+// innermost call that passed one down. A program built unoptimised, the
+// default, keeps the call; interpreted, nothing stops.
+memory_debugger_break :: (debugger: *Memory_Debugger) {
+}
+
+// The ending of a count's noun: "" for 1, "s" for any other count, so the
+// debugger writes "1 byte" and "2 bytes".
+memory_debugger_plural :: (n: int) -> string {
+    if n == 1 { return ""; }
+    return "s";
+}
+
+// Writes a line of the debugger's: at's place first, as PATH:LINE:COL: ,
+// when it has one (a line above 0), as a diagnostic or a runtime error
+// starts (spec 8.1), and then format with its {}s replaced by args, as
+// print does. It writes to standard output when the debugger's output is
+// null, as all of Basic does, and otherwise appends to output, whose
+// allocator must not be the debugger. Every line the debugger writes goes
+// through here, so where it writes is this procedure's choice alone.
+//
+// print allocates nothing, and print_to_builder takes only the heap's
+// memory and output's own allocator's, so writing is no allocation of the
+// debugger's.
+memory_debugger_write :: (debugger: *Memory_Debugger, at: Source_Code_Location, format: string, args: ..Any) {
+    if debugger.output == null {
+        if at.line > 0 { print("{}:{}:{}: ", at.file, at.line, at.column); }
+        print(format, ..args);
+    } else {
+        if at.line > 0 { print_to_builder(debugger.output, "{}:{}:{}: ", at.file, at.line, at.column); }
+        print_to_builder(debugger.output, format, ..args);
+    }
+}
+
+// Counts a bad call the debugger was given, a "free" or a "resize" (what),
+// and writes it at its place, at: of memory it never gave out when found
+// is null, named by the allocation the debugger will give next, since it
+// has no number of its own; otherwise of the allocation found is the
+// record of, which is already freed. Then it calls memory_debugger_break,
+// where a debugger attached stops. The caller doesn't pass the call on.
+memory_debugger_bad_call :: (debugger: *Memory_Debugger, at: Source_Code_Location, what: string, found: *Memory_Debugger_Record) {
+    debugger.bad_calls += 1;
+    if found == null {
+        memory_debugger_write(debugger, at, "memory debugger: {} of memory it never gave out, before allocation {}\n", what, debugger.allocations + 1);
+    } else {
+        memory_debugger_write(debugger, at, "memory debugger: {} of allocation {} ({} byte{}), which is already freed\n", what, found.number, found.size, memory_debugger_plural(found.size));
+    }
+    memory_debugger_break(debugger);
+}
+
+// Whether allocator's FREE_ALL gives back everything it gave, so that a
+// debugger over it takes every allocation as freed at FREE_ALL. The
+// protocol says FREE_ALL gives back everything (Preload's README), and an
+// arena, a pool and the temporary storage do; the heap doesn't, as it
+// doesn't know what it gave, so it is false for the heap. A debugger gives
+// back what the allocator it wraps gives back, so for a debugger it is the
+// answer for its wrapped allocator, followed down a debugger over a
+// debugger. Any other allocator is taken at the protocol's word: one of the
+// program's own whose FREE_ALL gives nothing back is taken as giving all.
+memory_debugger_gives_back_all :: (allocator: Allocator) -> bool {
+    if allocator.proc == heap_allocator_proc { return false; }
+    if allocator.proc == memory_debugger_allocator_proc {
+        return memory_debugger_gives_back_all((cast(*Memory_Debugger) allocator.data).wrapped);
+    }
+    return true;
+}
+
+// A memory debugger's allocator procedure; data is its *Memory_Debugger.
+// Each call is passed on to the wrapped allocator by a direct call of its
+// procedure, and settles the edges as Basic's helpers do (allocators.rig),
+// so the wrapped allocator is asked only what the helpers would ask it:
+//
+// - ALLOCATE of 0 bytes or less gives null without asking. Otherwise the
+//   wrapped allocator's memory: its null is passed on and isn't counted;
+//   anything else is the next allocation, recorded with its size and the
+//   place, and returned, after a call of memory_debugger_break when its
+//   number is break_at.
+// - RESIZE of null is ALLOCATE. Of an allocation the debugger gave and
+//   hasn't taken back, to 0 bytes or less, it is FREE and gives null.
+//   Otherwise, its old_size the allocation's size, the resize is passed
+//   on, and the wrapped allocator's null is passed on with the record as
+//   it was; anything else is the same allocation, its number and place
+//   kept, its size the new one, at the result's address. When the result
+//   moved, the record at the old address is marked freed, unless an
+//   allocation made through the debugger while the wrapped allocator
+//   resized, through the context, was given that address: its record is
+//   then there, and it is live.
+// - FREE of null does nothing. Of an allocation the debugger gave and
+//   hasn't taken back, the record is marked freed, and the free is passed
+//   on with its old_size as given: Basic's free passes 0, and a resizable
+//   array's free the array's bytes.
+// - FREE_ALL is passed on, and then every allocation given before it is
+//   marked freed when the wrapped allocator gives back everything it gave
+//   (memory_debugger_gives_back_all): an arena's, a pool's or the
+//   temporary storage's does, the heap's doesn't, so a debugger over the
+//   heap keeps its records, as the heap kept the memory. An allocation the
+//   wrapped allocator makes through the debugger while it frees all,
+//   through the context, comes after it, and is live.
+//
+// A resize or a free of memory the debugger never gave, or has taken back,
+// and a resize to more than 0 bytes whose old_size isn't the allocation's
+// size, are bad calls: each is written at its place and counted,
+// memory_debugger_break is called, and the call isn't passed on. A resize
+// gives null, which leaves the memory as it was and still the caller's to
+// free, as the protocol says of a null, and a free does nothing. The
+// address a resize moved an allocation from is taken back: its record
+// stays there, freed, with the allocation's number and its size there,
+// unless the wrapped allocator handed that address out again meanwhile.
+//
+// The place is copied first, before the procedure calls anything of
+// Basic's: each of Basic's helpers puts the field back after its own call,
+// so the copy only makes plain which place is read.
+memory_debugger_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    at := context.allocation_location;
+    debugger := cast(*Memory_Debugger) data;
+    wrapped := debugger.wrapped;
+    if mode == ALLOCATE || (mode == RESIZE && old_memory == null) {
+        if size <= 0 { return null; }
+        memory := wrapped.proc(ALLOCATE, size, 0, null, wrapped.data);
+        if memory == null { return null; }
+        debugger.allocations += 1;
+        record := Memory_Debugger_Record.{debugger.allocations, size, false, at};
+        int_table_set(*debugger.records, cast(int) memory, *record);
+        if debugger.allocations == debugger.break_at { memory_debugger_break(debugger); }
+        return memory;
+    }
+    if mode == RESIZE {
+        found := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
+        if found == null || found.freed {
+            memory_debugger_bad_call(debugger, at, "resize", found);
+            return null;
+        }
+        if size <= 0 {
+            found.freed = true;
+            wrapped.proc(FREE, 0, 0, old_memory, wrapped.data);
+            return null;
+        }
+        if old_size != found.size {
+            debugger.bad_calls += 1;
+            memory_debugger_write(debugger, at, "memory debugger: resize of allocation {} ({} byte{}) given old_size {}\n", found.number, found.size, memory_debugger_plural(found.size), old_size);
+            memory_debugger_break(debugger);
+            return null;
+        }
+        // The record is copied out before the resize is passed on, and the
+        // old one is found again after it: a set may rehash the table and
+        // move every record, the debugger's own below, and any allocation
+        // the wrapped allocator makes through the context while it resizes,
+        // whose allocator is this debugger when the program pushed it. Such
+        // an allocation may be at the old address, which the wrapped
+        // allocator has taken back and handed out again, so the record there
+        // is marked freed only while it is still this allocation's.
+        record := found.*;
+        memory := wrapped.proc(RESIZE, size, old_size, old_memory, wrapped.data);
+        if memory == null { return null; }
+        if memory != old_memory {
+            moved := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
+            if moved.number == record.number { moved.freed = true; }
+        }
+        record.size = size;
+        int_table_set(*debugger.records, cast(int) memory, *record);
+        return memory;
+    }
+    if mode == FREE {
+        if old_memory == null { return null; }
+        found := cast(*Memory_Debugger_Record) int_table_find(debugger.records, cast(int) old_memory);
+        if found == null || found.freed {
+            memory_debugger_bad_call(debugger, at, "free", found);
+            return null;
+        }
+        found.freed = true;
+        wrapped.proc(FREE, 0, old_size, old_memory, wrapped.data);
+        return null;
+    }
+    if mode == FREE_ALL {
+        // What FREE_ALL gives back is what was given before it: an
+        // allocation the wrapped allocator makes through the context while
+        // it frees all, so through this debugger when the program pushed it,
+        // has a later number and is kept.
+        given := debugger.allocations;
+        wrapped.proc(FREE_ALL, 0, 0, null, wrapped.data);
+        if memory_debugger_gives_back_all(wrapped) {
+            records := debugger.records;
+            for 0..records.capacity - 1 {
+                used, key, value := int_table_entry(records, it);
+                if used {
+                    record := cast(*Memory_Debugger_Record) value;
+                    if record.number <= given { record.freed = true; }
+                }
+            }
+        }
+    }
+    return null;
+}
+
+// debugger as an Allocator.
+memory_debugger_allocator :: (debugger: *Memory_Debugger) -> Allocator {
+    return Allocator.{memory_debugger_allocator_proc, debugger};
+}
+
+// Whether the record at a goes before the one at b, by number, for sort.
+memory_debugger_less :: (a: *void, b: *void) -> bool {
+    return (cast(*Memory_Debugger_Record) a).number < (cast(*Memory_Debugger_Record) b).number;
+}
+
+// Writes what debugger gave and hasn't taken back, one line per
+// allocation, at the place it was asked for at, in the order they were
+// given, then a line that counts the allocations, those not freed and
+// their bytes, and the bad calls; and gives whether every allocation is
+// freed and there was no bad call. The program chooses what to do with the
+// answer, such as its exit status. It may be called any number of times:
+// a report before the end is a checkpoint, and the numbering goes on.
+//
+// The table's order is the addresses' hashes', which differ from run to
+// run, so the records not freed are copied out and sorted by number
+// first, in memory from the heap, given back before it returns.
+memory_debugger_report :: (debugger: *Memory_Debugger) -> bool {
+    records := debugger.records;
+    live := cast(*Memory_Debugger_Record) alloc(records.count * size_of(Memory_Debugger_Record), HEAP_ALLOCATOR);
+    count := 0;
+    bytes := 0;
+    for 0..records.capacity - 1 {
+        used, key, value := int_table_entry(records, it);
+        if used {
+            record := cast(*Memory_Debugger_Record) value;
+            if !record.freed {
+                live[count] = record.*;
+                count += 1;
+                bytes += record.size;
+            }
+        }
+    }
+    sort(live, count, size_of(Memory_Debugger_Record), memory_debugger_less, HEAP_ALLOCATOR);
+    for 0..count - 1 {
+        record := live[it];
+        memory_debugger_write(debugger, record.location, "memory debugger: allocation {} ({} byte{}) isn't freed\n", record.number, record.size, memory_debugger_plural(record.size));
+    }
+    free(live, HEAP_ALLOCATOR);
+    none : Source_Code_Location;
+    memory_debugger_write(debugger, none, "memory debugger: {} allocation{}, {} not freed ({} byte{}), {} bad call{}\n", debugger.allocations, memory_debugger_plural(debugger.allocations), count, bytes, memory_debugger_plural(bytes), debugger.bad_calls, memory_debugger_plural(debugger.bad_calls));
+    return count == 0 && debugger.bad_calls == 0;
+}
+
+// Gives debugger's records back to the heap, and nothing it tracked: what
+// it gave is the wrapped allocator's, the program's to give back. The
+// debugger forgets every allocation; memory_debugger_init makes it ready
+// again.
+memory_debugger_free :: (debugger: *Memory_Debugger) {
+    int_table_free(*debugger.records);
+}
