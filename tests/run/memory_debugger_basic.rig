@@ -1,10 +1,11 @@
 // Basic's memory debugger (issue #159) over every procedure of Basic that
-// allocates, each called with its allocator left out, so its memory comes
-// through the debugger in the context, and what each gives freed as
-// Basic's README says. The report is clean: Basic frees all it allocates,
-// and passes every resize the size it gave. Nothing is written but the
-// report's count, so print_to_builder's and sprint's allocations, whose
-// places are lines of print.rig, belong here too.
+// allocates, each called with its allocator left out (for the arena and
+// the pool, their parent), so its memory comes through the debugger in the
+// context, and what each gives freed as Basic's README says. The report is
+// clean: Basic frees all it allocates, and passes every resize the size it
+// gave. Nothing is written but the report's count, so print_to_builder's
+// and sprint's allocations, whose places are lines of print.rig, belong
+// here too.
 #import "Basic";
 
 main :: () {
