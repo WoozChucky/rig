@@ -1,0 +1,6 @@
+allocators.rig:359:12: memory debugger: allocation 1 (40024 bytes) isn't freed
+allocators.rig:359:12: memory debugger: allocation 2 (50024 bytes) isn't freed
+memory debugger: 2 allocations, 2 not freed (90048 bytes), 0 bad calls
+allocators.rig:359:12: memory debugger: allocation 1 (40024 bytes) isn't freed
+memory debugger: 2 allocations, 1 not freed (40024 bytes), 0 bad calls
+memory debugger: 2 allocations, 0 not freed (0 bytes), 0 bad calls
