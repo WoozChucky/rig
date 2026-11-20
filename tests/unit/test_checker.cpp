@@ -9072,10 +9072,31 @@ TEST(caller_location_is_refused_elsewhere) {
     arena_free(&a);
 }
 
+TEST(caller_location_is_no_any) {
+    // An Any parameter would take any other value, a copy of it, but the
+    // place is made at the call, as a Source_Code_Location, and isn't put in
+    // an Any: refused at the '#', and nothing more is said of it.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "f :: (loc: Any = #caller_location) { }\n"
+                                     "main :: () { f(); }\n"),
+              "1:18: '#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'\n");
+    arena_free(&a);
+}
+
 TEST(caller_location_needs_preload) {
-    // Without Preload there's no Source_Code_Location for the place to be.
+    // Without Preload there's no Source_Code_Location for the place to be. A
+    // program's own struct called Source_Code_Location isn't Preload's: only
+    // a module's file declares the one the place is. Anywhere but a default
+    // it's refused as it is with Preload.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "f :: (n: int = #caller_location) { }\nmain :: () { }\n"),
               "1:16: '#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "Source_Code_Location :: struct { file: string; line: int; column: int; }\n"
+                               "f :: (loc: Source_Code_Location = #caller_location) { }\n"
+                               "main :: () { }\n"),
+              "2:35: '#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n    x := #caller_location;\n}\n"),
+              "2:10: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n");
     arena_free(&a);
 }

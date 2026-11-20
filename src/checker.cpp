@@ -2091,11 +2091,22 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // "'#caller_location' needs Preload's 'Source_Code_Location', which the
 // program doesn't have", at the '#', and it has no type, so nothing more is
 // said of it.
-static void check_caller_location_default(Checker *c, Ast *value) {
+//
+// It then converts to the parameter's type as any default does (another
+// type is "a value of type 'Source_Code_Location' doesn't convert to 'int'
+// implicitly"), except to Any, which would take a copy of it: the place is
+// made at the call as a Source_Code_Location, not put in an Any, so that's
+// "'#caller_location' needs a parameter of type 'Source_Code_Location', not
+// 'Any'", at the '#', and it has no type either.
+static void check_caller_location_default(Checker *c, Ast *value, Type *param_type) {
     value->type = c->file->source_code_location_type;
     if (!value->type) {
         diag_error(c->diag, value->pos,
                    "'#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have");
+    } else if (param_type && param_type == c->any_type) {
+        diag_error(c->diag, value->pos,
+                   "'#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'");
+        value->type = nullptr;
     }
 }
 
@@ -2165,7 +2176,7 @@ static void check_caller_location_default(Checker *c, Ast *value) {
 // value, which it isn't anywhere else (check_expression refuses it), and
 // then converted to its parameter's type as any default is: `loc: int =
 // #caller_location` is "a value of type 'Source_Code_Location' doesn't
-// convert to 'int' implicitly".
+// convert to 'int' implicitly". An Any parameter doesn't take it.
 static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
@@ -2198,7 +2209,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
         c->filled_depth = 0;
         c->needs_context = false;
         if (value->kind == AST_CALLER_LOCATION) {
-            check_caller_location_default(c, value);
+            check_caller_location_default(c, value, param->type);
         } else {
             check_value(c, value);
         }

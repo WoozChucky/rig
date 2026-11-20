@@ -591,7 +591,9 @@
 //   leaves the parameter out, which lowering fills in there. Its type is
 //   Source_Code_Location, which converts to the parameter's as any
 //   default's does ("a value of type 'Source_Code_Location' doesn't
-//   convert to 'int' implicitly", at it), and it needs no context.
+//   convert to 'int' implicitly", at it), but not to Any: "'#caller_location'
+//   needs a parameter of type 'Source_Code_Location', not 'Any'", at the
+//   '#'. It needs no context.
 // - Anywhere else, a body's value, a global's or a constant's, an
 //   argument, a #run's operand, a part of a default, it's
 //   "'#caller_location' can only be a parameter's default value, as in loc:
