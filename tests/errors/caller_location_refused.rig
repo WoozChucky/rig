@@ -1,0 +1,15 @@
+// #caller_location (issue #194, spec 7.2) is only a parameter's whole default
+// value, written with its type, Preload's Source_Code_Location: anywhere
+// else, a body, a global's value, part of a default, it's refused; a
+// parameter of another type doesn't take it; and a parameter without its
+// type, or one after a signature where the body should be, is the parser's,
+// which gives up that declaration and goes on.
+line_of :: (loc: Source_Code_Location) -> int { return loc.line; }
+G := #caller_location;
+wrong :: (loc: int = #caller_location) { }
+untyped :: (loc := #caller_location) { }
+inside :: (n: int = line_of(#caller_location)) { }
+after :: () #caller_location { }
+main :: () {
+    x := #caller_location;
+}

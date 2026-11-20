@@ -39,20 +39,25 @@
 // copy or the value's, and for a name C would read wrong: an empty name,
 // one with '=', which ends a name in the environment (NAME=value), and one
 // with a zero byte, which C would read as a shorter name.
-get_environment :: (name: string, allocator: Allocator = context.allocator) -> string, bool {
+//
+// The name's C copy and the value's are asked for, and the C copy given
+// back, with loc, the place of the call unless given (#caller_location,
+// spec 7.2), so an allocator that records where it is asked from sees the
+// caller's line (allocators.rig).
+get_environment :: (name: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
     if name.count == 0 || find_byte(name, "="[0]) >= 0 || find_byte(name, 0) >= 0 { return empty, false; }
-    c_name := to_c_string(name, allocator);
+    c_name := to_c_string(name, allocator, loc);
     if c_name == null { return empty, false; }
     c_value := c_getenv(c_name);
-    free(c_name, allocator);
+    free(c_name, allocator, loc);
     if c_value == null { return empty, false; }
 
     // C's string ends at its first zero, which is how its length is found.
     count := 0;
     while c_value[count] != 0 { count += 1; }
     if count == 0 { return empty, true; }
-    data := cast(*u8) alloc(count, allocator);
+    data := cast(*u8) alloc(count, allocator, loc);
     if data == null { return empty, false; }
     copy_memory(data, c_value, count);
 
@@ -84,12 +89,15 @@ get_environment :: (name: string, allocator: Allocator = context.allocator) -> s
 // Basic's print puts it, while the command writes to the same place
 // straight away; so every C stream is flushed first, and what the program
 // printed before the command comes out before what the command prints.
-run_command :: (command: string, allocator: Allocator = context.allocator) -> int {
+//
+// The command's C copy is asked for and given back with loc, the place of
+// the call unless given, as get_environment's are.
+run_command :: (command: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> int {
     if find_byte(command, 0) >= 0 { return -1; }
-    c_command := to_c_string(command, allocator);
+    c_command := to_c_string(command, allocator, loc);
     if c_command == null { return -1; }
     c_fflush(null);
     status := c_system(c_command);
-    free(c_command, allocator);
+    free(c_command, allocator, loc);
     return status;
 }

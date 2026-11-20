@@ -153,8 +153,12 @@ file_size :: (file: File) -> int {
 // zeroed string and false, with nothing left allocated.
 //
 // The memory is the file's size, asked for once, and C reads into it until
-// it is full or a read gives nothing.
-read_entire_file :: (path: string, allocator: Allocator = context.allocator) -> string, bool {
+// it is full or a read gives nothing. It is asked for, and given back after
+// a short read, with loc, the place of the call unless given
+// (#caller_location, spec 7.2), so an allocator that records where it is
+// asked from sees the caller's line (allocators.rig); the heap's copy of
+// the path is file_open's, at its own line.
+read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
     file, opened := file_open(path, FILE_READ);
     if !opened { return empty, false; }
@@ -167,7 +171,7 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator) -> 
         file_close(file);
         return empty, true;
     }
-    data := cast(*u8) alloc(size, allocator);
+    data := cast(*u8) alloc(size, allocator, loc);
     if data == null {
         file_close(file);
         return empty, false;
@@ -184,7 +188,7 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator) -> 
     }
     file_close(file);
     if got < size {
-        free(data, allocator);
+        free(data, allocator, loc);
         return empty, false;
     }
 

@@ -8,6 +8,13 @@
 // grows. A number is written into a buffer on the stack by numbers.rig and
 // appended from there, so nothing but the builder's own memory is
 // allocated.
+//
+// Each procedure here that allocates or frees, the appends,
+// builder_to_string and builder_free, takes loc last, the place of the call
+// that leaves it out (#caller_location, spec 7.2), and passes it down to the
+// helper that calls the allocator (allocators.rig): so an allocator that
+// records where it is asked from sees the program's line, not this file's.
+// The other appends pass theirs on to append_string.
 #load "allocators.rig";
 #load "numbers.rig";
 #load "memory.rig";
@@ -50,7 +57,7 @@ builder_init :: (builder: *String_Builder, allocator: Allocator = context.alloca
 // test for it: its data is then null, and the copy below, which takes the
 // address of an element of data, stops the program with the language's
 // null pointer dereference.
-append_string :: (builder: *String_Builder, s: string) {
+append_string :: (builder: *String_Builder, s: string, loc: Source_Code_Location = #caller_location) {
     LARGEST :: 9223372036854775807; // int's largest value
     HALF :: LARGEST / 2;
     if s.count <= 0 { return; }
@@ -79,7 +86,7 @@ append_string :: (builder: *String_Builder, s: string) {
                 capacity *= 2;
             }
         }
-        builder.data = cast(*u8) resize(builder.data, builder.capacity, capacity, builder.allocator);
+        builder.data = cast(*u8) resize(builder.data, builder.capacity, capacity, builder.allocator, loc);
         builder.capacity = capacity;
         if own { source = builder.data + offset; }
     }
@@ -90,40 +97,40 @@ append_string :: (builder: *String_Builder, s: string) {
 }
 
 // Appends one byte, as itself: append_byte(builder, 32) appends a space.
-append_byte :: (builder: *String_Builder, byte: u8) {
+append_byte :: (builder: *String_Builder, byte: u8, loc: Source_Code_Location = #caller_location) {
     bytes : [1]u8;
     bytes[0] = byte;
     view : []u8 = bytes;
-    append_string(builder, cast(string) view);
+    append_string(builder, cast(string) view, loc);
 }
 
 // Appends value in a base from 2 to 36, as format_int writes it; another
 // base appends nothing.
-append_int :: (builder: *String_Builder, value: int, base: int) {
+append_int :: (builder: *String_Builder, value: int, base: int, loc: Source_Code_Location = #caller_location) {
     buffer : [INT_TEXT_MAX]u8;
-    append_string(builder, format_int(buffer, value, base));
+    append_string(builder, format_int(buffer, value, base), loc);
 }
 
 // Appends value in a base from 2 to 36, as format_u64 writes it, so a u64
 // above int's largest too; another base appends nothing.
-append_u64 :: (builder: *String_Builder, value: u64, base: int) {
+append_u64 :: (builder: *String_Builder, value: u64, base: int, loc: Source_Code_Location = #caller_location) {
     buffer : [INT_TEXT_MAX]u8;
-    append_string(builder, format_u64(buffer, value, base));
+    append_string(builder, format_u64(buffer, value, base), loc);
 }
 
 // Appends value with decimals digits after the point, from 0 to 9, as
 // format_float writes it: "nan", "inf" and "-inf" included.
-append_float :: (builder: *String_Builder, value: float64, decimals: int) {
+append_float :: (builder: *String_Builder, value: float64, decimals: int, loc: Source_Code_Location = #caller_location) {
     buffer : [FLOAT_TEXT_MAX]u8;
-    append_string(builder, format_float(buffer, value, decimals));
+    append_string(builder, format_float(buffer, value, decimals), loc);
 }
 
 // Appends true or false.
-append_bool :: (builder: *String_Builder, value: bool) {
+append_bool :: (builder: *String_Builder, value: bool, loc: Source_Code_Location = #caller_location) {
     if value {
-        append_string(builder, "true");
+        append_string(builder, "true", loc);
     } else {
-        append_string(builder, "false");
+        append_string(builder, "false", loc);
     }
 }
 
@@ -138,10 +145,10 @@ append_bool :: (builder: *String_Builder, value: bool) {
 // isn't null, and freeing it would give an allocator memory it never gave.
 // An allocator that has no memory gives null, and the copy stops the
 // program with a null pointer dereference, as append_string's does.
-builder_to_string :: (builder: *String_Builder, allocator: Allocator = context.allocator) -> string {
+builder_to_string :: (builder: *String_Builder, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string {
     text : string;
     if builder.count == 0 { return text; }
-    text.data = cast(*u8) alloc(builder.count, allocator);
+    text.data = cast(*u8) alloc(builder.count, allocator, loc);
     text.count = builder.count;
     copy_memory(*text.data[0], builder.data, builder.count);
     return text;
@@ -156,8 +163,8 @@ builder_reset :: (builder: *String_Builder) {
 // Gives the builder's memory back to its allocator. The builder is empty,
 // with data null and count and capacity 0, and keeps its allocator, so it
 // can be appended to again.
-builder_free :: (builder: *String_Builder) {
-    free(builder.data, builder.allocator);
+builder_free :: (builder: *String_Builder, loc: Source_Code_Location = #caller_location) {
+    free(builder.data, builder.allocator, loc);
     builder.data = null;
     builder.count = 0;
     builder.capacity = 0;

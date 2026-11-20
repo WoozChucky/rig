@@ -583,6 +583,26 @@
 //   too deeply with the default values its calls fill in (more than 1000
 //   levels)", at it, said once per 1000 levels of a chain.
 //
+// Caller locations (issue #194, spec 7.2).
+// - The checker finds Preload's Source_Code_Location struct by name, as
+//   Context, and keeps it on the tree (Ast_File.source_code_location_type).
+// - #caller_location may only be a parameter's whole default value, `loc:
+//   Source_Code_Location = #caller_location`: the place of each call that
+//   leaves the parameter out, which lowering fills in there. Its type is
+//   Source_Code_Location, which converts to the parameter's as any
+//   default's does ("a value of type 'Source_Code_Location' doesn't
+//   convert to 'int' implicitly", at it), but not to Any: "'#caller_location'
+//   needs a parameter of type 'Source_Code_Location', not 'Any'", at the
+//   '#'. It needs no context.
+// - Anywhere else, a body's value, a global's or a constant's, an
+//   argument, a #run's operand, a part of a default, it's
+//   "'#caller_location' can only be a parameter's default value, as in loc:
+//   Source_Code_Location = #caller_location", at the '#'. It has no type
+//   then, so nothing more is said of it.
+// - Without Preload, a default that is one is "'#caller_location' needs
+//   Preload's 'Source_Code_Location', which the program doesn't have", at
+//   the '#'.
+//
 // The context (issue #156, spec 7.10, 6.13).
 // - The checker finds Preload's Context struct, its global default_context
 //   and its procedure __runtime_init by name at the top level, in a

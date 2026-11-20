@@ -3902,3 +3902,53 @@ TEST(context_is_no_name) {
     }
     arena_free(&a);
 }
+
+// Issue #194: caller locations (spec 7.2).
+
+TEST(caller_location_is_a_primary) {
+    // #caller_location is a primary expression, a plain node at its '#',
+    // wherever an expression starts: a parameter's default value, and a
+    // body's variable too, which the checker refuses (only a default may be
+    // one).
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "f :: (loc: Source_Code_Location = #caller_location) { }\n", &errors),
+              "(proc f (params (loc Source_Code_Location (default (caller_location)))) (block))\n");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "x := #caller_location;", &errors), "(block (var x _ (caller_location)))");
+    CHECK_STR(errors, "");
+    Token_List *list = src("f :: (loc: Source_Code_Location = #caller_location) { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->procs.count, 1);
+    CHECK_EQ(file->procs.count == 1 ? file->procs[0]->params.count : 0, 1);
+    if (file->procs.count == 1 && file->procs[0]->params.count == 1) {
+        Ast *value = file->procs[0]->params[0]->default_value;
+        CHECK(value->kind == AST_CALLER_LOCATION);
+        CHECK_EQ(value->pos.line, 1);
+        CHECK_EQ(value->pos.col, 35);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(caller_location_after_a_signature) {
+    // A directive Rig knows, so not "unknown directive" there: where the body
+    // should be it's what was expected, as a #run there is, also starting the
+    // next line, and the declaration is given up. At the top level, where no
+    // value goes, it's no declaration.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a, "f :: () #caller_location { }\nmain :: () {}\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    parse_src(&a, "f :: () #caller_location;\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    parse_src(&a, "f :: () #no_abc #caller_location { }\n", &errors);
+    CHECK_STR(errors, "1:17: expected '{', found directive\n");
+    CHECK_STR(parse_src(&a, "f :: ()\n#caller_location;\nmain :: () {}\n", &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "2:1: expected '{', found directive\n");
+    parse_src(&a, "#caller_location;\n", &errors);
+    CHECK_STR(errors, "1:1: expected identifier, found directive\n");
+    arena_free(&a);
+}

@@ -391,6 +391,13 @@ print :: (format: string, args: ..Any) {
 // append_string's s may: all is written into a builder of its own first,
 // on the heap, and then appended at once, so nothing of builder moves
 // while it is read. The heap's memory is freed before it returns.
+//
+// Unlike append_string and builder_to_string, it takes no loc: a
+// procedure with a '..' parameter can't have default values, for now
+// (spec 7.2), so the place builder's allocator sees is the append_string
+// call below, this file's line, not the caller's. The helpers above that
+// write into a builder they are given take none either, so theirs is
+// print_or_append's append_string call.
 print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
     // A null builder is standard output to print_formatted, so it's read
     // here first, whatever the format, to stop the program with a null
@@ -414,6 +421,9 @@ print_to_builder :: (builder: *String_Builder, format: string, args: ..Any) {
 // context's allocator gives one allocation, the size of the text, and the
 // heap's memory is freed before it returns. Nothing written gives the
 // zeroed string, count 0 and data null, and allocates nothing.
+//
+// Like print_to_builder, it takes no loc, so the place the context's
+// allocator sees is the builder_to_string call below, this file's line.
 sprint :: (format: string, args: ..Any) -> string {
     scratch : String_Builder;
     builder_init(*scratch, HEAP_ALLOCATOR);

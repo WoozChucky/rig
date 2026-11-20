@@ -8248,8 +8248,9 @@ TEST(preload_declares_the_context) {
     // The checker finds Preload's Context, default_context and
     // __runtime_init as it finds Type_Info and Any, and keeps them on the
     // tree, for lowering. The structs are laid out as any struct: Context is
-    // an Allocator and a pointer, and the storage's header and page hold
-    // what the temporary allocator counts.
+    // an Allocator, a pointer and the place an allocation is asked from, a
+    // Source_Code_Location (issue #194), and the storage's header and page
+    // hold what the temporary allocator counts.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
@@ -8266,9 +8267,10 @@ TEST(preload_declares_the_context) {
     CHECK_STR(tree->runtime_init->name, "__runtime_init");
     CHECK(tree->runtime_init->is_c_call);
     Type *context = tree->context_type;
-    CHECK_EQ(context->size, 24);
+    CHECK_EQ(context->size, 56);
     CHECK_EQ(context->fields[type_field_index(context, str("allocator"))].offset, 0);
     CHECK_EQ(context->fields[type_field_index(context, str("temporary_storage"))].offset, 16);
+    CHECK_EQ(context->fields[type_field_index(context, str("allocation_location"))].offset, 24);
     Type *storage = ((Ast_Struct *)top_level_named(tree, "Temporary_Storage"))->declared;
     CHECK_EQ(storage->size, 56);
     CHECK_EQ(storage->fields[type_field_index(storage, str("overflow_allocator"))].offset, 32);
@@ -8914,7 +8916,9 @@ TEST(preload_declares_the_array_helpers) {
     // each taking the untyped array and its element's size, then what the
     // built-in takes after the array, an item by its address; __array_pop
     // takes the address its last element is copied to. Those that can grow
-    // the array say whether the allocator gave memory.
+    // the array say whether the allocator gave memory. Those that can reach
+    // the allocator take the built-in's place last, which they put in the
+    // context while they call it (spec 7.10).
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
@@ -8922,15 +8926,15 @@ TEST(preload_declares_the_array_helpers) {
         const char *name;
         const char *type;
     } helpers[] = {
-        {"__array_add", "(*Resizable_Array, int, *void) -> bool"},
-        {"__array_insert", "(*Resizable_Array, int, int, *void) -> bool"},
+        {"__array_add", "(*Resizable_Array, int, *void, Source_Code_Location) -> bool"},
+        {"__array_insert", "(*Resizable_Array, int, int, *void, Source_Code_Location) -> bool"},
         {"__array_pop", "(*Resizable_Array, int, *void)"},
         {"__array_remove_ordered", "(*Resizable_Array, int, int)"},
         {"__array_remove_unordered", "(*Resizable_Array, int, int)"},
-        {"__array_reserve", "(*Resizable_Array, int, int) -> bool"},
-        {"__array_resize", "(*Resizable_Array, int, int) -> bool"},
+        {"__array_reserve", "(*Resizable_Array, int, int, Source_Code_Location) -> bool"},
+        {"__array_resize", "(*Resizable_Array, int, int, Source_Code_Location) -> bool"},
         {"__array_reset", "(*Resizable_Array, int)"},
-        {"__array_free", "(*Resizable_Array, int)"},
+        {"__array_free", "(*Resizable_Array, int, Source_Code_Location)"},
     };
     for (s64 i = 0; i < (s64)(sizeof helpers / sizeof helpers[0]); i++) {
         Ast_Proc *found = nullptr;
@@ -8992,5 +8996,111 @@ TEST(array_procedure_calls_are_typed_by_their_array) {
         CHECK(call->callee_type != nullptr);
         if (call->callee_type) CHECK_STR(type_name(&a, call->callee_type), "(*[..]u8, u8)");
     }
+    arena_free(&a);
+}
+
+// Issue #194: caller locations (spec 7.2).
+
+TEST(caller_location_is_a_default_value) {
+    // A parameter's whole default value may be #caller_location, of Preload's
+    // Source_Code_Location, which the checker finds as it finds Context and
+    // keeps on the tree: a file's path and a line and a column.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "here :: (loc: Source_Code_Location = #caller_location) -> int { return loc.line; }\n"
+                                 "main :: () { n := here(); }\n",
+                                 &tree),
+              "");
+    Type *location = tree->source_code_location_type;
+    CHECK(location != nullptr);
+    if (!location) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_STR(location->decl->name, "Source_Code_Location");
+    CHECK_EQ(location->size, 32);
+    CHECK_EQ(location->fields[type_field_index(location, str("file"))].offset, 0);
+    CHECK_EQ(location->fields[type_field_index(location, str("line"))].offset, 16);
+    CHECK_EQ(location->fields[type_field_index(location, str("column"))].offset, 24);
+    CHECK(((Ast_Proc *)top_level_named(tree, "here"))->params[0]->default_value->type == location);
+    arena_free(&a);
+}
+
+TEST(caller_location_needs_no_context) {
+    // The place is the call's, known where the call is lowered: working it
+    // out reads no context, so the default doesn't set default_needs_context.
+    // A default that reads context still sets it.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "here :: (n: int, loc: Source_Code_Location = #caller_location,\n"
+                                 "         a: Allocator = context.allocator) -> int { return n; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    Ast_Proc *here = (Ast_Proc *)top_level_named(tree, "here");
+    CHECK_EQ(here->params.count, 3);
+    if (here->params.count == 3) {
+        CHECK(!here->params[1]->default_needs_context);
+        CHECK(here->params[2]->default_needs_context);
+    }
+    arena_free(&a);
+}
+
+TEST(caller_location_is_refused_elsewhere) {
+    // Anywhere but a parameter's whole default value it's refused at its
+    // '#', with no type, so nothing more is said of it: a body's variable, a
+    // global's or a constant's value, part of a default, a #run's operand.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "here :: (loc: Source_Code_Location = #caller_location) -> int { return loc.line; }\n"
+                                 "g :: (loc: Source_Code_Location) -> int { return loc.line; }\n"
+                                 "G := #caller_location;\n"
+                                 "C :: #caller_location;\n"
+                                 "f :: (n: int = g(#caller_location)) { }\n"
+                                 "X :: #run here(#caller_location);\n"
+                                 "main :: () {\n"
+                                 "    x := #caller_location;\n"
+                                 "}\n"),
+              "3:6: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "4:6: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "5:18: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "6:16: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n"
+              "8:10: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n");
+    arena_free(&a);
+}
+
+TEST(caller_location_is_no_any) {
+    // An Any parameter would take any other value, a copy of it, but the
+    // place is made at the call, as a Source_Code_Location, and isn't put in
+    // an Any: refused at the '#', and nothing more is said of it.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "f :: (loc: Any = #caller_location) { }\n"
+                                     "main :: () { f(); }\n"),
+              "1:18: '#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'\n");
+    arena_free(&a);
+}
+
+TEST(caller_location_needs_preload) {
+    // Without Preload there's no Source_Code_Location for the place to be. A
+    // program's own struct called Source_Code_Location isn't Preload's: only
+    // a module's file declares the one the place is. Anywhere but a default
+    // it's refused as it is with Preload.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (n: int = #caller_location) { }\nmain :: () { }\n"),
+              "1:16: '#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "Source_Code_Location :: struct { file: string; line: int; column: int; }\n"
+                               "f :: (loc: Source_Code_Location = #caller_location) { }\n"
+                               "main :: () { }\n"),
+              "2:35: '#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have\n");
+    CHECK_STR(check_source(&a, "main :: () {\n    x := #caller_location;\n}\n"),
+              "2:10: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
+              "#caller_location\n");
     arena_free(&a);
 }

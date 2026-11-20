@@ -2084,6 +2084,32 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
     }
 }
 
+// A default value that is #caller_location (spec 7.2): the place of each
+// call that leaves its parameter out, which lowering fills in at that call
+// from the call alone, so it reads no context and has nothing to check but
+// its type, Preload's Source_Code_Location. Without Preload there's none:
+// "'#caller_location' needs Preload's 'Source_Code_Location', which the
+// program doesn't have", at the '#', and it has no type, so nothing more is
+// said of it.
+//
+// It then converts to the parameter's type as any default does (another
+// type is "a value of type 'Source_Code_Location' doesn't convert to 'int'
+// implicitly"), except to Any, which would take a copy of it: the place is
+// made at the call as a Source_Code_Location, not put in an Any, so that's
+// "'#caller_location' needs a parameter of type 'Source_Code_Location', not
+// 'Any'", at the '#', and it has no type either.
+static void check_caller_location_default(Checker *c, Ast *value, Type *param_type) {
+    value->type = c->file->source_code_location_type;
+    if (!value->type) {
+        diag_error(c->diag, value->pos,
+                   "'#caller_location' needs Preload's 'Source_Code_Location', which the program doesn't have");
+    } else if (param_type && param_type == c->any_type) {
+        diag_error(c->diag, value->pos,
+                   "'#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'");
+        value->type = nullptr;
+    }
+}
+
 // A procedure's default values (issue #155, spec 7.2), checked with its
 // signature, once every parameter's type is known, `base` being the
 // signature's level (check_signature's).
@@ -2144,6 +2170,13 @@ static void check_c_name(Checker *c, Ast_Proc *proc) {
 // check_call_context raise c->needs_context while it's checked). A #c_call
 // body, which has no context outside its pushes, can't leave it out
 // (check_call_context).
+//
+// A default that is #caller_location itself, the one place it may be (spec
+// 7.2), is typed here (check_caller_location_default) rather than as a
+// value, which it isn't anywhere else (check_expression refuses it), and
+// then converted to its parameter's type as any default is: `loc: int =
+// #caller_location` is "a value of type 'Source_Code_Location' doesn't
+// convert to 'int' implicitly". An Any parameter doesn't take it.
 static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
@@ -2175,7 +2208,11 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
         c->levels = base + param->default_levels + 1;
         c->filled_depth = 0;
         c->needs_context = false;
-        check_value(c, value);
+        if (value->kind == AST_CALLER_LOCATION) {
+            check_caller_location_default(c, value, param->type);
+        } else {
+            check_value(c, value);
+        }
         if (!check_convert(c, value, param->type)) report_no_conversion(c, value, param->type);
         param->default_needs_context = c->needs_context;
         s32 own = param->default_levels + c->filled_depth;
@@ -2523,6 +2560,11 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             // is the allocator a [..]T holds: without it, no [..]T.
             if (decl->kind == AST_STRUCT && string_eq(name, str("Resizable_Array"))) {
                 c->file->resizable_array_type = ((Ast_Struct *)decl)->declared;
+            }
+            // And what a default #caller_location is (spec 7.2), a call's
+            // place, which lowering fills in: without it, no such default.
+            if (decl->kind == AST_STRUCT && string_eq(name, str("Source_Code_Location"))) {
+                c->file->source_code_location_type = ((Ast_Struct *)decl)->declared;
             }
             // And the helpers the built-in procedures call, which lowering
             // and the walk of a #run read.

@@ -1,0 +1,18 @@
+tests/errors/caller_location_refused.rig:8:6: error: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location
+    G := #caller_location;
+         ^
+tests/errors/caller_location_refused.rig:9:22: error: a value of type 'Source_Code_Location' doesn't convert to 'int' implicitly
+    wrong :: (loc: int = #caller_location) { }
+                         ^
+tests/errors/caller_location_refused.rig:10:17: error: a parameter needs its type, as in n: int = 0
+    untyped :: (loc := #caller_location) { }
+                    ^
+tests/errors/caller_location_refused.rig:11:29: error: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location
+    inside :: (n: int = line_of(#caller_location)) { }
+                                ^
+tests/errors/caller_location_refused.rig:12:13: error: expected '{', found directive
+    after :: () #caller_location { }
+                ^
+tests/errors/caller_location_refused.rig:14:10: error: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location
+        x := #caller_location;
+             ^

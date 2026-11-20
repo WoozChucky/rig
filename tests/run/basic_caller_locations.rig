@@ -1,0 +1,164 @@
+// Every procedure of Basic that allocates or frees through an allocator
+// names its caller's place, not Basic's own line (issue #194): each takes
+// loc: Source_Code_Location = #caller_location last (spec 7.2) and passes
+// it down to the helper that calls the allocator, which puts it in
+// context.allocation_location for the allocator to read (spec 7.10).
+// Under a pushed context whose allocator prints the mode and the place of
+// every call it is asked, each is called on a line of its own, after a
+// line printing its name, so each of its allocator calls, not only the
+// last, is listed under its name: the callee's name in the call on that
+// line. What each gave is freed with Basic's helpers, the context's, on a
+// line of its own after it, so those frees are listed too.
+// print_to_builder and sprint, last, take no loc for now, nor do
+// print.rig's other procedures that write into a builder they are given:
+// their allocations name print.rig's own line, in an absolute path that
+// differs from machine to machine, so for a place in print.rig the
+// allocator prints that file's name rather than the path.
+#import "Basic";
+
+// The file read_entire_file reads, under .build/tests/, which the runner
+// makes before any test; written before the push and deleted at the end.
+PATH :: ".build/tests/basic_caller_locations.txt";
+
+// The heap, printing the mode it is asked for and the place in
+// context.allocation_location, indented under the name of the procedure
+// called. Printing to standard output takes no allocator, so it doesn't
+// ask itself.
+recording_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    name := "ALLOCATE";
+    if mode == RESIZE {
+        name = "RESIZE";
+    } else if mode == FREE {
+        name = "FREE";
+    } else if mode == FREE_ALL {
+        name = "FREE_ALL";
+    }
+    loc := context.allocation_location;
+    if ends_with(loc.file, "print.rig") {
+        print("    {} print.rig {}:{}\n", name, loc.line, loc.column);
+    } else {
+        print("    {} {}:{}\n", name, loc.line, loc.column);
+    }
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+main :: () {
+    recording := context;
+    recording.allocator = Allocator.{recording_proc, null};
+    // Writing the file takes no allocator: its path's copy for C is the
+    // heap's, whatever the context is.
+    write_entire_file(PATH, "data");
+    push_context recording {
+        print("{}\n", "alloc");
+        p := alloc(8);
+        print("{}\n", "resize");
+        p = resize(p, 8, 16);
+        print("{}\n", "free");
+        free(p);
+        print("{}\n", "free_all");
+        free_all();
+
+        // Each append is into an empty builder, so each grows it.
+        b : String_Builder;
+        builder_init(*b);
+        print("{}\n", "append_string");
+        append_string(*b, "text");
+        builder_free(*b);
+        print("{}\n", "append_byte");
+        append_byte(*b, 32);
+        builder_free(*b);
+        print("{}\n", "append_int");
+        append_int(*b, 7, 10);
+        builder_free(*b);
+        print("{}\n", "append_u64");
+        append_u64(*b, 7, 10);
+        builder_free(*b);
+        print("{}\n", "append_float");
+        append_float(*b, 1.5, 1);
+        builder_free(*b);
+        print("{}\n", "append_bool");
+        append_bool(*b, true);
+        print("{}\n", "builder_to_string");
+        s := builder_to_string(*b);
+        free(s.data);
+        print("{}\n", "builder_free");
+        builder_free(*b);
+
+        print("{}\n", "to_c_string");
+        c := to_c_string("abc");
+        free(c);
+        print("{}\n", "join");
+        s = join(string.["a", "b"], ", ");
+        free(s.data);
+        print("{}\n", "replace");
+        s = replace("aba", "a", "c");
+        free(s.data);
+        print("{}\n", "repeat");
+        s = repeat("ab", 2);
+        free(s.data);
+        print("{}\n", "to_upper_copy");
+        s = to_upper_copy("ab");
+        free(s.data);
+        print("{}\n", "to_lower_copy");
+        s = to_lower_copy("AB");
+        free(s.data);
+        print("{}\n", "path_join");
+        s = path_join("a", "b");
+        free(s.data);
+
+        ok : bool;
+        print("{}\n", "read_entire_file");
+        s, ok = read_entire_file(PATH);
+        free(s.data);
+        // The runner sets RIG_BASIC_TEST, so the value is copied out after
+        // the name's copy for C is freed.
+        print("{}\n", "get_environment");
+        s, ok = get_environment("RIG_BASIC_TEST");
+        free(s.data);
+        print("{}\n", "run_command");
+        run_command("exit 0");
+        // More than SORT_INSERTION_MAX, so the sort asks for its scratch
+        // memory.
+        values := int.[7, 6, 5, 4, 3, 2, 1];
+        print("{}\n", "sort");
+        sort(values.data, 7, size_of(int), less_int);
+
+        // The first set gives the table its 16 entries, and the loop's
+        // eleven more fill three quarters of them, so the set after grows
+        // the table and frees its old entries. table_free then frees the
+        // keys' copies left in it, and its entries.
+        n := 7;
+        t : Table;
+        table_init(*t, size_of(int));
+        print("{}\n", "table_set");
+        table_set(*t, "k", *n);
+        keys := string.["b", "c", "d", "e", "f", "g", "h", "i", "j", "l", "m"];
+        print("{}\n", "table_set");
+        for keys { table_set(*t, it, *n); }
+        print("{}\n", "table_set");
+        table_set(*t, "o", *n);
+        print("{}\n", "table_remove");
+        table_remove(*t, "k");
+        print("{}\n", "table_free");
+        table_free(*t);
+        u : Int_Table;
+        int_table_init(*u, size_of(int));
+        print("{}\n", "int_table_set");
+        for 1..12 { int_table_set(*u, it, *n); }
+        print("{}\n", "int_table_set");
+        int_table_set(*u, 13, *n);
+        print("{}\n", "int_table_free");
+        int_table_free(*u);
+
+        // The builder's growth is append_string's, called in print.rig.
+        builder_init(*b);
+        print("{}\n", "print_to_builder");
+        print_to_builder(*b, "{}", 7);
+        builder_free(*b);
+        // The string is builder_to_string's, called in print.rig.
+        print("{}\n", "sprint");
+        s = sprint("{}", 7);
+        free(s.data);
+    }
+    delete_file(PATH);
+}

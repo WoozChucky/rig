@@ -908,6 +908,19 @@ check('the grammar colours default parameter values', () => {
     assertScopes('N :: (1 + 2);', { N: 'variable.other.constant.rig' });
 });
 
+// A default #caller_location (issue #194) is a directive as any #name is,
+// and the parameter's type, Preload's Source_Code_Location, a type, in the
+// parameter and in the result: the grammar needed no change for it.
+check('the grammar colours a default #caller_location', () => {
+    assertScopes('here :: (loc: Source_Code_Location = #caller_location) -> Source_Code_Location {', {
+        here: 'entity.name.function.rig',
+        loc: null,
+        Source_Code_Location: [TYPE, TYPE],
+        '=': 'keyword.operator.assignment.rig',
+        '#caller_location': 'keyword.other.directive.rig',
+    });
+});
+
 check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('v := Vec2.{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
     assertScopes('ps := Vec2.[.{1, 2}, .{3, 4}];', { Vec2: TYPE, ps: null });
