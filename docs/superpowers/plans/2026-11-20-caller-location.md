@@ -99,7 +99,7 @@
    - `string.rig`: `to_c_string`, `join`, `replace`, `repeat`, `to_upper_copy`, `to_lower_copy`.
    - `path.rig`: `path_join`. `file.rig`: `read_entire_file` (its C copy of the path stays the heap's, at its own line). `environment.rig`: `get_environment`, `run_command`. `sort.rig`: `sort`.
    - `table.rig`: `table_set`, `int_table_set`, `table_remove`, `table_free`, `int_table_free`; `table_make_room` takes `loc: Source_Code_Location` with no default, as its allocator has none.
-   - `print.rig`: none, for now (default; Q3, open, below). `print_to_builder` and `sprint` take `args: ..Any` last, and a procedure with a `..` parameter can't have default values, for now, nor a parameter after it (Fact 2), so neither can take a `loc`. They keep their signatures: `print_to_builder`'s `append_string` of the builder given and `sprint`'s `builder_to_string` leave `loc` out, so the place their allocator sees is that call's own, in `print.rig`. Their comments and Basic's README say so.
+   - `print.rig`: none, for now (settled; Q3, below). `print_to_builder` and `sprint` take `args: ..Any` last, and a procedure with a `..` parameter can't have default values, for now, nor a parameter after it (Fact 2), so neither can take a `loc`. They keep their signatures: `print_to_builder`'s `append_string` of the builder given and `sprint`'s `builder_to_string` leave `loc` out, so the place their allocator sees is that call's own, in `print.rig`. Their comments and Basic's README say so.
 
    Not: `arena_init`, `pool_init`, `builder_init`, `table_init` and `int_table_init`, which allocate nothing; `talloc`, `tprint`, `reset_temporary_storage` and the marks, which are the temporary storage's; `arena_reset`; what prints to standard output; `print_to_builder` and `sprint` (above).
 9. **#158's built-ins pass their call's place:** `lower_builtin_call` passes `lower_source_location(l, the built-in's name)` as the last argument to the helpers that can reach the allocator, `__array_add`, `__array_insert`, `__array_reserve`, `__array_resize` and `__array_free`, each of which takes `loc: Source_Code_Location` last (no default: the helpers are called by lowering, which always passes it); `__array_add` passes it to `__array_insert`, and `__array_insert`, `__array_reserve` and `__array_resize` to `__array_grow`, which takes it last too. The two helpers that call `allocator.proc`, `__array_grow` and `__array_free` (Fact 10), set `context.allocation_location` to it around that call and put the one before back, as Basic's helpers do. The built-ins' own signatures, what a program writes, don't change, and a built-in takes no place to forward, for now: a program's procedure that wraps `array_add` gives its own line.
@@ -335,8 +335,7 @@
 
 ## Settled by the maintainer
 
-Both defaults stand, settled by the maintainer on 2026-11-19.
-
+Q1 and Q2 were settled by the maintainer on 2026-11-19, Q3 on 2026-11-20. Each default stands.
 
 - **Q1. How does the place reach the allocator?**
   - **(Settled) A third field of the context, `allocation_location`, set by Basic's helpers and the built-ins around their allocator call** (Decision 7). Fact 7: measured working compiled and interpreted, with Jai's allocator shape and every existing allocator unchanged.
@@ -346,10 +345,8 @@ Both defaults stand, settled by the maintainer on 2026-11-19.
   - Yes, for `#caller_location` only: the parser and `check_defaults` take a `:=` whose value is the directive, the type Preload's. One rule more in 7.2.
   - Yes, for every default: #155's "for now" lifted here, the type of `n := 0` its value's default type (spec 3.12).
 
-## Open
-
 - **Q3. `print_to_builder` and `sprint` can't take `loc` (Fact 2: their `..Any`).** The issue lists them among Basic's procedures that pass the place down.
-  - **(Default) They take none, for now** (Decision 8): their allocations name `print.rig`'s own line, and the README says so. Lifting #155's rule for a `..` parameter is its own work.
+  - **(Settled) They take none, for now** (Decision 8): their allocations name `print.rig`'s own line, and the README says so. Lifting #155's rule for a `..` parameter is its own work: issue #197.
   - Lift the rule here: a default before or after a `..T` parameter (a language change to 7.2 and 5.10, and to the checker's and lowering's calls).
   - Add non-variadic variants that take `loc`, as `sprint_args :: (format: string, args: []Any, allocator..., loc...)`.
 
@@ -359,4 +356,4 @@ Both defaults stand, settled by the maintainer on 2026-11-19.
 - **A built-in that takes a place to forward**, so a program's wrapper of `array_add` names its own caller.
 - **Places in procedure types or through procedure values** beyond passing one by hand.
 - **#159's memory debugger**, which reads `context.allocation_location`: its own plan.
-- **A place for `print_to_builder` and `sprint`**, which take `..Any` and so no default value, for now (Decision 8): once #155's rule is lifted.
+- **A place for `print_to_builder` and `sprint`**, which take `..Any` and so no default value, for now (Decision 8): issue #197 lifts #155's rule.
