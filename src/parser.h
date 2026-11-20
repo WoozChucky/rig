@@ -20,7 +20,7 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, the last;
+//   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, one at most;
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)

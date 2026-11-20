@@ -3682,10 +3682,10 @@ TEST(a_parameter_may_follow_the_dots) {
 
 TEST(misplaced_variadic_parameters) {
     // A '..T' parameter takes every argument after the fixed ones, so a
-    // procedure has one at most: a second is given up with the
-    // declaration, the error at its '..'. C's '..' after a '..T' parameter
-    // parses, as it does after any other: what a procedure may take is the
-    // checker's to say.
+    // procedure has one at most: a second, beside the first or further on,
+    // is given up with the declaration, the error at its '..'. C's '..'
+    // after a '..T' parameter parses, as it does after any other: what a
+    // procedure may take is the checker's to say.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a,
@@ -3694,6 +3694,12 @@ TEST(misplaced_variadic_parameters) {
                         &errors),
               "(broken f)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:26: a procedure takes at most one '..' parameter\n");
+    CHECK_STR(parse_src(&a,
+                        "f :: (a: ..int, n: int = 1, b: ..int) { }\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:32: a procedure takes at most one '..' parameter\n");
     parse_src(&a,
               "f :: (a: int, rest: ..int, ..) #foreign libc;\n"
               "main :: () { }\n",
