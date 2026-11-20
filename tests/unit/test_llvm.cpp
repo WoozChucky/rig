@@ -2837,6 +2837,42 @@ TEST(llvm_describes_the_context) {
     arena_free(&a);
 }
 
+TEST(mains_hidden_parameters_have_no_debug_information) {
+    // Issue #152 (spec 10.7): C's argc and argv are main's two IR
+    // parameters, but no debugger is told of them: main's type is still
+    // !{null}, no parameter variable is main's, and __save_command_line,
+    // as __runtime_init, has no subprogram, main's call of it no location.
+    // So `break main` stops at main's first line, the arguments saved.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "main :: () { }\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "define i32 @main(i32 %0, ptr %1)"));
+        CHECK(!contains(text, "!DISubprogram(name: \"__save_command_line\""));
+        String call = line_with(text, "call void @__save_command_line(i32 %0, ptr %1)");
+        CHECK(call.count > 0 && !contains(call, "!dbg"));
+
+        String subprogram = line_with(text, "!DISubprogram(name: \"main\"");
+        String main = defined_node(subprogram);
+        CHECK(main.count > 0);
+        String subroutine = node_line(&a, text, attached(&a, subprogram, "type:"));
+        String types = node_line(&a, text, attached(&a, subroutine, "types:"));
+        s64 at = index_of(types, "!{");
+        CHECK(at >= 0 && string_eq(string_slice(types, at, types.count - at), str("!{null}")));
+
+        // No "arg: N, scope: MAIN," anywhere: a parameter variable of main.
+        String scope = string_printf(&a, ", scope: " STR_FMT ",", STR_ARG(main));
+        for (s64 i = 0; i + 5 <= text.count; i++) {
+            if (memcmp(text.data + i, "arg: ", 5) != 0) continue;
+            s64 end = i + 5;
+            while (end < text.count && text.data[end] >= '0' && text.data[end] <= '9') end++;
+            String rest = string_slice(text, end, text.count - end);
+            CHECK(!(rest.count >= scope.count && string_eq(string_slice(rest, 0, scope.count), scope)));
+        }
+    }
+    arena_free(&a);
+}
+
 // Issue #158: resizable arrays (spec 3.17, 10.7).
 
 TEST(a_resizable_arrays_debug_type) {

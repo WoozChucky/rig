@@ -398,6 +398,32 @@ TEST(windows_hypotf_links_and_runs_as_the_ucrts_hypotf) {
 }
 #endif
 
+#ifndef _WIN32
+TEST(linux_arguments_are_the_bytes_given) {
+    // Issue #152 (spec 10.6): on Linux a program's arguments are argv's
+    // bytes as the system gives them, no encoding assumed: FF FE, which is
+    // no UTF-8, arrives as those two bytes, and an empty argument as an
+    // empty string, each with a zero after it. The program's own name is
+    // first, so there are three.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "exit :: (status: s32) #foreign libc;\n"
+                                          "main :: () {\n"
+                                          "    args := __command_line_arguments;\n"
+                                          "    if args.count != 3 { exit(10); }\n"
+                                          "    if args[1] != \"\xFF\xFE\" { exit(1); }\n"
+                                          "    if args[2] != \"\" { exit(2); }\n"
+                                          "    if args[1].data[2] != 0 || args[2].data[0] != 0 { exit(3); }\n"
+                                          "}\n");
+    Array<String> words = strings({"\xFF\xFE", ""});
+    Process_Result result = run_module(&a, m, "arguments-test", words);
+    CHECK_STR(result.out, "");
+    CHECK_STR(result.err, "");
+    CHECK_EQ(result.exit_code, 0);
+    array_free(&words);
+    arena_free(&a);
+}
+#endif
+
 TEST(windows_linker_falls_back_to_lld_link) {
     // link.exe when Visual Studio has it; otherwise the lld-link.exe
     // build.bat copied beside rig; otherwise a sentence.

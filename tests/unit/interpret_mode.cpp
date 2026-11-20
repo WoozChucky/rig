@@ -1,5 +1,6 @@
-// interpret_mode.cpp: bin/unit-tests --interpret FILE.rig [--no-bounds-checks],
-// a program run by the IR interpreter (interp.h) instead of being compiled.
+// interpret_mode.cpp: bin/unit-tests --interpret FILE.rig [--no-bounds-checks]
+// [-- ARGS...], a program run by the IR interpreter (interp.h) instead of
+// being compiled, with ARGS its command-line arguments.
 // bin/run-tests runs every tests/run program this way too, and holds it to
 // the same .out, .err and .exit as the compiled program: the interpreter
 // must give the same results (but for one with a NAME.interp.err, which the
@@ -19,7 +20,10 @@
 // 'Preload' (looked in DIR1 and DIR2)" or "cannot read 'PATH': MESSAGE". A
 // build program (spec 7.9), which has no main, is refused once it has
 // checked, before its top-level #runs: "unit-tests: error: a build program
-// can't be interpreted", exit status 1. Otherwise it interprets main, and
+// can't be interpreted", exit status 1. Otherwise it interprets main, given
+// C's argc and argv as a compiled program's C runtime gives them (issue
+// #152, spec 7.4, 10.8): argv[0] FILE as given, then each word after --,
+// so the program's __save_command_line saves them as compiled. And it
 // exits with main's status, 0, unless the program calls C's exit, which ends
 // the process with its own. A run that fails exits with 101, as a compiled
 // program's runtime error does, after:
@@ -38,26 +42,34 @@
 
 // The usage, on stderr, and exit status 2: a malformed command line.
 static void interpret_mode_usage(Interpret_Mode *mode) {
-    fprintf(stderr, "usage: unit-tests --interpret FILE.rig [--no-bounds-checks]\n");
+    fprintf(stderr, "usage: unit-tests --interpret FILE.rig [--no-bounds-checks] [-- ARGS...]\n");
     mode->status = 2;
 }
 
 static void interpret_mode(void *data) {
     Interpret_Mode *mode = (Interpret_Mode *)data;
     // The words after --interpret: FILE.rig [--no-bounds-checks], in either
-    // order, each once. In UTF-8, as rig reads its own (main.cpp): on
-    // Windows, main's argv is in the ANSI code page, which can't name every
-    // file.
+    // order, each once, until a --, which ends them: every word after it is
+    // the program's, as it is, a -- or --no-bounds-checks included, so a
+    // FILE after it is no FILE. In UTF-8, as rig reads its own (main.cpp):
+    // on Windows, main's argv is in the ANSI code page, which can't name
+    // every file, nor every argument.
     Arena a = arena_make();
     Array<String> args = os_arguments(&a, mode->argc, mode->argv);
     String path = {};
     bool have_path = false;
     bool bounds_checks = true;
     bool malformed = false;
+    bool dashes = false;
+    Array<String> words = {};  // the program's, after the --
     for (s64 i = 2; i < args.count && !malformed; i++) {
         String word = args[i];
         bool is_option = word.count >= 2 && word.data[0] == '-' && word.data[1] == '-';
-        if (string_eq(word, str("--no-bounds-checks")) && bounds_checks) {
+        if (dashes) {
+            array_add(&words, word);
+        } else if (string_eq(word, str("--"))) {
+            dashes = true;
+        } else if (string_eq(word, str("--no-bounds-checks")) && bounds_checks) {
             bounds_checks = false;
         } else if (!is_option && !have_path) {
             path = word;
@@ -69,9 +81,20 @@ static void interpret_mode(void *data) {
     array_free(&args);  // the list, not the words: they're the arena's, or argv's
     if (malformed || !have_path) {
         interpret_mode_usage(mode);
+        array_free(&words);
         arena_free(&a);
         return;
     }
+    // C's argc and argv, as a compiled program's C runtime gives them to
+    // main: FILE as given, then the words after --, each a zero-ended copy
+    // in the arena, argv[argc] null. The interpreter's memory is native
+    // (interp.h), so main's code reads them where they are.
+    s64 argc = 1 + words.count;
+    const char **argv = arena_new_array<const char *>(&a, argc + 1);
+    argv[0] = string_cstr(&a, path);
+    for (s64 i = 0; i < words.count; i++) argv[i + 1] = string_cstr(&a, words[i]);
+    argv[argc] = nullptr;
+    array_free(&words);
 
     String text = {};
     if (!os_read_file(&a, path, &text)) {
@@ -146,17 +169,25 @@ static void interpret_mode(void *data) {
     for (s64 i = 0; i < c.d.files.count; i++) array_add(&paths, string_copy(&a, c.d.files[i].path));
     compilation_free(&c);
 
-    // main, which the checker made sure is there: no arguments, and one
-    // result, the i32 C's main returns (always 0).
+    // main, which the checker made sure is there: no arguments in Rig, and
+    // one result, the i32 C's main returns (always 0). With Preload, which
+    // every program has here, its IR takes C's argc and argv, an i32 and a
+    // ptr (lower.cpp's takes_command_line), given as above; without, none.
     s32 main_proc = -1;
     for (s64 i = 0; i < m->procs.count; i++) {
         if (!m->procs[i]->is_foreign && string_eq(m->procs[i]->source_name, str("main"))) main_proc = (s32)i;
     }
     RIG_ASSERT(main_proc >= 0);
+    Array<u64> main_args = {};
+    if (m->procs[main_proc]->params.count == 2) {
+        array_add(&main_args, (u64)(u32)argc);
+        array_add(&main_args, (u64)(uintptr_t)argv);
+    }
 
     Interp *in = interp_new(m);
     Interp_Result r = {};
-    interp_run(in, main_proc, {}, &a, &r);
+    interp_run(in, main_proc, main_args, &a, &r);
+    array_free(&main_args);
     if (r.ok) {
         mode->status = (s32)(u32)r.results[0];
     } else {

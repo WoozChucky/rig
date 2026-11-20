@@ -610,6 +610,35 @@ TEST(a_runs_resizable_array_isnt_baked) {
     arena_free(&a);
 }
 
+TEST(a_run_has_no_command_line_arguments_until_it_saves_some) {
+    // Issue #152 (spec 7.8): no startup runs while compiling, so a #run
+    // finds Preload's __command_line_arguments empty. Code may still save
+    // some by hand, as a program may, and null then keeps them, as a Rig
+    // call of main passes: SAVED is 0 before, 2 after, the second "bc".
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "saved :: () -> int {\n"
+                                 "    before := __command_line_arguments.count;\n"
+                                 "    words : [3]*u8;\n"
+                                 "    words[0] = cast(*u8) \"a\";\n"
+                                 "    words[1] = cast(*u8) \"bc\";\n"
+                                 "    __save_command_line(2, *words[0]);\n"
+                                 "    __save_command_line(0, null);\n"
+                                 "    return before * 100 + __command_line_arguments.count * 10 + "
+                                 "__command_line_arguments[1].count;\n"
+                                 "}\n"
+                                 "SAVED :: #run saved();\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    Ast *saved = top_level_named(tree, "SAVED");
+    CHECK(saved->is_constant);
+    CHECK_EQ(saved->constant, 22u);
+    CHECK_STR(type_name(&a, saved->type), "int");
+    arena_free(&a);
+}
+
 TEST(run_negative_counts_are_refused) {
     // A view or a string with a count below zero has no elements to bake:
     // its #run fails. A view whose count makes its elements' array too big

@@ -1,0 +1,34 @@
+// Preload's __save_command_line (issue #152, spec 7.4, 10.5), called by
+// hand, as a program may call any of Preload's names: main's prologue
+// has saved the program's own arguments, its name alone here; a list
+// given replaces them, each string's bytes where they are; null keeps
+// what was saved, as a Rig call of main passes; a count of 0 saves none.
+#import "Basic";
+
+show :: (when: string) {
+    print("{}: {}", when, __command_line_arguments.count);
+    for __command_line_arguments { print(" [{}]", it); }
+    print("\n");
+}
+
+again := false;
+
+main :: () {
+    if again {
+        show("in a call of main");
+        return;
+    }
+    print("at the start: {}\n", __command_line_arguments.count);
+    words : [4]*u8;
+    words[0] = cast(*u8) "saved";
+    words[1] = cast(*u8) "";
+    words[2] = cast(*u8) "Wörld";
+    __save_command_line(3, *words[0]);
+    show("three");
+    __save_command_line(0, null);
+    show("null keeps them");
+    again = true;
+    main();
+    __save_command_line(0, *words[3]);
+    show("none");
+}

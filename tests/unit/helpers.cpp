@@ -443,11 +443,10 @@ static Ir_Proc *new_proc_returning(Ir_Module *m, Arena *a, const char *name, Ir_
 }
 
 // Builds `m` as rig build does, an object for the host and its linker, into
-// .build/NAME (NAME.exe on Windows), runs it with a minute to finish, and
-// returns what it printed and its exit status. A step that fails is a
-// failed check, with a line saying why; the result is then empty, its exit
-// status -1.
-static Process_Result run_module(Arena *a, Ir_Module *m, const char *name) {
+// .build/NAME (NAME.exe on Windows), and returns the program's path. A step
+// that fails is a failed check, with a line saying why; the path is then
+// empty.
+static String link_module(Arena *a, Ir_Module *m, const char *name) {
     os_make_directory(str(".build"));
 #ifdef _WIN32
     String object = string_printf(a, ".build/%s.obj", name), program = string_printf(a, ".build/%s.exe", name);
@@ -457,18 +456,30 @@ static Process_Result run_module(Arena *a, Ir_Module *m, const char *name) {
     String error = {};
     Array<String> objects = {};
     array_add(&objects, object);
-    Array<String> argv = {};
-    array_add(&argv, program);
-    Process_Result result = {};
-    result.exit_code = -1;
     bool emitted = llvm_emit_object(m, target_host(), object, false, a, &error);
     bool linked = emitted && link_executable(a, target_host(), objects, program, &error);
-    if (!linked) fprintf(stderr, "  run_module: " STR_FMT "\n", STR_ARG(error));
-    bool ran = linked && os_run_for(a, argv, {}, 60, &result);
-    if (linked && !ran) fprintf(stderr, "  run_module: " STR_FMT "\n", STR_ARG(os_error_message(a)));
+    if (!linked) fprintf(stderr, "  link_module: " STR_FMT "\n", STR_ARG(error));
+    CHECK(linked);
+    array_free(&objects);
+    return linked ? program : String{};
+}
+
+// `m` built by link_module, then run with `arguments` after its path, with
+// a minute to finish: what it printed and its exit status. A step that
+// fails is a failed check, with a line saying why; the result is then
+// empty, its exit status -1.
+static Process_Result run_module(Arena *a, Ir_Module *m, const char *name, Array<String> arguments = {}) {
+    String program = link_module(a, m, name);
+    Process_Result result = {};
+    result.exit_code = -1;
+    if (!program.count) return result;
+    Array<String> argv = {};
+    array_add(&argv, program);
+    for (s64 i = 0; i < arguments.count; i++) array_add(&argv, arguments[i]);
+    bool ran = os_run_for(a, argv, {}, 60, &result);
+    if (!ran) fprintf(stderr, "  run_module: " STR_FMT "\n", STR_ARG(os_error_message(a)));
     CHECK(ran);
     CHECK(!result.timed_out);
-    array_free(&objects);
     array_free(&argv);
     return result;
 }

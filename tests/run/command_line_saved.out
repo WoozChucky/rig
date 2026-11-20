@@ -1,0 +1,5 @@
+at the start: 1
+three: 3 [saved] [] [Wörld]
+null keeps them: 3 [saved] [] [Wörld]
+in a call of main: 3 [saved] [] [Wörld]
+none: 0

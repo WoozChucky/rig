@@ -661,6 +661,8 @@ struct Ast_File {
     Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
                                // #c_call procedure pushes for itself
     Ast_Proc *runtime_init;    // Preload's __runtime_init, which sets it up: main and each #run call it first
+    Ast_Proc *save_command_line;  // Preload's __save_command_line (spec 7.4, 10.5): main calls it next,
+                                  // with C's argc and argv, its two hidden parameters
     Type *resizable_array_type;  // Preload's Resizable_Array (spec 3.17): a [..]T's layout, untyped, and
                                  // its allocator field's type; null without Preload
     Ast_Proc *array_procs[BUILTIN_ARRAY_COUNT];  // Preload's __array_add ..., what each built-in calls,

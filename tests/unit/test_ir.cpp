@@ -3792,7 +3792,9 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             // The entry block's first instructions, with no position: a slot
             // and a store per scalar parameter, the context's included; then,
             // in main, which starts with the default context, the call of
-            // __runtime_init, the context's slot, default_context's address
+            // __runtime_init, then (issue #152) the call of
+            // __save_command_line with C's argc and argv, main's two IR
+            // parameters, the context's slot, default_context's address
             // and the store (issue #156): its variable is the artificial one
             // in the body's scope 0 that isn't a parameter, where a
             // push_context block's is in the block's own scope.
@@ -3804,9 +3806,11 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                     ops[prologue++] = IR_STORE;
                 }
             }
-            for (s64 v = 0; v < p->vars.count && prologue + 4 <= 64; v++) {
+            bool saves_command_line = string_eq(p->source_name, str("main")) && p->params.count == 2;
+            for (s64 v = 0; v < p->vars.count && prologue + 5 <= 64; v++) {
                 if (p->vars[v].artificial && p->vars[v].arg == 0 && p->vars[v].scope == 0) {
                     ops[prologue++] = IR_CALL;
+                    if (saves_command_line) ops[prologue++] = IR_CALL;
                     ops[prologue++] = IR_LOCAL;
                     ops[prologue++] = IR_ADDR;
                     ops[prologue++] = IR_STORE;
@@ -5674,7 +5678,7 @@ TEST(a_global_holds_a_descriptions_address) {
 TEST(an_any_holds_a_places_address_or_a_copys) {
     // Converting to Any (spec 3.16): the value's address first, then the
     // Any's 16 bytes, its type's description's address at 0 and the value's
-    // at 8. n is a place, so the Any holds n's own slot, %2; 7 isn't, so it's
+    // at 8. n is a place, so the Any holds n's own slot, %4; 7 isn't, so it's
     // put into a temporary of its own, an i64 slot, whose address the Any
     // holds. Each Any is then passed as any struct argument is, copied.
     Arena a = arena_make();
@@ -5685,40 +5689,41 @@ TEST(an_any_holds_a_places_address_or_a_copys) {
                                                     "    show(7);\n"
                                                     "}\n"));
     CHECK_STR(proc_ir(ir, "main"),
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local i64\n"
-              "  %3 = const i64 42\n"
-              "  store i64 %3, %2\n"
-              "  %4 = load ptr %0\n"
-              "  %5 = local 16 align 8\n"
-              "  %6 = addr @type_info.0\n"
-              "  store ptr %6, %5\n"
-              "  %7 = const i64 8\n"
-              "  %8 = ptradd %5, %7\n"
-              "  store ptr %2, %8\n"
-              "  %9 = local 16 align 8\n"
-              "  copy %9, %5, 16\n"
-              "  call @show(%4, %9)\n"
-              "  %10 = load ptr %0\n"
-              "  %11 = local i64\n"
-              "  %12 = const i64 7\n"
-              "  store i64 %12, %11\n"
-              "  %13 = local 16 align 8\n"
-              "  %14 = addr @type_info.0\n"
-              "  store ptr %14, %13\n"
-              "  %15 = const i64 8\n"
-              "  %16 = ptradd %13, %15\n"
-              "  store ptr %11, %16\n"
-              "  %17 = local 16 align 8\n"
-              "  copy %17, %13, 16\n"
-              "  call @show(%10, %17)\n"
-              "  %18 = const i32 0\n"
-              "  ret %18\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local i64\n"
+              "  %5 = const i64 42\n"
+              "  store i64 %5, %4\n"
+              "  %6 = load ptr %2\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = addr @type_info.0\n"
+              "  store ptr %8, %7\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %7, %9\n"
+              "  store ptr %4, %10\n"
+              "  %11 = local 16 align 8\n"
+              "  copy %11, %7, 16\n"
+              "  call @show(%6, %11)\n"
+              "  %12 = load ptr %2\n"
+              "  %13 = local i64\n"
+              "  %14 = const i64 7\n"
+              "  store i64 %14, %13\n"
+              "  %15 = local 16 align 8\n"
+              "  %16 = addr @type_info.0\n"
+              "  store ptr %16, %15\n"
+              "  %17 = const i64 8\n"
+              "  %18 = ptradd %15, %17\n"
+              "  store ptr %13, %18\n"
+              "  %19 = local 16 align 8\n"
+              "  copy %19, %15, 16\n"
+              "  call @show(%12, %19)\n"
+              "  %20 = const i32 0\n"
+              "  ret %20\n"
               "}\n");
     arena_free(&a);
 }
@@ -5959,8 +5964,9 @@ TEST(rig_procedures_take_the_context) {
     // twice takes its caller's context, a ptr after its result pointers
     // (none here), stored into a slot of its own before the body, as a
     // scalar parameter is. main takes none: it calls __runtime_init, then
-    // keeps default_context's address in its slot, and passes that to
-    // twice, before the arguments.
+    // __save_command_line with C's argc and argv, %0 and %1 (issue #152),
+    // then keeps default_context's address in its slot, %2, and passes that
+    // to twice, before the arguments.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "twice :: (n: int) -> int { return n * 2; }\n"
                                                     "main :: () {\n"
@@ -5979,19 +5985,20 @@ TEST(rig_procedures_take_the_context) {
               "  ret %6\n"
               "}\n");
     CHECK_STR(proc_ir(ir, "main"),
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local i64\n"
-              "  %3 = load ptr %0\n"
-              "  %4 = const i64 4\n"
-              "  %5 = call @twice(%3, %4)\n"
-              "  store i64 %5, %2\n"
-              "  %6 = const i32 0\n"
-              "  ret %6\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local i64\n"
+              "  %5 = load ptr %2\n"
+              "  %6 = const i64 4\n"
+              "  %7 = call @twice(%5, %6)\n"
+              "  store i64 %7, %4\n"
+              "  %8 = const i32 0\n"
+              "  ret %8\n"
               "}\n");
     arena_free(&a);
 }
@@ -5999,7 +6006,7 @@ TEST(rig_procedures_take_the_context) {
 TEST(the_context_comes_after_the_result_pointers) {
     // The hidden parameters in order: a pointer per aggregate result, then
     // the context, then the visible parameters; a call passes them so, the
-    // context loaded from main's slot, %0.
+    // context loaded from main's slot, %2.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "Pair :: struct { a: int; b: int; }\n"
                                                     "make :: (n: int) -> Pair { return Pair.{n, n}; }\n"
@@ -6009,10 +6016,10 @@ TEST(the_context_comes_after_the_result_pointers) {
                                                     "}\n"));
     CHECK(contains(ir, "proc @make(ptr, ptr, i64) {\n"));
     CHECK(contains(ir, "proc @both(ptr, ptr, ptr, i64) {\n"));
-    CHECK(contains(proc_ir(ir, "main"), "  %3 = local 16 align 8\n"
-                                        "  %4 = load ptr %0\n"
-                                        "  %5 = const i64 1\n"
-                                        "  call @make(%3, %4, %5)\n"));
+    CHECK(contains(proc_ir(ir, "main"), "  %5 = local 16 align 8\n"
+                                        "  %6 = load ptr %2\n"
+                                        "  %7 = const i64 1\n"
+                                        "  call @make(%5, %6, %7)\n"));
     arena_free(&a);
 }
 
@@ -6056,28 +6063,30 @@ TEST(c_procedures_take_no_context) {
 }
 
 TEST(a_c_call_main_starts_with_the_default_context) {
-    // main marked #c_call is still main: no parameter, but it calls
-    // __runtime_init and keeps default_context's address in its slot, as
-    // any main does, and passes it to twice.
+    // main marked #c_call is still main: no context parameter, only C's
+    // argc and argv, but it calls __runtime_init and __save_command_line and
+    // keeps default_context's address in its slot, as any main does, and
+    // passes it to twice.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "twice :: (n: int) -> int { return n; }\n"
                                                     "main :: () #c_call {\n"
                                                     "    n := twice(1);\n"
                                                     "}\n"));
     CHECK_STR(proc_ir(ir, "main"),
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local i64\n"
-              "  %3 = load ptr %0\n"
-              "  %4 = const i64 1\n"
-              "  %5 = call @twice(%3, %4)\n"
-              "  store i64 %5, %2\n"
-              "  %6 = const i32 0\n"
-              "  ret %6\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local i64\n"
+              "  %5 = load ptr %2\n"
+              "  %6 = const i64 1\n"
+              "  %7 = call @twice(%5, %6)\n"
+              "  store i64 %7, %4\n"
+              "  %8 = const i32 0\n"
+              "  ret %8\n"
               "}\n");
     arena_free(&a);
 }
@@ -6096,12 +6105,12 @@ TEST(a_call_through_a_value_passes_the_context) {
                                                               "    k := g(null, null);\n"
                                                               "}\n")),
                           "main");
-    s64 value = index_of(main, "  %5 = load ptr %2\n");
-    s64 context = index_of(main, "  %6 = load ptr %0\n");
+    s64 value = index_of(main, "  %7 = load ptr %4\n");
+    s64 context = index_of(main, "  %8 = load ptr %2\n");
     CHECK(value >= 0 && context > value);
-    CHECK(contains(main, "= call %5(%6, %7)\n"));
-    CHECK_EQ(count_of(main, "load ptr %0"), 1);
-    s64 f = index_of(main, "= call %5(");
+    CHECK(contains(main, "= call %7(%8, %9)\n"));
+    CHECK_EQ(count_of(main, "load ptr %2"), 1);
+    s64 f = index_of(main, "= call %7(");
     String after = f < 0 ? String{} : string_slice(main, f + 1, main.count - f - 1);
     String g = line_with(after, "= call %");
     CHECK(g.count > 0);
@@ -6111,7 +6120,7 @@ TEST(a_call_through_a_value_passes_the_context) {
 
 TEST(a_default_reads_the_callers_context) {
     // A default value is the caller's code (#155), so context there is the
-    // caller's: main's slot, %0, and in f its hidden parameter's slot, %1.
+    // caller's: main's slot, %2, and in f its hidden parameter's slot, %1.
     // Each call passes that context first, and a copy of its allocator for
     // a, after the 1 or the 2.
     Arena a = arena_make();
@@ -6119,19 +6128,19 @@ TEST(a_default_reads_the_callers_context) {
                                                     "f :: () { n := get(1); }\n"
                                                     "main :: () { n := get(2); }\n"));
     String main = proc_ir(ir, "main"), f = proc_ir(ir, "f");
-    CHECK(contains(main, "  %3 = load ptr %0\n"
-                         "  %4 = const i64 2\n"
-                         "  %5 = load ptr %0\n"
-                         "  %6 = local 16 align 8\n"
-                         "  copy %6, %5, 16\n"
-                         "  %7 = call @get(%3, %4, %6)\n"));
+    CHECK(contains(main, "  %5 = load ptr %2\n"
+                         "  %6 = const i64 2\n"
+                         "  %7 = load ptr %2\n"
+                         "  %8 = local 16 align 8\n"
+                         "  copy %8, %7, 16\n"
+                         "  %9 = call @get(%5, %6, %8)\n"));
     CHECK(contains(f, "  %3 = load ptr %1\n"
                       "  %4 = const i64 1\n"
                       "  %5 = load ptr %1\n"
                       "  %6 = local 16 align 8\n"
                       "  copy %6, %5, 16\n"
                       "  %7 = call @get(%3, %4, %6)\n"));
-    CHECK_EQ(count_of(main, "load ptr %0"), 2);
+    CHECK_EQ(count_of(main, "load ptr %2"), 2);
     CHECK_EQ(count_of(f, "load ptr %1"), 2);
     arena_free(&a);
 }
@@ -6150,10 +6159,52 @@ TEST(the_context_is_an_artificial_variable) {
     CHECK(contains(twice, "; var n int slot %3 arg 2 in 0 at 1:11\n"));
     String cb = proc_ir(ir, "cb");
     CHECK(cb.count > 0 && !contains(cb, "; var context"));
-    CHECK(contains(proc_ir(ir, "main"), "; var context *Context slot %0 artificial in 0 at 3:1\n"));
+    CHECK(contains(proc_ir(ir, "main"), "; var context *Context slot %2 artificial in 0 at 3:1\n"));
     String init = line_with(ir, "; source __runtime_init at ");
     CHECK(init.count > 0);
     CHECK(init.count >= 15 && string_eq(string_slice(init, init.count - 15, 15), str(", no debug info")));
+    arena_free(&a);
+}
+
+TEST(main_takes_cs_argc_and_argv) {
+    // Issue #152 (spec 7.4, 10.4): with Preload, main is given C's argc and
+    // argv, two hidden parameters, %0 and %1, and its prologue hands them to
+    // Preload's __save_command_line right after __runtime_init, both calls
+    // with no position, before the context's slot, which is %2.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "main"),
+              "proc @main(i32, ptr) -> i32 {\n"
+              "b0:\n"
+              "  call @__runtime_init()\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = const i32 0\n"
+              "  ret %4\n"
+              "}\n");
+    CHECK(contains(ir, "proc @__save_command_line(i32, ptr) {\n"));
+    arena_free(&a);
+}
+
+TEST(a_rig_call_of_main_passes_zero_and_null) {
+    // A Rig call of main (spec 7.4) passes 0 and null for argc and argv,
+    // which __save_command_line takes as "keep what was saved"; main takes
+    // no context, so none is passed.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "go :: () { main(); }\n"
+                                                    "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "go"),
+              "proc @go(ptr) {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = const i32 0\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = call @main(%2, %3)\n"
+              "  ret\n"
+              "}\n");
     arena_free(&a);
 }
 
@@ -6170,11 +6221,11 @@ static Ir_Instr *instr_of(Ir_Module *m, const char *name, s64 n) {
 }
 
 TEST(push_context_pushes_an_address) {
-    // A place's own address is pushed: the block's slot, %4, holds c's
-    // slot, %2, and use is given a load of it, with no copy of c. Anything
-    // else is copied into a temporary of its own, %6, from make's result,
-    // and the block's slot, %9, holds the temporary's address. After the
-    // blocks, the context is main's own again, %0. Each block's slot is a
+    // A place's own address is pushed: the block's slot, %6, holds c's
+    // slot, %4, and use is given a load of it, with no copy of c. Anything
+    // else is copied into a temporary of its own, %8, from make's result,
+    // and the block's slot, %11, holds the temporary's address. After the
+    // blocks, the context is main's own again, %2. Each block's slot is a
     // variable context, artificial, at its push_context, in the block's
     // scope, which starts at its '{'.
     Arena a = arena_make();
@@ -6187,47 +6238,48 @@ TEST(push_context_pushes_an_address) {
                                           "}\n"
                                           "make :: () -> Context { return context; }\n");
     CHECK_STR(proc_ir(ir_print(&a, m), "main"),
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local 56 align 8\n"
-              "  %3 = load ptr %0\n"
-              "  copy %2, %3, 56\n"
-              "  %4 = local ptr\n"
-              "  store ptr %2, %4\n"
-              "  %5 = load ptr %4\n"
-              "  call @use(%5)\n"
-              "  %6 = local 56 align 8\n"
-              "  %7 = local 56 align 8\n"
-              "  %8 = load ptr %0\n"
-              "  call @make(%7, %8)\n"
-              "  copy %6, %7, 56\n"
-              "  %9 = local ptr\n"
-              "  store ptr %6, %9\n"
-              "  %10 = load ptr %9\n"
-              "  call @use(%10)\n"
-              "  %11 = load ptr %0\n"
-              "  call @use(%11)\n"
-              "  %12 = const i32 0\n"
-              "  ret %12\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local 56 align 8\n"
+              "  %5 = load ptr %2\n"
+              "  copy %4, %5, 56\n"
+              "  %6 = local ptr\n"
+              "  store ptr %4, %6\n"
+              "  %7 = load ptr %6\n"
+              "  call @use(%7)\n"
+              "  %8 = local 56 align 8\n"
+              "  %9 = local 56 align 8\n"
+              "  %10 = load ptr %2\n"
+              "  call @make(%9, %10)\n"
+              "  copy %8, %9, 56\n"
+              "  %11 = local ptr\n"
+              "  store ptr %8, %11\n"
+              "  %12 = load ptr %11\n"
+              "  call @use(%12)\n"
+              "  %13 = load ptr %2\n"
+              "  call @use(%13)\n"
+              "  %14 = const i32 0\n"
+              "  ret %14\n"
               "}\n");
     String main = proc_ir(ir_print_debug(&a, m), "main");
     CHECK_EQ(count_of(main, "; var context *Context slot"), 3);
     CHECK(contains(main, "; scope 1 in 0 at 4:20\n"));
     CHECK(contains(main, "; scope 2 in 0 at 5:25\n"));
-    CHECK(contains(main, "; var context *Context slot %4 artificial in 1 at 4:5\n"));
-    CHECK(contains(main, "; var context *Context slot %9 artificial in 2 at 5:5\n"));
+    CHECK(contains(main, "; var context *Context slot %6 artificial in 1 at 4:5\n"));
+    CHECK(contains(main, "; var context *Context slot %11 artificial in 2 at 5:5\n"));
     // All of a push's instructions are at its keyword: make's call and its
     // copy in the scope around, each block's slot and its store in the
     // block's own, so a debugger doesn't show the block's context before
     // its slot is filled. Each is named by its index in b0 above, from 0.
     struct { s64 n; s32 scope, line, col; } where[] = {
-        {7, 1, 4, 5},  {8, 1, 4, 5},   // %4 = local ptr; store ptr %2, %4
-        {14, 0, 5, 5}, {15, 0, 5, 5},  // call @make(%7, %8); copy %6, %7, 56
-        {16, 2, 5, 5}, {17, 2, 5, 5},  // %9 = local ptr; store ptr %6, %9
+        {8, 1, 4, 5},  {9, 1, 4, 5},   // %6 = local ptr; store ptr %4, %6
+        {15, 0, 5, 5}, {16, 0, 5, 5},  // call @make(%9, %10); copy %8, %9, 56
+        {17, 2, 5, 5}, {18, 2, 5, 5},  // %11 = local ptr; store ptr %8, %11
     };
     for (s64 i = 0; i < (s64)(sizeof where / sizeof where[0]); i++) {
         Ir_Instr *instr = instr_of(m, "main", where[i].n);
@@ -6345,7 +6397,7 @@ TEST(a_c_call_procedure_pushes_its_own) {
 
 TEST(a_resizable_array_converts_to_a_view_of_its_count_and_data) {
     // sum(a) passes the []int the [..]int converts to: a view slot of its
-    // own, %5, holding the array's count and data, loaded from %2, the
+    // own, %7, holding the array's count and data, loaded from %4, the
     // array, where the conversion is; then copied, as any view argument is.
     Arena a = arena_make();
     String main = proc_ir(ir_print(&a, lower_with_preload(&a, "sum :: (v: []int) -> int { return v.count; }\n"
@@ -6355,39 +6407,40 @@ TEST(a_resizable_array_converts_to_a_view_of_its_count_and_data) {
                                                               "}\n")),
                           "main");
     CHECK_STR(main,
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local 40 align 8\n"
-              "  zero %2, 40\n"
-              "  %3 = local i64\n"
-              "  %4 = load ptr %0\n"
-              "  %5 = local 16 align 8\n"
-              "  %6 = load i64 %2\n"
-              "  %7 = const i64 8\n"
-              "  %8 = ptradd %2, %7\n"
-              "  %9 = load ptr %8\n"
-              "  store i64 %6, %5\n"
-              "  %10 = const i64 8\n"
-              "  %11 = ptradd %5, %10\n"
-              "  store ptr %9, %11\n"
-              "  %12 = local 16 align 8\n"
-              "  copy %12, %5, 16\n"
-              "  %13 = call @sum(%4, %12)\n"
-              "  store i64 %13, %3\n"
-              "  %14 = const i32 0\n"
-              "  ret %14\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local 40 align 8\n"
+              "  zero %4, 40\n"
+              "  %5 = local i64\n"
+              "  %6 = load ptr %2\n"
+              "  %7 = local 16 align 8\n"
+              "  %8 = load i64 %4\n"
+              "  %9 = const i64 8\n"
+              "  %10 = ptradd %4, %9\n"
+              "  %11 = load ptr %10\n"
+              "  store i64 %8, %7\n"
+              "  %12 = const i64 8\n"
+              "  %13 = ptradd %7, %12\n"
+              "  store ptr %11, %13\n"
+              "  %14 = local 16 align 8\n"
+              "  copy %14, %7, 16\n"
+              "  %15 = call @sum(%6, %14)\n"
+              "  store i64 %15, %5\n"
+              "  %16 = const i32 0\n"
+              "  ret %16\n"
               "}\n");
     arena_free(&a);
 }
 
 TEST(a_resizable_array_cast_to_a_view_is_its_count_and_data) {
     // cast([]int) a is the view a converts to without a cast: a view slot
-    // of its own, %4, holding the count and data loaded from %2, the
-    // array, at the cast. w's slot, %3, is then a copy of it.
+    // of its own, %6, holding the count and data loaded from %4, the
+    // array, at the cast. w's slot, %5, is then a copy of it.
     Arena a = arena_make();
     String main = proc_ir(ir_print(&a, lower_with_preload(&a, "main :: () {\n"
                                                               "    a : [..]int;\n"
@@ -6395,34 +6448,35 @@ TEST(a_resizable_array_cast_to_a_view_is_its_count_and_data) {
                                                               "}\n")),
                           "main");
     CHECK_STR(main,
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local 40 align 8\n"
-              "  zero %2, 40\n"
-              "  %3 = local 16 align 8\n"
-              "  %4 = local 16 align 8\n"
-              "  %5 = load i64 %2\n"
-              "  %6 = const i64 8\n"
-              "  %7 = ptradd %2, %6\n"
-              "  %8 = load ptr %7\n"
-              "  store i64 %5, %4\n"
-              "  %9 = const i64 8\n"
-              "  %10 = ptradd %4, %9\n"
-              "  store ptr %8, %10\n"
-              "  copy %3, %4, 16\n"
-              "  %11 = const i32 0\n"
-              "  ret %11\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local 40 align 8\n"
+              "  zero %4, 40\n"
+              "  %5 = local 16 align 8\n"
+              "  %6 = local 16 align 8\n"
+              "  %7 = load i64 %4\n"
+              "  %8 = const i64 8\n"
+              "  %9 = ptradd %4, %8\n"
+              "  %10 = load ptr %9\n"
+              "  store i64 %7, %6\n"
+              "  %11 = const i64 8\n"
+              "  %12 = ptradd %6, %11\n"
+              "  store ptr %10, %12\n"
+              "  copy %5, %6, 16\n"
+              "  %13 = const i32 0\n"
+              "  ret %13\n"
               "}\n");
     arena_free(&a);
 }
 
 TEST(a_resizable_array_result_put_into_a_view_is_its_count_and_data) {
-    // v, n = pair(); puts the [..]int result's view into v, %2: a view slot
-    // of its own, %8, holding the count and data loaded from %5, the call's
+    // v, n = pair(); puts the [..]int result's view into v, %4: a view slot
+    // of its own, %10, holding the count and data loaded from %7, the call's
     // temporary, where it converts, then copied into v.
     Arena a = arena_make();
     String main = proc_ir(ir_print(&a, lower_with_preload(&a, "pair :: () -> ([..]int, int) {\n"
@@ -6436,33 +6490,34 @@ TEST(a_resizable_array_result_put_into_a_view_is_its_count_and_data) {
                                                               "}\n")),
                           "main");
     CHECK_STR(main,
-              "proc @main() -> i32 {\n"
+              "proc @main(i32, ptr) -> i32 {\n"
               "b0:\n"
               "  call @__runtime_init()\n"
-              "  %0 = local ptr\n"
-              "  %1 = addr @default_context\n"
-              "  store ptr %1, %0\n"
-              "  %2 = local 16 align 8\n"
-              "  zero %2, 16\n"
-              "  %3 = local i64\n"
-              "  %4 = const i64 0\n"
-              "  store i64 %4, %3\n"
-              "  %5 = local 40 align 8\n"
-              "  %6 = load ptr %0\n"
-              "  %7 = call @pair(%5, %6)\n"
-              "  %8 = local 16 align 8\n"
-              "  %9 = load i64 %5\n"
-              "  %10 = const i64 8\n"
-              "  %11 = ptradd %5, %10\n"
-              "  %12 = load ptr %11\n"
-              "  store i64 %9, %8\n"
-              "  %13 = const i64 8\n"
-              "  %14 = ptradd %8, %13\n"
-              "  store ptr %12, %14\n"
-              "  copy %2, %8, 16\n"
-              "  store i64 %7, %3\n"
-              "  %15 = const i32 0\n"
-              "  ret %15\n"
+              "  call @__save_command_line(%0, %1)\n"
+              "  %2 = local ptr\n"
+              "  %3 = addr @default_context\n"
+              "  store ptr %3, %2\n"
+              "  %4 = local 16 align 8\n"
+              "  zero %4, 16\n"
+              "  %5 = local i64\n"
+              "  %6 = const i64 0\n"
+              "  store i64 %6, %5\n"
+              "  %7 = local 40 align 8\n"
+              "  %8 = load ptr %2\n"
+              "  %9 = call @pair(%7, %8)\n"
+              "  %10 = local 16 align 8\n"
+              "  %11 = load i64 %7\n"
+              "  %12 = const i64 8\n"
+              "  %13 = ptradd %7, %12\n"
+              "  %14 = load ptr %13\n"
+              "  store i64 %11, %10\n"
+              "  %15 = const i64 8\n"
+              "  %16 = ptradd %10, %15\n"
+              "  store ptr %14, %16\n"
+              "  copy %4, %10, 16\n"
+              "  store i64 %9, %5\n"
+              "  %17 = const i32 0\n"
+              "  ret %17\n"
               "}\n");
     arena_free(&a);
 }
@@ -6530,197 +6585,197 @@ TEST(an_array_procedure_calls_its_preload_helper) {
                                                               "    array_free(*a);\n"
                                                               "}\n")),
                           "main");
-    // a is %2; each check's failure, a panic or __rig_bounds_failed, is a
+    // a is %4; each check's failure, a panic or __rig_bounds_failed, is a
     // block of its own. A panic's message is a string global numbered after
     // all of Preload's, so its number isn't matched: the run tests pin the
     // messages.
-    CHECK(contains(main, "  %3 = load ptr %0\n"
-                         "  %4 = const i64 8\n"
-                         "  %5 = local i64\n"
-                         "  %6 = const i64 7\n"
-                         "  store i64 %6, %5\n"
-                         "  %7 = const ptr 0\n"
-                         "  %8 = cmp eq ptr %2, %7\n"
-                         "  branch %8, b1, b2\n"));
+    CHECK(contains(main, "  %5 = load ptr %2\n"
+                         "  %6 = const i64 8\n"
+                         "  %7 = local i64\n"
+                         "  %8 = const i64 7\n"
+                         "  store i64 %8, %7\n"
+                         "  %9 = const ptr 0\n"
+                         "  %10 = cmp eq ptr %4, %9\n"
+                         "  branch %10, b1, b2\n"));
     // The add's count below 0, which no bounds check made sure of, then
     // its data check: the count or allocated above 0 and the data null
     // fails.
     CHECK(contains(main, "b2:\n"
-                         "  %9 = load i64 %2\n"
-                         "  %10 = const i64 0\n"
-                         "  %11 = cmp slt i64 %9, %10\n"
-                         "  branch %11, b3, b4\n"
+                         "  %11 = load i64 %4\n"
+                         "  %12 = const i64 0\n"
+                         "  %13 = cmp slt i64 %11, %12\n"
+                         "  branch %13, b3, b4\n"
                          "b3:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb4:\n"
-                         "  %12 = const i64 8\n"
-                         "  %13 = ptradd %2, %12\n"
-                         "  %14 = load ptr %13\n"
-                         "  %15 = const i64 16\n"
-                         "  %16 = ptradd %2, %15\n"
-                         "  %17 = load i64 %16\n"
-                         "  %18 = const i64 0\n"
-                         "  %19 = cmp sgt i64 %9, %18\n"
+                         "  %14 = const i64 8\n"
+                         "  %15 = ptradd %4, %14\n"
+                         "  %16 = load ptr %15\n"
+                         "  %17 = const i64 16\n"
+                         "  %18 = ptradd %4, %17\n"
+                         "  %19 = load i64 %18\n"
                          "  %20 = const i64 0\n"
-                         "  %21 = cmp sgt i64 %17, %20\n"
-                         "  %22 = or i1 %19, %21\n"
-                         "  %23 = const ptr 0\n"
-                         "  %24 = cmp eq ptr %14, %23\n"
-                         "  %25 = and i1 %22, %24\n"
-                         "  branch %25, b5, b6\n"
+                         "  %21 = cmp sgt i64 %11, %20\n"
+                         "  %22 = const i64 0\n"
+                         "  %23 = cmp sgt i64 %19, %22\n"
+                         "  %24 = or i1 %21, %23\n"
+                         "  %25 = const ptr 0\n"
+                         "  %26 = cmp eq ptr %16, %25\n"
+                         "  %27 = and i1 %24, %26\n"
+                         "  branch %27, b5, b6\n"
                          "b5:\n"
                          "  panic @str."));
     // No check of the count past allocated: the add grows first. Then its
-    // place, %26, which the call is passed last.
+    // place, %28, which the call is passed last.
     CHECK(contains(main, "\nb6:\n"
-                         "  %26 = local 32 align 8\n"));
-    CHECK(contains(main, "  %37 = call @__array_add(%3, %2, %4, %5, %26)\n"
-                         "  %38 = const i1 1\n"
-                         "  %39 = xor i1 %37, %38\n"
-                         "  branch %39, b7, b8\n"));
+                         "  %28 = local 32 align 8\n"));
+    CHECK(contains(main, "  %39 = call @__array_add(%5, %4, %6, %7, %28)\n"
+                         "  %40 = const i1 1\n"
+                         "  %41 = xor i1 %39, %40\n"
+                         "  branch %41, b7, b8\n"));
     CHECK(contains(main, "b8:\n"
-                         "  %40 = local i64\n"
-                         "  %41 = load ptr %0\n"
-                         "  %42 = const i64 8\n"
-                         "  %43 = local i64\n"
-                         "  %44 = const ptr 0\n"
-                         "  %45 = cmp eq ptr %2, %44\n"
-                         "  branch %45, b9, b10\n"));
+                         "  %42 = local i64\n"
+                         "  %43 = load ptr %2\n"
+                         "  %44 = const i64 8\n"
+                         "  %45 = local i64\n"
+                         "  %46 = const ptr 0\n"
+                         "  %47 = cmp eq ptr %4, %46\n"
+                         "  branch %47, b9, b10\n"));
     // The pop's count, loaded once, is the bounds check's, which fails a
     // count below 0 too, so no check of its own follows; then the data
     // check, and the count past allocated, in an array that owns memory
-    // (%65, allocated above 0).
+    // (%67, allocated above 0).
     CHECK(contains(main, "b10:\n"
-                         "  %46 = load i64 %2\n"
-                         "  %47 = const i64 1\n"
-                         "  %48 = sub i64 %46, %47\n"
-                         "  %49 = cmp uge i64 %48, %46\n"
-                         "  %50 = const i64 0\n"
-                         "  %51 = cmp slt i64 %46, %50\n"
-                         "  %52 = or i1 %49, %51\n"
-                         "  branch %52, b11, b12\n"));
-    CHECK(contains(main, "  call @__rig_bounds_failed(%53, %54, %48, %46, %55)\n"
+                         "  %48 = load i64 %4\n"
+                         "  %49 = const i64 1\n"
+                         "  %50 = sub i64 %48, %49\n"
+                         "  %51 = cmp uge i64 %50, %48\n"
+                         "  %52 = const i64 0\n"
+                         "  %53 = cmp slt i64 %48, %52\n"
+                         "  %54 = or i1 %51, %53\n"
+                         "  branch %54, b11, b12\n"));
+    CHECK(contains(main, "  call @__rig_bounds_failed(%55, %56, %50, %48, %57)\n"
                          "  unreachable\n"
                          "b12:\n"
-                         "  %56 = const i64 8\n"
-                         "  %57 = ptradd %2, %56\n"
-                         "  %58 = load ptr %57\n"
-                         "  %59 = const i64 16\n"
-                         "  %60 = ptradd %2, %59\n"
-                         "  %61 = load i64 %60\n"
-                         "  %62 = const i64 0\n"
-                         "  %63 = cmp sgt i64 %46, %62\n"
+                         "  %58 = const i64 8\n"
+                         "  %59 = ptradd %4, %58\n"
+                         "  %60 = load ptr %59\n"
+                         "  %61 = const i64 16\n"
+                         "  %62 = ptradd %4, %61\n"
+                         "  %63 = load i64 %62\n"
                          "  %64 = const i64 0\n"
-                         "  %65 = cmp sgt i64 %61, %64\n"
-                         "  %66 = or i1 %63, %65\n"
-                         "  %67 = const ptr 0\n"
-                         "  %68 = cmp eq ptr %58, %67\n"
-                         "  %69 = and i1 %66, %68\n"
-                         "  branch %69, b13, b14\n"));
+                         "  %65 = cmp sgt i64 %48, %64\n"
+                         "  %66 = const i64 0\n"
+                         "  %67 = cmp sgt i64 %63, %66\n"
+                         "  %68 = or i1 %65, %67\n"
+                         "  %69 = const ptr 0\n"
+                         "  %70 = cmp eq ptr %60, %69\n"
+                         "  %71 = and i1 %68, %70\n"
+                         "  branch %71, b13, b14\n"));
     CHECK(contains(main, "b14:\n"
-                         "  %70 = cmp sgt i64 %46, %61\n"
-                         "  %71 = and i1 %65, %70\n"
-                         "  branch %71, b15, b16\n"
+                         "  %72 = cmp sgt i64 %48, %63\n"
+                         "  %73 = and i1 %67, %72\n"
+                         "  branch %73, b15, b16\n"
                          "b15:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb16:\n"
-                         "  call @__array_pop(%41, %2, %42, %43)\n"
-                         "  %72 = load i64 %43\n"
-                         "  store i64 %72, %40\n"));
+                         "  call @__array_pop(%43, %4, %44, %45)\n"
+                         "  %74 = load i64 %45\n"
+                         "  store i64 %74, %42\n"));
     // The reserve's data check comes right after its count's load: no
     // check of the count below 0, nor past allocated.
     CHECK(contains(main, "b18:\n"
-                         "  %78 = load i64 %2\n"
-                         "  %79 = const i64 8\n"
-                         "  %80 = ptradd %2, %79\n"));
-    CHECK(contains(main, "  %92 = and i1 %89, %91\n"
-                         "  branch %92, b19, b20\n"
+                         "  %80 = load i64 %4\n"
+                         "  %81 = const i64 8\n"
+                         "  %82 = ptradd %4, %81\n"));
+    CHECK(contains(main, "  %94 = and i1 %91, %93\n"
+                         "  branch %94, b19, b20\n"
                          "b19:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb20:\n"
-                         "  %93 = local 32 align 8\n"));
-    CHECK(contains(main, "  %104 = call @__array_reserve(%73, %2, %74, %75, %93)\n"
-                         "  %105 = const i1 1\n"
-                         "  %106 = xor i1 %104, %105\n"
-                         "  branch %106, b21, b22\n"));
+                         "  %95 = local 32 align 8\n"));
+    CHECK(contains(main, "  %106 = call @__array_reserve(%75, %4, %76, %77, %95)\n"
+                         "  %107 = const i1 1\n"
+                         "  %108 = xor i1 %106, %107\n"
+                         "  branch %108, b21, b22\n"));
     // The resize's array count below 0, its data check, then the count it
     // was given.
     CHECK(contains(main, "b24:\n"
-                         "  %112 = load i64 %2\n"
-                         "  %113 = const i64 0\n"
-                         "  %114 = cmp slt i64 %112, %113\n"
-                         "  branch %114, b25, b26\n"
+                         "  %114 = load i64 %4\n"
+                         "  %115 = const i64 0\n"
+                         "  %116 = cmp slt i64 %114, %115\n"
+                         "  branch %116, b25, b26\n"
                          "b25:\n"
                          "  panic @str."));
-    CHECK(contains(main, "  %128 = and i1 %125, %127\n"
-                         "  branch %128, b27, b28\n"
+    CHECK(contains(main, "  %130 = and i1 %127, %129\n"
+                         "  branch %130, b27, b28\n"
                          "b27:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb28:\n"
-                         "  %129 = const i64 0\n"
-                         "  %130 = cmp slt i64 %109, %129\n"
-                         "  branch %130, b29, b30\n"
+                         "  %131 = const i64 0\n"
+                         "  %132 = cmp slt i64 %111, %131\n"
+                         "  branch %132, b29, b30\n"
                          "b29:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb30:\n"
-                         "  %131 = local 32 align 8\n"));
-    CHECK(contains(main, "  %142 = call @__array_resize(%107, %2, %108, %109, %131)\n"
-                         "  %143 = const i1 1\n"
-                         "  %144 = xor i1 %142, %143\n"
-                         "  branch %144, b31, b32\n"));
+                         "  %133 = local 32 align 8\n"));
+    CHECK(contains(main, "  %144 = call @__array_resize(%109, %4, %110, %111, %133)\n"
+                         "  %145 = const i1 1\n"
+                         "  %146 = xor i1 %144, %145\n"
+                         "  branch %146, b31, b32\n"));
     // The insert's bounds check, against the count plus one, then its data
     // check, and no check of the count past allocated.
-    CHECK(contains(main, "  %154 = add i64 %152, %153\n"
-                         "  %155 = cmp uge i64 %147, %154\n"));
-    CHECK(contains(main, "  %175 = and i1 %172, %174\n"
-                         "  branch %175, b37, b38\n"
+    CHECK(contains(main, "  %156 = add i64 %154, %155\n"
+                         "  %157 = cmp uge i64 %149, %156\n"));
+    CHECK(contains(main, "  %177 = and i1 %174, %176\n"
+                         "  branch %177, b37, b38\n"
                          "b37:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb38:\n"
-                         "  %176 = local 32 align 8\n"));
-    CHECK(contains(main, "  %187 = call @__array_insert(%145, %2, %146, %147, %148, %176)\n"));
+                         "  %178 = local 32 align 8\n"));
+    CHECK(contains(main, "  %189 = call @__array_insert(%147, %4, %148, %149, %150, %178)\n"));
     // Each remove's bounds check, data check and count past allocated.
-    CHECK(contains(main, "  %216 = and i1 %213, %215\n"
-                         "  branch %216, b45, b46\n"
+    CHECK(contains(main, "  %218 = and i1 %215, %217\n"
+                         "  branch %218, b45, b46\n"
                          "b45:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb46:\n"
-                         "  %217 = cmp sgt i64 %195, %208\n"
-                         "  %218 = and i1 %212, %217\n"
-                         "  branch %218, b47, b48\n"
+                         "  %219 = cmp sgt i64 %197, %210\n"
+                         "  %220 = and i1 %214, %219\n"
+                         "  branch %220, b47, b48\n"
                          "b47:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb48:\n"
-                         "  call @__array_remove_ordered(%190, %2, %191, %192)\n"));
-    CHECK(contains(main, "  %245 = and i1 %242, %244\n"
-                         "  branch %245, b53, b54\n"
+                         "  call @__array_remove_ordered(%192, %4, %193, %194)\n"));
+    CHECK(contains(main, "  %247 = and i1 %244, %246\n"
+                         "  branch %247, b53, b54\n"
                          "b53:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb54:\n"
-                         "  %246 = cmp sgt i64 %224, %237\n"
-                         "  %247 = and i1 %241, %246\n"
-                         "  branch %247, b55, b56\n"
+                         "  %248 = cmp sgt i64 %226, %239\n"
+                         "  %249 = and i1 %243, %248\n"
+                         "  branch %249, b55, b56\n"
                          "b55:\n"
                          "  panic @str."));
     CHECK(contains(main, "\nb56:\n"
-                         "  call @__array_remove_unordered(%219, %2, %220, %221)\n"));
+                         "  call @__array_remove_unordered(%221, %4, %222, %223)\n"));
     // The reset and the free check the pointer, and nothing else.
-    CHECK(contains(main, "  call @__array_remove_unordered(%219, %2, %220, %221)\n"
-                         "  %248 = load ptr %0\n"
-                         "  %249 = const i64 8\n"
-                         "  %250 = const ptr 0\n"
-                         "  %251 = cmp eq ptr %2, %250\n"
-                         "  branch %251, b57, b58\n"));
+    CHECK(contains(main, "  call @__array_remove_unordered(%221, %4, %222, %223)\n"
+                         "  %250 = load ptr %2\n"
+                         "  %251 = const i64 8\n"
+                         "  %252 = const ptr 0\n"
+                         "  %253 = cmp eq ptr %4, %252\n"
+                         "  branch %253, b57, b58\n"));
     CHECK(contains(main, "b58:\n"
-                         "  call @__array_reset(%248, %2, %249)\n"
-                         "  %252 = load ptr %0\n"
-                         "  %253 = const i64 8\n"
-                         "  %254 = const ptr 0\n"
-                         "  %255 = cmp eq ptr %2, %254\n"
-                         "  branch %255, b59, b60\n"));
+                         "  call @__array_reset(%250, %4, %251)\n"
+                         "  %254 = load ptr %2\n"
+                         "  %255 = const i64 8\n"
+                         "  %256 = const ptr 0\n"
+                         "  %257 = cmp eq ptr %4, %256\n"
+                         "  branch %257, b59, b60\n"));
     CHECK(contains(main, "b60:\n"
-                         "  %256 = local 32 align 8\n"));
-    CHECK(contains(main, "  call @__array_free(%252, %2, %253, %256)\n"));
+                         "  %258 = local 32 align 8\n"));
+    CHECK(contains(main, "  call @__array_free(%254, %4, %255, %258)\n"));
     // Each of the seven loads allocated, at offset 16, for its data check,
     // and each of the five places puts its line there; only the pop and
     // the removes check the count past allocated.
@@ -6742,78 +6797,78 @@ TEST(an_array_procedure_calls_its_preload_helper) {
     // the data checks, the counts past allocated, the no-memory ones and
     // the resize's negative count's. Where a bounds check was, the count's
     // check below 0 is: in the pop, the insert and the removes.
-    CHECK(contains(quiet, "  %8 = cmp eq ptr %2, %7\n"
-                          "  branch %8, b1, b2\n"
+    CHECK(contains(quiet, "  %10 = cmp eq ptr %4, %9\n"
+                          "  branch %10, b1, b2\n"
                           "b1:\n"
                           "  panic @str."));
-    CHECK(contains(quiet, "  %25 = and i1 %22, %24\n"
-                          "  branch %25, b5, b6\n"
+    CHECK(contains(quiet, "  %27 = and i1 %24, %26\n"
+                          "  branch %27, b5, b6\n"
                           "b5:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb6:\n"
-                          "  %26 = local 32 align 8\n"));
-    CHECK(contains(quiet, "  %37 = call @__array_add(%3, %2, %4, %5, %26)\n"));
+                          "  %28 = local 32 align 8\n"));
+    CHECK(contains(quiet, "  %39 = call @__array_add(%5, %4, %6, %7, %28)\n"));
     // The pop's count below 0, then its data check and its count past
     // allocated.
     CHECK(contains(quiet, "\nb10:\n"
-                          "  %46 = load i64 %2\n"
-                          "  %47 = const i64 0\n"
-                          "  %48 = cmp slt i64 %46, %47\n"
-                          "  branch %48, b11, b12\n"
+                          "  %48 = load i64 %4\n"
+                          "  %49 = const i64 0\n"
+                          "  %50 = cmp slt i64 %48, %49\n"
+                          "  branch %50, b11, b12\n"
                           "b11:\n"
                           "  panic @str."));
-    CHECK(contains(quiet, "  %62 = and i1 %59, %61\n"
-                          "  branch %62, b13, b14\n"
+    CHECK(contains(quiet, "  %64 = and i1 %61, %63\n"
+                          "  branch %64, b13, b14\n"
                           "b13:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb14:\n"
-                          "  %63 = cmp sgt i64 %46, %54\n"
-                          "  %64 = and i1 %58, %63\n"
-                          "  branch %64, b15, b16\n"
+                          "  %65 = cmp sgt i64 %48, %56\n"
+                          "  %66 = and i1 %60, %65\n"
+                          "  branch %66, b15, b16\n"
                           "b15:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb16:\n"
-                          "  call @__array_pop(%41, %2, %42, %43)\n"));
-    CHECK(contains(quiet, "  %85 = and i1 %82, %84\n"
-                          "  branch %85, b19, b20\n"
+                          "  call @__array_pop(%43, %4, %44, %45)\n"));
+    CHECK(contains(quiet, "  %87 = and i1 %84, %86\n"
+                          "  branch %87, b19, b20\n"
                           "b19:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb20:\n"
-                          "  %86 = local 32 align 8\n"));
-    CHECK(contains(quiet, "  %97 = call @__array_reserve(%66, %2, %67, %68, %86)\n"));
+                          "  %88 = local 32 align 8\n"));
+    CHECK(contains(quiet, "  %99 = call @__array_reserve(%68, %4, %69, %70, %88)\n"));
     CHECK(contains(quiet, "\nb28:\n"
-                          "  %122 = const i64 0\n"
-                          "  %123 = cmp slt i64 %102, %122\n"
-                          "  branch %123, b29, b30\n"
+                          "  %124 = const i64 0\n"
+                          "  %125 = cmp slt i64 %104, %124\n"
+                          "  branch %125, b29, b30\n"
                           "b29:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb30:\n"
-                          "  %124 = local 32 align 8\n"));
-    CHECK(contains(quiet, "  %135 = call @__array_resize(%100, %2, %101, %102, %124)\n"));
+                          "  %126 = local 32 align 8\n"));
+    CHECK(contains(quiet, "  %137 = call @__array_resize(%102, %4, %103, %104, %126)\n"));
     CHECK(contains(quiet, "\nb34:\n"
-                          "  %145 = load i64 %2\n"
-                          "  %146 = const i64 0\n"
-                          "  %147 = cmp slt i64 %145, %146\n"
-                          "  branch %147, b35, b36\n"
+                          "  %147 = load i64 %4\n"
+                          "  %148 = const i64 0\n"
+                          "  %149 = cmp slt i64 %147, %148\n"
+                          "  branch %149, b35, b36\n"
                           "b35:\n"
                           "  panic @str."));
     CHECK(contains(quiet, "\nb38:\n"
-                          "  %162 = local 32 align 8\n"));
-    CHECK(contains(quiet, "  %173 = call @__array_insert(%138, %2, %139, %140, %141, %162)\n"));
+                          "  %164 = local 32 align 8\n"));
+    CHECK(contains(quiet, "  %175 = call @__array_insert(%140, %4, %141, %142, %143, %164)\n"));
     CHECK(contains(quiet, "\nb42:\n"
-                          "  %181 = load i64 %2\n"
-                          "  %182 = const i64 0\n"
-                          "  %183 = cmp slt i64 %181, %182\n"
-                          "  branch %183, b43, b44\n"));
+                          "  %183 = load i64 %4\n"
+                          "  %184 = const i64 0\n"
+                          "  %185 = cmp slt i64 %183, %184\n"
+                          "  branch %185, b43, b44\n"));
     CHECK(contains(quiet, "\nb48:\n"
-                          "  call @__array_remove_ordered(%176, %2, %177, %178)\n"));
+                          "  call @__array_remove_ordered(%178, %4, %179, %180)\n"));
     CHECK(contains(quiet, "\nb50:\n"
-                          "  %205 = load i64 %2\n"
-                          "  %206 = const i64 0\n"
-                          "  %207 = cmp slt i64 %205, %206\n"
-                          "  branch %207, b51, b52\n"));
+                          "  %207 = load i64 %4\n"
+                          "  %208 = const i64 0\n"
+                          "  %209 = cmp slt i64 %207, %208\n"
+                          "  branch %209, b51, b52\n"));
     CHECK(contains(quiet, "\nb56:\n"
-                          "  call @__array_remove_unordered(%200, %2, %201, %202)\n"));
+                          "  call @__array_remove_unordered(%202, %4, %203, %204)\n"));
     CHECK(!contains(quiet, "__rig_bounds_failed"));
     CHECK(count_of(quiet, "= const i64 16\n") == 7 + 4);
     CHECK(count_of(quiet, "panic @str.") == 7 + 7 + 6 + 3 + 4 + 1);
@@ -6850,54 +6905,55 @@ TEST(a_call_fills_in_its_own_place) {
     }
     char expected[2048];
     snprintf(expected, sizeof expected,
-             "proc @main() -> i32 {\n"
+             "proc @main(i32, ptr) -> i32 {\n"
              "b0:\n"
              "  call @__runtime_init()\n"
-             "  %%0 = local ptr\n"
-             "  %%1 = addr @default_context\n"
-             "  store ptr %%1, %%0\n"
-             "  %%2 = local i64\n"
-             "  %%3 = load ptr %%0\n"
-             "  %%4 = local 32 align 8\n"
-             "  %%5 = const i64 8\n"
-             "  store i64 %%5, %%4\n"
-             "  %%6 = addr @" STR_FMT "\n"
+             "  call @__save_command_line(%%0, %%1)\n"
+             "  %%2 = local ptr\n"
+             "  %%3 = addr @default_context\n"
+             "  store ptr %%3, %%2\n"
+             "  %%4 = local i64\n"
+             "  %%5 = load ptr %%2\n"
+             "  %%6 = local 32 align 8\n"
              "  %%7 = const i64 8\n"
-             "  %%8 = ptradd %%4, %%7\n"
-             "  store ptr %%6, %%8\n"
-             "  %%9 = const i64 4\n"
-             "  %%10 = const i64 16\n"
-             "  %%11 = ptradd %%4, %%10\n"
-             "  store i64 %%9, %%11\n"
-             "  %%12 = const i64 10\n"
-             "  %%13 = const i64 24\n"
-             "  %%14 = ptradd %%4, %%13\n"
-             "  store i64 %%12, %%14\n"
-             "  %%15 = call @here(%%3, %%4)\n"
-             "  store i64 %%15, %%2\n"
-             "  %%16 = local i64\n"
-             "  %%17 = const i64 1\n"
-             "  %%18 = load ptr %%0\n"
-             "  %%19 = local 32 align 8\n"
-             "  %%20 = const i64 8\n"
-             "  store i64 %%20, %%19\n"
-             "  %%21 = addr @" STR_FMT "\n"
+             "  store i64 %%7, %%6\n"
+             "  %%8 = addr @" STR_FMT "\n"
+             "  %%9 = const i64 8\n"
+             "  %%10 = ptradd %%6, %%9\n"
+             "  store ptr %%8, %%10\n"
+             "  %%11 = const i64 4\n"
+             "  %%12 = const i64 16\n"
+             "  %%13 = ptradd %%6, %%12\n"
+             "  store i64 %%11, %%13\n"
+             "  %%14 = const i64 10\n"
+             "  %%15 = const i64 24\n"
+             "  %%16 = ptradd %%6, %%15\n"
+             "  store i64 %%14, %%16\n"
+             "  %%17 = call @here(%%5, %%6)\n"
+             "  store i64 %%17, %%4\n"
+             "  %%18 = local i64\n"
+             "  %%19 = const i64 1\n"
+             "  %%20 = load ptr %%2\n"
+             "  %%21 = local 32 align 8\n"
              "  %%22 = const i64 8\n"
-             "  %%23 = ptradd %%19, %%22\n"
-             "  store ptr %%21, %%23\n"
-             "  %%24 = const i64 5\n"
-             "  %%25 = const i64 16\n"
-             "  %%26 = ptradd %%19, %%25\n"
-             "  store i64 %%24, %%26\n"
-             "  %%27 = const i64 14\n"
-             "  %%28 = const i64 24\n"
-             "  %%29 = ptradd %%19, %%28\n"
-             "  store i64 %%27, %%29\n"
-             "  %%30 = call @here(%%18, %%19)\n"
-             "  %%31 = add i64 %%17, %%30\n"
-             "  store i64 %%31, %%16\n"
-             "  %%32 = const i32 0\n"
-             "  ret %%32\n"
+             "  store i64 %%22, %%21\n"
+             "  %%23 = addr @" STR_FMT "\n"
+             "  %%24 = const i64 8\n"
+             "  %%25 = ptradd %%21, %%24\n"
+             "  store ptr %%23, %%25\n"
+             "  %%26 = const i64 5\n"
+             "  %%27 = const i64 16\n"
+             "  %%28 = ptradd %%21, %%27\n"
+             "  store i64 %%26, %%28\n"
+             "  %%29 = const i64 14\n"
+             "  %%30 = const i64 24\n"
+             "  %%31 = ptradd %%21, %%30\n"
+             "  store i64 %%29, %%31\n"
+             "  %%32 = call @here(%%20, %%21)\n"
+             "  %%33 = add i64 %%19, %%32\n"
+             "  store i64 %%33, %%18\n"
+             "  %%34 = const i32 0\n"
+             "  ret %%34\n"
              "}\n",
              STR_ARG(m->globals[path].name), STR_ARG(m->globals[path].name));
     CHECK_STR(proc_ir(ir_print(&a, m), "main"), expected);
@@ -6931,46 +6987,46 @@ TEST(a_builtin_passes_its_place) {
     char expected[1024];
     snprintf(expected, sizeof expected,
              "b4:\n"
-             "  %%25 = local 32 align 8\n"
-             "  %%26 = const i64 8\n"
-             "  store i64 %%26, %%25\n"
-             "  %%27 = addr @" STR_FMT "\n"
+             "  %%27 = local 32 align 8\n"
              "  %%28 = const i64 8\n"
-             "  %%29 = ptradd %%25, %%28\n"
-             "  store ptr %%27, %%29\n"
-             "  %%30 = const i64 4\n"
-             "  %%31 = const i64 16\n"
-             "  %%32 = ptradd %%25, %%31\n"
-             "  store i64 %%30, %%32\n"
-             "  %%33 = const i64 5\n"
-             "  %%34 = const i64 24\n"
-             "  %%35 = ptradd %%25, %%34\n"
-             "  store i64 %%33, %%35\n"
-             "  %%36 = call @__array_reserve(%%5, %%2, %%6, %%7, %%25)\n",
+             "  store i64 %%28, %%27\n"
+             "  %%29 = addr @" STR_FMT "\n"
+             "  %%30 = const i64 8\n"
+             "  %%31 = ptradd %%27, %%30\n"
+             "  store ptr %%29, %%31\n"
+             "  %%32 = const i64 4\n"
+             "  %%33 = const i64 16\n"
+             "  %%34 = ptradd %%27, %%33\n"
+             "  store i64 %%32, %%34\n"
+             "  %%35 = const i64 5\n"
+             "  %%36 = const i64 24\n"
+             "  %%37 = ptradd %%27, %%36\n"
+             "  store i64 %%35, %%37\n"
+             "  %%38 = call @__array_reserve(%%7, %%4, %%8, %%9, %%27)\n",
              STR_ARG(m->globals[path].name));
     CHECK(contains(main, expected));
     snprintf(expected, sizeof expected,
              "b12:\n"
-             "  %%62 = local 32 align 8\n"
-             "  %%63 = const i64 8\n"
-             "  store i64 %%63, %%62\n"
-             "  %%64 = addr @" STR_FMT "\n"
+             "  %%64 = local 32 align 8\n"
              "  %%65 = const i64 8\n"
-             "  %%66 = ptradd %%62, %%65\n"
-             "  store ptr %%64, %%66\n"
-             "  %%67 = const i64 5\n"
-             "  %%68 = const i64 16\n"
-             "  %%69 = ptradd %%62, %%68\n"
-             "  store i64 %%67, %%69\n"
-             "  %%70 = const i64 5\n"
-             "  %%71 = const i64 24\n"
-             "  %%72 = ptradd %%62, %%71\n"
-             "  store i64 %%70, %%72\n"
-             "  %%73 = call @__array_add(%%39, %%2, %%40, %%41, %%62)\n",
+             "  store i64 %%65, %%64\n"
+             "  %%66 = addr @" STR_FMT "\n"
+             "  %%67 = const i64 8\n"
+             "  %%68 = ptradd %%64, %%67\n"
+             "  store ptr %%66, %%68\n"
+             "  %%69 = const i64 5\n"
+             "  %%70 = const i64 16\n"
+             "  %%71 = ptradd %%64, %%70\n"
+             "  store i64 %%69, %%71\n"
+             "  %%72 = const i64 5\n"
+             "  %%73 = const i64 24\n"
+             "  %%74 = ptradd %%64, %%73\n"
+             "  store i64 %%72, %%74\n"
+             "  %%75 = call @__array_add(%%41, %%4, %%42, %%43, %%64)\n",
              STR_ARG(m->globals[path].name));
     CHECK(contains(main, expected));
     // Two places, and the pop's call ends at its result's temporary.
     CHECK(count_of(main, "= local 32 align 8\n") == 2);
-    CHECK(contains(main, "  call @__array_pop(%77, %2, %78, %79)\n"));
+    CHECK(contains(main, "  call @__array_pop(%79, %4, %80, %81)\n"));
     arena_free(&a);
 }

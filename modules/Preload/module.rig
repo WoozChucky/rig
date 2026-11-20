@@ -14,9 +14,9 @@
 // path reads nothing more: a file is read once.
 //
 // It holds the allocator's shape and the heap, type information, Any, the
-// context, the temporary storage and its allocator, the resizable array
-// [..]T's layout, Resizable_Array, and the helpers of its built-ins, and
-// the place a default #caller_location is, Source_Code_Location.
+// context, the temporary storage and its allocator, [..]T's layout,
+// Resizable_Array, and its built-ins' helpers, Source_Code_Location, the
+// place a default #caller_location is, and the command-line arguments.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -243,6 +243,46 @@ __runtime_init :: () #c_call {
     __temporary_storage.overflow_allocator = HEAP_ALLOCATOR;
     default_context.allocator = HEAP_ALLOCATOR;
     default_context.temporary_storage = *__temporary_storage;
+}
+
+// The program's command-line arguments (spec 7.4, 10.5): its name as it was
+// started first, then each argument, each a string over the bytes of one of
+// C's argv strings, so a zero byte its count doesn't include follows it.
+// main's prologue saves them, through __save_command_line, before main's
+// first line; until then, and in the compile-time world, where no startup
+// runs (spec 7.8), this is the empty view. Programs read it through Basic's
+// get_command_line_arguments. Neither the elements nor the bytes are ever
+// freed: they are the program's for the whole run.
+__command_line_arguments : []string;
+
+// Saves C's argc and argv as __command_line_arguments. main's prologue
+// calls it right after __runtime_init, with the argc and argv the C
+// runtime gave C's main, which main takes though its Rig signature doesn't
+// say so (spec 10.4). A null argv keeps what was saved: a Rig call of main
+// passes 0 and null. An argc of 0 or less saves the empty view (Linux lets
+// a program be started with no argv[0]). Otherwise the elements come from
+// one __malloc, the i-th viewing argv[i]'s bytes up to its zero, which
+// stay where C put them; when __malloc gives null, what was saved stays.
+// #c_call, so it uses no context, as __runtime_init; and, as it, it has no
+// debug information, so a debugger steps over main's call of it. Nothing
+// it saves is ever freed.
+__save_command_line :: (argc: s32, argv: **u8) #c_call {
+    if argv == null { return; }
+    if argc <= 0 {
+        empty : []string;
+        __command_line_arguments = empty;
+        return;
+    }
+    elements := cast(*string) __malloc(cast(u64) (argc * size_of(string)));
+    if elements == null { return; }
+    for 0..argc - 1 {
+        count := 0;
+        while argv[it][count] != 0 { count += 1; }
+        elements[it].data = argv[it];
+        elements[it].count = count;
+    }
+    __command_line_arguments.data = elements;
+    __command_line_arguments.count = argc;
 }
 
 // C's memmove, under Preload's own name, as __malloc is: the temporary
