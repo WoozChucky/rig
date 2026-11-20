@@ -131,6 +131,14 @@ bool check_finished_layout(Checker *c, Type *t);
 // the call then having no type. A broken entry's is never checked: true.
 bool check_proc_signature(Checker *c, Ast_Proc *proc);
 
+// The index of proc's '..T' parameter (spec 7.2), its one at most (the
+// parser makes sure), or -1 when it has none.
+s64 variadic_index(Ast_Proc *proc);
+
+// Whether proc has parameters after its '..T' one (issue #197), which take
+// only their default values.
+bool has_params_after_dots(Ast_Proc *proc);
+
 // The body of procedure proc, needed by the #run at `at`: checked now if it
 // isn't yet (checker.cpp's check_body). A body found under way is a circle:
 // "'f' is defined in terms of itself" at `at`, once (a body already in one,

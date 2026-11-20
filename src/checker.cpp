@@ -1986,11 +1986,25 @@ bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     return !proc->had_errors;
 }
 
+s64 variadic_index(Ast_Proc *proc) {
+    for (s64 i = 0; i < proc->params.count; i++) {
+        if (proc->params[i]->is_variadic) return i;
+    }
+    return -1;
+}
+
+bool has_params_after_dots(Ast_Proc *proc) {
+    s64 dots = variadic_index(proc);
+    return dots >= 0 && dots < proc->params.count - 1;
+}
+
 // The procedure type of proc's checked signature (check_signature says
 // which), variadic when its last parameter is a '..T'; null when it has
-// none.
+// none. A procedure that takes C's '..' has none, and nor does one with
+// parameters after its '..T' (issue #197, spec 3.15): a procedure type
+// keeps no defaults, so a call through a value could never fill them.
 static Type *proc_type_of_signature(Ast_Proc *proc) {
-    if (proc->is_c_variadic) return nullptr;
+    if (proc->is_c_variadic || has_params_after_dots(proc)) return nullptr;
     Array<Type *> parts = {};
     bool fine = true;
     for (s64 i = 0; i < proc->params.count; i++) {
@@ -2118,12 +2132,23 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // A call gives the parameters in order, and leaves out the last ones: so
 // once a parameter has a default, every one after it has one, or it's
 // "'separator' needs a default value, since a parameter before it has
-// one", at each one's name that doesn't. A procedure with a '..T'
-// parameter, one that takes C's '..' and a #compiler one take none for
-// now: "a procedure with a '..' parameter can't have default values, for
-// now" ("a procedure that takes C's '..' ...", "a #compiler procedure
-// ..."), once, at the first default's '='. Their defaults then go
-// unchecked, and no gap is said: the procedure can have none anyway.
+// one", at each one's name that doesn't. A procedure that takes C's '..'
+// and a #compiler one take none for now: "a procedure that takes C's '..'
+// can't have default values, for now" ("a #compiler procedure ..."), once,
+// at the first default's '='. Their defaults then go unchecked, and no gap
+// is said: the procedure can have none anyway.
+//
+// With a '..T' parameter (issue #197, spec 7.2), the arguments after the
+// fixed ones all go to it, so a call never gives a parameter after it: each
+// takes only its default, and needs one, "'loc' needs a default value,
+// since it comes after the '..' parameter", at each one's name that
+// doesn't. A default before it would make a call ambiguous, since the
+// '..T' parameter takes any number of arguments: "'first' can't have a
+// default value, since a '..' parameter comes after it", at each one's
+// '='. Nor has the '..T' parameter one: given no arguments, it is empty
+// already ("a '..' parameter can't have a default value: given no
+// arguments, it is empty", at its '='). Those refused go unchecked; the
+// defaults after it are checked as any default is.
 //
 // A default is worked out at each call that leaves it out, in the caller,
 // but means the same at every one: its names are the top level's, as the
@@ -2182,20 +2207,46 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
     while (first < params.count && !params[first]->default_value) first++;
-    if (first == params.count) return;
-    const char *refused = params[params.count - 1]->is_variadic ? "a procedure with a '..' parameter"
-                          : proc->is_c_variadic                  ? "a procedure that takes C's '..'"
-                          : proc->is_compiler                    ? "a #compiler procedure"
-                                                                 : nullptr;
+    const char *refused = proc->is_c_variadic ? "a procedure that takes C's '..'"
+                          : proc->is_compiler ? "a #compiler procedure"
+                                              : nullptr;
     if (refused) {
-        diag_error(c->diag, params[first]->equals, "%s can't have default values, for now", refused);
+        if (first < params.count) {
+            diag_error(c->diag, params[first]->equals, "%s can't have default values, for now", refused);
+        }
         return;
     }
-    for (s64 i = first + 1; i < params.count; i++) {
-        if (params[i]->default_value) continue;
-        diag_error(c->diag, params[i]->pos, "'" STR_FMT "' needs a default value, since a parameter before it has one",
-                   STR_ARG(params[i]->name));
+    s64 dots = variadic_index(proc);
+    if (dots >= 0) {
+        // Only the defaults after the '..T' parameter are checked: the
+        // others are refused.
+        for (s64 i = 0; i <= dots; i++) {
+            if (!params[i]->default_value) continue;
+            if (i < dots) {
+                diag_error(c->diag, params[i]->equals,
+                           "'" STR_FMT "' can't have a default value, since a '..' parameter comes after it",
+                           STR_ARG(params[i]->name));
+            } else {
+                diag_error(c->diag, params[i]->equals,
+                           "a '..' parameter can't have a default value: given no arguments, it is empty");
+            }
+        }
+        for (s64 i = dots + 1; i < params.count; i++) {
+            if (params[i]->default_value) continue;
+            diag_error(c->diag, params[i]->pos,
+                       "'" STR_FMT "' needs a default value, since it comes after the '..' parameter",
+                       STR_ARG(params[i]->name));
+        }
+        first = dots + 1;
+    } else {
+        for (s64 i = first + 1; i < params.count; i++) {
+            if (params[i]->default_value) continue;
+            diag_error(c->diag, params[i]->pos,
+                       "'" STR_FMT "' needs a default value, since a parameter before it has one",
+                       STR_ARG(params[i]->name));
+        }
     }
+    if (first == params.count) return;
     push_scope(c);
     Table<Ast *> *scope = &c->scopes[c->scopes.count - 1];
     for (s64 i = 0; i < params.count; i++) table_put(scope, params[i]->name, (Ast *)params[i]);
@@ -2269,7 +2320,9 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
 // The procedure's type (Ast.type) is its signature's procedure type: #c_call
 // when it's marked so, or foreign (C's own), and variadic with a '..T'. One
 // that takes C's bare '..' has none: no procedure type takes it, so it can
-// only be called (check_name).
+// only be called (check_name). Nor has one with parameters after its '..T'
+// (issue #197): a procedure type keeps no defaults, which are all a call
+// gives them (proc_type_of_signature).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     bool c_side = proc->is_foreign || proc->is_c_call;
     const char *who = proc->is_foreign ? "a foreign procedure" : "a #c_call procedure";

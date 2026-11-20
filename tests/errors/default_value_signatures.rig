@@ -1,8 +1,8 @@
 // Default values in signatures (issue #155, spec 7.2): each converts to its
 // parameter's type as a variable's value does, uses none of the
 // parameters, which hide the top level's names there as in the body, and
-// comes after every parameter without one. A procedure with a '..'
-// parameter, one taking C's '..' and a #compiler one take none, for now.
+// comes after every parameter without one. None comes before a '..'
+// parameter; one taking C's '..' and a #compiler one take none, for now.
 times := 3;
 gap :: (a: int = 1, b: int, c: int = 3) { }
 wrong :: (s: string, n: int = "two") { }

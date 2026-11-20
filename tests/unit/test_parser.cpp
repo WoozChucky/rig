@@ -3635,8 +3635,9 @@ TEST(parse_defers_nested_too_deeply) {
 // Issue #150: variadic Rig procedures, '..T' parameters and spreads (spec 5.10, 7.2).
 
 TEST(parses_variadic_parameters) {
-    // name: ..T, the last parameter: its type as written is T, marked. A
-    // foreign procedure's parses too: refusing it is the checker's.
+    // name: ..T, a procedure's one at most: its type as written is T,
+    // marked. A foreign procedure's parses too: refusing it is the
+    // checker's.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a,
@@ -3663,23 +3664,47 @@ TEST(parses_variadic_parameters) {
     arena_free(&a);
 }
 
-TEST(misplaced_variadic_parameters) {
-    // A '..T' parameter takes every argument after the others, so it's
-    // the last: before another parameter, or before C's '..', the
-    // declaration is given up, the error at its '..'.
+TEST(a_parameter_may_follow_the_dots) {
+    // Parameters may follow a '..T' one (issue #197): only their defaults
+    // ever fill them, which is the checker's to say, so one without a
+    // default parses too.
     Arena a = arena_make();
     String errors;
     CHECK_STR(parse_src(&a,
-                        "f :: (rest: ..int, n: int) { }\n"
+                        "f :: (format: string, args: ..int, n: int = 1) { }\n"
+                        "g :: (args: ..int, n: int) { }\n",
+                        &errors),
+              "(proc f (params (format string) (args (.. int)) (n int (default (int 1)))) (block))\n"
+              "(proc g (params (args (.. int)) (n int)) (block))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(misplaced_variadic_parameters) {
+    // A '..T' parameter takes every argument after the fixed ones, so a
+    // procedure has one at most: a second, beside the first or further on,
+    // is given up with the declaration, the error at its '..'. C's '..'
+    // after a '..T' parameter parses, as it does after any other: what a
+    // procedure may take is the checker's to say.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "f :: (rest: ..int, more: ..int) { }\n"
                         "main :: () { }\n",
                         &errors),
               "(broken f)\n(proc main (params) (block))\n");
-    CHECK_STR(errors, "1:13: '..' must be the last parameter\n");
+    CHECK_STR(errors, "1:26: a procedure takes at most one '..' parameter\n");
+    CHECK_STR(parse_src(&a,
+                        "f :: (a: ..int, n: int = 1, b: ..int) { }\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(broken f)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:32: a procedure takes at most one '..' parameter\n");
     parse_src(&a,
               "f :: (a: int, rest: ..int, ..) #foreign libc;\n"
               "main :: () { }\n",
               &errors);
-    CHECK_STR(errors, "1:21: '..' must be the last parameter\n");
+    CHECK_STR(errors, "");
     arena_free(&a);
 }
 

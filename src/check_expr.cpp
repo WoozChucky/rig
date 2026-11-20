@@ -653,15 +653,17 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
-// procedure type (a constant naming one too), one taking a '..T' included,
-// its type saying so (spec 3.15). One that takes C's bare '..' has no
-// procedure type: "'printf' can't be a value: it takes C's '..', which no
-// procedure type can say". Nor is main a value: "'main' can't be a value:
-// it's where the program starts"; nor a #compiler one: "'create_workspace'
-// can't be a value: the compiler does it". In a default value, a
-// parameter is "a default value can't use the parameter 'times'". Nor is a
-// built-in procedure a value: "'array_add' can't be a value: it's built
-// into the language".
+// procedure type (a constant naming one too), one taking a '..T' last
+// included, its type saying so (spec 3.15). One that takes C's bare '..' has
+// no procedure type: "'printf' can't be a value: it takes C's '..', which no
+// procedure type can say". Nor has one with parameters after its '..T'
+// (issue #197): "'log' can't be a value: its parameters after '..' take only
+// their default values, which a procedure type doesn't keep". Nor is main a
+// value: "'main' can't be a value: it's where the program starts"; nor a
+// #compiler one: "'create_workspace' can't be a value: the compiler does
+// it". In a default value, a parameter is "a default value can't use the
+// parameter 'times'". Nor is a built-in procedure a value: "'array_add'
+// can't be a value: it's built into the language".
 static Type *check_name(Checker *c, Ast_Name *name) {
     Ast *decl = check_lookup(c, name->name);
     name->decl = decl;
@@ -709,6 +711,17 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         if (proc->is_c_variadic) {
             diag_error(c->diag, name->pos,
                        "'" STR_FMT "' can't be a value: it takes C's '..', which no procedure type can say",
+                       STR_ARG(proc->name));
+        } else if (has_params_after_dots(proc) && !proc->is_foreign && !proc->is_c_call &&
+                   proc->params[variadic_index(proc)]->type) {
+            // A call through a value gives every parameter, but nothing
+            // gives one after a '..T' parameter: only its default fills it,
+            // which a procedure type doesn't keep (issue #197, spec 3.15).
+            // A '..T' refused at its '..' (a foreign or #c_call
+            // procedure's), or whose T is an error, was said already.
+            diag_error(c->diag, name->pos,
+                       "'" STR_FMT "' can't be a value: its parameters after '..' take only their default values, "
+                       "which a procedure type doesn't keep",
                        STR_ARG(proc->name));
         }
         return proc->type;  // null when a part of its signature was an error, reported
@@ -794,20 +807,22 @@ Type *call_result_type(Ast_Call *call, s64 i) {
     return call->proc ? call->proc->results[i]->type : call->callee_type->results[i];
 }
 
-// Whether the procedure `call` calls takes a '..T' parameter, directly or
-// through a value: even one whose T is an error, which has no type, or one
-// refused on a foreign, a #c_call or a #compiler procedure, whose type is
-// still its []T, so its calls gather and spread as any other's.
-static bool takes_variadic(Ast_Call *call) {
-    if (!call->proc) return call->callee_type->is_variadic;
-    Array<Ast_Param *> &params = call->proc->params;
-    return params.count && params[params.count - 1]->is_variadic;
+// The index of the '..T' parameter of the procedure `call` calls: a
+// procedure's own, anywhere among its parameters (issue #197), even one
+// whose T is an error, which has no type, or one refused on a foreign, a
+// #c_call or a #compiler procedure, whose type is still its []T, so its
+// calls gather and spread as any other's; through a value, its type's last
+// (spec 3.15). -1 when it takes none.
+s64 call_variadic_index(Ast_Call *call) {
+    if (call->proc) return variadic_index(call->proc);
+    return call->callee_type->is_variadic ? call->callee_type->param_count - 1 : -1;
 }
 
 Type *call_variadic_type(Ast_Call *call) {
-    if (!takes_variadic(call)) return nullptr;
-    if (call->proc) return call->proc->params[call->proc->params.count - 1]->type;
-    return call->callee_type->params[call->callee_type->param_count - 1];
+    s64 dots = call_variadic_index(call);
+    if (dots < 0) return nullptr;
+    if (call->proc) return call->proc->params[dots]->type;
+    return call->callee_type->params[dots];
 }
 
 // A spread that is one of a call's arguments, ..e: e is checked as an
@@ -821,7 +836,9 @@ static void check_spread_argument(Checker *c, Ast_Spread *spread) {
 
 // "only the arguments of a '..' parameter can be spread, as in
 // f(..values)", at the spread's '..': a call's spread argument that no
-// '..T' parameter takes, or that isn't the last argument (check_call), or a
+// '..T' parameter takes, or that isn't the last argument (check_call; of a
+// procedure with parameters after its '..T' one, a spread among the '..'
+// arguments is kept, and the arguments after it are refused instead), or a
 // spread anywhere else (check_spread). It then has no type, so nothing more
 // is said about it; a call's argument counts as one of its own position.
 static void refuse_spread(Checker *c, Ast *spread) {
@@ -844,8 +861,9 @@ static void check_argument(Checker *c, Ast *arg, Type *to, s64 index, String nam
 }
 
 // The '..' arguments of `call`, whose callee takes a '..T' parameter of
-// type `view` (null when T is an error), the arguments from `fixed` on
-// (spec 5.10):
+// type `view` (null when T is an error): the arguments from `fixed` to
+// `given`, the call's count, or the end of a spread that more arguments
+// follow, which check_call refuses (spec 5.10):
 // - a spread, ..e, the last of them and the only one (check_call made sure),
 //   passes e as the parameter's view: e's type must be exactly a []T, a
 //   [N]T or a [..]T (the view of its elements, spec 3.17), its elements
@@ -858,8 +876,7 @@ static void check_argument(Checker *c, Ast *arg, Type *to, s64 index, String nam
 //   'int'", counted over all the arguments), and they go, in order, into a
 //   [N]T of the caller's, call->gathered: made as any array type is, so too
 //   many large T's are "'[3]Big' is too big", at the first of them.
-static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, Type *view, String name) {
-    s64 given = call->args.count;
+static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, s64 given, Type *view, String name) {
     Ast *last = given ? call->args[given - 1] : nullptr;
     if (last && last->kind == AST_SPREAD) {
         Type *from = last->type;
@@ -1029,13 +1046,15 @@ static s64 required_arguments(Ast_Proc *proc) {
 // "'twice' needs a context; ..." at the callee, or else "'sized' leaves out
 // 'n', whose default value needs a context; ...", each ending in the push
 // to write, once per call. In a default being checked, either makes the
-// default need a context too (Checker.needs_context).
-static void check_call_context(Checker *c, Ast_Call *call, String name, bool more) {
+// default need a context too (Checker.needs_context). The parameters left
+// out are those from `left_out_from` on: after the arguments given, or
+// after the '..T' parameter (issue #197).
+static void check_call_context(Checker *c, Ast_Call *call, String name, s64 left_out_from) {
     Ast_Proc *proc = call->proc;
     bool takes = proc ? needs_a_context(c, proc) : type_needs_a_context(c, call->callee_type);
     Ast_Param *left_out = nullptr;
-    if (proc && !more) {
-        for (s64 i = call->args.count; i < proc->params.count && !left_out; i++) {
+    if (proc) {
+        for (s64 i = left_out_from; i < proc->params.count && !left_out; i++) {
             if (proc->params[i]->default_needs_context) left_out = proc->params[i];
         }
     }
@@ -1102,7 +1121,7 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
     if (entry->takes_item) params[count++] = element;
     call->callee_type = type_proc_of(params, count, &element, entry->returns_item ? 1 : 0, false, false);
     for (s64 i = 1; i < given; i++) check_argument(c, call->args[i], params[i], i, name);
-    check_call_context(c, call, name, false);
+    check_call_context(c, call, name, given);
     return entry->returns_item ? element : &type_void;
 }
 
@@ -1126,14 +1145,21 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
 // callee's defaults_depth, which check_defaults counts in the default's
 // depth. What the call needs of the context is check_call_context's, once
 // the call matches. A callee with a '..T' parameter takes at least the
-// others, its fixed ones, and then any number more, or one spread
-// (check_variadic_arguments). A spread is only that: the last argument of
-// such a call. Anywhere else among the arguments it's refused
-// (refuse_spread), C's '..' included. With a spread kept, the arguments
-// before it are exactly the fixed ones: fewer is the "at least" message,
-// which doesn't count the spread; more is "'sum' takes its '..' arguments
-// one by one or as one spread view, not both", at the spread's '..'. The
-// call's type is its first result's, void when there's none.
+// fixed ones, those before it, and then any number more, or one spread
+// (check_variadic_arguments), all of them its '..T' parameter's. A spread
+// is only that: the last argument of such a call. Anywhere else among the
+// arguments it's refused (refuse_spread), C's '..' included. With a spread
+// kept, the arguments before it are exactly the fixed ones: fewer is the
+// "at least" message, which doesn't count the spread; more is "'sum' takes
+// its '..' arguments one by one or as one spread view, not both", at the
+// spread's '..'. The parameters after the '..T' one (issue #197) take no
+// argument: each is left out, and passed its default, at every call. So a
+// spread among the '..' arguments of a call of such a procedure that more
+// arguments follow is "'log' takes no argument after a spread: 'loc',
+// after its '..' parameter, takes only its default value", at the first of
+// them, and the arguments after the spread, checked as any expression is,
+// are given to no parameter. The call's type is its first result's, void
+// when there's none.
 static Type *check_call(Checker *c, Ast_Call *call) {
     bool known = check_callee(c, call);
     for (s64 i = 0; i < call->args.count; i++) {
@@ -1158,7 +1184,26 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     String name = callee_name(c, call);
     Type *callee = call->callee_type;
     s64 n = proc ? proc->params.count : callee->param_count, given = call->args.count;
-    bool gathers = takes_variadic(call);
+    // The fixed parameters are those before the '..T' one, if any; those
+    // after it (issue #197) take no argument, only their defaults.
+    s64 dots = call_variadic_index(call);
+    bool gathers = dots >= 0;
+    s64 fixed = gathers ? dots : n;
+    // A spread is all the '..' arguments, so a call of a procedure with
+    // parameters after its '..T' one gives nothing after one: the first
+    // argument after it is refused, and the call is checked as if it ended
+    // at the spread, the others unchecked against any parameter.
+    if (gathers && dots < n - 1) {
+        for (s64 i = fixed; i < given - 1; i++) {
+            if (call->args[i]->kind != AST_SPREAD) continue;
+            diag_error(c->diag, call->args[i + 1]->start,
+                       "'" STR_FMT "' takes no argument after a spread: '" STR_FMT
+                       "', after its '..' parameter, takes only its default value",
+                       STR_ARG(name), STR_ARG(proc->params[dots + 1]->name));
+            given = i + 1;
+            break;
+        }
+    }
     for (s64 i = 0; i < given; i++) {
         Ast *arg = call->args[i];
         if (arg->kind == AST_SPREAD && (!gathers || i != given - 1)) refuse_spread(c, arg);
@@ -1168,7 +1213,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     // so it isn't counted.
     bool spreads = gathers && given && call->args[given - 1]->kind == AST_SPREAD;
     bool more = gathers || (proc && proc->is_c_variadic);
-    s64 fixed = gathers ? n - 1 : n, before = spreads ? given - 1 : given;
+    s64 before = spreads ? given - 1 : given;
     // A direct call may leave out the parameters with default values (spec
     // 5.10); a call through a value, whose type keeps none, gives them all.
     s64 required = proc && !more ? required_arguments(proc) : n;
@@ -1196,14 +1241,17 @@ static Type *check_call(Checker *c, Ast_Call *call) {
         for (s64 i = 0; i < converted; i++) {
             check_argument(c, call->args[i], proc ? proc->params[i]->type : callee->params[i], i, name);
         }
-        // Lowering puts the defaults left out here, and theirs in turn: a
-        // default being checked goes as deep as they do (check_defaults).
-        if (c->default_of && proc && !more && given < n && proc->defaults_depth > c->filled_depth) {
+        // The parameters left out: those after the arguments given, or after
+        // the '..T' one, whose arguments are all the others. Lowering puts
+        // their defaults here, and theirs in turn: a default being checked
+        // goes as deep as they do (check_defaults).
+        s64 left_out_from = gathers ? dots + 1 : more ? n : given;
+        if (c->default_of && proc && left_out_from < n && proc->defaults_depth > c->filled_depth) {
             c->filled_depth = proc->defaults_depth;
         }
-        check_call_context(c, call, name, more);
+        check_call_context(c, call, name, left_out_from);
         if (gathers) {
-            check_variadic_arguments(c, call, fixed, call_variadic_type(call), name);
+            check_variadic_arguments(c, call, fixed, given, call_variadic_type(call), name);
         } else {
             // A Rig procedure with C's bare '..' was reported, and takes C's
             // '..' only so its calls say nothing more: what C would refuse is

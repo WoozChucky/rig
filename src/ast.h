@@ -134,7 +134,7 @@ struct Ast_Type : Ast {
 struct Ast_Param : Ast {
     String name;
     Ast_Type *type_expr;
-    bool is_variadic;  // name: ..T, the last parameter (spec 7.2): type_expr is T, and its type []T
+    bool is_variadic;  // name: ..T, a procedure's one at most (spec 7.2): type_expr is T, and its type []T
     Position dots;     // where that '..' is written
     Ast *default_value;  // = e: what a call that leaves the parameter out passes, worked out at that
                          // call (spec 7.2); null without one. Checked with the signature, converted
@@ -178,8 +178,9 @@ enum Ast_Resolve : u8 {
 // Ast.type is the procedure's type, a TYPE_PROC, once its signature is
 // checked, variadic for one whose last parameter is a '..T' (spec 3.15):
 // null for one that takes C's '..', which no procedure type can say, for
-// one refused a '..T' (a foreign, #c_call or #compiler procedure), and
-// when a parameter's or a result's type was an error.
+// one refused a '..T' (a foreign, #c_call or #compiler procedure), for one
+// with parameters after its '..T' (a procedure type keeps no defaults,
+// issue #197), and when a parameter's or a result's type was an error.
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;  // the named parameters (with C's '..', its fixed parameters)

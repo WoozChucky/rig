@@ -20,7 +20,7 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, the last;
+//   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, one at most;
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)
@@ -168,23 +168,27 @@
 // values", at the '=', since a call through a value gives every argument.
 // Its '(' is a type level, as a '*' is.
 //
-// A variadic Rig procedure (spec 7.2) takes the arguments after its others
-// in a '..T' parameter, its last: `sum :: (first: int, rest: ..int) -> int`
-// (Ast_Param.is_variadic; its type as written is T). Before another
-// parameter, in a signature or a procedure type, it's "'..' must be the
-// last parameter", at its '..', and the declaration is given up. Which
-// procedures may have one is the checker's business. A C function's other
-// arguments are written as C's bare '..' instead, the list's last element
-// (`printf :: (format: *u8, ..) -> s32 #foreign libc;`).
+// A variadic Rig procedure (spec 7.2) takes the arguments after its fixed
+// ones in a '..T' parameter: `sum :: (first: int, rest: ..int) -> int`
+// (Ast_Param.is_variadic; its type as written is T). Which procedures may
+// have one is the checker's business. A procedure has one at most: a second
+// is "a procedure takes at most one '..' parameter", at its '..', and the
+// declaration is given up. Parameters may follow it (issue #197), each
+// taking only its default value. A procedure type keeps no defaults, so its
+// '..T' is its last: before another parameter it's "'..' must be the last
+// parameter", at its '..', and the declaration is given up. A C function's
+// other arguments are written as C's bare '..' instead, the list's last
+// element (`printf :: (format: *u8, ..) -> s32 #foreign libc;`).
 //
 // A parameter's default value (spec 7.2), Jai's, is an expression after its
 // type and a '=': `repeat :: (s: string, times: int = 2) { ... }`, which a
 // call that leaves the parameter out passes (Ast_Param.default_value). Its
 // levels are counted as a constant's value's, not the body's. Where a
 // default may be is the checker's business: every parameter after one with
-// a default needs one too, and a procedure with a '..' parameter, C's '..'
-// or #compiler takes none, for now; the checker refuses those and keeps
-// the procedure. A parameter needs its type still: `(n := 0)` is "a
+// a default needs one too, as every one after a '..' parameter does, none
+// before it nor on it may have one, and a procedure with C's '..' or
+// #compiler takes none, for now; the checker refuses those and keeps the
+// procedure. A parameter needs its type still: `(n := 0)` is "a
 // parameter needs its type, as in n: int = 0", at the ':=', and the
 // declaration is given up.
 //

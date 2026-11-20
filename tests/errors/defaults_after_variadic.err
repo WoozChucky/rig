@@ -1,0 +1,18 @@
+tests/errors/defaults_after_variadic.rig:6:26: error: 'total' needs a default value, since it comes after the '..' parameter
+    after :: (values: ..int, total: int) { }
+                             ^
+tests/errors/defaults_after_variadic.rig:7:23: error: 'first' can't have a default value, since a '..' parameter comes after it
+    before :: (first: int = 0, values: ..int) { }
+                          ^
+tests/errors/defaults_after_variadic.rig:8:23: error: a '..' parameter can't have a default value: given no arguments, it is empty
+    own :: (values: ..int = 1) { }
+                          ^
+tests/errors/defaults_after_variadic.rig:11:10: error: 'log' can't be a value: its parameters after '..' take only their default values, which a procedure type doesn't keep
+        f := log;
+             ^
+tests/errors/defaults_after_variadic.rig:13:26: error: 'log' takes no argument after a spread: 'loc', after its '..' parameter, takes only its default value
+        log("{} {}", ..args, Source_Code_Location.{});
+                             ^
+tests/errors/defaults_after_variadic.rig:16:24: error: a procedure takes at most one '..' parameter
+    twice :: (a: ..int, b: ..int) { }
+                           ^

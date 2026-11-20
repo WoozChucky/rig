@@ -10,7 +10,7 @@ tests/errors/default_value_signatures.rig:9:58: error: a default value can't use
 tests/errors/default_value_signatures.rig:10:19: error: 300 doesn't fit in 'u8'
     small :: (b: u8 = 300) { }
                       ^
-tests/errors/default_value_signatures.rig:11:24: error: a procedure with a '..' parameter can't have default values, for now
+tests/errors/default_value_signatures.rig:11:24: error: 'first' can't have a default value, since a '..' parameter comes after it
     gathers :: (first: int = 0, rest: ..int) { }
                            ^
 tests/errors/default_value_signatures.rig:12:24: error: a procedure that takes C's '..' can't have default values, for now

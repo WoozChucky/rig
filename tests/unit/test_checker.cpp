@@ -7926,10 +7926,12 @@ TEST(default_values_take_their_parameters_types) {
 
 TEST(where_default_values_cant_be) {
     // A parameter without a default after one with is said at its name, each
-    // one. A '..T' parameter, C's '..' and #compiler refuse defaults for now,
-    // once, at the first default's '=', and then say no gap and check none
-    // of the defaults: the second one's string goes unsaid. A gap, unlike
-    // them, is said and the defaults are still checked: gap's string is.
+    // one. Before a '..T' parameter, each default is refused at its '='
+    // (issue #197) and goes unchecked: the second one's string goes unsaid.
+    // C's '..' and #compiler refuse defaults for now, once, at the first
+    // default's '=', and then say no gap and check none of the defaults. A
+    // gap, unlike them, is said and the defaults are still checked: gap's
+    // string is.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, "gap :: (a: int = 1, b: int, c: int = \"x\") { }\n"
                                "later :: (a: int = 1, b: int, c: int) { }\n"
@@ -7940,18 +7942,20 @@ TEST(where_default_values_cant_be) {
               "1:38: a value of type 'string' doesn't convert to 'int' implicitly\n"
               "2:23: 'b' needs a default value, since a parameter before it has one\n"
               "2:31: 'c' needs a default value, since a parameter before it has one\n"
-              "3:24: a procedure with a '..' parameter can't have default values, for now\n"
+              "3:24: 'first' can't have a default value, since a '..' parameter comes after it\n"
+              "3:41: 'second' can't have a default value, since a '..' parameter comes after it\n"
               "4:24: a procedure that takes C's '..' can't have default values, for now\n");
     CHECK_STR(check_module_source(&a, "compiled :: (n: int = 1, m: int = \"z\") #compiler;\nmain :: () { }\n"),
               "1:21: a #compiler procedure can't have default values, for now\n");
-    // Their calls count the parameters as with no defaults, a '..T' or C's
+    // A '..T' parameter has no default either: given no arguments, it's
+    // empty. Calls count the parameters as with no defaults, a '..T' or C's
     // '..' taking at least the fixed ones: a call that leaves those out says
     // so. A #compiler procedure's defaults count, so a call that leaves them
     // out says nothing beyond the refusal.
     CHECK_STR(check_source(&a, "gathers :: (first: int, rest: ..int = 1) { }\n"
                                "c_like :: (format: *u8 = \"%d\", ..) -> s32 #foreign libc \"printf\";\n"
                                "main :: () { gathers(); c_like(); }\n"),
-              "1:37: a procedure with a '..' parameter can't have default values, for now\n"
+              "1:37: a '..' parameter can't have a default value: given no arguments, it is empty\n"
               "2:24: a procedure that takes C's '..' can't have default values, for now\n"
               "3:14: 'gathers' takes at least 1 argument, but 0 were given\n"
               "3:25: 'c_like' takes at least 1 argument, but 0 were given\n");
@@ -9114,5 +9118,172 @@ TEST(caller_location_needs_preload) {
     CHECK_STR(check_source(&a, "main :: () {\n    x := #caller_location;\n}\n"),
               "2:10: '#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = "
               "#caller_location\n");
+    arena_free(&a);
+}
+
+// Issue #197: default values after a '..' parameter (spec 7.2, 5.10, 3.15).
+
+TEST(defaults_after_the_dots) {
+    // The parameters after a '..T' one take no argument: the arguments
+    // after the fixed ones all go to the '..T' parameter, one by one or as
+    // one spread, and each parameter after it takes its default, checked
+    // as any default is: a's reads the context, n's doesn't.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "log :: (format: string, args: ..int, n: int = 1, "
+                                 "a: Allocator = context.allocator) { }\n"
+                                 "main :: () {\n"
+                                 "    log(\"a\");\n"
+                                 "    log(\"a\", 1, 2, 3);\n"
+                                 "    values := int.[1];\n"
+                                 "    log(\"a\", ..values);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Proc *proc = (Ast_Proc *)top_level_named(tree, "log");
+    Array<Ast *> &body = ((Ast_Proc *)top_level_named(tree, "main"))->body->statements;
+    Ast_Call *none = (Ast_Call *)body[0];
+    CHECK(none->gathered);
+    CHECK_STR(type_name(&a, none->gathered), "[0]int");
+    Ast_Call *three = (Ast_Call *)body[1];
+    CHECK(three->gathered);
+    CHECK_STR(type_name(&a, three->gathered), "[3]int");
+    Ast_Call *spread = (Ast_Call *)body[3];
+    CHECK(!spread->gathered);
+    CHECK_STR(type_name(&a, spread->args[1]->type), "[1]int");
+    CHECK(!proc->params[2]->default_needs_context);
+    CHECK(proc->params[3]->default_needs_context);
+    arena_free(&a);
+}
+
+TEST(where_a_default_stands_beside_the_dots) {
+    // Every parameter after a '..T' one needs a default, which only ever
+    // fills it: one without is said at its name, a gap's last included. The
+    // defaults there are checked as any default is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "after :: (values: ..int, total: int) { }\n"
+                               "wrong :: (values: ..int, n: int = \"x\") { }\n"
+                               "gap :: (values: ..int, a: int = 1, b: int) { }\n"
+                               "main :: () { }\n"),
+              "1:26: 'total' needs a default value, since it comes after the '..' parameter\n"
+              "2:35: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "3:36: 'b' needs a default value, since it comes after the '..' parameter\n");
+    arena_free(&a);
+}
+
+TEST(a_procedure_with_parameters_after_the_dots_is_no_value) {
+    // A procedure type keeps no defaults, so a call through a value could
+    // never fill a parameter after the '..T' one: such a procedure has no
+    // type, and its name used as a value is refused.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "log :: (args: ..int, n: int = 1) { }\n"
+                              "main :: () { f := log; }\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "2:19: 'log' can't be a value: its parameters after '..' take only their default values, which a "
+              "procedure type doesn't keep\n");
+    CHECK(!top_level_named(c.file, "log")->type);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_procedure_value_is_refused_once_beside_the_dots) {
+    // A '..T' refused at its '..' (a foreign or #c_call procedure's), or
+    // whose T is an error, was said already, so the procedure's name as a
+    // value says nothing more of the parameters after it; and one that also
+    // takes C's '..' is refused as a value for that alone.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "g :: (rest: ..int, n: int = 1) #foreign libc \"abs\";\n"
+                               "h :: (rest: ..int, n: int = 1) #c_call { }\n"
+                               "e :: (rest: ..Nope, n: int = 1) { }\n"
+                               "cf :: (a: int, rest: ..int, n: int = 1, ..) -> s32 #foreign libc \"printf\";\n"
+                               "main :: () { x := g; y := h; z := e; w := cf; }\n"),
+              "1:13: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in "
+              "(format: *u8, ..)\n"
+              "2:13: a #c_call procedure can't take '..int'\n"
+              "3:15: unknown type 'Nope'\n"
+              "4:22: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in "
+              "(format: *u8, ..)\n"
+              "4:36: a procedure that takes C's '..' can't have default values, for now\n"
+              "5:43: 'cf' can't be a value: it takes C's '..', which no procedure type can say\n");
+    arena_free(&a);
+}
+
+TEST(a_dots_parameter_before_cs_dots_is_refused_as_before) {
+    // C's '..' may follow a '..T' parameter in the parse; the checker
+    // refuses what it always has: a foreign procedure's '..T', and C's '..'
+    // on a Rig procedure. Calling either says nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "cf :: (a: int, rest: ..int, ..) -> s32 #foreign libc \"printf\";\n"
+                               "mixed :: (a: int, rest: ..int, ..) { }\n"
+                               "main :: () {\n"
+                               "    cf(1, 2, 3);\n"
+                               "    mixed(1, 2, 3);\n"
+                               "}\n"),
+              "1:22: a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in "
+              "(format: *u8, ..)\n"
+              "2:32: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as "
+              "in (values: ..int)\n");
+    arena_free(&a);
+}
+
+TEST(nothing_follows_a_spread_to_the_dots) {
+    // A spread is all the '..' arguments, and the parameters after the '..T'
+    // one take only their defaults: an argument after the spread is said at
+    // the first of them, however many follow it, and the arguments after it
+    // are checked as any expression is but given to no parameter, so a string
+    // that suits neither 'n' nor '..int' says nothing more, and an unknown
+    // name is said as anywhere. A procedure with nothing after its '..T' one
+    // says what it always has of a spread that isn't the last argument, and
+    // so does any procedure of a spread in a fixed argument's place. '..'
+    // arguments both one by one and spread are said as before, and an
+    // argument after the spread besides.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "log :: (format: string, args: ..int, n: int = 1, m: int = 2) { }\n"
+                               "sum :: (first: int, rest: ..int) -> int { return first; }\n"
+                               "main :: () {\n"
+                               "    values := int.[1];\n"
+                               "    log(\"a\", ..values, 3);\n"
+                               "    sum(0, ..values, 5);\n"
+                               "    log(..values, 3);\n"
+                               "    log(\"a\", ..values, 3, 4);\n"
+                               "    log(\"a\", 1, ..values, 3);\n"
+                               "    log(\"a\", ..values, \"x\");\n"
+                               "    log(\"a\", ..values, nope);\n"
+                               "}\n"),
+              "5:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n"
+              "6:12: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "7:9: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+              "8:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n"
+              "9:17: 'log' takes its '..' arguments one by one or as one spread view, not both\n"
+              "9:27: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n"
+              "10:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n"
+              "11:24: unknown identifier 'nope'\n"
+              "11:24: 'log' takes no argument after a spread: 'n', after its '..' parameter, takes only its default "
+              "value\n");
+    arena_free(&a);
+}
+
+TEST(a_default_after_the_dots_counts_its_depth) {
+    // A call that leaves out the parameters after a '..T' one fills in their
+    // defaults, so a default holding it counts how deep those go, as it does
+    // for any call that leaves defaults out: outer's depth is outer_twin's,
+    // and above plain's.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "id :: (x: int) -> int { return x; }\n"
+                              "inner :: (v: ..int, n: int = id(id(id(1)))) -> int { return 0; }\n"
+                              "twin :: (n: int = id(id(id(1)))) -> int { return 0; }\n"
+                              "outer :: (m: int = inner()) -> int { return 0; }\n"
+                              "outer_twin :: (m: int = twin()) -> int { return 0; }\n"
+                              "plain :: (m: int = 1) -> int { return 0; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(c.file->procs[3]->defaults_depth, c.file->procs[4]->defaults_depth);
+    CHECK(c.file->procs[4]->defaults_depth > c.file->procs[5]->defaults_depth);
+    token_list_free(c.list);
     arena_free(&a);
 }

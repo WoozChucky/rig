@@ -1605,18 +1605,19 @@ static Ast_Type *parse_whole_type(Parser *p) {
 //
 // A '..' before the type makes the parameter a '..T' one (spec 7.2), which
 // takes the call's other arguments: its type as written is T, and the
-// checker gives it the type []T. Whether it's last is parse_procedure's to
-// say.
+// checker gives it the type []T. Whether it's the only one is
+// parse_procedure's to say.
 //
 // An expression after the type and a '=' is the parameter's default value
 // (spec 7.2), which a call that leaves the parameter out passes: kept with
 // its '=' and its levels, counted as a constant's are (parse_constant), since
 // the checker works it out with the signature, at the top level. Where a
-// default may be (trailing, not with a '..' parameter, not on a procedure
-// that takes C's '..' nor on a #compiler one) is the checker's to say, so a
-// misplaced one gives nothing up. A parameter written `n := 0`, its type left
-// to its value, is "a parameter needs its type, as in n: int = 0", at the
-// ':=', for now.
+// default may be (on every parameter after one with a default, and after a
+// '..' parameter; on none before it, nor on it; not on a procedure that
+// takes C's '..' nor on a #compiler one) is the checker's to say, so a
+// misplaced one gives nothing up. A parameter written `n := 0`, its type
+// left to its value, is "a parameter needs its type, as in n: int = 0", at
+// the ':=', for now.
 static Ast_Param *parse_param(Parser *p) {
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
@@ -1697,16 +1698,20 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // identifier begins a parameter, whatever its type turns out to be (a
 // procedure's type, when #foreign parameters get them, is still IDENT ':'
 // and a type), and '..' is the end. A '..T' parameter (`rest: ..int`, spec
-// 7.2) takes every argument after the others, so it's the last too: one
-// followed by a ',' is "'..' must be the last parameter", at its '..', as
-// C's is, and the declaration is given up. A parameter may have a default
-// value (`times: int = 2`, spec 7.2), read with it (parse_param) before the
-// body, so its levels aren't the body's; which parameters may have one is
-// the checker's to say.
+// 7.2) takes every argument after the fixed ones, the parameters before
+// it, so a procedure has one at most: a second is "a procedure takes at
+// most one '..' parameter", at its '..', and the declaration is given up.
+// Parameters may follow it (issue #197): each takes only its default value,
+// which the checker makes sure it has (`log :: (format: string, args:
+// ..Any, loc: Source_Code_Location = #caller_location)`). A parameter may
+// have a default value (`times: int = 2`, spec 7.2), read with it
+// (parse_param) before the body, so its levels aren't the body's; which
+// parameters may have one is the checker's to say.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
+    bool gathers = false;  // a '..T' parameter was read
     if (peek(p)->kind != TOKEN_RPAREN) {
         for (;;) {
             if (peek(p)->kind == TOKEN_DOT_DOT) {
@@ -1715,12 +1720,15 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             }
             Ast_Param *param = parse_param(p);
             if (!param) return nullptr;
+            if (param->is_variadic) {
+                if (gathers) {
+                    diag_error(p->diag, param->dots, "a procedure takes at most one '..' parameter");
+                    return nullptr;
+                }
+                gathers = true;
+            }
             array_add(&proc->params, param);
             if (peek(p)->kind != TOKEN_COMMA) break;
-            if (param->is_variadic) {
-                diag_error(p->diag, param->dots, "'..' must be the last parameter");
-                return nullptr;
-            }
             advance(p);
         }
     }
