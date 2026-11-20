@@ -1,0 +1,64 @@
+// Resizable arrays growing from Preload's temporary allocator and from
+// Basic's Arena (issue #158, spec 3.17), a line of output per case:
+// - temporary: an array whose allocator is TEMPORARY_ALLOCATOR, the only
+//   allocation since a reset, is its storage's last, so each RESIZE grows
+//   it in place while the first block holds it: its data stays where it
+//   was through 4096 elements, the block's 32768 bytes, all of them
+//   occupied. Past that, it moves to pages the storage asks of the heap,
+//   copied there. Its 10001 elements, 0 to 10000, are all where they
+//   should be, in 16384 elements of room.
+// - pushed: an array that first grows in a push_context whose allocator is
+//   the temporary one keeps it.
+// - arena: an array whose allocator is an Arena's, whose RESIZE always
+//   allocates anew and copies, from blocks of 64 bytes, smaller than most
+//   of its growths: its 1001 elements, 0 to 1000, are all where they should
+//   be, in 1024 elements of room.
+#import "Basic";
+
+// Whether a's elements are 0, 1, 2 and so on, and their sum.
+check :: (a: []int) -> (bool, int) {
+    sum := 0;
+    for a {
+        if it != it_index { return false, sum; }
+        sum += it;
+    }
+    return true, sum;
+}
+
+main :: () {
+    reset_temporary_storage();
+    storage := context.temporary_storage;
+    t : [..]int;
+    t.allocator = TEMPORARY_ALLOCATOR;
+    array_add(*t, 0);
+    first := t.data;
+    print("temporary {} {} {}\n", t.allocated, storage.occupied, storage.overflow_pages == null);
+    for 1..4095 { array_add(*t, it); }
+    print("temporary {} {} {} {} {}\n", t.count, t.allocated, t.data == first, storage.occupied,
+          storage.overflow_pages == null);
+    array_add(*t, 4096);
+    print("temporary {} {} {} {}\n", t.count, t.allocated, t.data == first, storage.overflow_pages != null);
+    for 4097..10000 { array_add(*t, it); }
+    ok, sum := check(t);
+    print("temporary {} {} {} {}\n", t.count, t.allocated, ok, sum);
+    reset_temporary_storage();
+
+    q : [..]string;
+    push_context Context.{TEMPORARY_ALLOCATOR, context.temporary_storage} {
+        array_add(*q, "x");
+    }
+    array_add(*q, "y");
+    print("pushed {} {}\n", q.allocator.proc == temporary_allocator_proc, q);
+    reset_temporary_storage();
+
+    arena : Arena;
+    arena_init(*arena, 64);
+    r : [..]int;
+    r.allocator = arena_allocator(*arena);
+    for 0..1000 { array_add(*r, it); }
+    ok, sum = check(r);
+    print("arena {} {} {} {}\n", r.count, r.allocated, ok, sum);
+    array_free(*r);
+    print("arena {} {} {}\n", r.count, r.data == null, r.allocator.data == cast(*void) *arena);
+    free_all(arena_allocator(*arena));
+}

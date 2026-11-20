@@ -1,0 +1,7 @@
+temporary 8 64 true
+temporary 4096 4096 true 32768 true
+temporary 4097 8192 false true
+temporary 10001 16384 true 50005000
+pushed true ["x", "y"]
+arena 1001 1024 true 500500
+arena 0 true true
