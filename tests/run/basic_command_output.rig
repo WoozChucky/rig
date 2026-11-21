@@ -105,10 +105,14 @@ main :: () {
     print_line("");
 
     // cmd.exe gives exit 3's code, 3; sh's wait status holds it times 256.
-    output, status = run_command_with_output("exit 3", HEAP_ALLOCATOR);
+    // No output is the zeroed string, allocating nothing: one allocation,
+    // the command's C copy, given back by the call.
+    output, status = run_command_with_output("exit 3", counting);
     print_string("exit 3: ");
     show_text(output);
     show_bool(status == 3 || status == 768);
+    show_bool(output.data == null);
+    show_counts(*counter);
     print_line("");
 
     // An empty command runs the shell with nothing to do.
