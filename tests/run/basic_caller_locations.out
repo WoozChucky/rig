@@ -62,8 +62,8 @@ run_command
     FREE 127:9
 run_command_with_output
     ALLOCATE 132:21
-    FREE 132:21
     ALLOCATE 132:21
+    FREE 132:21
     FREE 133:9
 list_directory
     ALLOCATE 138:21

@@ -157,17 +157,22 @@ get_environment :: (name: string, allocator: Allocator = context.allocator, loc:
 // the call unless given, as get_environment's are.
 run_command :: (command: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> int {
     if find_byte(command, 0) >= 0 { return -1; }
+    // The command's copy for the system: on Windows the whole command
+    // line, in UTF-16 (shell_command_line).
     #if OS == OS_WINDOWS {
-        c_fflush(null);
-        return run_through_shell(command, null, allocator, loc);
+        c_command := shell_command_line(command, allocator, loc);
     } else {
         c_command := to_c_string(command, allocator, loc);
-        if c_command == null { return -1; }
-        c_fflush(null);
-        status := c_system(c_command);
-        free(c_command, allocator, loc);
-        return status;
     }
+    if c_command == null { return -1; }
+    c_fflush(null);
+    #if OS == OS_WINDOWS {
+        status := run_through_shell(c_command, null);
+    } else {
+        status := c_system(c_command);
+    }
+    free(c_command, allocator, loc);
+    return status;
 }
 
 // Runs command through the system's shell, as run_command does, waits for
@@ -204,31 +209,32 @@ run_command :: (command: string, allocator: Allocator = context.allocator, loc: 
 //
 // The command's copy and the output are asked for, and the copy given
 // back, with loc, the place of the call unless given, as get_environment's
-// are. The copy is given back once the command has ended, before the
-// output's memory is asked for, on both systems, so an allocator sees the
-// same calls in the same order on both.
+// are. The copy is given back as the call returns, after the output's
+// memory is asked for, on both systems, so an allocator sees the same
+// calls in the same order on both.
 run_command_with_output :: (command: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, int {
     empty : string;
     if find_byte(command, 0) >= 0 { return empty, -1; }
+    // The command's copy for the system: on Windows the whole command
+    // line, in UTF-16 (shell_command_line).
+    #if OS == OS_WINDOWS {
+        c_command := shell_command_line(command, allocator, loc);
+    } else {
+        c_command := to_c_string(command, allocator, loc);
+    }
+    if c_command == null { return empty, -1; }
+    defer free(c_command, allocator, loc);
 
+    c_fflush(null);
     gathered : String_Builder;
     builder_init(*gathered, HEAP_ALLOCATOR);
     defer builder_free(*gathered);
-    status := -1;
     #if OS == OS_WINDOWS {
-        c_fflush(null);
-        status = run_through_shell(command, *gathered, allocator, loc);
+        status := run_through_shell(c_command, *gathered);
     } else {
-        c_command := to_c_string(command, allocator, loc);
-        if c_command == null { return empty, -1; }
-
-        c_fflush(null);
         // glibc refuses "rb", and its pipes are binary anyway.
         pipe := c_popen(c_command, "r");
-        if pipe == null {
-            free(c_command, allocator, loc);
-            return empty, -1;
-        }
+        if pipe == null { return empty, -1; }
 
         descriptor := c_fileno(pipe);
         buffer : [4096]u8;
@@ -243,8 +249,7 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
             piece.count = got;
             append_string(*gathered, piece);
         }
-        status = cast(int) c_pclose(pipe);
-        free(c_command, allocator, loc);
+        status := cast(int) c_pclose(pipe);
     }
 
     if gathered.count == 0 { return empty, status; }
@@ -259,34 +264,23 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
 }
 
 #if OS == OS_WINDOWS {
-    // Windows' way to run command, for run_command, with captured null, and
-    // run_command_with_output, with the builder it gathers the output in.
-    // The shell is the one %COMSPEC% names, cmd.exe's path, or cmd.exe when
-    // it is unset or empty, as for C's system, and it is started by
-    // CreateProcessW with the command line "SHELL" /c COMMAND, in UTF-16.
-    // The shell's path is in quotes, so that one with a space in it is one
-    // word; cmd.exe takes what follows /c as the command, as it does from
-    // system, so a command means what it meant there.
+    // The command line Windows runs command with, for run_command and
+    // run_command_with_output: "SHELL" /c COMMAND, in UTF-16 with a zero
+    // unit after it, in one allocation from allocator at loc, which the
+    // caller gives back with free(line, allocator, loc) once the shell has
+    // ended, as Linux's C copy is given back. The shell is the one
+    // %COMSPEC% names, cmd.exe's path, or cmd.exe when it is unset or
+    // empty, as for C's system. The shell's path is in quotes, so that one
+    // with a space in it is one word; cmd.exe takes what follows /c as the
+    // command, as it does from system, so a command means what it meant
+    // there.
     //
-    // The shell starts with the program's own standard input, output and
-    // error, so what it writes goes where the program's own output goes,
-    // after what the caller flushed. When captured isn't null, its
-    // standard output is instead the write end of a pipe, which only the
-    // shell holds once it has started: the program reads the other end,
-    // appending each piece to captured, until the read gives nothing, when
-    // the shell, and every command it started, has ended and closed it.
-    // Then it waits for the shell to end and gives its exit code as a
-    // signed 32-bit number, as system gives it, so "exit -1" is -1, not
-    // 4294967295.
-    //
-    // It is -1, with nothing run, when the command line isn't valid UTF-8
-    // or allocator has no memory for its UTF-16 copy, and when the pipe
-    // can't be made or the shell started. The copy is the one allocation
-    // from allocator, at loc, given back before it returns, as the C copy
-    // is on Linux. The command line itself is built in a builder on the
-    // heap, and the shell's path read into the heap, both given back
-    // before it returns too.
-    run_through_shell :: (command: string, captured: *String_Builder, allocator: Allocator, loc: Source_Code_Location) -> int {
+    // It is null, with nothing allocated, when the command line isn't valid
+    // UTF-8 or allocator has no memory for it. The line is built in a
+    // builder on the heap, and %COMSPEC% looked up on the heap (its name's
+    // UTF-16 copy, get_environment's buffer and its value), all given back
+    // before it returns.
+    shell_command_line :: (command: string, allocator: Allocator, loc: Source_Code_Location) -> *u16 {
         shell, found := get_environment("COMSPEC", HEAP_ALLOCATOR);
         defer free(shell.data, HEAP_ALLOCATOR);
         line : String_Builder;
@@ -303,10 +297,28 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
         text : string;
         text.data = line.data;
         text.count = line.count;
-        wide_line := to_wide_string(text, allocator, loc);
-        if wide_line == null { return -1; }
-        defer free(wide_line, allocator, loc);
+        return to_wide_string(text, allocator, loc);
+    }
 
+    // Windows' way to run a command line of shell_command_line's, for
+    // run_command, with captured null, and run_command_with_output, with
+    // the builder it gathers the output in: the shell is started by
+    // CreateProcessW with wide_line as its command line.
+    //
+    // The shell starts with the program's own standard input, output and
+    // error, so what it writes goes where the program's own output goes,
+    // after what the caller flushed. When captured isn't null, its
+    // standard output is instead the write end of a pipe, which only the
+    // shell holds once it has started: the program reads the other end,
+    // appending each piece to captured, until the read gives nothing, when
+    // the shell, and every command it started, has ended and closed it.
+    // Then it waits for the shell to end and gives its exit code as a
+    // signed 32-bit number, as system gives it, so "exit -1" is -1, not
+    // 4294967295.
+    //
+    // It is -1, with nothing run, when the pipe can't be made or the shell
+    // started.
+    run_through_shell :: (wide_line: *u16, captured: *String_Builder) -> int {
         startup : C_Startup_Info;
         startup.size = size_of(C_Startup_Info);
         startup.flags = C_STARTF_USESTDHANDLES;

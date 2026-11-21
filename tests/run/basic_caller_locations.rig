@@ -126,7 +126,7 @@ main :: () {
         print("{}\n", "run_command");
         run_command("exit 0");
         // Only the command's copy and the output are the allocator's (its
-        // builder is the heap's), the copy freed before the output is made.
+        // builder is the heap's), the copy freed after the output is made.
         print("{}\n", "run_command_with_output");
         status : int;
         s, status = run_command_with_output("echo x");

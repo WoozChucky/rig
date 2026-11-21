@@ -19,12 +19,13 @@
 // list_directory's gathered names and sorting scratch,
 // run_command_with_output's gathered output, and on Windows
 // get_environment's UTF-16 buffer for the value and the commands' builder
-// of the command line and copy of the shell's path come from the heap, and
-// are freed before the call returns; the memory debugger's records come
-// from the heap too, and stay until memory_debugger_free, and its report's
-// sorted copy of them and the scratch it gives sort are the heap's, freed
-// before it returns. A failing assert's line is the one allocation from
-// the heap Basic never gives back: the program, or the #run, ends there.
+// of the command line and lookup of %COMSPEC% (its name's and value's
+// copies) come from the heap, and are freed before the call returns; the
+// memory debugger's records come from the heap too, and stay until
+// memory_debugger_free, and its report's sorted copy of them and the
+// scratch it gives sort are the heap's, freed before it returns. A failing
+// assert's line is the one allocation from the heap Basic never gives
+// back: the program, or the #run, ends there.
 // sort's scratch memory and the environment's copies of a name or a
 // command for the system (UTF-16 on Windows, ended by a zero on Linux)
 // come from the allocator the call is given, the context's unless another

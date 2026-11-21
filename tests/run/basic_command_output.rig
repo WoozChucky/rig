@@ -7,14 +7,14 @@
 // its \r\n line endings unchanged; a file named outside the ANSI code
 // page, read and then deleted by commands that name it, which on Windows
 // reach the system as UTF-16 (issue #209); the largest exit code each
-// shell gives back as it is; and the commands refused before they run (a
-// zero byte, no memory for the command's copy, and on Windows a command
-// that isn't valid UTF-8), and one whose output finds no memory. cmd.exe
-// and sh differ in their line endings and their statuses, so only what
-// both agree on is printed: an output with its line ending trimmed,
-// whether it ended with one, and exit 3's status as either system's. The
-// files are written under .build/tests and deleted, and what a stopped
-// run left of them is deleted first.
+// shell has, given as each system's status, not refused; and the commands
+// refused before they run (a zero byte, no memory for the command's copy,
+// and on Windows a command that isn't valid UTF-8), and one whose output
+// finds no memory. cmd.exe and sh differ in their line endings and their
+// statuses, so only what both agree on is printed: an output with its line
+// ending trimmed, whether it ended with one, and exit 3's status as either
+// system's. The files are written under .build/tests and deleted, and what
+// a stopped run left of them is deleted first.
 #import "Basic";
 
 FILE :: ".build/tests/basic_command_output.txt";
@@ -130,8 +130,8 @@ main :: () {
 
     // A file of 9022 bytes, more than one read of 4096 takes, written out
     // by the shell's own command, comes back as its bytes, every one, each
-    // \r\n still a \r\n: the output is read in binary mode on Windows,
-    // where text mode would turn each into \n. cmd.exe's type needs the
+    // \r\n still a \r\n: neither system's pipes have a text mode, so the
+    // bytes come back as the command wrote them. cmd.exe's type needs the
     // path with \, and sh's cat takes it with /.
     contents : String_Builder;
     builder_init(*contents, HEAP_ALLOCATOR);
@@ -187,9 +187,10 @@ main :: () {
     print_line("");
     delete_file(NIHON);
 
-    // The largest exit code comes back as it is. cmd.exe's exit -1 is the
-    // code 0xFFFFFFFF, which Windows gives as -1, as C's system did; sh
-    // (dash) refuses exit -1, and its exit 255 is the wait status 65280.
+    // The largest exit code is given as each system's status, not refused.
+    // cmd.exe's exit -1 is the code 0xFFFFFFFF, which run_command gives as
+    // -1, read as a signed 32-bit number, as C's system did; sh (dash)
+    // refuses exit -1, and its exit 255 is the wait status 65280.
     top := false;
     #if OS == OS_WINDOWS {
         top = run_command("exit -1", HEAP_ALLOCATOR) == -1;
