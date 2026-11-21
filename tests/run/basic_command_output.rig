@@ -1,0 +1,176 @@
+// Basic's run_command_with_output (issue #157): a command's standard
+// output captured, its bytes in memory from the allocator the call is
+// given, and its status; a command that writes only to standard error,
+// whose line is the program's own standard error, not captured; a failing
+// command; an empty one; a file of more than 4096 bytes written out by the
+// shell, which comes back byte for byte, read in several pieces with no
+// line ending changed; and the commands refused before they run (a zero
+// byte, no memory for the command's C copy), and one whose output finds no
+// memory. cmd.exe and sh differ in their line endings and their statuses,
+// so only what both agree on is printed: an output with its line ending
+// trimmed, whether it ended with one, and exit 3's status as either
+// system's. The file is written under .build/tests and deleted, and what a
+// stopped run left of it is deleted first.
+#import "Basic";
+
+FILE :: ".build/tests/basic_command_output.txt";
+
+// Prints s between brackets, so an empty string shows as [].
+show_text :: (s: string) {
+    print_string("[");
+    print_string(s);
+    print_string("]");
+}
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// How many allocations an allocator was asked for, and how many frees.
+Counter :: struct {
+    allocations: int;
+    frees: int;
+}
+
+// Prints a space and counter's allocations, then a space and its frees,
+// and sets both back to 0 for the next call.
+show_counts :: (counter: *Counter) {
+    show_int(counter.allocations);
+    show_int(counter.frees);
+    counter.allocations = 0;
+    counter.frees = 0;
+}
+
+// Passes every call on to the heap, counting the allocations and the
+// frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Counts as counting_allocator_proc does, but gives memory for the first
+// allocation only, as an allocator that runs out after it would.
+first_only_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        if counter.allocations > 1 { return null; }
+    }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+main :: () {
+    delete_file(FILE);
+
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
+
+    // The command's output is captured, not printed: echo's line comes
+    // back as cmd.exe or sh wrote it, ended by \r\n or \n, which both end
+    // with a line feed. Two allocations, the command's C copy and the
+    // output; the C copy is given back by the call, and the output by the
+    // test.
+    print_line("before the command");
+    output, status := run_command_with_output("echo hello", counting);
+    print_string("echo: ");
+    show_text(trim_right(output));
+    show_int(status);
+    show_bool(ends_with(output, "\n"));
+    free(output.data, counting);
+    show_counts(*counter);
+    print_line("");
+
+    // Only standard output is captured: the command's standard error is
+    // the program's, where its line goes, so nothing comes back.
+    output, status = run_command_with_output("1>&2 echo to standard error", HEAP_ALLOCATOR);
+    print_string("standard error: ");
+    show_text(output);
+    show_int(status);
+    print_line("");
+
+    // cmd.exe gives exit 3's code, 3; sh's wait status holds it times 256.
+    output, status = run_command_with_output("exit 3", HEAP_ALLOCATOR);
+    print_string("exit 3: ");
+    show_text(output);
+    show_bool(status == 3 || status == 768);
+    print_line("");
+
+    // An empty command runs the shell with nothing to do.
+    output, status = run_command_with_output("", HEAP_ALLOCATOR);
+    print_string("empty: ");
+    show_text(output);
+    show_int(status);
+    print_line("");
+
+    // A file of 9019 bytes, more than one read of 4096 takes, written out
+    // by the shell's own command, comes back as its bytes, every one, each
+    // \n a \n: the output is read in binary mode on Windows. cmd.exe's
+    // type needs the path with \, and sh's cat takes it with /.
+    contents : String_Builder;
+    builder_init(*contents, HEAP_ALLOCATOR);
+    append_string(*contents, "line one\nline two\n");
+    for i: 0..8999 { append_byte(*contents, "x"[0]); }
+    append_byte(*contents, "\n"[0]);
+    text : string;
+    text.data = contents.data;
+    text.count = contents.count;
+    write_entire_file(FILE, text);
+    #if OS == OS_WINDOWS {
+        output, status = run_command_with_output("type .build\\tests\\basic_command_output.txt", HEAP_ALLOCATOR);
+    } else {
+        output, status = run_command_with_output("cat .build/tests/basic_command_output.txt", HEAP_ALLOCATOR);
+    }
+    print_string("exact:");
+    show_bool(output == text);
+    show_int(output.count);
+    show_int(status);
+    print_line("");
+    free(output.data, HEAP_ALLOCATOR);
+    builder_free(*contents);
+    delete_file(FILE);
+
+    // A command with a zero byte would run as "echo a", so it is refused
+    // before its C copy is made: the allocator is asked for nothing.
+    output, status = run_command_with_output("echo a\0b", counting);
+    print_string("zero byte: ");
+    show_text(output);
+    show_int(status);
+    show_counts(*counter);
+    print_line("");
+
+    // With no memory for the command's C copy, nothing runs.
+    output, status = run_command_with_output("echo from a command with no memory", Allocator.{failing_allocator_proc, null});
+    print_string("no memory: ");
+    show_text(output);
+    show_int(status);
+    print_line("");
+
+    // With memory for the C copy but not for the output, the command runs,
+    // and its output is lost: the zeroed string, and still its status. Two
+    // allocations asked for, the output's refused, and the C copy given
+    // back.
+    first_only : Counter;
+    output, status = run_command_with_output("echo hello", Allocator.{first_only_allocator_proc, *first_only});
+    print_string("no memory for the output: ");
+    show_text(output);
+    show_int(status);
+    show_bool(output.data == null);
+    show_counts(*first_only);
+    print_line("");
+}

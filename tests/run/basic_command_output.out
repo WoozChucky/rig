@@ -1,0 +1,9 @@
+before the command
+echo: [hello] 0 true 2 2
+standard error: [] 0
+exit 3: [] true
+empty: [] 0
+exact: true 9019 0
+zero byte: [] -1 0 0
+no memory: [] -1
+no memory for the output: [] 0 true 2 1

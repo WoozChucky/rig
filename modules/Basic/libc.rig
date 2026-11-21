@@ -335,6 +335,33 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // right after the call, before anything else is called, it is that
     // call's, compiled and interpreted.
     c_get_last_error :: () -> u32 #foreign libc "GetLastError";
+
+    // Basic's run_command_with_output (environment.rig) reads a command's
+    // output through the UCRT's _popen, _fileno, _read and _pclose, used
+    // only with one another: interpreted, they are ucrtbase.dll's, and the
+    // compiler's own fread would refuse _popen's FILE *, so the output is
+    // read from its descriptor with _read, never with c_fread.
+
+    // Runs command through cmd.exe, as c_system does, with its standard
+    // output going into a pipe this end reads, and gives that end as a
+    // FILE *, or null when it can't. Basic's mode is "rb", binary, so the
+    // output's bytes come as the command wrote them, cmd's \r\n included.
+    // The command is bytes in the system's ANSI code page, as c_system's
+    // is.
+    c_popen :: (command: *u8, mode: *u8) -> *void #foreign libc "_popen";
+
+    // Waits for the command c_popen ran to end, closes its pipe, and gives
+    // its status as c_system gives it, the command's exit code, or -1 when
+    // it can't.
+    c_pclose :: (stream: *void) -> s32 #foreign libc "_pclose";
+
+    // The file descriptor under a FILE * of _popen's, for c_read.
+    c_fileno :: (stream: *void) -> s32 #foreign libc "_fileno";
+
+    // Reads up to count bytes from the file descriptor into buffer: the
+    // bytes it read, 0 at the end, or -1 when it couldn't. Its count is 32
+    // bits, and so is its result.
+    c_read :: (descriptor: s32, buffer: *void, count: u32) -> s32 #foreign libc "_read";
 } else {
     // Writes count bytes of data to the file descriptor, 2 for standard
     // error, at once, with no buffer of C's in between: the bytes it wrote,
@@ -401,4 +428,27 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // can't reach by its name, since in glibc it is a macro over this
     // call.
     c_errno_location :: () -> *s32 #foreign libc "__errno_location";
+
+    // Basic's run_command_with_output (environment.rig) reads a command's
+    // output through POSIX's popen, fileno, read and pclose, from the
+    // pipe's descriptor, as on Windows.
+
+    // Runs command through sh, as c_system does, with its standard output
+    // going into a pipe this end reads, and gives that end as a FILE *, or
+    // null when it can't. glibc's mode takes only r, w and e, and refuses
+    // any other letter, b included, so Basic's mode is "r": Linux's pipes
+    // have no text mode, and the bytes come as the command wrote them.
+    c_popen :: (command: *u8, mode: *u8) -> *void #foreign libc "popen";
+
+    // Waits for the command c_popen ran to end, closes its pipe, and gives
+    // its status as c_system gives it, a wait status, or -1 when it can't.
+    c_pclose :: (stream: *void) -> s32 #foreign libc "pclose";
+
+    // The file descriptor under a FILE *, for c_read.
+    c_fileno :: (stream: *void) -> s32 #foreign libc "fileno";
+
+    // Reads up to count bytes from the file descriptor into buffer: the
+    // bytes it read, which may be fewer, 0 at the end, or -1 when it
+    // couldn't.
+    c_read :: (descriptor: s32, buffer: *void, count: u64) -> s64 #foreign libc "read";
 }
