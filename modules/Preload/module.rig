@@ -14,9 +14,9 @@
 // path reads nothing more: a file is read once.
 //
 // It holds the allocator's shape and the heap, type information, Any, the
-// context, the temporary storage and its allocator, [..]T's layout,
-// Resizable_Array, and its built-ins' helpers, Source_Code_Location, the
-// place a default #caller_location is, and the command-line arguments.
+// context, the temporary storage and its allocator, [..]T's layout and the
+// helpers of its built-ins, Resizable_Array, Source_Code_Location (the
+// place a default #caller_location is), and the command-line arguments.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for

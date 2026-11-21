@@ -1104,9 +1104,11 @@ s64 call_result_count(Ast_Call *call);
 Type *call_result_type(Ast_Call *call, s64 i);
 
 // The index of the ..T parameter of the procedure `call` calls, directly
-// (any of its parameters, issue #197) or through a value (its type's last);
-// -1 when it takes none (C's '..' included). For a call that checked with a
-// callee.
+// (any of its parameters, issue #197, even one whose T is an error or one
+// refused on a foreign, a #c_call or a #compiler procedure, so their calls
+// gather and spread as any other's) or through a value (its type's last,
+// spec 3.15); -1 when it takes none (C's '..' included). For a call that
+// checked with a callee.
 s64 call_variadic_index(Ast_Call *call);
 
 // The []T of the ..T parameter of the procedure `call` calls, directly or

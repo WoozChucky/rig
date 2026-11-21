@@ -6,7 +6,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <shellapi.h>  // CommandLineToArgvW
+#include <corecrt_startup.h>  // _configure_wide_argv
+#include <stdlib.h>           // __p___argc, __p___wargv
 
 // GetLastError() of the last failing os_ function.
 static DWORD os_last_error;
@@ -258,9 +259,9 @@ String os_executable_directory(Arena *a) {
 }
 
 // Appends one argument to a command line so that the C runtime's parser
-// (and CommandLineToArgvW) gives it back unchanged. Windows passes a program
-// one string; each program splits it itself, and these are the rules
-// Microsoft's C runtime splits by:
+// gives it back unchanged. Windows passes a program one string; each
+// program splits it itself, and these are the rules Microsoft's C runtime
+// splits by:
 // - an argument with no space, tab, newline or quote, and not empty, goes as
 //   it is;
 // - otherwise it goes in quotes, where backslashes are literal except right
@@ -553,17 +554,31 @@ bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, 
     return run_process(a, argv, directory, seconds, {}, true, false, result);
 }
 
+// The C runtime's wide arguments, split from the UTF-16 command line by the
+// rules append_quoted writes for, which split every Rig program's arguments
+// too (Preload's __save_command_line, spec 10.6), so rig, bin/unit-tests and
+// the programs they run split a command line alike. (shell32's
+// CommandLineToArgvW reads a "" inside quotes otherwise: "a""b" c is a"b and
+// c to the C runtime, and one argument, a"b c, to it.) main's startup made
+// only the narrow argv, so the first call makes the wide one with
+// _configure_wide_argv(1), unexpanded, as the narrow one was. That sets
+// __argc to the wide count, so __argc gets the narrow count back, for C code
+// that reads it with __argv. The wide array ends with a null, so it's walked
+// to that. Should the C runtime fail to make it (out of memory), the
+// arguments are argv as given.
 Array<String> os_arguments(Arena *a, int argc, char **argv) {
-    // CommandLineToArgvW splits as the C runtime does (append_quoted's rules).
     Array<String> args = {};
-    int count = 0;
-    wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!*__p___wargv()) {
+        int narrow_count = *__p___argc();
+        _configure_wide_argv(_crt_argv_unexpanded_arguments);
+        *__p___argc() = narrow_count;
+    }
+    wchar_t **wide = *__p___wargv();
     if (!wide) {
         for (int i = 0; i < argc; i++) array_add(&args, str(argv[i]));
         return args;
     }
-    for (int i = 0; i < count; i++) array_add(&args, from_wide(a, wide[i]));
-    LocalFree(wide);
+    for (int i = 0; wide[i]; i++) array_add(&args, from_wide(a, wide[i]));
     return args;
 }
 

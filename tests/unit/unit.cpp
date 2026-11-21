@@ -112,6 +112,12 @@ static int helper_mode(int argc, char **argv) {
         arena_free(&a);
         return 0;
     }
+    if (strcmp(argv[1], "--echo-crt-args") == 0) {
+        // main's own argv, as the C runtime split it (in the ANSI code
+        // page), for test_os.cpp to hold --echo-args to.
+        for (int i = 2; i < argc; i++) printf("[%s]\n", argv[i]);
+        return 0;
+    }
     if (strcmp(argv[1], "--cwd") == 0) {
         Arena a = arena_make();
         printf(STR_FMT "\n", STR_ARG(os_current_directory(&a)));

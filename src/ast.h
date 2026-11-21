@@ -416,8 +416,9 @@ struct Ast_Call : Ast {
     Array<Ast *> args;
     Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
                         // constant naming one (OP :: add;), is a call of the procedure itself;
-                        // a call of one without a '..T' parameter that gives fewer arguments
-                        // than `proc` has parameters passes the rest's default values (spec 5.10)
+                        // a call passes the default values of the parameters it leaves out:
+                        // those its arguments don't reach, or, with a '..T' parameter, every
+                        // parameter after that one, at every call (spec 5.10)
     Ast_Builtin *builtin;  // the built-in called, or null; then `proc` is null and `callee_type` is the
                            // signature the checker made for this call's element type (spec 3.17)
     Type *callee_type;  // a call through a procedure value (a variable, a field, an element, a

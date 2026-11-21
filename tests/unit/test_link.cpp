@@ -432,8 +432,8 @@ static s32 run_wide(const wchar_t *command_line) {
     return status;
 }
 
-// The little-endian u16 or u32 at `at` in `bytes`, or 0 past its end: a
-// PE file's fields are little-endian, as x64 is.
+// The little-endian u16 or u32 at `at` in `bytes`, as a PE file's fields
+// are, or 0 past its end; read byte by byte, whatever the host's order.
 static u32 pe_u16(String bytes, u64 at) {
     if (at + 2 > (u64)bytes.count) return 0;
     return (u32)bytes.data[at] | (u32)bytes.data[at + 1] << 8;
@@ -466,10 +466,9 @@ static u64 pe_offset_of(String bytes, u64 table, u32 sections, u32 rva) {
 // follows it; the optional header's second data directory (at 120 in a
 // PE32+ one) is the import directory, an RVA. An RVA is an address in the
 // loaded image, so the section table, after the optional header, turns it
-// into a place in the file: the section holding it, 40 bytes each, its
-// virtual address at 12 and its file offset at 20. The import directory is
-// a list of 20-byte descriptors, each naming its DLL by the RVA at 12, up
-// to one that is all zero. None when the file can't be read or isn't one.
+// into a place in the file (pe_offset_of). The import directory is a list
+// of 20-byte descriptors, each naming its DLL by the RVA at 12, up to one
+// that is all zero. None when the file can't be read or isn't one.
 static Array<String> imported_dlls(Arena *a, String program) {
     Array<String> names = {};
     String bytes = {};
@@ -513,17 +512,17 @@ static const char WIDE_ARGUMENTS[] =
     "}\n";
 
 TEST(windows_arguments_reach_main_in_utf8) {
-    // Issue #152 (spec 10.6): the C runtime gives main its argv in the
-    // ANSI code page, where Wörld's ö is one byte, F6, and 日本 is ??, so
-    // Preload's __save_command_line takes the C runtime's wide arguments
-    // in its place, converted to UTF-8. An unpaired surrogate,
-    // which no UTF-8 holds, becomes U+FFFD, EF BF BD, the rest of its
-    // argument kept; an empty argument stays one, and \" inside quotes is
-    // a quote, both split as the C runtime splits them; and *, unquoted,
-    // stays *, no wildcard expanded, as in the narrow argv (the test runs
-    // in a directory with files, which an expanding split would list, so
-    // the count would be wrong). The command line is UTF-16, given to
-    // CreateProcessW as it is, so the surrogates reach the program.
+    // Issue #152 (spec 10.6): the C runtime gives main its argv in the ANSI
+    // code page, where Wörld's ö is one byte, F6, and 日本 is ??, so
+    // Preload's __save_command_line takes the C runtime's wide arguments in
+    // its place, converted to UTF-8. An unpaired surrogate, which no UTF-8
+    // holds, becomes U+FFFD, EF BF BD, the rest of its argument kept; an
+    // empty argument stays one, and \" inside quotes is a quote, both split
+    // as the C runtime splits them; and *, unquoted, stays *, no wildcard
+    // expanded, as in the narrow argv (the test runs in a directory with
+    // files, which an expanding split would list, so the count would be
+    // wrong). The command line is UTF-16, given to CreateProcessW as it is,
+    // so the surrogates reach the program.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
     String program = link_module(&a, m, "wide-arguments-test");

@@ -2379,6 +2379,9 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //   body but a #c_call one or main, takes_context; through a value, one of
 //   a type that isn't #c_call, type_takes_context), the caller's current
 //   one, its address loaded from the caller's slot (Lowering.context).
+// - Then, in a direct call of main (spec 7.4), which takes no context, 0
+//   and null for C's argc and argv (takes_command_line): its prologue hands
+//   them to __save_command_line, which keeps what was saved before.
 // - Then the arguments, in order, each converted to its parameter's type;
 //   an aggregate one is copied into a temporary as soon as it's worked out,
 //   and the temporary's address passed. So the callee's parameter is the
@@ -2442,7 +2445,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //                                call @make(%1, %2)
 //                                copy %0, %1, 8
 //
-//     sum(1, 2, 3);              %0 = const i64 1          (sum :: (first: int, rest: ..int))
+//     sum(1, 2, 3);              %0 = const i64 1          (sum :: (first: int, rest: ..int) -> int)
 //                                %1 = local 16 align 8     (the [2]int)
 //                                %2 = const i64 2
 //                                store i64 %2, %1
@@ -2454,7 +2457,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //                                ...
 //                                %10 = call @sum(%0, %6)
 //
-//     scaled(1, 2);              %0 = const i64 1          (scaled :: (first: int, rest: ..int, scale: int = 10))
+//     scaled(1, 2);              %0 = const i64 1          (scaled :: (first: int, rest: ..int, scale: int = 10) -> int)
 //                                %1 = local 8 align 8      (the [1]int)
 //                                %2 = const i64 2
 //                                store i64 %2, %1
@@ -2522,8 +2525,8 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         array_add(&args, lower_argument(l, call->args[i], t));
     }
     if (view) array_add(&args, lower_variadic_argument(l, call, fixed, view));
-    s64 left_out = view ? fixed + 1 : fixed;
-    if (proc && left_out < params) {
+    s64 first_left_out = view ? fixed + 1 : fixed;
+    if (proc && first_left_out < params) {
         // The parameters left out, each passed its default value, worked
         // out here, in parameter order, and converted as an argument is:
         // after the view, those after a '..T' parameter, which take only
@@ -2543,7 +2546,7 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         // A default #caller_location is this call's place, its callee's
         // name (spec 7.2): a temporary made for it, the caller's fresh copy
         // already, passed as it is.
-        for (s64 i = left_out; i < params; i++) {
+        for (s64 i = first_left_out; i < params; i++) {
             Ast *value = proc->params[i]->default_value;
             if (value->kind == AST_CALLER_LOCATION) {
                 array_add(&args, lower_source_location(l, call->callee->pos));
