@@ -5,7 +5,9 @@
 // print_error_order_test runs a program like this one with both in one
 // pipe, where each line must come out where it was written. An empty
 // string and a zeroed one write nothing, and a placeholder with no argument
-// is written {!MISSING}, as print writes it.
+// is written {!MISSING}, as print writes it. One line is written under a
+// memory debugger in the context, whose report counts no allocation:
+// print_error takes its memory from the heap, never from context.allocator.
 #import "Basic";
 
 main :: () {
@@ -16,7 +18,15 @@ main :: () {
     print_error_string("");
     empty : string;
     print_error_string(empty);
-    print_error("{} and {} {}\n", "a", 2);
+    debugger : Memory_Debugger;
+    memory_debugger_init(*debugger);
+    debugged := context;
+    debugged.allocator = memory_debugger_allocator(*debugger);
+    push_context debugged {
+        print_error("{} and {} {}\n", "a", 2);
+    }
+    memory_debugger_report(*debugger);
+    memory_debugger_free(*debugger);
     print_error("no newline");
     print_error("\n");
     print_line("done");
