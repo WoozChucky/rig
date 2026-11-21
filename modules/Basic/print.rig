@@ -467,9 +467,8 @@ tprint :: (format: string, args: ..Any) -> string {
 // may write fewer bytes than it was given. When one writes none or fails,
 // the rest is dropped: there's nowhere left to say so. On Linux a call a
 // signal stopped before it wrote anything (C_EINTR) is made again, and
-// isn't a failure. An empty string, or
-// a zeroed one, writes nothing, though C's streams are flushed all the
-// same.
+// isn't a failure. An empty string, or a zeroed one, writes nothing,
+// though C's streams are flushed all the same.
 print_error_string :: (s: string) {
     c_fflush(null);
     MOST :: 1 << 30; // the most bytes one call is given

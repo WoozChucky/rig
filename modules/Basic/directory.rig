@@ -167,9 +167,9 @@ delete_directory :: (path: string) -> bool {
 // buffer on the stack. A name may hold an unpaired surrogate, which
 // Windows allows and UTF-8 can't hold: it becomes U+FFFD, so that name
 // doesn't reach its entry again, and two such names may list alike. On
-// Linux a name is its bytes as the system keeps them. On Linux errno is set to 0 before each readdir,
-// since its null is both the end and an error, and only errno tells them
-// apart.
+// Linux a name is its bytes as the system keeps them, and errno is set to
+// 0 before each readdir, since its null is both the end and an error, and
+// only errno tells them apart.
 list_directory :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> []string, bool {
     empty : []string;
     if path.count <= 0 || find_byte(path, 0) >= 0 { return empty, false; }

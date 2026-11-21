@@ -1554,12 +1554,12 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
 #ifndef _WIN32
 // run_command_with_output's read of the pipe, stopped by a signal: the
 // program installs a SIGALRM handler with sigaction, without SA_RESTART,
-// and a timer that fires 100 ms into a command that sleeps half a second,
-// so the read gives -1 with EINTR before the command writes. Basic must
-// read again, and give the whole output and the command's status 0.
-// Compiled only: the interpreter can't hand C a Rig procedure, and the
-// handler is one (qsort_callback). Linux only, as Windows has no signals
-// that stop a read.
+// and a timer that fires 100 ms later, while the command still sleeps its
+// half second, so the read gives -1 with EINTR before the command writes.
+// Basic must read again, and give the whole output and the command's
+// status 0. Compiled only: the interpreter can't hand C a Rig procedure,
+// and the handler is one, as in tests/run/qsort_callback. Linux only, as
+// Windows has no signals that stop a read.
 static String interrupted_read_test(Arena *a, String rig) {
     String name = str("interrupted_read");
     String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
