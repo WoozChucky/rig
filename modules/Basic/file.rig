@@ -1,46 +1,50 @@
 // Basic's files: reading and writing them whole, appending to them, asking
 // whether one is there and deleting it, and an open file read or written a
-// piece at a time, all through C's stdio (libc.rig).
+// piece at a time, through kernel32's wide calls on Windows (CreateFileW,
+// ReadFile, WriteFile, GetFileSizeEx, CloseHandle and DeleteFileW) and C's
+// stdio on Linux (libc.rig). Each procedure that differs between the
+// systems chooses with a statement #if; the rest reach the system only
+// through those.
 //
-// Every file is opened in binary mode, "rb", "wb" or "ab", so the bytes
-// read are the bytes written on every system. Windows' text mode would
-// change them: it writes a line feed as a carriage return and a line feed,
-// and reads stop at Ctrl-Z (26).
+// A path is UTF-8, as every Rig string is, and names the file it says on
+// both systems. Windows' calls take it as UTF-16, so it is converted first
+// (to_wide_path, wide.rig), and a file named outside the system's ANSI code
+// page, café or 日本, is made, read, found and deleted by its UTF-8 name,
+// as a directory is (directory.rig); wide.rig says why not through C's
+// calls there. A path that isn't valid UTF-8, which would have to change to
+// be converted, and so would name another file, is refused on Windows.
+// Linux's C library takes a path as plain bytes, so a UTF-8 path names the
+// file it says, and one that isn't UTF-8 is a name all the same.
 //
-// A directory is not a file here, on either system. Windows' fopen won't
-// open one, but Linux's opens it for reading, and its remove deletes an
-// empty one. So file_open, opening to read, reads one byte first: a
-// directory's read fails, where a file's gives the byte or the end.
-// read_entire_file, file_exists and delete_file open the file that way,
-// through file_open, before reading it, finding it or deleting it.
+// The bytes read are the bytes written on every system. kernel32's calls
+// have no text mode, and on Linux every file is opened in binary mode,
+// "rb", "wb" or "ab": C's text mode on Windows would change them, writing a
+// line feed as a carriage return and a line feed, and stopping reads at
+// Ctrl-Z (26), and on Linux the two modes are the same.
 //
-// A path goes to C as a copy ended by a zero (to_c_string), which C reads
-// up to its first zero. So a path with a zero byte in it would reach C as
-// a shorter one, another file's name, and every procedure here refuses it
-// without calling C. The copy comes from the heap, and is given back as
-// soon as the C call that takes it returns: not from the context's
-// allocator, which may be an arena's or the temporary storage's, where
-// giving it back frees nothing, so memory a program never resets would
-// grow with each call.
+// A directory is not a file here, on either system. Windows' CreateFileW
+// won't open one in any mode Basic asks for, but Linux's fopen opens it
+// for reading, and its remove deletes an empty one. So on Linux file_open,
+// opening to read, reads one byte first: a directory's read fails, where a
+// file's gives the byte or the end. read_entire_file, file_exists and
+// delete_file open the file that way, through file_open, before reading
+// it, finding it or deleting it.
 //
-// The path's bytes go to C as they are. Linux's C library takes a file
-// name as plain bytes, so a UTF-8 path names the file it says, but
-// Windows' reads it in the system's ANSI code page rather than as UTF-8,
-// so a path with a character outside ASCII names another file there (with
-// code page 1252, "café.txt" makes cafÃ©.txt). Windows' wide-character
-// calls, _wfopen and _wremove, would take it right, but Basic's files
-// don't call them: interpreted, _wfopen's FILE * would be a second C
-// runtime's, which the other calls here refuse (libc.rig). Basic's
-// directories (directory.rig) do take a UTF-8 path on Windows, through
-// kernel32's wide calls, so a directory named outside the ANSI code page
-// is made and listed by its name, but a file in it, or one so named,
-// can't be opened here (issue #209 is to make files UTF-8 too).
+// A path goes to the system as a copy, UTF-16 on Windows and ended by a
+// zero on Linux (to_c_string), which the system reads up to its first
+// zero. So a path with a zero byte in it would reach it as a shorter one,
+// another file's name, and every procedure here refuses it without calling
+// the system. The copy comes from the heap, and is given back as soon as
+// the call that takes it returns: not from the context's allocator, which
+// may be an arena's or the temporary storage's, where giving it back frees
+// nothing, so memory a program never resets would grow with each call.
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
+#load "wide.rig";
 
-// An open file: C's FILE *, or null when the file isn't open. A zeroed
-// File is one that isn't open.
+// An open file: kernel32's file handle on Windows and C's FILE * on Linux,
+// or null when the file isn't open. A zeroed File is one that isn't open.
 File :: struct {
     handle: *void;
 }
@@ -55,116 +59,181 @@ FILE_APPEND :: 2;
 // Opens the file at path in mode, FILE_READ, FILE_WRITE or FILE_APPEND,
 // and gives it and true; the caller closes it with file_close. It gives a
 // File that isn't open, and false, for any other mode, for a path with a
-// zero byte, for a file C can't open (missing, when reading, or not
-// allowed), and when reading, for a directory.
+// zero byte, for an empty path, on Windows for one that isn't valid UTF-8,
+// for a file the system can't open (missing, when reading, or not
+// allowed), and for a directory.
 //
-// To tell a directory from a file when reading, one byte is read and then
-// the position set back to the start, where it was before: on Linux a
+// On Windows a mode is CreateFileW's access and disposition: FILE_READ
+// reads a file that is there, FILE_WRITE writes one made or emptied, and
+// FILE_APPEND writes at the end of one, made when it isn't there, every
+// write landing at the end. Others may read and write the file while it is
+// open, as C's fopen lets them, but not delete it. A directory doesn't
+// open, in any mode.
+//
+// On Linux, to tell a directory from a file when reading, one byte is read
+// and then the position set back to the start, where it was before: a
 // directory opens, but its read fails, where a file's read gives a byte or
 // the end of the file. A position that can't be read or set back fails the
 // open too, since the byte read would be lost.
 file_open :: (path: string, mode: int) -> File, bool {
     if mode != FILE_READ && mode != FILE_WRITE && mode != FILE_APPEND { return File.{null}, false; }
     if find_byte(path, 0) >= 0 { return File.{null}, false; }
-    c_path := to_c_string(path, HEAP_ALLOCATOR);
-    if c_path == null { return File.{null}, false; }
 
-    handle : *void = null;
-    if mode == FILE_READ {
-        handle = c_fopen(c_path, "rb");
-    } else if mode == FILE_WRITE {
-        handle = c_fopen(c_path, "wb");
+    #if OS == OS_WINDOWS {
+        wide := to_wide_path(path);
+        if wide == null { return File.{null}, false; }
+        access : u32 = C_GENERIC_READ;
+        disposition : u32 = C_OPEN_EXISTING;
+        if mode == FILE_WRITE {
+            access = C_GENERIC_WRITE;
+            disposition = C_CREATE_ALWAYS;
+        } else if mode == FILE_APPEND {
+            access = C_FILE_APPEND_DATA;
+            disposition = C_OPEN_ALWAYS;
+        }
+        handle := c_create_file_w(wide, access, C_FILE_SHARE_READ_WRITE, null, disposition, C_FILE_ATTRIBUTE_NORMAL, null);
+        free(wide, HEAP_ALLOCATOR);
+        if cast(int) handle == -1 { return File.{null}, false; }
+        return File.{handle}, true;
     } else {
-        handle = c_fopen(c_path, "ab");
-    }
-    free(c_path, HEAP_ALLOCATOR);
-    if handle == null { return File.{null}, false; }
+        c_path := to_c_string(path, HEAP_ALLOCATOR);
+        if c_path == null { return File.{null}, false; }
 
-    // The handle is open from here, and every return that fails closes it:
-    // the deferred c_fclose runs on each way out (spec 6.12) unless keep is
-    // set, which only the last return does, handing the open file to the
-    // caller.
-    keep := false;
-    defer if !keep { c_fclose(handle); }
+        handle : *void = null;
+        if mode == FILE_READ {
+            handle = c_fopen(c_path, "rb");
+        } else if mode == FILE_WRITE {
+            handle = c_fopen(c_path, "wb");
+        } else {
+            handle = c_fopen(c_path, "ab");
+        }
+        free(c_path, HEAP_ALLOCATOR);
+        if handle == null { return File.{null}, false; }
 
-    if mode == FILE_READ {
-        start : C_Fpos;
-        if c_fgetpos(handle, *start) != 0 { return File.{null}, false; }
-        probe : u8;
-        c_fread(*probe, 1, 1, handle);
-        if c_ferror(handle) != 0 || c_fsetpos(handle, *start) != 0 { return File.{null}, false; }
+        // The handle is open from here, and every return that fails closes
+        // it: the deferred c_fclose runs on each way out (spec 6.12) unless
+        // keep is set, which only the success path does, just before its
+        // return, handing the open file to the caller.
+        keep := false;
+        defer if !keep { c_fclose(handle); }
+
+        if mode == FILE_READ {
+            start : C_Fpos;
+            if c_fgetpos(handle, *start) != 0 { return File.{null}, false; }
+            probe : u8;
+            c_fread(*probe, 1, 1, handle);
+            if c_ferror(handle) != 0 || c_fsetpos(handle, *start) != 0 { return File.{null}, false; }
+        }
+        keep = true;
+        return File.{handle}, true;
     }
-    keep = true;
-    return File.{handle}, true;
 }
 
-// Closes file, writing out what C still holds of it. A File that isn't
-// open is left alone.
+// Closes file; on Linux C writes out what it still holds of it first. A
+// File that isn't open is left alone.
 file_close :: (file: File) {
     if file.handle == null { return; }
-    c_fclose(file.handle);
+    #if OS == OS_WINDOWS {
+        c_close_handle(file.handle);
+    } else {
+        c_fclose(file.handle);
+    }
 }
 
 // Reads up to buffer.count bytes into buffer from where file is, and gives
 // how many it read: fewer at the end of the file, and 0 there, on an error,
-// for an empty buffer or for a File that isn't open.
+// for an empty buffer or for a File that isn't open. On Windows one read
+// asks the system for at most 1 GiB, so a larger buffer gets that much at
+// most, and the rest by reading again, as read_entire_file does.
 file_read :: (file: File, buffer: []u8) -> int {
     if file.handle == null || buffer.count <= 0 { return 0; }
-    return cast(int) c_fread(buffer.data, 1, cast(u64) buffer.count, file.handle);
+    #if OS == OS_WINDOWS {
+        PIECE :: 1073741824; // 1 GiB, well within ReadFile's 32-bit count
+        count := buffer.count;
+        if count > PIECE { count = PIECE; }
+        read : u32 = 0;
+        if c_read_file(file.handle, buffer.data, cast(u32) count, *read, null) == 0 { return 0; }
+        return cast(int) read;
+    } else {
+        return cast(int) c_fread(buffer.data, 1, cast(u64) buffer.count, file.handle);
+    }
 }
 
 // Writes the bytes of data to file, and gives whether every one of them
 // was written. An empty or zeroed string writes nothing, and is true. A
 // File that isn't open is false.
 //
-// What is written may stay in C's buffer until the file is closed, which
-// is when an error writing it out shows: c_fclose gives it, which
-// write_entire_file and append_to_file read, and file_close doesn't.
+// On Windows the bytes go to the system at once, in pieces of at most
+// 1 GiB, each going on where the last stopped, and a piece that fails, or
+// writes nothing, is false. On Linux what is written may stay in C's
+// buffer until the file is closed, which is when an error writing it out
+// shows: c_fclose gives it, which write_entire_file and append_to_file
+// read, and file_close doesn't.
 file_write :: (file: File, data: string) -> bool {
     if file.handle == null { return false; }
     if data.count <= 0 { return true; }
-    return c_fwrite(data.data, 1, cast(u64) data.count, file.handle) == cast(u64) data.count;
+    #if OS == OS_WINDOWS {
+        PIECE :: 1073741824; // 1 GiB, well within WriteFile's 32-bit count
+        done := 0;
+        while done < data.count {
+            count := data.count - done;
+            if count > PIECE { count = PIECE; }
+            written : u32 = 0;
+            if c_write_file(file.handle, data.data + done, cast(u32) count, *written, null) == 0 || written == 0 { return false; }
+            done += cast(int) written;
+        }
+        return true;
+    } else {
+        return c_fwrite(data.data, 1, cast(u64) data.count, file.handle) == cast(u64) data.count;
+    }
 }
 
-// The size of file in bytes, its position left where it was; -1 when C
-// can't tell, or for a File that isn't open.
+// The size of file in bytes, its position left where it was; -1 when the
+// system can't tell, or for a File that isn't open.
 //
-// It is the position at the end: the position now is kept, the file goes
-// to its end and the position there is read, and then it goes back. The
-// positions are fgetpos's, 64 bits on both systems, so a file past 2 GiB
-// has its size right. Both moves, fseek's and fsetpos's, clear the
-// end-of-file mark, so a read that had reached the end before reads again
-// from where it was.
+// On Windows GetFileSizeEx gives it, 64 bits, without moving. On Linux it
+// is the position at the end: the position now is kept, the file goes to
+// its end and the position there is read, and then it goes back. The
+// positions are fgetpos's, 64 bits, so a file past 2 GiB has its size
+// right. Both moves, fseek's and fsetpos's, clear the end-of-file mark, so
+// a read that had reached the end before reads again from where it was.
 file_size :: (file: File) -> int {
     if file.handle == null { return -1; }
-    here : C_Fpos;
-    if c_fgetpos(file.handle, *here) != 0 { return -1; }
-    if c_fseek(file.handle, 0, C_SEEK_END) != 0 {
-        c_fsetpos(file.handle, *here);
-        return -1;
+    #if OS == OS_WINDOWS {
+        size : s64 = 0;
+        if c_get_file_size_ex(file.handle, *size) == 0 { return -1; }
+        return size;
+    } else {
+        here : C_Fpos;
+        if c_fgetpos(file.handle, *here) != 0 { return -1; }
+        if c_fseek(file.handle, 0, C_SEEK_END) != 0 {
+            c_fsetpos(file.handle, *here);
+            return -1;
+        }
+        end : C_Fpos;
+        found := c_fgetpos(file.handle, *end) == 0;
+        if c_fsetpos(file.handle, *here) != 0 || !found { return -1; }
+        return end.position;
     }
-    end : C_Fpos;
-    found := c_fgetpos(file.handle, *end) == 0;
-    if c_fsetpos(file.handle, *here) != 0 || !found { return -1; }
-    return end.position;
 }
 
 // The whole file at path, in memory from allocator, the context's unless
 // given, which the caller gives back with free(s.data, allocator), and
 // true. An empty file is the zeroed string (count 0, data null),
-// allocating nothing, and true. The path's copy for C comes from the heap
-// all the same, as every procedure here takes it.
+// allocating nothing, and true. The path's copy for the system comes from
+// the heap all the same, as every procedure here takes it.
 //
-// A missing file, a directory, a path with a zero byte, a file whose size
-// C can't tell, no memory, or fewer bytes read than the size are the
-// zeroed string and false, with nothing left allocated.
+// A missing file, a directory, a path file_open refuses, a file whose size
+// the system can't tell, no memory, or fewer bytes read than the size are
+// the zeroed string and false, with nothing left allocated.
 //
-// The memory is the file's size, asked for once, and C reads into it until
-// it is full or a read gives nothing. It is asked for, and given back after
-// a short read, with loc, the place of the call unless given
+// The memory is the file's size, asked for once, and the file is read into
+// it until it is full or a read gives nothing. It is asked for, and given
+// back after a short read, with loc, the place of the call unless given
 // (#caller_location, spec 7.2), so an allocator that records where it is
 // asked from sees the caller's line (allocators.rig); the heap's copy of
-// the path is file_open's, at its own line.
+// the path is file_open's, made at a line of its own (to_wide_path's in
+// wide.rig on Windows).
 read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
     file, opened := file_open(path, FILE_READ);
@@ -201,13 +270,19 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc
 
 // Makes the file at path, or empties it when it is there, and writes data
 // to it. True when it opened, every byte was written and it closed without
-// an error: c_fclose gives an error when it couldn't write out what C
-// still held, as on a full disk. False for a path with a zero byte.
+// an error: on Linux c_fclose gives an error when it couldn't write out
+// what C still held, as on a full disk. False for a path file_open
+// refuses.
 write_entire_file :: (path: string, data: string) -> bool {
     file, opened := file_open(path, FILE_WRITE);
     if !opened { return false; }
     written := file_write(file, data);
-    closed := c_fclose(file.handle) == 0;
+    closed := false;
+    #if OS == OS_WINDOWS {
+        closed = c_close_handle(file.handle) != 0;
+    } else {
+        closed = c_fclose(file.handle) == 0;
+    }
     return written && closed;
 }
 
@@ -217,13 +292,18 @@ append_to_file :: (path: string, data: string) -> bool {
     file, opened := file_open(path, FILE_APPEND);
     if !opened { return false; }
     written := file_write(file, data);
-    closed := c_fclose(file.handle) == 0;
+    closed := false;
+    #if OS == OS_WINDOWS {
+        closed = c_close_handle(file.handle) != 0;
+    } else {
+        closed = c_fclose(file.handle) == 0;
+    }
     return written && closed;
 }
 
 // Whether there is a file at path that opens for reading: false for a
-// directory, a missing file, one that can't be read, and a path with a
-// zero byte.
+// directory, a missing file, one that can't be read, and a path file_open
+// refuses.
 file_exists :: (path: string) -> bool {
     file, opened := file_open(path, FILE_READ);
     file_close(file);
@@ -231,15 +311,23 @@ file_exists :: (path: string) -> bool {
 }
 
 // Deletes the file at path, and gives whether it did: false for a missing
-// file, a directory, a path with a zero byte, or when C can't. Only a file
-// that file_exists finds is deleted, so Linux's remove, which deletes an
-// empty directory too, is never given one, and a file that can't be opened
-// for reading isn't deleted either.
+// file, a directory, a path file_open refuses, or when the system can't,
+// as Windows can't while the file is open without FILE_SHARE_DELETE, as
+// Basic's and C's files are. Only a file that file_exists finds is
+// deleted, so Linux's remove, which deletes an empty directory too, is
+// never given one, and a file that can't be opened for reading isn't
+// deleted either.
 delete_file :: (path: string) -> bool {
     if !file_exists(path) { return false; }
-    c_path := to_c_string(path, HEAP_ALLOCATOR);
-    if c_path == null { return false; }
-    removed := c_remove(c_path) == 0;
-    free(c_path, HEAP_ALLOCATOR);
-    return removed;
+    #if OS == OS_WINDOWS {
+        wide := to_wide_path(path);
+        if wide == null { return false; }
+        defer free(wide, HEAP_ALLOCATOR);
+        return c_delete_file_w(wide) != 0;
+    } else {
+        c_path := to_c_string(path, HEAP_ALLOCATOR);
+        if c_path == null { return false; }
+        defer free(c_path, HEAP_ALLOCATOR);
+        return c_remove(c_path) == 0;
+    }
 }

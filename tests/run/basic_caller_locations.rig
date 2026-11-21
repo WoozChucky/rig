@@ -51,8 +51,8 @@ recording_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data:
 main :: () {
     recording := context;
     recording.allocator = Allocator.{recording_proc, null};
-    // Writing the file takes no allocator: its path's copy for C is the
-    // heap's, whatever the context is.
+    // Writing the file takes no allocator: its path's copy for the system
+    // is the heap's, whatever the context is.
     write_entire_file(PATH, "data");
     make_directory(DIRECTORY);
     make_directory(CHILD);
@@ -119,14 +119,14 @@ main :: () {
         s, ok = read_entire_file(PATH);
         free(s.data);
         // The runner sets RIG_BASIC_TEST, so the value is copied out after
-        // the name's copy for C is freed.
+        // the name's copy for the system is freed, on both systems.
         print("{}\n", "get_environment");
         s, ok = get_environment("RIG_BASIC_TEST");
         free(s.data);
         print("{}\n", "run_command");
         run_command("exit 0");
-        // Its gathering builder is the heap's, so only the command's C copy
-        // and the output, which isn't empty, are the allocator's.
+        // Only the command's copy and the output are the allocator's (its
+        // builder is the heap's), the copy freed after the output is made.
         print("{}\n", "run_command_with_output");
         status : int;
         s, status = run_command_with_output("echo x");

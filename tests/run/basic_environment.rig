@@ -1,10 +1,13 @@
-// Basic's environment (issue #145): two variables bin/run-tests sets for
-// every program it runs, RIG_BASIC_TEST and RIG_BASIC_TEST_EMPTY, which is
-// set to "", so this test passes only under the runner; PATH, which every
-// system sets, read without printing it; names Basic refuses; allocators
-// that count what they give and get back, one with no memory and one with
-// memory for only the name's C copy; and commands, whose output comes in
-// order with the program's, and their status.
+// Basic's environment (issues #145 and #209): four variables bin/run-tests
+// sets for every program it runs, RIG_BASIC_TEST, RIG_BASIC_TEST_EMPTY,
+// which is set to "", RIG_BASIC_TEST_UTF8, whose value is outside ASCII,
+// and RIG_BASIC_TEST_日本, whose name is, read as the same UTF-8 on both
+// systems, so this test passes only under the runner; PATH, which every
+// system sets, read without printing it; names Basic refuses, and one that
+// isn't valid UTF-8; allocators that count what they give and get back,
+// one with no memory and one with memory for only the name's copy; and
+// commands, whose output comes in order with the program's, and their
+// status.
 #import "Basic";
 
 // Prints s between brackets, so an empty string shows as [].
@@ -71,7 +74,8 @@ main :: () {
     counter : Counter;
     counting := Allocator.{counting_allocator_proc, *counter};
 
-    // The name's C copy is given back once getenv returns, so of the two
+    // The name's copy for the system (UTF-16 on Windows, ended by a zero
+    // on Linux) is given back once the system has read it, so of the two
     // allocations, the name's and the value's, one is freed, and the
     // caller frees the value.
     value, found := get_environment("RIG_BASIC_TEST", counting);
@@ -84,7 +88,7 @@ main :: () {
     counter.frees = 0; // The caller's free isn't the next call's.
 
     // A variable set to "" is found, and is the zeroed string, with only
-    // the name's C copy allocated, and freed.
+    // the name's copy allocated, and freed.
     value, found = get_environment("RIG_BASIC_TEST_EMPTY", counting);
     print_string("empty: ");
     show_text(value);
@@ -94,7 +98,7 @@ main :: () {
     print_line("");
 
     // A variable that isn't set is the zeroed string, with nothing left
-    // allocated: the name's C copy is freed.
+    // allocated: the name's copy is freed.
     value, found = get_environment("RIG_BASIC_TEST_UNSET", counting);
     print_string("unset: ");
     show_text(value);
@@ -102,6 +106,50 @@ main :: () {
     show_bool(value.data == null);
     show_counts(*counter);
     print_line("");
+
+    // A value and a name outside ASCII, which the runner sets in UTF-16 on
+    // Windows and in UTF-8 on Linux, come back as the same UTF-8 on both:
+    // the value with the same two allocations as RIG_BASIC_TEST's, one of
+    // them freed, and the name found by its UTF-8 bytes.
+    value, found = get_environment("RIG_BASIC_TEST_UTF8", counting);
+    print_string("utf-8 value: ");
+    show_text(value);
+    show_bool(found);
+    show_counts(*counter);
+    print_line("");
+    free(value.data, counting);
+    counter.frees = 0;
+    value, found = get_environment("RIG_BASIC_TEST_日本", HEAP_ALLOCATOR);
+    print_string("utf-8 name: ");
+    show_text(value);
+    show_bool(found);
+    print_line("");
+    free(value.data, HEAP_ALLOCATOR);
+
+    // A name of RIG_ and the byte 255, which is never valid UTF-8, joined
+    // from a view of the byte since a string literal can't hold it. No
+    // such variable is set, so it isn't found on either system, but the
+    // counts tell why: Windows refuses the name, as it can't be converted
+    // to UTF-16 as it is, and asks the allocator for nothing, and Linux
+    // makes and frees its C copy and doesn't find it. The counts differ, so
+    // one check of them is printed, the same line on both systems.
+    byte : [1]u8;
+    byte[0] = 255;
+    byte_view : []u8 = byte;
+    bad_name := sprint("RIG_{}", cast(string) byte_view);
+    value, found = get_environment(bad_name, counting);
+    refused := false;
+    #if OS == OS_WINDOWS {
+        refused = !found && counter.allocations == 0 && counter.frees == 0;
+    } else {
+        refused = !found && counter.allocations == 1 && counter.frees == 1;
+    }
+    print_string("invalid UTF-8 name:");
+    show_bool(refused);
+    print_line("");
+    free(bad_name.data);
+    counter.allocations = 0;
+    counter.frees = 0;
 
     // PATH differs from system to system and run to run, so only that it
     // is there, and not empty, is printed.
@@ -113,10 +161,10 @@ main :: () {
     free(value.data, HEAP_ALLOCATOR);
 
     // An empty name, one with '=', which ends a name in the environment,
-    // and one with a zero byte, which C would read as RIG_BASIC_TEST,
-    // which is set, are refused without asking C: no C copy of the name is
-    // made, so the allocator is asked for nothing. Each is the zeroed
-    // string and false.
+    // and one with a zero byte, which the system would read as
+    // RIG_BASIC_TEST, which is set, are refused without asking it: no copy
+    // of the name is made, so the allocator is asked for nothing. Each is
+    // the zeroed string and false.
     print_string("refused names:");
     value, found = get_environment("", counting);
     show_bool(found);
@@ -139,7 +187,7 @@ main :: () {
     show_int(run_command("echo from a command with no memory", Allocator.{failing_allocator_proc, null}));
     print_line("");
 
-    // With memory for the name's C copy but not for the value, the
+    // With memory for the name's copy but not for the value, the
     // variable is the zeroed string and false, and the name's copy is
     // given back: two allocations asked for, one freed.
     first_only : Counter;
@@ -153,7 +201,7 @@ main :: () {
 
     // What the program printed is flushed before the command runs, so the
     // command's line comes after it, and before what follows. The
-    // command's C copy is given back once it has run.
+    // command's copy is given back once it has run.
     print_line("before the command");
     status := run_command("echo from the command", counting);
     print_string("status:");
@@ -168,7 +216,7 @@ main :: () {
     print_line("");
 
     // A command with a zero byte would run as "echo a", so it is refused
-    // before its C copy is made: the allocator is asked for nothing.
+    // before its copy is made: the allocator is asked for nothing.
     print_string("zero byte:");
     show_int(run_command("echo a\0b", counting));
     show_counts(*counter);

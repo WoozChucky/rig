@@ -1,20 +1,23 @@
 // Basic's environment: the value of a variable of the environment the
-// program was started with and a command run through the system's shell,
-// each through C's stdlib (libc.rig), a command run with its standard
-// output captured, through the system's popen (libc.rig's per-system
-// part), and the command line the program was started with, which Preload
-// saves before main's first line.
+// program was started with, through kernel32's GetEnvironmentVariableW on
+// Windows and C's getenv on Linux (libc.rig), a command run through the
+// system's shell, through kernel32's CreateProcessW on Windows and C's
+// system on Linux, a command run with its standard output captured, the
+// same way through a pipe on Windows and through popen on Linux, and the
+// command line the program was started with, which Preload saves before
+// main's first line.
 //
-// A variable's name and a command go to C as copies ended by a zero
-// (to_c_string), which C reads up to its first zero. So a name or a
-// command with a zero byte in it would reach C cut short, another name or
-// another command, and get_environment, run_command and
-// run_command_with_output refuse it without calling C. The copies come
-// from the allocator each procedure is given, the context's unless another
-// is, and go back to it before the procedure returns, once C is done with
-// them.
+// A variable's name and a command go to the system as a copy, in UTF-16
+// and ended by a zero unit on Windows (to_wide_string, wide.rig), and
+// ended by a zero on Linux (to_c_string). The system reads each up to its
+// first zero, so a name or a command with a zero byte in it would reach it
+// cut short, another name or another command, and get_environment,
+// run_command and run_command_with_output refuse it without calling the
+// system. The copies come from the allocator each procedure is given, the
+// context's unless another is, and go back to it before the procedure
+// returns, once the system is done with them.
 //
-// The systems differ in what they hand C, and Basic doesn't hide it:
+// The systems differ in what they are handed, and Basic doesn't hide it:
 // Windows' variable names are case-insensitive, so "Path" finds PATH
 // there, and Linux's aren't; a command runs in cmd.exe on Windows and in
 // sh on Linux, with each one's syntax, cmd's echo ending its line with
@@ -22,96 +25,152 @@
 // Windows, and a wait status on Linux (run_command).
 //
 // A captured output is the bytes the command wrote to its standard output,
-// as it wrote them: on Windows the pipe is read in binary mode, so cmd's
-// \r\n stays \r\n, as Basic's files keep their bytes (file.rig), and
-// Linux's pipes have no other mode. Only standard output is captured: the
-// command's standard error and standard input are the program's own, so
-// its errors still reach the program's standard error (a command can send
-// them into the pipe too with 2>&1).
+// as it wrote them: neither system's pipes have a text mode, so cmd's \r\n
+// stays \r\n, as Basic's files keep their bytes (file.rig). Only standard
+// output is captured: the command's standard error and standard input are
+// the program's own, so its errors still reach the program's standard
+// error (a command can send them into the pipe too with 2>&1).
 //
-// A name, a value and a command are bytes to C. Linux's C library takes
-// them as they are, so UTF-8 stays UTF-8, but Windows' reads and gives them
-// in the system's ANSI code page rather than as UTF-8, so one with a
-// character outside ASCII means something else there. Windows'
-// wide-character calls, such as _wgetenv, _wsystem and _wpopen, would take
-// them right, but Basic doesn't call them yet (issue #209).
+// A variable's name and value, and a command, are UTF-8 on both systems.
+// Linux's C library takes and gives them as bytes, so UTF-8 stays UTF-8.
+// Windows' wide calls take the name and the command and give the value in
+// UTF-16, converted from and to UTF-8 (wide.rig), where C's getenv, system
+// and _popen would read and give them in the system's ANSI code page, so
+// that one with a character outside it, 日本 in code page 1252, would mean
+// something else there; a name or a command that isn't valid UTF-8, which
+// would have to change to be converted, is refused there. What a command
+// writes is its own, in whatever encoding it chooses: on Windows cmd's
+// echo writes its text in the console's code page, not in UTF-8, where
+// its type writes a file's bytes as they are.
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
 #load "memory.rig";
 #load "builder.rig";
+#load "wide.rig";
 
 // A copy of the value of the environment's variable name, in memory from
 // allocator, the context's unless given, which the caller gives back with
-// free(value.data, allocator), and true. C's getenv gives a pointer to its
-// own copy, which a later call may change, so the value is copied out at
-// once, its zero not included. A variable set to "" is the zeroed string
-// (count 0, data null), which allocates nothing, and true.
+// free(value.data, allocator), and true. On Linux C's getenv gives a
+// pointer to its own copy, which a later call may change, so the value is
+// copied out at once, as its bytes, its zero not included; on Windows
+// GetEnvironmentVariableW writes it, in UTF-16, into a buffer Basic gives
+// (below), and it is converted to UTF-8 from there. On Windows an unpaired
+// surrogate in the value, which Windows allows, becomes U+FFFD. A variable
+// set to "" is the zeroed string (count 0, data null), which allocates
+// nothing, and true.
 //
 // It is the zeroed string and false, with nothing left allocated, when the
-// variable isn't set, when the allocator has no memory for the name's C
-// copy or the value's, and for a name C would read wrong: an empty name,
-// one with '=', which ends a name in the environment (NAME=value), and one
-// with a zero byte, which C would read as a shorter name.
+// variable isn't set, when the allocator has no memory for the name's copy
+// or the value's, and for a name the system would read wrong: an empty
+// name, one with '=', which ends a name in the environment (NAME=value),
+// one with a zero byte, which the system would read as a shorter name, and
+// on Windows one that isn't valid UTF-8, which would have to change to be
+// converted and so would name another variable.
 //
-// The name's C copy and the value's are asked for, and the C copy given
+// On Windows GetEnvironmentVariableW is asked first for the value's size
+// in UTF-16 units, its zero counted: 0 when the variable isn't set, and 1
+// when it is set to "". The value is then read into a buffer of that size
+// on the heap, given back before the call returns, as the file
+// procedures' copies of a path are (file.rig says why), and converted into
+// one allocation from allocator. A value another thread changed between
+// the two calls, so that the second doesn't give one unit fewer than the
+// size, is false, as is no memory for the buffer.
+//
+// The name's copy and the value's are asked for, and the name's copy given
 // back, with loc, the place of the call unless given (#caller_location,
 // spec 7.2), so an allocator that records where it is asked from sees the
 // caller's line (allocators.rig).
 get_environment :: (name: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
     if name.count == 0 || find_byte(name, "="[0]) >= 0 || find_byte(name, 0) >= 0 { return empty, false; }
-    c_name := to_c_string(name, allocator, loc);
-    if c_name == null { return empty, false; }
-    c_value := c_getenv(c_name);
-    free(c_name, allocator, loc);
-    if c_value == null { return empty, false; }
+    #if OS == OS_WINDOWS {
+        // The name's copy is given back as soon as the system has read it,
+        // before the value's is asked for, as on Linux, so an allocator
+        // sees the same calls in the same order on both systems.
+        wide_name := to_wide_string(name, allocator, loc);
+        if wide_name == null { return empty, false; }
+        size := c_get_environment_variable_w(wide_name, null, 0);
+        if size <= 1 {
+            free(wide_name, allocator, loc);
+            return empty, size == 1;
+        }
+        units := cast(*u16) alloc(cast(int) size * 2, HEAP_ALLOCATOR);
+        if units == null {
+            free(wide_name, allocator, loc);
+            return empty, false;
+        }
+        defer free(units, HEAP_ALLOCATOR);
+        got := c_get_environment_variable_w(wide_name, units, size);
+        free(wide_name, allocator, loc);
+        if got != size - 1 { return empty, false; }
+        value, converted := from_wide_string(units, cast(int) got, allocator, loc);
+        return value, converted;
+    } else {
+        c_name := to_c_string(name, allocator, loc);
+        if c_name == null { return empty, false; }
+        c_value := c_getenv(c_name);
+        free(c_name, allocator, loc);
+        if c_value == null { return empty, false; }
 
-    // C's string ends at its first zero, which is how its length is found.
-    count := 0;
-    while c_value[count] != 0 { count += 1; }
-    if count == 0 { return empty, true; }
-    data := cast(*u8) alloc(count, allocator, loc);
-    if data == null { return empty, false; }
-    copy_memory(data, c_value, count);
+        // C's string ends at its first zero, which is how its length is
+        // found.
+        count := 0;
+        while c_value[count] != 0 { count += 1; }
+        if count == 0 { return empty, true; }
+        data := cast(*u8) alloc(count, allocator, loc);
+        if data == null { return empty, false; }
+        copy_memory(data, c_value, count);
 
-    value : string;
-    value.data = data;
-    value.count = count;
-    return value, true;
+        value : string;
+        value.data = data;
+        value.count = count;
+        return value, true;
+    }
 }
 
 // Runs command through the system's shell, cmd.exe on Windows and sh on
-// Linux, waits for it to end, and gives its status as C's system gives
-// it. On Windows that is the command's exit code: "exit 3" gives 3, and a
-// command cmd.exe can't find gives 1. On Linux it is a wait status: the
-// exit code times 256 when the command ended by itself ("exit 3" gives
-// 768), and 32512 (127 times 256) when sh can't find the command. Either
-// way 0 means it succeeded. An empty command, "" or the zeroed string,
-// runs the shell with nothing to do, which gives 0: it reaches C as a lone
-// zero (to_c_string), never as the null that asks whether there is a
-// shell.
+// Linux, waits for it to end, and gives its status. On Windows that is
+// the command's exit code, as C's system gives it: "exit 3" gives 3, a
+// command cmd.exe can't find gives 1, and "exit -1" gives -1, the code
+// 0xFFFFFFFF read as a signed 32-bit number (run_through_shell). On Linux
+// it is C's system's wait status: the exit code times 256 when the
+// command ended by itself ("exit 3" gives 768), and 32512 (127 times 256)
+// when sh can't find the command. Either way 0 means it succeeded. An
+// empty command, "" or the zeroed string, runs the shell with nothing to
+// do, which gives 0: on Linux it reaches C as a lone zero (to_c_string),
+// never as the null that asks whether there is a shell.
 //
-// It is -1, and nothing runs, for a command with a zero byte, which C
-// would read as a shorter command, and when allocator, the context's
-// unless given, has no memory for the command's C copy. -1 is also what
-// C's system gives when it can't start the shell, and on Windows what a
-// command that exits with -1 gives ("exit -1"), so -1 alone doesn't say
-// the command never ran.
+// It is -1, and nothing runs, for a command with a zero byte, which the
+// system would read as a shorter command, on Windows for one that isn't
+// valid UTF-8, and when allocator, the context's unless given, has no
+// memory for the command's copy. -1 is also what it gives when the shell
+// can't be started, and on Windows what a command that exits with -1
+// gives, so -1 alone doesn't say the command never ran.
 //
 // The program's output may still sit in C's buffer for stdout, where
 // Basic's print puts it, while the command writes to the same place
 // straight away; so every C stream is flushed first, and what the program
 // printed before the command comes out before what the command prints.
 //
-// The command's C copy is asked for and given back with loc, the place of
+// The command's copy is asked for and given back with loc, the place of
 // the call unless given, as get_environment's are.
 run_command :: (command: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> int {
     if find_byte(command, 0) >= 0 { return -1; }
-    c_command := to_c_string(command, allocator, loc);
+    // The command's copy for the system: on Windows the whole command
+    // line, in UTF-16 (shell_command_line).
+    #if OS == OS_WINDOWS {
+        c_command := shell_command_line(command, allocator, loc);
+    } else {
+        c_command := to_c_string(command, allocator, loc);
+    }
     if c_command == null { return -1; }
     c_fflush(null);
-    status := c_system(c_command);
+    #if OS == OS_WINDOWS {
+        status := run_through_shell(c_command, null);
+    } else {
+        status := c_system(c_command);
+    }
     free(c_command, allocator, loc);
     return status;
 }
@@ -131,65 +190,67 @@ run_command :: (command: string, allocator: Allocator = context.allocator, loc: 
 // first, as run_command flushes it, so it comes out before anything the
 // command writes to standard error.
 //
-// It is the zeroed string and -1, and nothing runs, for a command with a
-// zero byte and when allocator has no memory for the command's C copy, as
-// run_command's -1 is; and the zeroed string and -1 when C can't start the
-// shell. When allocator has no memory for the output, the command has run
-// all the same, so its output is lost but its status is still given, with
-// the zeroed string.
+// It is the zeroed string and -1, and nothing runs, for every command
+// run_command refuses, as its -1 is, and when allocator has no memory for
+// the command's copy; and the zeroed string and -1 when the shell can't be
+// started. When allocator has no memory for the output, the command has
+// run all the same, so its output is lost but its status is still given,
+// with the zeroed string.
 //
-// The output is read from the pipe's file descriptor (c_read), 4096 bytes
-// at a time into a buffer on the stack, until a read gives nothing more,
-// and gathered in a builder on the heap, whose memory is given back before
-// it returns; then it is copied into one allocation of its exact size from
-// allocator. The heap is used for the gathering rather than allocator,
-// which may be an arena's, where a builder's growing would leave each
-// smaller copy behind. Like every builder of Basic's, the heap's stops the
-// program when it has no memory left (builder.rig).
+// The output is read from the pipe, 4096 bytes at a time into a buffer on
+// the stack, until a read gives nothing more: with ReadFile on Windows
+// (run_through_shell), and from the pipe's file descriptor with read on
+// Linux. It is gathered in a builder on the heap, whose memory is given
+// back before it returns; then it is copied into one allocation of its
+// exact size from allocator. The heap is used for the gathering rather
+// than allocator, which may be an arena's, where a builder's growing would
+// leave each smaller copy behind. Like every builder of Basic's, the
+// heap's stops the program when it has no memory left (builder.rig).
 //
-// The command's C copy and the output are asked for, and the C copy given
+// The command's copy and the output are asked for, and the copy given
 // back, with loc, the place of the call unless given, as get_environment's
-// are.
+// are. The copy is given back as the call returns, after the output's
+// memory is asked for, on both systems, so an allocator sees the same
+// calls in the same order on both.
 run_command_with_output :: (command: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, int {
     empty : string;
     if find_byte(command, 0) >= 0 { return empty, -1; }
-    c_command := to_c_string(command, allocator, loc);
+    // The command's copy for the system: on Windows the whole command
+    // line, in UTF-16 (shell_command_line).
+    #if OS == OS_WINDOWS {
+        c_command := shell_command_line(command, allocator, loc);
+    } else {
+        c_command := to_c_string(command, allocator, loc);
+    }
     if c_command == null { return empty, -1; }
     defer free(c_command, allocator, loc);
 
     c_fflush(null);
-    pipe : *void;
-    #if OS == OS_WINDOWS {
-        // Binary, so cmd's \r\n isn't turned into \n, nor a Ctrl-Z taken
-        // for the end.
-        pipe = c_popen(c_command, "rb");
-    } else {
-        // glibc refuses "rb", and its pipes are binary anyway.
-        pipe = c_popen(c_command, "r");
-    }
-    if pipe == null { return empty, -1; }
-
     gathered : String_Builder;
     builder_init(*gathered, HEAP_ALLOCATOR);
     defer builder_free(*gathered);
-    descriptor := c_fileno(pipe);
-    buffer : [4096]u8;
-    while true {
-        // c_read's count and result are 32 bits on Windows and 64 on
-        // Linux; 4096 fits either, and so does what it gives.
-        got := cast(int) c_read(descriptor, *buffer[0], 4096);
-        // On Linux a read a signal stopped before it read anything is
-        // made again: it isn't the end.
-        #if OS != OS_WINDOWS {
+    #if OS == OS_WINDOWS {
+        status := run_through_shell(c_command, *gathered);
+    } else {
+        // glibc refuses "rb", and its pipes are binary anyway.
+        pipe := c_popen(c_command, "r");
+        if pipe == null { return empty, -1; }
+
+        descriptor := c_fileno(pipe);
+        buffer : [4096]u8;
+        while true {
+            got := cast(int) c_read(descriptor, *buffer[0], 4096);
+            // A read a signal stopped before it read anything is made
+            // again: it isn't the end.
             if got < 0 && c_errno_location().* == C_EINTR { continue; }
+            if got <= 0 { break; }
+            piece : string;
+            piece.data = *buffer[0];
+            piece.count = got;
+            append_string(*gathered, piece);
         }
-        if got <= 0 { break; }
-        piece : string;
-        piece.data = *buffer[0];
-        piece.count = got;
-        append_string(*gathered, piece);
+        status := cast(int) c_pclose(pipe);
     }
-    status := cast(int) c_pclose(pipe);
 
     if gathered.count == 0 { return empty, status; }
     data := cast(*u8) alloc(gathered.count, allocator, loc);
@@ -202,22 +263,143 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     return output, status;
 }
 
+#if OS == OS_WINDOWS {
+    // The command line Windows runs command with, for run_command and
+    // run_command_with_output: "SHELL" /c COMMAND, in UTF-16 with a zero
+    // unit after it, in one allocation from allocator at loc, which the
+    // caller gives back with free(line, allocator, loc) once the shell has
+    // ended, as Linux's C copy is given back. The shell is the one
+    // %COMSPEC% names, cmd.exe's path, or cmd.exe when it is unset or
+    // empty, which CreateProcessW looks for where it looks for any program
+    // named without a path: the program's own directory first, then the
+    // current one, the system's and PATH (C's system tries the current
+    // directory and PATH); a %COMSPEC% naming a shell that isn't there
+    // gives -1 (run_through_shell). The shell's path is in quotes, so that
+    // one with a space in it is one word; cmd.exe takes what follows /c as
+    // the command, as it does from system, so a command means what it
+    // meant there.
+    //
+    // It is null, with nothing allocated, when the command line isn't valid
+    // UTF-8 or allocator has no memory for it. The line is built in a
+    // builder on the heap, and %COMSPEC% looked up on the heap (its name's
+    // UTF-16 copy, get_environment's buffer and its value), all given back
+    // before it returns.
+    shell_command_line :: (command: string, allocator: Allocator, loc: Source_Code_Location) -> *u16 {
+        shell, found := get_environment("COMSPEC", HEAP_ALLOCATOR);
+        defer free(shell.data, HEAP_ALLOCATOR);
+        line : String_Builder;
+        builder_init(*line, HEAP_ALLOCATOR);
+        defer builder_free(*line);
+        append_string(*line, "\"");
+        if found && shell.count > 0 {
+            append_string(*line, shell);
+        } else {
+            append_string(*line, "cmd.exe");
+        }
+        append_string(*line, "\" /c ");
+        append_string(*line, command);
+        text : string;
+        text.data = line.data;
+        text.count = line.count;
+        return to_wide_string(text, allocator, loc);
+    }
+
+    // Windows' way to run a command line of shell_command_line's, for
+    // run_command, with captured null, and run_command_with_output, with
+    // the builder it gathers the output in: the shell is started by
+    // CreateProcessW with wide_line as its command line.
+    //
+    // The shell starts with the program's own standard input, output and
+    // error, so what it writes goes where the program's own output goes,
+    // after what the caller flushed. When captured isn't null, its
+    // standard output is instead the write end of a pipe, which only the
+    // shell holds once it has started: the program reads the other end,
+    // appending each piece to captured, until the read gives nothing, when
+    // the shell, and every command it started, has ended and closed it.
+    // Then it waits for the shell to end and gives its exit code as a
+    // signed 32-bit number, as system gives it, so "exit -1" is -1, not
+    // 4294967295.
+    //
+    // It is -1, with nothing run, when the pipe can't be made or the shell
+    // started.
+    run_through_shell :: (wide_line: *u16, captured: *String_Builder) -> int {
+        startup : C_Startup_Info;
+        startup.size = size_of(C_Startup_Info);
+        startup.flags = C_STARTF_USESTDHANDLES;
+        startup.standard_input = c_get_std_handle(C_STD_INPUT_HANDLE);
+        startup.standard_output = c_get_std_handle(C_STD_OUTPUT_HANDLE);
+        startup.standard_error = c_get_std_handle(C_STD_ERROR_HANDLE);
+
+        // Both of the pipe's ends are made inheritable, and then the
+        // program's own, the read end, made not: the shell inherits only
+        // the write end, which it is given as its standard output.
+        read_end : *void = null;
+        write_end : *void = null;
+        if captured != null {
+            security : C_Security_Attributes;
+            security.length = size_of(C_Security_Attributes);
+            security.inherit = 1;
+            if c_create_pipe(*read_end, *write_end, *security, 0) == 0 { return -1; }
+            if c_set_handle_information(read_end, C_HANDLE_FLAG_INHERIT, 0) == 0 {
+                c_close_handle(read_end);
+                c_close_handle(write_end);
+                return -1;
+            }
+            startup.standard_output = write_end;
+        }
+
+        information : C_Process_Information;
+        started := c_create_process_w(null, wide_line, null, null, 1, 0, null, null, *startup, *information);
+        if captured != null {
+            // The program's copy of the write end is closed, started or
+            // not, so that once the shell has started its copy is the only
+            // one, and a read gives nothing when the shell has closed it.
+            c_close_handle(write_end);
+            if started == 0 { c_close_handle(read_end); }
+        }
+        if started == 0 { return -1; }
+
+        if captured != null {
+            buffer : [4096]u8;
+            while true {
+                // A read gives 0 bytes, or fails, once no write end is
+                // left open, and the pipe is empty.
+                got : u32 = 0;
+                if c_read_file(read_end, *buffer[0], 4096, *got, null) == 0 || got == 0 { break; }
+                piece : string;
+                piece.data = *buffer[0];
+                piece.count = cast(int) got;
+                append_string(captured, piece);
+            }
+            c_close_handle(read_end);
+        }
+
+        c_wait_for_single_object(information.process, C_INFINITE);
+        code : u32 = 0;
+        got_code := c_get_exit_code_process(information.process, *code);
+        c_close_handle(information.thread);
+        c_close_handle(information.process);
+        if got_code == 0 { return -1; }
+        return cast(int) cast,trunc(s32) code;
+    }
+}
+
 // The program's command-line arguments (spec 7.4): the name it was started
 // by first, then each argument. On Windows they are UTF-8: a compiled
 // program's are converted by Preload from the C runtime's wide arguments,
-// an interpreted one's by interpret mode from the wide command line, so
-// unlike a variable's value above they don't depend on the ANSI code page;
-// on Linux they are the bytes the system gave, as they are. The view is
-// empty, not even a name, when the program was started with no argv[0]
-// (argc 0, which Linux before 5.18 allowed), so check its count before
-// reading the name. Each string is followed by a zero byte its count
-// doesn't include, so its data can go to C as it is. main's prologue
-// saves them, through Preload's __save_command_line, before main's first
-// line, and this gives the view it saved: the same one every call, its
-// elements and their bytes the program's for the whole run, never freed,
-// and as changeable as any global's. A #run sees the empty view, not even
-// a name: no startup runs while compiling (spec 7.8), and the compiler's
-// own arguments aren't the program's.
+// an interpreted one's by interpret mode from the wide command line, so,
+// like a variable's name and value above, they don't depend on the ANSI
+// code page; on Linux they are the bytes the system gave, as they are.
+// The view is empty, not even a name, when the program was started with
+// no argv[0] (argc 0, which Linux before 5.18 allowed), so check its count
+// before reading the name. Each string is followed by a zero byte its
+// count doesn't include, so its data can go to C as it is. main's
+// prologue saves them, through Preload's __save_command_line, before
+// main's first line, and this gives the view it saved: the same one every
+// call, its elements and their bytes the program's for the whole run,
+// never freed, and as changeable as any global's. A #run sees the empty
+// view, not even a name: no startup runs while compiling (spec 7.8), and
+// the compiler's own arguments aren't the program's.
 get_command_line_arguments :: () -> []string {
     return __command_line_arguments;
 }

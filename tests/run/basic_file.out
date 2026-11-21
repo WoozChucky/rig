@@ -8,13 +8,14 @@ empty: true true true 0 true
 binary: true 256 true
 large: true 5242880 true
 reads: true 5 [hello] 12 5 2 0
-write mode: true true [abc]
-append mode: true [abcdef]
+write mode: true true 3 [abc]
+append mode: true 6 [abcdef]
+open twice: true true true true
 wrong mode: false 0
 bad opens: false true false
 directory: false false false
 directory closed: true
-empty directory: false false true true
+empty directory: true false false true true true
 zero byte: false false false
 delete: true true true true true, again: false, exists: false
 null handle: 0 false -1

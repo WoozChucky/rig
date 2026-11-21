@@ -661,7 +661,9 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
 // their default values, which a procedure type doesn't keep". Nor is main a
 // value: "'main' can't be a value: it's where the program starts"; nor a
 // #compiler one: "'create_workspace' can't be a value: the compiler does
-// it". In a default value, a parameter is "a default value can't use the
+// it", or for Preload's __runtime_error, which the compiler doesn't do,
+// "'__runtime_error' can't be a value: it has no code of its own, only
+// calls". In a default value, a parameter is "a default value can't use the
 // parameter 'times'". Nor is a built-in procedure a value: "'array_add'
 // can't be a value: it's built into the language".
 static Type *check_name(Checker *c, Ast_Name *name) {
@@ -704,9 +706,17 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         }
         // A #compiler procedure (spec 7.9) has no code in any module, so it
         // has no address: only a direct call, which the compiler does, can
-        // name it.
+        // name it. Preload's __runtime_error is one the compiler doesn't do,
+        // since lowering makes each call of it a panic, so its refusal says
+        // what it lacks instead.
         if (proc->is_compiler) {
-            diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it", STR_ARG(proc->name));
+            if (proc == c->file->runtime_error) {
+                diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: it has no code of its own, only calls",
+                           STR_ARG(proc->name));
+            } else {
+                diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it",
+                           STR_ARG(proc->name));
+            }
             return nullptr;
         }
         if (proc->is_c_variadic) {

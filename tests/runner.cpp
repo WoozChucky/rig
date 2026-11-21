@@ -22,15 +22,14 @@
 // text-mode streams write \r\n for each \n: every \r\n in its stdout and
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
-// Before any test the runner makes .build/tests, and in it an empty
-// directory, .build/tests/basic_file_empty_dir, which tests/run/basic_file
-// gives Basic's file procedures as a path, made here since before Basic
-// had make_directory; that test could make it itself now. At its start
-// the runner sets RIG_BASIC_TEST=set by bin/run-tests, and
-// RIG_BASIC_TEST_EMPTY to "", in its own environment, which every
-// program it runs inherits, compiled and interpreted, so
-// tests/run/basic_environment reads a variable whose value it knows and one
-// set to "" (and passes only under the runner).
+// Before any test the runner makes .build/tests, where the tests write
+// what they make. At its start the runner sets RIG_BASIC_TEST=set by
+// bin/run-tests, RIG_BASIC_TEST_EMPTY to "", RIG_BASIC_TEST_UTF8 to
+// 日本 café and RIG_BASIC_TEST_日本 to x in its own environment, which
+// every program it runs inherits, compiled and interpreted, so
+// tests/run/basic_environment reads a variable whose value it knows, one
+// set to "", one whose value is outside ASCII and one whose name is (and
+// passes only under the runner).
 //
 // Then every program of tests/run again, interpreted: `bin/unit-tests
 // --interpret tests/run/NAME.rig`, with the words of NAME.flags after it,
@@ -50,14 +49,18 @@
 // whole, and one at least (its NAME.exit is the compiled run's).
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
-// Then three fixed cases: rig build without -o from another directory
+// Then four fixed cases: rig build without -o from another directory
 // (default_output_test), a runtime error's order after the program's
-// output when stdout and stderr are one pipe (merged_output_test), and
+// output when stdout and stderr are one pipe (merged_output_test),
 // Basic's print_error lines, and the standard error of a command run by
-// run_command_with_output, in order with the program's output so, compiled
-// and interpreted (print_error_order_test). On Linux a fourth:
-// run_command_with_output's whole output when a signal stops its read
-// (interrupted_read_test).
+// run_command_with_output, in order with the program's output when stdout
+// and stderr are one pipe too, compiled and interpreted
+// (print_error_order_test), and a command run by run_command reading the
+// program's standard input, compiled and interpreted
+// (command_input_test). On Windows a fifth: run_command_with_output's
+// shell, %COMSPEC%'s or cmd.exe when it is unset or empty (comspec_test);
+// on Linux a fifth: run_command_with_output's whole output when a signal
+// stops its read (interrupted_read_test).
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
@@ -1541,8 +1544,8 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
         if (ran.timed_out) return string_printf(a, "it took longer than %d seconds %s", timeout, how);
         ran.out = normalise_newlines(a, ran.out);
         if (!string_eq(ran.out, expected)) {
-            return first_difference(a, interpreted ? "stdout and stderr, interpreted" : "stdout and stderr, compiled",
-                                    expected, ran.out);
+            return first_difference(a, string_cstr(a, string_printf(a, "stdout and stderr, %s", how)), expected,
+                                    ran.out);
         }
         if (ran.exit_code != 0) {
             return string_printf(a, "exit code " STR_FMT " %s, expected 0", STR_ARG(exit_code_text(a, ran.exit_code)), how);
@@ -1550,6 +1553,169 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
     }
     return {};
 }
+
+// A command run by Basic's run_command that reads a line from its standard
+// input, which is the program's own: the runner gives the program the line
+// hello, and the command must echo it back between brackets, after the
+// line the program printed before it. cmd.exe's set /p reads the line, and
+// sh's read. The program is written here, in .build/tests, and run
+// compiled and then interpreted (bin/unit-tests --interpret), each exiting
+// 0 with the same three lines.
+static String command_input_test(Arena *a, String rig, String unit_tests) {
+    String name = str("command_input");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = str("#import \"Basic\";\n"
+                      "main :: () {\n"
+                      "    print_line(\"before the command\");\n"
+                      "    #if OS == OS_WINDOWS {\n"
+                      "        status := run_command(\"set /p LINE=& call echo [%LINE%]\", HEAP_ALLOCATOR);\n"
+                      "    } else {\n"
+                      "        status := run_command(\"read line; echo \\\"[$line]\\\"\", HEAP_ALLOCATOR);\n"
+                      "    }\n"
+                      "    print(\"status {}\\n\", status);\n"
+                      "}\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String expected = str("before the command\n[hello]\nstatus 0\n");
+
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    String why = build_program(a, build_command(a, rig, ".build/tests", name, program), {}, program);
+    if (why.count) return why;
+
+#ifdef _WIN32
+    // cmd.exe expands %LINE% when it reads the line, before set /p runs, so
+    // a LINE the runner was started with would be echoed in place of hello:
+    // it is unset for the two runs and put back afterwards.
+    static wchar_t saved[32768];
+    DWORD saved_length = GetEnvironmentVariableW(L"LINE", saved, 32768);
+    SetEnvironmentVariableW(L"LINE", nullptr);
+#endif
+    for (s32 interpreted = 0; interpreted < 2; interpreted++) {
+        Array<String> command = {};
+        if (interpreted) {
+            array_add(&command, unit_tests);
+            array_add(&command, str("--interpret"));
+            array_add(&command, source);
+        } else {
+            array_add(&command, program);
+        }
+        s32 timeout = interpreted ? INTERPRETED_TIMEOUT : TIMEOUT;
+        const char *how = interpreted ? "interpreted" : "compiled";
+        Process_Result ran = {};
+        bool started = os_run_with_input(a, command, {}, timeout, str("hello\n"), &ran);
+        array_free(&command);
+        if (!started) {
+            why = string_printf(a, "couldn't run it %s: " STR_FMT, how, STR_ARG(os_error_message(a)));
+            break;
+        }
+        if (ran.timed_out) {
+            why = string_printf(a, "it took longer than %d seconds %s", timeout, how);
+            break;
+        }
+        ran.out = normalise_newlines(a, ran.out);
+        if (!string_eq(ran.out, expected)) {
+            why = with_stderr(
+                a, first_difference(a, string_cstr(a, string_printf(a, "stdout, %s", how)), expected, ran.out),
+                ran.err);
+            break;
+        }
+        if (ran.exit_code != 0) {
+            why = with_stderr(
+                a, string_printf(a, "exit code " STR_FMT " %s, expected 0", STR_ARG(exit_code_text(a, ran.exit_code)), how),
+                ran.err);
+            break;
+        }
+    }
+#ifdef _WIN32
+    SetEnvironmentVariableW(L"LINE", saved_length > 0 && saved_length < 32768 ? saved : nullptr);
+#endif
+    return why;
+}
+
+#ifdef _WIN32
+// The shell Basic's run_command_with_output starts on Windows: the one
+// %COMSPEC% names, or cmd.exe when it is unset or empty. A program that
+// captures "echo hi& exit 3" is run with COMSPEC unset, set to "", and set
+// to a copy of cmd.exe in a directory whose name has a space, each of which
+// must give hi\r\n and 3; and with COMSPEC naming a shell that isn't there,
+// which must give no output and -1. Beside that directory is a file named
+// as its first word, .exe added, which isn't a program: were the path not
+// in quotes, CreateProcessW would try it first, as it tries each word of an
+// unquoted path in turn, and fail. The runner's own COMSPEC is put back
+// afterwards, and the copy, its directory and the file deleted. Compiled
+// only: interpret mode runs the same Basic.
+static String comspec_test(Arena *a, String rig) {
+    String name = str("comspec");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = str("#import \"Basic\";\n"
+                      "main :: () {\n"
+                      "    output, status := run_command_with_output(\"echo hi& exit 3\", HEAP_ALLOCATOR);\n"
+                      "    print(\"{} {}\\n\", output == \"hi\\r\\n\", status);\n"
+                      "}\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    String why = build_program(a, build_command(a, rig, ".build/tests", name, program), {}, program);
+    if (why.count) return why;
+
+    String shell_directory = str(".build/tests/shell copy");
+    const wchar_t *shell_copy = L".build\\tests\\shell copy\\cmd.exe";
+    String decoy = str(".build/tests/shell.exe");
+    wchar_t system_shell[MAX_PATH + 16];
+    UINT length = GetSystemDirectoryW(system_shell, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) return str("couldn't find the system's directory");
+    wcscpy(system_shell + length, L"\\cmd.exe");
+    // A failure from here on still reaches the deletions at the end, so
+    // that no copy of cmd.exe is left behind.
+    os_make_directory(shell_directory);
+    if (!CopyFileW(system_shell, shell_copy, FALSE)) {
+        why = str("couldn't copy cmd.exe");
+    } else if (!os_write_file(decoy, str("not a program\n"))) {
+        why = string_printf(a, "couldn't write " STR_FMT, STR_ARG(decoy));
+    }
+
+    static wchar_t saved[32768];
+    DWORD saved_length = GetEnvironmentVariableW(L"COMSPEC", saved, 32768);
+    struct Case {
+        const wchar_t *value;  // null: unset
+        const char *what;
+        const char *expected;
+    };
+    Case cases[] = {
+        {nullptr, "unset", "true 3\n"},
+        {L"", "set to \"\"", "true 3\n"},
+        {shell_copy, "a path with a space", "true 3\n"},
+        {L".build\\tests\\no such shell.exe", "a shell that isn't there", "false -1\n"},
+    };
+    for (const Case &c : cases) {
+        if (why.count) break;
+        SetEnvironmentVariableW(L"COMSPEC", c.value);
+        Array<String> command = {};
+        array_add(&command, program);
+        Process_Result ran = {};
+        bool started = run(a, command, {}, &ran, &why);
+        array_free(&command);
+        if (!started) break;
+        if (!string_eq(ran.out, str(c.expected))) {
+            why = with_stderr(a,
+                              first_difference(a, string_cstr(a, string_printf(a, "stdout, COMSPEC %s", c.what)),
+                                               str(c.expected), ran.out),
+                              ran.err);
+            break;
+        }
+        if (ran.exit_code != 0) {
+            why = with_stderr(a,
+                              string_printf(a, "exit code " STR_FMT " with COMSPEC %s, expected 0",
+                                            STR_ARG(exit_code_text(a, ran.exit_code)), c.what),
+                              ran.err);
+            break;
+        }
+    }
+    SetEnvironmentVariableW(L"COMSPEC", saved_length > 0 && saved_length < 32768 ? saved : nullptr);
+    DeleteFileW(shell_copy);
+    _rmdir(string_cstr(a, shell_directory));
+    remove(string_cstr(a, decoy));
+    return why;
+}
+#endif
 
 #ifndef _WIN32
 // run_command_with_output's read of the pipe, stopped by a signal: the
@@ -3839,22 +4005,30 @@ int main(int argc, char **argv) {
     // Every program the runner starts inherits this.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 #endif
-    // Two variables every program the runner starts inherits, compiled and
+    // Four variables every program the runner starts inherits, compiled and
     // interpreted, so tests/run/basic_environment can read one whose value
-    // it knows and one set to "". Each program starts with the runner's own
-    // environment: on Windows CreateProcessW is given no environment of its
-    // own, so it passes the process's, which _putenv_s changes as well as
-    // the C runtime's copy; on Linux posix_spawnp is given environ, which
-    // setenv changes. _putenv_s with "" deletes a variable instead of
-    // setting it to "", so on Windows the empty one is set in the process's
-    // environment directly, where the program's C runtime finds it, set to
-    // "".
+    // it knows, one set to "", one whose value is outside ASCII and one
+    // whose name is. Each program starts with the runner's own environment:
+    // on Windows CreateProcessW is given no environment of its own, so it
+    // passes the process's, which _putenv_s changes as well as the C
+    // runtime's copy; on Linux posix_spawnp is given environ, which setenv
+    // changes. _putenv_s with "" deletes a variable instead of setting it to
+    // "", so on Windows the empty one is set in the process's environment
+    // directly, where Basic's GetEnvironmentVariableW finds it, set to "".
+    // _putenv_s takes a name and a value in the ANSI code page, which may
+    // not hold 日本 (code page 1252 doesn't), so the two outside ASCII are
+    // set there directly too, in UTF-16; on Linux they are UTF-8 bytes, as
+    // setenv takes them.
 #ifdef _WIN32
     _putenv_s("RIG_BASIC_TEST", "set by bin/run-tests");
     SetEnvironmentVariableW(L"RIG_BASIC_TEST_EMPTY", L"");
+    SetEnvironmentVariableW(L"RIG_BASIC_TEST_UTF8", L"\u65E5\u672C caf\u00E9");  // 日本 café
+    SetEnvironmentVariableW(L"RIG_BASIC_TEST_\u65E5\u672C", L"x");               // RIG_BASIC_TEST_日本
 #else
     setenv("RIG_BASIC_TEST", "set by bin/run-tests", 1);
     setenv("RIG_BASIC_TEST_EMPTY", "", 1);
+    setenv("RIG_BASIC_TEST_UTF8", "\xE6\x97\xA5\xE6\x9C\xAC caf\xC3\xA9", 1);  // 日本 café
+    setenv("RIG_BASIC_TEST_\xE6\x97\xA5\xE6\x9C\xAC", "x", 1);                 // RIG_BASIC_TEST_日本
 #endif
     Arena a = arena_make();
     Array<String> args = os_arguments(&a, argc, argv);
@@ -3865,7 +4039,6 @@ int main(int argc, char **argv) {
     module_places_of(&a, unit_tests, &unit_tests_modules, &unit_tests_bin_modules);
     os_make_directory(str(".build"));
     os_make_directory(str(".build/tests"));
-    os_make_directory(str(".build/tests/basic_file_empty_dir"));
     s64 passed = 0, failed = 0;
     run_directory(&a, rig, "", "tests/run", run_test, &passed, &failed);
     run_directory(&a, unit_tests, "interpreted ", "tests/run", interpreted_test, &passed, &failed);
@@ -3874,6 +4047,12 @@ int main(int argc, char **argv) {
            &failed);
     report("print_error's lines in order with the program's output, both in one pipe",
            print_error_order_test(&a, rig, unit_tests), &passed, &failed);
+    report("a command run by run_command reads the program's standard input", command_input_test(&a, rig, unit_tests),
+           &passed, &failed);
+#ifdef _WIN32
+    report("run_command_with_output's shell: %COMSPEC%, or cmd.exe when it is unset or empty", comspec_test(&a, rig),
+           &passed, &failed);
+#endif
 #ifndef _WIN32
     report("run_command_with_output's whole output when a signal stops its read", interrupted_read_test(&a, rig),
            &passed, &failed);

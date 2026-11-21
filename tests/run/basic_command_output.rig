@@ -2,18 +2,23 @@
 // output captured, its bytes in memory from the allocator the call is
 // given, and its status; a command that writes only to standard error,
 // whose line is the program's own standard error, not captured; a failing
-// command; an empty one; a file of more than 4096 bytes written out by the
-// shell, which comes back byte for byte, read in several pieces with its
-// \r\n line endings unchanged; and the commands refused before they run (a zero
-// byte, no memory for the command's C copy), and one whose output finds no
-// memory. cmd.exe and sh differ in their line endings and their statuses,
-// so only what both agree on is printed: an output with its line ending
-// trimmed, whether it ended with one, and exit 3's status as either
-// system's. The file is written under .build/tests and deleted, and what a
-// stopped run left of it is deleted first.
+// command; an empty one; a file of more than 4096 bytes written out by
+// the shell, which comes back byte for byte, read in several pieces with
+// its \r\n line endings unchanged; a file named outside the ANSI code
+// page, read and then deleted by commands that name it, which on Windows
+// reach the system as UTF-16 (issue #209); the largest exit code each
+// shell has, given as each system's status, not refused; and the commands
+// refused before they run (a zero byte, no memory for the command's copy,
+// and on Windows a command that isn't valid UTF-8), and one whose output
+// finds no memory. cmd.exe and sh differ in their line endings and their
+// statuses, so only what both agree on is printed: an output with its line
+// ending trimmed, whether it ended with one, and exit 3's status as either
+// system's. The files are written under .build/tests and deleted, and what
+// a stopped run left of them is deleted first.
 #import "Basic";
 
 FILE :: ".build/tests/basic_command_output.txt";
+NIHON :: ".build/tests/basic_command_日本.txt";
 
 // Prints s between brackets, so an empty string shows as [].
 show_text :: (s: string) {
@@ -77,15 +82,16 @@ failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *voi
 
 main :: () {
     delete_file(FILE);
+    delete_file(NIHON);
 
     counter : Counter;
     counting := Allocator.{counting_allocator_proc, *counter};
 
     // The command's output is captured, not printed: echo's line comes
     // back as cmd.exe or sh wrote it, ended by \r\n or \n, which both end
-    // with a line feed. Two allocations, the command's C copy and the
-    // output; the C copy is given back by the call, and the output by the
-    // test.
+    // with a line feed. Two allocations, the command's copy for the system
+    // (UTF-16 on Windows, ended by a zero on Linux) and the output; the
+    // copy is given back by the call, and the output by the test.
     print_line("before the command");
     output, status := run_command_with_output("echo hello", counting);
     print_string("echo: ");
@@ -106,7 +112,7 @@ main :: () {
 
     // cmd.exe gives exit 3's code, 3; sh's wait status holds it times 256.
     // No output is the zeroed string, allocating nothing: one allocation,
-    // the command's C copy, given back by the call.
+    // the command's copy, given back by the call.
     output, status = run_command_with_output("exit 3", counting);
     print_string("exit 3: ");
     show_text(output);
@@ -124,8 +130,8 @@ main :: () {
 
     // A file of 9022 bytes, more than one read of 4096 takes, written out
     // by the shell's own command, comes back as its bytes, every one, each
-    // \r\n still a \r\n: the output is read in binary mode on Windows,
-    // where text mode would turn each into \n. cmd.exe's type needs the
+    // \r\n still a \r\n: neither system's pipes have a text mode, so the
+    // bytes come back as the command wrote them. cmd.exe's type needs the
     // path with \, and sh's cat takes it with /.
     contents : String_Builder;
     builder_init(*contents, HEAP_ALLOCATOR);
@@ -150,8 +156,83 @@ main :: () {
     builder_free(*contents);
     delete_file(FILE);
 
+    // A file named outside the ANSI code page, written by Basic, then read
+    // by the shell's own command, which names it: on Windows the command
+    // reaches the system as UTF-16, so cmd.exe finds the file by its UTF-8
+    // name, as sh does on Linux. type and cat write the file's bytes as
+    // they are, so the output is the text written. Two allocations, the
+    // command's copy and the output, both given back.
+    write_entire_file(NIHON, "日本 café\n");
+    #if OS == OS_WINDOWS {
+        output, status = run_command_with_output("type .build\\tests\\basic_command_日本.txt", counting);
+    } else {
+        output, status = run_command_with_output("cat .build/tests/basic_command_日本.txt", counting);
+    }
+    print_string("utf-8 path:");
+    show_bool(output == "日本 café\n");
+    show_int(status);
+    free(output.data, counting);
+    show_counts(*counter);
+    print_line("");
+
+    // A command that names the file deletes it.
+    #if OS == OS_WINDOWS {
+        status = run_command("del .build\\tests\\basic_command_日本.txt", HEAP_ALLOCATOR);
+    } else {
+        status = run_command("rm .build/tests/basic_command_日本.txt", HEAP_ALLOCATOR);
+    }
+    print_string("deleted by a command:");
+    show_int(status);
+    show_bool(file_exists(NIHON));
+    print_line("");
+    delete_file(NIHON);
+
+    // The largest exit code is given as each system's status, not refused.
+    // cmd.exe's exit -1 is the code 0xFFFFFFFF, which run_command gives as
+    // -1, read as a signed 32-bit number, as C's system did; sh (dash)
+    // refuses exit -1, and its exit 255 is the wait status 65280.
+    top := false;
+    #if OS == OS_WINDOWS {
+        top = run_command("exit -1", HEAP_ALLOCATOR) == -1;
+    } else {
+        top = run_command("exit 255", HEAP_ALLOCATOR) == 65280;
+    }
+    print_string("top exit code:");
+    show_bool(top);
+    print_line("");
+
+    // A command of echo and the byte 255, which is never valid UTF-8,
+    // joined from a view of the byte since a string literal can't hold it.
+    // Windows refuses it, as it can't be converted to UTF-16 as it is:
+    // nothing runs and the allocator is asked for nothing. Linux's sh takes
+    // it as bytes and echoes them. run_command is given : and the byte,
+    // which Windows refuses as well, and which sh's : takes as an argument
+    // and does nothing with, so nothing is printed. The results differ, so
+    // one check of them is printed, the same line on both systems.
+    byte : [1]u8;
+    byte[0] = 255;
+    byte_view : []u8 = byte;
+    bad_command := sprint("echo {}", cast(string) byte_view);
+    output, status = run_command_with_output(bad_command, counting);
+    quiet_command := sprint(": {}", cast(string) byte_view);
+    quiet_status := run_command(quiet_command, counting);
+    expected := false;
+    #if OS == OS_WINDOWS {
+        expected = status == -1 && output.count == 0 && quiet_status == -1 && counter.allocations == 0;
+    } else {
+        expected = status == 0 && quiet_status == 0;
+    }
+    print_string("invalid UTF-8:");
+    show_bool(expected);
+    print_line("");
+    free(output.data, counting);
+    free(bad_command.data);
+    free(quiet_command.data);
+    counter.allocations = 0;
+    counter.frees = 0;
+
     // A command with a zero byte would run as "echo a", so it is refused
-    // before its C copy is made: the allocator is asked for nothing.
+    // before its copy is made: the allocator is asked for nothing.
     output, status = run_command_with_output("echo a\0b", counting);
     print_string("zero byte: ");
     show_text(output);
@@ -159,17 +240,17 @@ main :: () {
     show_counts(*counter);
     print_line("");
 
-    // With no memory for the command's C copy, nothing runs.
+    // With no memory for the command's copy, nothing runs.
     output, status = run_command_with_output("echo from a command with no memory", Allocator.{failing_allocator_proc, null});
     print_string("no memory: ");
     show_text(output);
     show_int(status);
     print_line("");
 
-    // With memory for the C copy but not for the output, the command runs,
-    // and its output is lost: the zeroed string, and still its status. Two
-    // allocations asked for, the output's refused, and the C copy given
-    // back.
+    // With memory for the command's copy but not for the output, the
+    // command runs, and its output is lost: the zeroed string, and still
+    // its status. Two allocations asked for, the output's refused, and the
+    // copy given back.
     first_only : Counter;
     output, status = run_command_with_output("echo hello", Allocator.{first_only_allocator_proc, *first_only});
     print_string("no memory for the output: ");

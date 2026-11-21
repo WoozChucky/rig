@@ -402,8 +402,8 @@ __save_command_line :: (argc: s32, argv: **u8) #c_call {
 // It's the one #compiler procedure the program's own code may call: the
 // compiler doesn't do it while compiling, as it does the Compiler module's,
 // but makes each call of it the panic a failing check ends in, in the
-// executable and in the compile-time world alike. No deferred
-// statement runs, as none runs after a runtime error (spec 6.12).
+// executable and in the compile-time world alike. No deferred statement
+// runs, as none runs after a runtime error (spec 6.12).
 __runtime_error :: (text: string, message_start: int) #compiler;
 
 // C's memmove, under Preload's own name, as __malloc is: the temporary

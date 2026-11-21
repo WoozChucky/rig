@@ -8352,6 +8352,17 @@ TEST(preload_declares_runtime_error) {
     arena_free(&a);
 }
 
+TEST(runtime_error_isnt_a_value) {
+    // Issue #211: __runtime_error is a #compiler procedure, so it has no
+    // address, but the compiler doesn't do it as it does the Compiler
+    // module's: lowering makes each call a panic. Its refusal says what it
+    // lacks instead (compiler_procedures_arent_values keeps the other).
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "main :: () { f := __runtime_error; }\n"),
+              "1:19: '__runtime_error' can't be a value: it has no code of its own, only calls\n");
+    arena_free(&a);
+}
+
 TEST(context_is_a_place) {
     // context is the current context, a place of type Context: read, copied,
     // its address taken, its fields read and assigned, and itself assigned.

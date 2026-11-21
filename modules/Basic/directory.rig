@@ -5,27 +5,24 @@
 // On Windows they are kernel32's wide calls, GetFileAttributesW,
 // CreateDirectoryW, RemoveDirectoryW and FindFirstFileW with FindNextFileW,
 // which take a path as UTF-16: the path, UTF-8 as every Rig string is, is
-// converted first (to_wide_path), and each name listed is converted back to
-// UTF-8. So a directory named outside the system's ANSI code page, café or
-// 日本, is made, found, listed and deleted by its UTF-8 name, as on Linux.
-// Basic's files, the environment and commands still go through C's ANSI
-// calls (file.rig, environment.rig), so a file whose path has a character
-// outside that code page can't be opened there, even in a directory these
-// procedures made and list (issue #209 is to make them UTF-8 too).
+// converted first (to_wide_string, wide.rig), and each name listed is
+// converted back to UTF-8. So a directory named outside the system's ANSI
+// code page, café or 日本, is made, found, listed and deleted by its UTF-8
+// name, as on Linux, and so is a file in it, or one so named (file.rig).
 //
 // On Linux they are POSIX's stat, mkdir, rmdir and opendir with readdir,
 // which take a path as bytes, so a UTF-8 path names what it says, and a
 // name that isn't UTF-8, which Linux allows, is listed as its bytes.
 //
 // Every procedure refuses, with nothing allocated and nothing asked of the
-// file system, an empty path, a path with a zero byte, which would reach the system cut
-// short, another directory's name, and on Windows a path that isn't valid
-// UTF-8, which would have to be changed to be converted and so would name
-// another directory too. The path's copy for the system, UTF-16 on Windows
-// and ended by a zero on Linux, comes from the heap and is given back
-// before the call returns, as file.rig's copies are and for its reasons:
-// not from the context's allocator, which may be an arena's or the
-// temporary storage's, where giving it back frees nothing.
+// file system, an empty path, a path with a zero byte, which would reach
+// the system cut short, another directory's name, and on Windows a path
+// that isn't valid UTF-8, which would have to be changed to be converted
+// and so would name another directory too. The path's copy for the
+// system, UTF-16 on Windows and ended by a zero on Linux, comes from the
+// heap and is given back before the call returns, as file.rig's copies are
+// and for its reasons: not from the context's allocator, which may be an
+// arena's or the temporary storage's, where giving it back frees nothing.
 //
 // A listing holds every entry's name but . and .., files and directories
 // alike, without the directory's path, sorted by bytes (less_string), so
@@ -37,39 +34,12 @@
 // go to C as it is, as the command-line arguments' can.
 #load "libc.rig";
 #load "string.rig";
+#load "memory.rig";
 #load "allocators.rig";
 #load "builder.rig";
 #load "sort.rig";
 #load "path.rig";
-
-#if OS == OS_WINDOWS {
-    // path in UTF-16, ended by a zero unit, for kernel32's wide calls, in
-    // memory from the heap, which the caller gives back with free(wide,
-    // HEAP_ALLOCATOR). Null, with nothing allocated, for an empty path, one
-    // with a zero byte, one that isn't valid UTF-8, one longer than a C int
-    // counts, and when the heap has no memory.
-    //
-    // MultiByteToWideChar is asked first how many units the path needs,
-    // which it gives as 0 for bytes that aren't valid UTF-8, given
-    // C_MB_ERR_INVALID_CHARS, and then converts it into room for those and
-    // the zero. It would convert a zero byte as a zero unit, where the
-    // system would see the path end, so that is refused first.
-    to_wide_path :: (path: string) -> *u16 {
-        LARGEST :: 2147483647; // the most bytes MultiByteToWideChar counts
-        if path.count <= 0 || path.count > LARGEST { return null; }
-        if find_byte(path, 0) >= 0 { return null; }
-        count := c_multi_byte_to_wide_char(C_CP_UTF8, C_MB_ERR_INVALID_CHARS, path.data, cast(s32) path.count, null, 0);
-        if count <= 0 { return null; }
-        wide := cast(*u16) alloc((cast(int) count + 1) * 2, HEAP_ALLOCATOR);
-        if wide == null { return null; }
-        if c_multi_byte_to_wide_char(C_CP_UTF8, C_MB_ERR_INVALID_CHARS, path.data, cast(s32) path.count, wide, count) != count {
-            free(wide, HEAP_ALLOCATOR);
-            return null;
-        }
-        wide[count] = 0;
-        return wide;
-    }
-}
+#load "wide.rig";
 
 // Whether there is a directory at path: false for a file, a missing path,
 // one that can't be reached, and the paths every procedure here refuses. A
@@ -80,7 +50,7 @@
 is_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
     #if OS == OS_WINDOWS {
-        wide := to_wide_path(path);
+        wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);
         attributes := c_get_file_attributes_w(wide);
@@ -103,7 +73,7 @@ is_directory :: (path: string) -> bool {
 make_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
     #if OS == OS_WINDOWS {
-        wide := to_wide_path(path);
+        wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);
         return c_create_directory_w(wide, null) != 0;
@@ -125,7 +95,7 @@ make_directory :: (path: string) -> bool {
 delete_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
     #if OS == OS_WINDOWS {
-        wide := to_wide_path(path);
+        wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);
         return c_remove_directory_w(wide) != 0;
@@ -135,6 +105,17 @@ delete_directory :: (path: string) -> bool {
         defer free(c_path, HEAP_ALLOCATOR);
         return c_rmdir(c_path) == 0;
     }
+}
+
+// Appends name and a zero byte after it to gathered, list_directory's
+// builder of the names it lists, and gives true; gives false, appending
+// nothing, for . and .., which a listing leaves out. Both systems' listings
+// gather their names through it.
+gather_directory_name :: (gathered: *String_Builder, name: string) -> bool {
+    if name == "." || name == ".." { return false; }
+    append_string(gathered, name);
+    append_byte(gathered, 0);
+    return true;
 }
 
 // The names in the directory at path, sorted by bytes, and true: every
@@ -180,9 +161,7 @@ list_directory :: (path: string, allocator: Allocator = context.allocator, loc: 
     count := 0;
 
     #if OS == OS_WINDOWS {
-        BACKSLASH :: 92;
-        STAR :: 42;
-        wide := to_wide_path(path);
+        wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return empty, false; }
         defer free(wide, HEAP_ALLOCATOR);
         // The pattern: the path's units, \ unless the path ends with a
@@ -196,13 +175,12 @@ list_directory :: (path: string, allocator: Allocator = context.allocator, loc: 
         if pattern == null { return empty, false; }
         defer free(pattern, HEAP_ALLOCATOR);
         copy_memory(pattern, wide, units * 2);
-        COLON :: 58;
-        drive_alone := path.count == 2 && path[1] == COLON;
+        drive_alone := path.count == 2 && path[1] == ":"[0];
         if !is_path_separator(path[path.count - 1]) && !drive_alone {
-            pattern[units] = BACKSLASH;
+            pattern[units] = "\\"[0];
             units += 1;
         }
-        pattern[units] = STAR;
+        pattern[units] = "*"[0];
         pattern[units + 1] = 0;
 
         entry : C_Find_Data;
@@ -220,11 +198,7 @@ list_directory :: (path: string, allocator: Allocator = context.allocator, loc: 
             name : string;
             name.data = *buffer[0];
             name.count = cast(int) written - 1;
-            if name != "." && name != ".." {
-                append_string(*gathered, name);
-                append_byte(*gathered, 0);
-                count += 1;
-            }
+            if gather_directory_name(*gathered, name) { count += 1; }
             if c_find_next_file_w(handle, *entry) == 0 {
                 if c_get_last_error() != C_ERROR_NO_MORE_FILES { return empty, false; }
                 break;
@@ -247,11 +221,7 @@ list_directory :: (path: string, allocator: Allocator = context.allocator, loc: 
             name : string;
             name.data = entry + C_DIRENT_NAME_OFFSET;
             while name.data[name.count] != 0 { name.count += 1; }
-            if name != "." && name != ".." {
-                append_string(*gathered, name);
-                append_byte(*gathered, 0);
-                count += 1;
-            }
+            if gather_directory_name(*gathered, name) { count += 1; }
         }
     }
 

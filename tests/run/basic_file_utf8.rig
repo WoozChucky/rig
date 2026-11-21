@@ -1,0 +1,234 @@
+// Basic's files under a directory named outside the system's ANSI code
+// page, .build/tests/café_日本, which the test makes and deletes, and a file
+// so named, 日本.txt, which Windows reaches through kernel32's wide calls
+// (issue #209): written, appended to, read, measured, listed, and on
+// Windows found on disk by its UTF-16 name built by hand; the directory
+// given as a file, in every mode; a path that isn't valid UTF-8, which
+// Windows refuses and Linux writes as its bytes; and deleted. Windows'
+// conversions to and from UTF-16 (wide.rig) are checked at their edges.
+// What a stopped run left is deleted first. Everything printed is the same
+// on both systems.
+#import "Basic";
+
+ROOT :: ".build/tests/café_日本";
+A :: ".build/tests/café_日本/a.txt";
+NIHON :: ".build/tests/café_日本/日本.txt";
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// What a counting allocator was asked: how many allocations and frees, how
+// many bytes the last allocation was for, and whether every place it was
+// asked from is in this file, the caller's, rather than in wide.rig.
+Counter :: struct { allocations: int; frees: int; last_size: int; all_here: bool; }
+
+// Passes every call on to the heap, counting allocations and frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
+    if mode == FREE { counter.frees += 1; }
+    if !ends_with(context.allocation_location.file, "basic_file_utf8.rig") { counter.all_here = false; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+#if OS == OS_WINDOWS {
+    // Whether GetFileAttributesW finds a file at .build/tests/ and tail,
+    // UTF-16 built by hand rather than by Basic's conversion, so that only
+    // a file whose names on disk are tail's units is found: one made in the
+    // ANSI code page from the UTF-8 bytes isn't.
+    on_disk :: (tail: []u16) -> bool {
+        TESTS :: ".build/tests/";
+        wide : [64]u16;
+        for i: 0..TESTS.count - 1 { wide[i] = TESTS[i]; }
+        for i: 0..tail.count - 1 { wide[TESTS.count + i] = tail[i]; }
+        wide[TESTS.count + tail.count] = 0;
+        attributes := c_get_file_attributes_w(*wide[0]);
+        return attributes != C_INVALID_FILE_ATTRIBUTES && (attributes & C_FILE_ATTRIBUTE_DIRECTORY) == 0;
+    }
+}
+
+main :: () {
+    // A name of the byte 255, which is never valid UTF-8, and .txt: Linux
+    // takes a name as plain bytes and makes the file, Windows refuses it
+    // before asking the file system. A string literal can't hold the byte,
+    // so the path is joined from a view of it.
+    byte : [1]u8;
+    byte[0] = 255;
+    byte_view : []u8 = byte;
+    bad := sprint("{}/{}.txt", ROOT, cast(string) byte_view);
+    defer free(bad.data);
+
+    // What a stopped run may have left, the files first: each call is false
+    // when there is nothing to delete.
+    delete_file(A);
+    delete_file(NIHON);
+    delete_file(bad);
+    delete_directory(ROOT);
+
+    print_string("made:");
+    show_bool(make_directory(ROOT));
+    print_string("\n");
+
+    print_string("write:");
+    show_bool(write_entire_file(A, "日本 café\n"));
+    show_bool(write_entire_file(NIHON, "x"));
+    print_string("\nappend:");
+    show_bool(append_to_file(A, "more\n"));
+    print_string("\nexists:");
+    show_bool(file_exists(A));
+    show_bool(file_exists(NIHON));
+    print_string("\n");
+
+    data, ok := read_entire_file(A);
+    print_string("read:");
+    show_bool(ok);
+    show_bool(data == "日本 café\nmore\n");
+    print_string(" ");
+    print_int(data.count);
+    print_string("\n");
+    free(data.data);
+
+    file, opened := file_open(A, FILE_READ);
+    print_string("size:");
+    show_bool(opened);
+    print_string(" ");
+    print_int(file_size(file));
+    print_string("\n");
+    file_close(file);
+
+    names, listed := list_directory(ROOT);
+    print_string("listed:");
+    show_bool(listed);
+    for names {
+        print_string(" [");
+        print_string(it);
+        print_string("]");
+    }
+    print_string("\n");
+    free(names.data);
+
+    // On Windows the names on disk are café_日本's and 日本.txt's own UTF-16
+    // units, found without Basic's conversion; Linux takes the bytes as
+    // they are, and prints the same line.
+    print_string("on disk:");
+    #if OS == OS_WINDOWS {
+        units : [14]u16;
+        units[0] = "c"[0];
+        units[1] = "a"[0];
+        units[2] = "f"[0];
+        units[3] = 233;   // U+00E9, é
+        units[4] = "_"[0];
+        units[5] = 26085; // U+65E5, 日
+        units[6] = 26412; // U+672C, 本
+        units[7] = "/"[0];
+        units[8] = 26085;
+        units[9] = 26412;
+        units[10] = "."[0];
+        units[11] = "t"[0];
+        units[12] = "x"[0];
+        units[13] = "t"[0];
+        units_view : []u16 = units;
+        show_bool(on_disk(units_view));
+    } else {
+        show_bool(file_exists(NIHON));
+    }
+    print_string("\n");
+
+    // A directory isn't a file in any mode: it isn't written over, appended
+    // to, read or deleted, and is still there.
+    print_string("directory as a file:");
+    show_bool(write_entire_file(ROOT, "x"));
+    show_bool(append_to_file(ROOT, "x"));
+    directory_data, directory_ok := read_entire_file(ROOT);
+    show_bool(directory_ok);
+    free(directory_data.data);
+    show_bool(delete_file(ROOT));
+    show_bool(is_directory(ROOT));
+    print_string("\n");
+
+    // The same line on both systems. Windows refuses the path, making
+    // nothing; Linux makes the file and deletes it.
+    invalid := false;
+    #if OS == OS_WINDOWS {
+        invalid = !write_entire_file(bad, "x") && !file_exists(bad);
+    } else {
+        invalid = write_entire_file(bad, "x") && delete_file(bad);
+    }
+    print_string("invalid UTF-8:");
+    show_bool(invalid);
+    print_string("\n");
+
+    // Windows' conversions at their edges, from a counting allocator, each
+    // check one value: "" is a lone zero unit, in one allocation of 2 bytes
+    // asked from here; a string that isn't valid UTF-8, one with a zero
+    // byte, or an allocator with no memory, is null, allocating nothing;
+    // 0 units are the zeroed string and true, allocating nothing; and 日,
+    // an unpaired surrogate and a are 日, U+FFFD (written as itself below)
+    // and a, in one allocation of their 7 bytes asked from here. Linux has
+    // no conversions, and prints the same line.
+    print_string("wide:");
+    #if OS == OS_WINDOWS {
+        counter := Counter.{0, 0, 0, true};
+        counted := Allocator.{counting_allocator_proc, *counter};
+        lone := to_wide_string("", counted);
+        show_bool(lone != null && lone[0] == 0 && counter.allocations == 1 && counter.last_size == 2);
+        free(lone, counted);
+        // Not only the byte 255: an overlong form (C0 80), an encoded
+        // surrogate (ED A0 80) and a cut sequence (E6 97) are refused too,
+        // never made U+FFFD, which would name another path.
+        overlong : [2]u8;
+        overlong[0] = 192;
+        overlong[1] = 128;
+        surrogate : [3]u8;
+        surrogate[0] = 237;
+        surrogate[1] = 160;
+        surrogate[2] = 128;
+        cut : [2]u8;
+        cut[0] = 230;
+        cut[1] = 151;
+        overlong_view : []u8 = overlong;
+        surrogate_view : []u8 = surrogate;
+        cut_view : []u8 = cut;
+        show_bool(to_wide_string(cast(string) byte_view, counted) == null &&
+                  to_wide_string(cast(string) overlong_view, counted) == null &&
+                  to_wide_string(cast(string) surrogate_view, counted) == null &&
+                  to_wide_string(cast(string) cut_view, counted) == null && counter.allocations == 1);
+        show_bool(to_wide_string("a\0b", counted) == null && counter.allocations == 1);
+        show_bool(to_wide_string("日本", Allocator.{failing_allocator_proc, null}) == null);
+
+        wide_units : [3]u16;
+        wide_units[0] = 26085; // U+65E5, 日
+        wide_units[1] = 0xD800;
+        wide_units[2] = "a"[0];
+        none, none_ok := from_wide_string(*wide_units[0], 0, counted);
+        show_bool(none_ok && none.count == 0 && none.data == null && counter.allocations == 1);
+        converted, converted_ok := from_wide_string(*wide_units[0], 3, counted);
+        show_bool(converted_ok && converted == "日�a" && counter.allocations == 2 && counter.last_size == 7);
+        free(converted.data, counted);
+        show_bool(counter.frees == 2 && counter.all_here);
+    } else {
+        for 1..7 { show_bool(true); }
+    }
+    print_string("\n");
+
+    print_string("deleted:");
+    show_bool(delete_file(A));
+    show_bool(delete_file(NIHON));
+    show_bool(file_exists(A));
+    show_bool(file_exists(NIHON));
+    print_string("\ndirectory deleted:");
+    show_bool(delete_directory(ROOT));
+    show_bool(is_directory(ROOT));
+    print_string("\n");
+}
