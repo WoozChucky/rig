@@ -24,9 +24,10 @@
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
 // Before any test the runner makes .build/tests, and in it an empty
 // directory, .build/tests/basic_file_empty_dir, which tests/run/basic_file
-// gives Basic's file procedures as a path: Basic, on C17 alone, can't make
-// one. At its start the runner sets RIG_BASIC_TEST=set by bin/run-tests,
-// and RIG_BASIC_TEST_EMPTY to "", in its own environment, which every
+// gives Basic's file procedures as a path, made here since before Basic
+// had make_directory; that test could make it itself now. At its start
+// the runner sets RIG_BASIC_TEST=set by bin/run-tests, and
+// RIG_BASIC_TEST_EMPTY to "", in its own environment, which every
 // program it runs inherits, compiled and interpreted, so
 // tests/run/basic_environment reads a variable whose value it knows and one
 // set to "" (and passes only under the runner).
@@ -49,9 +50,14 @@
 // whole, and one at least (its NAME.exit is the compiled run's).
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
-// Then two fixed cases: rig build without -o from another directory
-// (default_output_test), and a runtime error's order after the program's
-// output when stdout and stderr are one pipe (merged_output_test).
+// Then three fixed cases: rig build without -o from another directory
+// (default_output_test), a runtime error's order after the program's
+// output when stdout and stderr are one pipe (merged_output_test), and
+// Basic's print_error lines, and the standard error of a command run by
+// run_command_with_output, in order with the program's output so, compiled
+// and interpreted (print_error_order_test). On Linux a fourth:
+// run_command_with_output's whole output when a signal stops its read
+// (interrupted_read_test).
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
@@ -111,7 +117,8 @@
 // output before a workspace's file that can't be read is said
 // (workspace_output_order_test), tests/build/options once more, where the
 // workspaces whose bounds checks are left on by default, unoptimised and
-// optimised, stop at their index past the end (checked_workspace_test), rig
+// optimised, stop at their index past the end, and the one optimised with
+// bounds_checks false at its failing assert (checked_workspace_test), rig
 // build's report, without --quiet, checked by its shape, its times adding
 // up and its lines counted: of tests/run/hello.rig, its lines and Preload's
 // (hello_report_test), of tests/run/run_slow.rig, whose slow constant's
@@ -1307,13 +1314,11 @@ static String optimised_object_test(Arena *a, String rig) {
 // bounds-checked (spec 10.2), and so has its checked_fast workspace, the
 // same program optimised, so both programs, checked and checked_fast, stop
 // at its index one past the end: exit 101, nothing on stdout, and
-// checked.err on stderr. {} when they do, otherwise why not.
+// checked.err on stderr. Its asserted workspace, built optimised and with
+// bounds_checks false, still checks its assert (Basic's, spec 8.1), and
+// stops so too, with asserted.err. {} when they do, otherwise why not.
 static String checked_workspace_test(Arena *a, String rig) {
     String dir = str(".build/tests/checked");
-    String expected_err = {};
-    if (!os_read_file(a, str("tests/build/options/checked.err"), &expected_err)) {
-        return str("can't read tests/build/options/checked.err");
-    }
     Process_Result built = {};
     String why = {};
     if (!build_copy(a, rig, str("options"), dir, false, &built, &why)) return why;
@@ -1321,9 +1326,22 @@ static String checked_workspace_test(Arena *a, String rig) {
         return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
                            built.err);
     }
-    const char *names[] = {"checked", "checked_fast"};
-    for (const char *name : names) {
-        String program = string_printf(a, STR_FMT "/%s%s", STR_ARG(dir), name, EXE);
+    struct Stopped {
+        const char *name;
+        const char *err;  // what it writes to stderr, in tests/build/options
+    };
+    const Stopped stopped[] = {
+        {"checked", "checked.err"},
+        {"checked_fast", "checked.err"},
+        {"asserted", "asserted.err"},
+    };
+    for (const Stopped &s : stopped) {
+        String err_path = string_printf(a, "tests/build/options/%s", s.err);
+        String expected_err = {};
+        if (!os_read_file(a, err_path, &expected_err)) {
+            return string_printf(a, "can't read " STR_FMT, STR_ARG(err_path));
+        }
+        String program = string_printf(a, STR_FMT "/%s%s", STR_ARG(dir), s.name, EXE);
         if (!os_file_exists(program)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(program));
         Array<String> command = {};
         array_add(&command, program);
@@ -1465,6 +1483,137 @@ static String merged_output_test(Arena *a, String rig) {
     if (ran.exit_code != 101) return string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, ran.exit_code)));
     return {};
 }
+
+// Basic's print_error and print_error_string between lines printed to
+// standard output, then a command run by run_command_with_output that
+// writes to standard error, with stdout and stderr in one pipe: each line
+// must come out where it was written. stdout is a pipe, so C buffers it,
+// and Basic flushes C's streams before it writes to standard error, as the
+// runtime does before a runtime error, and before it runs the command. The
+// program is written here, in .build/tests, and run compiled and then
+// interpreted (bin/unit-tests --interpret), each exiting 0 with the same
+// six lines.
+static String print_error_order_test(Arena *a, String rig, String unit_tests) {
+    String name = str("print_error_order");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = str("#import \"Basic\";\n"
+                      "main :: () {\n"
+                      "    print_line(\"out 1\");\n"
+                      "    print_error(\"err {}\\n\", 1);\n"
+                      "    print_line(\"out 2\");\n"
+                      "    print_error_string(\"err 2\\n\");\n"
+                      "    print_line(\"out 3\");\n"
+                      "    run_command_with_output(\"1>&2 echo err 3\", HEAP_ALLOCATOR);\n"
+                      "}\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String expected = str("out 1\nerr 1\nout 2\nerr 2\nout 3\nerr 3\n");
+
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    remove(string_cstr(a, program));
+    Array<String> argv = build_command(a, rig, ".build/tests", name, program);
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+
+    for (s32 interpreted = 0; interpreted < 2; interpreted++) {
+        Array<String> command = {};
+        if (interpreted) {
+            array_add(&command, unit_tests);
+            array_add(&command, str("--interpret"));
+            array_add(&command, source);
+        } else {
+            array_add(&command, program);
+        }
+        s32 timeout = interpreted ? INTERPRETED_TIMEOUT : TIMEOUT;
+        const char *how = interpreted ? "interpreted" : "compiled";
+        Process_Result ran = {};
+        started = os_run_merged(a, command, {}, timeout, &ran);
+        array_free(&command);
+        if (!started) {
+            return string_printf(a, "couldn't run it %s: " STR_FMT, how, STR_ARG(os_error_message(a)));
+        }
+        if (ran.timed_out) return string_printf(a, "it took longer than %d seconds %s", timeout, how);
+        ran.out = normalise_newlines(a, ran.out);
+        if (!string_eq(ran.out, expected)) {
+            return first_difference(a, interpreted ? "stdout and stderr, interpreted" : "stdout and stderr, compiled",
+                                    expected, ran.out);
+        }
+        if (ran.exit_code != 0) {
+            return string_printf(a, "exit code " STR_FMT " %s, expected 0", STR_ARG(exit_code_text(a, ran.exit_code)), how);
+        }
+    }
+    return {};
+}
+
+#ifndef _WIN32
+// run_command_with_output's read of the pipe, stopped by a signal: the
+// program installs a SIGALRM handler with sigaction, without SA_RESTART,
+// and a timer that fires 100 ms into a command that sleeps half a second,
+// so the read gives -1 with EINTR before the command writes. Basic must
+// read again, and give the whole output and the command's status 0.
+// Compiled only: the interpreter can't hand C a Rig procedure, and the
+// handler is one (qsort_callback). Linux only, as Windows has no signals
+// that stop a read.
+static String interrupted_read_test(Arena *a, String rig) {
+    String name = str("interrupted_read");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = str("#import \"Basic\";\n"
+                      "C_Sigaction :: struct { handler: (signal: s32) #c_call; mask: [16]u64; flags: s32; pad: s32;"
+                      " restorer: *void; }\n"
+                      "C_Timer :: struct { interval_seconds: s64; interval_microseconds: s64; seconds: s64;"
+                      " microseconds: s64; }\n"
+                      "sigaction :: (signal: s32, action: *C_Sigaction, old: *C_Sigaction) -> s32 #foreign libc;\n"
+                      "setitimer :: (which: s32, value: *C_Timer, old: *C_Timer) -> s32 #foreign libc;\n"
+                      "alarms := 0;\n"
+                      "on_alarm :: (signal: s32) #c_call { alarms += 1; }\n"
+                      "main :: () {\n"
+                      "    action : C_Sigaction;\n"
+                      "    action.handler = on_alarm;\n"
+                      "    timer : C_Timer;\n"
+                      "    timer.microseconds = 100000;\n"
+                      "    if sigaction(14, *action, null) != 0 || setitimer(0, *timer, null) != 0 {\n"
+                      "        print_line(\"no alarm\");\n"
+                      "        return;\n"
+                      "    }\n"
+                      "    output, status := run_command_with_output(\"sleep 0.5; echo done\", HEAP_ALLOCATOR);\n"
+                      "    print(\"[{}] {} {}\\n\", output, status, alarms);\n"
+                      "}\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String expected = str("[done\n] 0 1\n");
+
+    String program = string_printf(a, ".build/tests/" STR_FMT, STR_ARG(name));
+    remove(string_cstr(a, program));
+    Array<String> argv = build_command(a, rig, ".build/tests", name, program);
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+
+    Array<String> command = {};
+    array_add(&command, program);
+    Process_Result ran = {};
+    started = os_run_merged(a, command, {}, TIMEOUT, &ran);
+    array_free(&command);
+    if (!started) return string_printf(a, "couldn't run it: " STR_FMT, STR_ARG(os_error_message(a)));
+    if (ran.timed_out) return string_printf(a, "it took longer than %d seconds", TIMEOUT);
+    if (!string_eq(ran.out, expected)) return first_difference(a, "stdout and stderr", expected, ran.out);
+    if (ran.exit_code != 0) {
+        return string_printf(a, "exit code " STR_FMT ", expected 0", STR_ARG(exit_code_text(a, ran.exit_code)));
+    }
+    return {};
+}
+#endif
 
 // rig build of a program whose top-level #runs print and then fail, its
 // stdout and stderr in one pipe: what the runs printed must come out first,
@@ -2232,13 +2381,14 @@ struct Report_Workspace {
     const char *name;
     bool optimised;
     const char *files[2];  // its build file and what that #loads, if anything
+    const char *module;    // a module its files #import, Basic, if any
 };
 
 // The lines block `i` of tests/build/NAME's report counts, its own
 // compilation's, added to *lines: block 0's, the build program's, are
 // build.rig's and Compiler's, which it imports, and block i's after it
-// workspace i - 1's files'; each has Preload's too, which every compilation
-// imports (spec 2.14). False when a file can't be read.
+// workspace i - 1's files' and its module's; each has Preload's too, which
+// every compilation imports (spec 2.14). False when a file can't be read.
 static bool block_lines(Arena *a, const char *name, const Report_Workspace *workspaces, s64 i, s64 *lines) {
     if (!module_lines(a, "Preload", lines)) return false;
     if (i == 0) {
@@ -2249,7 +2399,7 @@ static bool block_lines(Arena *a, const char *name, const Report_Workspace *work
         String path = string_printf(a, "tests/build/%s/%s", name, workspaces[i - 1].files[f]);
         if (!file_lines(a, path, lines)) return false;
     }
-    return true;
+    return !workspaces[i - 1].module || module_lines(a, workspaces[i - 1].module, lines);
 }
 
 // tests/build/NAME built in .build/tests/report-NAME (build_copy, without
@@ -2318,23 +2468,25 @@ static String build_program_report(Arena *a, String rig, const char *name, const
 // all, after what the #runs printed.
 static String build_program_report_test(Arena *a, String rig) {
     const Report_Workspace workspaces[] = {
-        {"greeter", false, {"greeter.rig"}},
-        {"counter", false, {"src/counter.rig"}},
+        {"greeter", false, {"greeter.rig"}, nullptr},
+        {"counter", false, {"src/counter.rig"}, nullptr},
     };
     return build_program_report(a, rig, "two_workspaces", workspaces, 2);
 }
 
-// tests/build/options's report: the workspaces built with optimize, fast
-// and checked_fast, have their optimising line, and the others none.
+// tests/build/options's report: the workspaces built with optimize, fast,
+// checked_fast and asserted, have their optimising line, and the others
+// none.
 static String optimised_report_test(Arena *a, String rig) {
     const Report_Workspace workspaces[] = {
-        {"plain", false, {"sums.rig"}},
-        {"fast", true, {"fast.rig", "sums.rig"}},
-        {"unchecked", false, {"past_the_end.rig"}},
-        {"checked", false, {"checked.rig"}},
-        {"checked_fast", true, {"checked_fast.rig", "checked.rig"}},
+        {"plain", false, {"sums.rig"}, nullptr},
+        {"fast", true, {"fast.rig", "sums.rig"}, nullptr},
+        {"unchecked", false, {"past_the_end.rig"}, nullptr},
+        {"checked", false, {"checked.rig"}, nullptr},
+        {"checked_fast", true, {"checked_fast.rig", "checked.rig"}, nullptr},
+        {"asserted", true, {"asserted.rig"}, "Basic"},
     };
-    return build_program_report(a, rig, "options", workspaces, 5);
+    return build_program_report(a, rig, "options", workspaces, 6);
 }
 
 // tests/build/workspace_failures built in .build/tests/report-failed
@@ -3719,6 +3871,12 @@ int main(int argc, char **argv) {
     report("rig build without -o, from another directory", default_output_test(&a, rig), &passed, &failed);
     report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,
            &failed);
+    report("print_error's lines in order with the program's output, both in one pipe",
+           print_error_order_test(&a, rig, unit_tests), &passed, &failed);
+#ifndef _WIN32
+    report("run_command_with_output's whole output when a signal stops its read", interrupted_read_test(&a, rig),
+           &passed, &failed);
+#endif
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     build_directory_tests(&a, rig, &passed, &failed);
     report("rig build sub/build.rig from its parent", build_program_elsewhere_test(&a, rig), &passed, &failed);
@@ -3728,7 +3886,8 @@ int main(int argc, char **argv) {
            workspace_output_order_test(&a, rig, str("workspace_errors"), true), &passed, &failed);
     report("the build program's #run output before a workspace's unreadable file, both in one pipe",
            workspace_output_order_test(&a, rig, str("workspace_unreadable"), false), &passed, &failed);
-    report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not",
+    report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not, and an "
+           "optimised unchecked one's assert still fails",
            checked_workspace_test(&a, rig), &passed, &failed);
     report("rig build's report: every phase, hello.rig's and Preload's lines", hello_report_test(&a, rig), &passed,
            &failed);

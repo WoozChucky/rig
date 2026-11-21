@@ -1,116 +1,124 @@
 alloc
-    ALLOCATE 53:14
+    ALLOCATE 61:14
 resize
-    RESIZE 55:13
+    RESIZE 63:13
 free
-    FREE 57:9
+    FREE 65:9
 free_all
-    FREE_ALL 59:9
+    FREE_ALL 67:9
 append_string
-    ALLOCATE 65:9
-    FREE 66:9
+    ALLOCATE 73:9
+    FREE 74:9
 append_byte
-    ALLOCATE 68:9
-    FREE 69:9
+    ALLOCATE 76:9
+    FREE 77:9
 append_int
-    ALLOCATE 71:9
-    FREE 72:9
+    ALLOCATE 79:9
+    FREE 80:9
 append_u64
-    ALLOCATE 74:9
-    FREE 75:9
-append_float
-    ALLOCATE 77:9
-    FREE 78:9
-append_bool
-    ALLOCATE 80:9
-builder_to_string
-    ALLOCATE 82:14
+    ALLOCATE 82:9
     FREE 83:9
+append_float
+    ALLOCATE 85:9
+    FREE 86:9
+append_bool
+    ALLOCATE 88:9
+builder_to_string
+    ALLOCATE 90:14
+    FREE 91:9
 builder_free
-    FREE 85:9
+    FREE 93:9
 to_c_string
-    ALLOCATE 88:14
-    FREE 89:9
+    ALLOCATE 96:14
+    FREE 97:9
 join
-    ALLOCATE 91:13
-    FREE 92:9
+    ALLOCATE 99:13
+    FREE 100:9
 replace
-    ALLOCATE 94:13
-    FREE 95:9
+    ALLOCATE 102:13
+    FREE 103:9
 repeat
-    ALLOCATE 97:13
-    FREE 98:9
+    ALLOCATE 105:13
+    FREE 106:9
 to_upper_copy
-    ALLOCATE 100:13
-    FREE 101:9
+    ALLOCATE 108:13
+    FREE 109:9
 to_lower_copy
-    ALLOCATE 103:13
-    FREE 104:9
-path_join
-    ALLOCATE 106:13
-    FREE 107:9
-read_entire_file
-    ALLOCATE 111:17
+    ALLOCATE 111:13
     FREE 112:9
+path_join
+    ALLOCATE 114:13
+    FREE 115:9
+read_entire_file
+    ALLOCATE 119:17
+    FREE 120:9
 get_environment
-    ALLOCATE 116:17
-    FREE 116:17
-    ALLOCATE 116:17
-    FREE 117:9
+    ALLOCATE 124:17
+    FREE 124:17
+    ALLOCATE 124:17
+    FREE 125:9
 run_command
-    ALLOCATE 119:9
-    FREE 119:9
-sort
-    ALLOCATE 124:9
-    FREE 124:9
-table_set
-    ALLOCATE 134:9
-    ALLOCATE 134:9
-table_set
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-    ALLOCATE 137:20
-table_set
-    ALLOCATE 139:9
-    ALLOCATE 139:9
+    ALLOCATE 127:9
+    FREE 127:9
+run_command_with_output
+    ALLOCATE 132:21
+    ALLOCATE 132:21
+    FREE 132:21
+    FREE 133:9
+list_directory
+    ALLOCATE 138:21
     FREE 139:9
+sort
+    ALLOCATE 144:9
+    FREE 144:9
+table_set
+    ALLOCATE 154:9
+    ALLOCATE 154:9
+table_set
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+table_set
+    ALLOCATE 159:9
+    ALLOCATE 159:9
+    FREE 159:9
 table_remove
-    FREE 141:9
-table_free
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-    FREE 143:9
-int_table_set
-    ALLOCATE 147:21
-int_table_set
-    ALLOCATE 149:9
-    FREE 149:9
-int_table_free
-    FREE 151:9
-print_to_builder
-    ALLOCATE 156:9
-    FREE 157:9
-sprint
-    ALLOCATE 160:13
     FREE 161:9
+table_free
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+int_table_set
+    ALLOCATE 167:21
+int_table_set
+    ALLOCATE 169:9
+    FREE 169:9
+int_table_free
+    FREE 171:9
+print_to_builder
+    ALLOCATE 176:9
+    FREE 177:9
+sprint
+    ALLOCATE 180:13
+    FREE 181:9
 sprint through a wrapper
-    ALLOCATE 172:12
-    FREE 164:9
+    ALLOCATE 194:12
+    FREE 184:9

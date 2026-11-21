@@ -993,6 +993,42 @@ TEST(compiler_procedures_give_the_hooks_results) {
     arena_free(&a);
 }
 
+TEST(a_runtime_error_fails_a_run) {
+    // Issue #157 (spec 7.8, 8.1): a call of Preload's __runtime_error,
+    // which the compiler makes a panic, needs no compiler to do it, so it
+    // fails a #run as a failing check does, with its text's message, from
+    // message_start on, and the calls, the innermost at the call's name in
+    // the procedure that made it. Checking goes on, and reports the error
+    // after it. The file is taken for a module's, which may declare it.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, "__runtime_error :: (text: string, message_start: int) #compiler;\n"
+                                      "g :: () -> int { __runtime_error(\"whole\\n\", 0); return 1; }\n"
+                                      "X :: #run g();\n"
+                                      "wrong : int = \"x\";\n"
+                                      "main :: () {}\n"),
+              "3:6: #run failed: runtime error: whole\n"
+              "    in g (test.rig:2:18)\n"
+              "    in #run (test.rig:3:6)\n"
+              "4:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(a_runtime_error_with_null_data_fails_a_run) {
+    // Issue #157 (spec 8.1): a text whose data is null, a count of 5 set by
+    // hand, is taken as empty, as one whose count is below 0 is: the #run
+    // fails with no message, rather than the interpreter reading the five
+    // bytes through the null pointer.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, "__runtime_error :: (text: string, message_start: int) #compiler;\n"
+                                      "g :: () -> int { t : string; t.count = 5; __runtime_error(t, 0); return 1; }\n"
+                                      "X :: #run g();\n"
+                                      "main :: () {}\n"),
+              "3:6: #run failed: runtime error: \n"
+              "    in g (test.rig:2:43)\n"
+              "    in #run (test.rig:3:6)\n");
+    arena_free(&a);
+}
+
 TEST(world_counts_its_runs_time) {
     // A world adds up the time its #runs take, for rig build's report (spec
     // 10.1): the expression run while the program checks, then the top-level

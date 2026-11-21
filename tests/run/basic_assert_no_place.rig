@@ -1,0 +1,15 @@
+// Basic's assert (issue #157) given a loc with no place, its line 0: a
+// zeroed Source_Code_Location, which a call through a procedure value,
+// given no default, passes, here an explicit .{}. Its line leaves the
+// place out, starting at "runtime error: ", and the exit status is 101,
+// compiled and interpreted.
+#import "Basic";
+
+main :: () {
+    check := assert;
+    zeroed : Source_Code_Location;
+    check(true, "passes", zeroed);
+    print_line("before");
+    check(false, "no place", .{});
+    print_line("not reached");
+}

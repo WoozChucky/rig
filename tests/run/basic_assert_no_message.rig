@@ -1,0 +1,14 @@
+// Basic's assert (issue #157) with no message: its line ends with
+// "assertion failed". The place it names is that of the assert's call in
+// check, the procedure that asserts, not main's call of check: assert's
+// loc is its own caller's place (#caller_location, spec 7.2).
+#import "Basic";
+
+check :: (n: int) {
+    assert(n >= 0);
+}
+
+main :: () {
+    print_line("before");
+    check(-1);
+}

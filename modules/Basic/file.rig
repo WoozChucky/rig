@@ -28,8 +28,13 @@
 // Windows' reads it in the system's ANSI code page rather than as UTF-8,
 // so a path with a character outside ASCII names another file there (with
 // code page 1252, "café.txt" makes cafÃ©.txt). Windows' wide-character
-// calls, _wfopen and _wremove, would take it right, but Basic doesn't
-// call them yet.
+// calls, _wfopen and _wremove, would take it right, but Basic's files
+// don't call them: interpreted, _wfopen's FILE * would be a second C
+// runtime's, which the other calls here refuse (libc.rig). Basic's
+// directories (directory.rig) do take a UTF-8 path on Windows, through
+// kernel32's wide calls, so a directory named outside the ANSI code page
+// is made and listed by its name, but a file in it, or one so named,
+// can't be opened here (issue #209 is to make files UTF-8 too).
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
@@ -75,19 +80,21 @@ file_open :: (path: string, mode: int) -> File, bool {
     free(c_path, HEAP_ALLOCATOR);
     if handle == null { return File.{null}, false; }
 
+    // The handle is open from here, and every return that fails closes it:
+    // the deferred c_fclose runs on each way out (spec 6.12) unless keep is
+    // set, which only the last return does, handing the open file to the
+    // caller.
+    keep := false;
+    defer if !keep { c_fclose(handle); }
+
     if mode == FILE_READ {
         start : C_Fpos;
-        if c_fgetpos(handle, *start) != 0 {
-            c_fclose(handle);
-            return File.{null}, false;
-        }
+        if c_fgetpos(handle, *start) != 0 { return File.{null}, false; }
         probe : u8;
         c_fread(*probe, 1, 1, handle);
-        if c_ferror(handle) != 0 || c_fsetpos(handle, *start) != 0 {
-            c_fclose(handle);
-            return File.{null}, false;
-        }
+        if c_ferror(handle) != 0 || c_fsetpos(handle, *start) != 0 { return File.{null}, false; }
     }
+    keep = true;
     return File.{handle}, true;
 }
 
@@ -162,20 +169,15 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc
     empty : string;
     file, opened := file_open(path, FILE_READ);
     if !opened { return empty, false; }
+    // The file is open from here: the deferred file_close closes it on
+    // whichever return is taken (spec 6.12), once nothing more is read from
+    // it.
+    defer file_close(file);
     size := file_size(file);
-    if size < 0 {
-        file_close(file);
-        return empty, false;
-    }
-    if size == 0 {
-        file_close(file);
-        return empty, true;
-    }
+    if size < 0 { return empty, false; }
+    if size == 0 { return empty, true; }
     data := cast(*u8) alloc(size, allocator, loc);
-    if data == null {
-        file_close(file);
-        return empty, false;
-    }
+    if data == null { return empty, false; }
 
     got := 0;
     while got < size {
@@ -186,7 +188,6 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc
         if n <= 0 { break; }
         got += n;
     }
-    file_close(file);
     if got < size {
         free(data, allocator, loc);
         return empty, false;

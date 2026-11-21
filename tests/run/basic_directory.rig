@@ -1,0 +1,395 @@
+// Basic's directories (issue #157), under .build/tests/basic_directory_dir,
+// which the test makes and deletes: a directory made, found and made
+// again, one whose parent is missing, a file in the way, children named in
+// ASCII and outside it (café, 日本, which Windows reaches through its wide
+// calls), found and listed by those names, and on Windows found on disk by
+// their UTF-16 names built by hand, a listing sorted by bytes in one
+// allocation with a zero after each name, a trailing separator, a listing
+// that closes what it opened, on Windows
+// a drive letter and a colon alone, an empty directory, the paths every
+// procedure refuses (empty, with a zero byte, and on Windows not valid
+// UTF-8, which Linux makes and lists as its byte), an allocator with no
+// memory, and deleting, which refuses a
+// directory with entries and a file. What a stopped run left is deleted
+// first. Everything printed is the same on both systems. The directory
+// isn't .build/tests/basic_directory, which on Linux is this test's own
+// program, built there by the runner.
+#import "Basic";
+
+ROOT :: ".build/tests/basic_directory_dir";
+ROOT_SLASH :: ".build/tests/basic_directory_dir/";
+A :: ".build/tests/basic_directory_dir/a";
+A2 :: ".build/tests/basic_directory_dir/a2";
+B :: ".build/tests/basic_directory_dir/b";
+Z :: ".build/tests/basic_directory_dir/Z";
+CAFE :: ".build/tests/basic_directory_dir/café";
+NIHON :: ".build/tests/basic_directory_dir/日本";
+NIHON_CAFE :: ".build/tests/basic_directory_dir/日本/café";
+FILE :: ".build/tests/basic_directory_dir/m.txt";
+MISSING :: ".build/tests/basic_directory_dir/missing";
+NO_PARENT :: ".build/tests/basic_directory_dir/x/y";
+
+// Paths with a zero byte after a real directory's path and a separator, so
+// that one cut short at the zero, as the system would see it, would name
+// that directory (ROOT, an empty A) or one that can be made (A2): only the
+// procedures' own refusal keeps the answer false.
+ROOT_ZERO :: ".build/tests/basic_directory_dir/\0x";
+A_ZERO :: ".build/tests/basic_directory_dir/a/\0x";
+A2_ZERO :: ".build/tests/basic_directory_dir/a2\0x";
+
+// Prints s between brackets, so an empty string shows as [].
+show_text :: (s: string) {
+    print_string("[");
+    print_string(s);
+    print_string("]");
+}
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+// Prints a space, then value.
+show_int :: (value: int) {
+    print_string(" ");
+    print_int(value);
+}
+
+// How many allocations an allocator was asked for, and how many frees.
+Counter :: struct {
+    allocations: int;
+    frees: int;
+}
+
+// Prints a space and counter's allocations, then a space and its frees,
+// and sets both back to 0 for the next call.
+show_counts :: (counter: *Counter) {
+    show_int(counter.allocations);
+    show_int(counter.frees);
+    counter.allocations = 0;
+    counter.frees = 0;
+}
+
+// Passes every call on to the heap, counting the allocations and the
+// frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE { counter.allocations += 1; }
+    if mode == FREE { counter.frees += 1; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+#if OS == OS_WINDOWS {
+    // Whether GetFileAttributesW finds a directory at ROOT, a separator and
+    // tail, UTF-16 built by hand rather than by Basic's conversion, so that
+    // only a directory whose name on disk is tail's units is found: a name
+    // made in the ANSI code page from the UTF-8 bytes, cafÃ© for café, isn't.
+    on_disk :: (tail: []u16) -> bool {
+        wide : [64]u16;
+        for i: 0..ROOT.count - 1 { wide[i] = cast(u16) ROOT[i]; }
+        wide[ROOT.count] = 47; // '/'
+        for i: 0..tail.count - 1 { wide[ROOT.count + 1 + i] = tail[i]; }
+        wide[ROOT.count + 1 + tail.count] = 0;
+        attributes := c_get_file_attributes_w(*wide[0]);
+        return attributes != C_INVALID_FILE_ATTRIBUTES && (attributes & C_FILE_ATTRIBUTE_DIRECTORY) != 0;
+    }
+
+    // How many handles the process holds, which a find handle left open
+    // adds to: kernel32's, which every program links and the interpreter
+    // looks up in kernel32.dll. Its process is GetCurrentProcess's
+    // pseudo-handle, -1.
+    c_get_process_handle_count :: (process: *void, count: *u32) -> s32 #foreign libc "GetProcessHandleCount";
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
+}
+
+// Prints label, then a listing that is refused or empty as list_directory
+// gave it: whether it was true, its count, whether its data is null, and
+// what counter saw.
+show_refused :: (label: string, names: []string, ok: bool, counter: *Counter) {
+    print_string(label);
+    print_string(":");
+    show_bool(ok);
+    show_int(names.count);
+    show_bool(names.data == null);
+    show_counts(counter);
+    print_string("\n");
+}
+
+main :: () {
+    counter : Counter;
+    counting := Allocator.{counting_allocator_proc, *counter};
+    failing := Allocator.{failing_allocator_proc, null};
+
+    // A name of one byte, 255, which is never valid UTF-8: Linux takes a
+    // name as plain bytes and makes it, Windows refuses it before asking
+    // the file system. A string literal can't hold the byte, so the path is
+    // joined from a view of it.
+    byte : [1]u8;
+    byte[0] = 255;
+    byte_view : []u8 = byte;
+    bad := path_join(ROOT, cast(string) byte_view);
+    defer free(bad.data);
+
+    // What a stopped run may have left, deleted children first: each call
+    // is false when there is nothing to delete.
+    delete_file(FILE);
+    delete_directory(NIHON_CAFE);
+    delete_directory(NIHON);
+    delete_directory(CAFE);
+    delete_directory(B);
+    delete_directory(A);
+    delete_directory(A2);
+    delete_directory(Z);
+    delete_directory(bad);
+    delete_directory(ROOT);
+
+    print_string("missing:");
+    show_bool(is_directory(ROOT));
+    print_string("\nmade:");
+    show_bool(make_directory(ROOT));
+    show_bool(make_directory(ROOT));
+    show_bool(is_directory(ROOT));
+    print_string("\nno parent:");
+    show_bool(make_directory(NO_PARENT));
+    print_string("\nrefused:");
+    show_bool(is_directory(""));
+    show_bool(is_directory(ROOT_ZERO));
+    show_bool(make_directory(A2_ZERO));
+    show_bool(is_directory(A2));
+    print_string("\n");
+
+    // Made in an order that isn't the listing's, which is by bytes. The
+    // file's path is ASCII: Basic's files are in the ANSI code page on
+    // Windows.
+    print_string("children:");
+    show_bool(make_directory(B));
+    show_bool(make_directory(A));
+    show_bool(make_directory(CAFE));
+    show_bool(make_directory(NIHON));
+    show_bool(make_directory(Z));
+    show_bool(write_entire_file(FILE, "m"));
+    print_string("\nfound:");
+    show_bool(is_directory(CAFE));
+    show_bool(is_directory(NIHON));
+    // On Windows the names on disk are café's and 日本's own UTF-16 units,
+    // found without Basic's conversion; Linux takes the bytes as they are,
+    // and prints the same line.
+    print_string("\non disk:");
+    #if OS == OS_WINDOWS {
+        cafe : [4]u16;
+        cafe[0] = 99;  // 'c'
+        cafe[1] = 97;  // 'a'
+        cafe[2] = 102; // 'f'
+        cafe[3] = 233; // U+00E9, é
+        nihon : [2]u16;
+        nihon[0] = 26085; // U+65E5, 日
+        nihon[1] = 26412; // U+672C, 本
+        cafe_view : []u16 = cafe;
+        nihon_view : []u16 = nihon;
+        show_bool(on_disk(cafe_view));
+        show_bool(on_disk(nihon_view));
+    } else {
+        show_bool(is_directory(CAFE));
+        show_bool(is_directory(NIHON));
+    }
+    // Nothing is made over the file, which is still a file.
+    print_string("\na file:");
+    show_bool(is_directory(FILE));
+    show_bool(make_directory(FILE));
+    show_bool(is_directory(FILE));
+    show_bool(file_exists(FILE));
+    print_string("\n");
+
+    // Every name but . and .., sorted by bytes: Z (90) before a (97), and
+    // the names outside ASCII, whose first bytes are above 127, after the
+    // rest. The listing is one allocation, which the test gives back.
+    names, ok := list_directory(ROOT, counting);
+    print_string("listed:");
+    show_bool(ok);
+    show_int(names.count);
+    for names {
+        print_string(" ");
+        show_text(it);
+    }
+    zeros := true;
+    for names {
+        if it.data[it.count] != 0 { zeros = false; }
+    }
+    print_string("\nzero after each:");
+    show_bool(zeros);
+    free(names.data, counting);
+    print_string("\nfreed:");
+    show_counts(*counter);
+    print_string("\n");
+
+    // A trailing separator lists the same directory.
+    names, ok = list_directory(ROOT_SLASH, counting);
+    print_string("trailing separator:");
+    show_bool(ok);
+    show_int(names.count);
+    print_string("\n");
+    free(names.data, counting);
+    counter.allocations = 0;
+    counter.frees = 0;
+
+    // A directory whose own path is outside ASCII is listed too: on Windows
+    // its pattern is made from the converted path.
+    print_string("listed 日本:");
+    show_bool(make_directory(NIHON_CAFE));
+    names, ok = list_directory(NIHON, counting);
+    show_bool(ok);
+    show_int(names.count);
+    for names {
+        print_string(" ");
+        show_text(it);
+    }
+    print_string("\n");
+    free(names.data, counting);
+    counter.allocations = 0;
+    counter.frees = 0;
+
+    // A listing gives back what it opened. On Linux C gives a new handle
+    // the lowest descriptor free, so the file opened again after a listing
+    // gets the descriptor it had before, which a DIR * left open would
+    // hold. On Windows the process holds as many handles after a listing
+    // as before, which a find handle left open would add to.
+    print_string("listing closed:");
+    #if OS == OS_WINDOWS {
+        // A handle another thread opens or closes in between changes the
+        // count too, so up to five listings are tried: a find handle left
+        // open would add one every time.
+        closed := false;
+        for 1..5 {
+            before : u32;
+            after : u32;
+            c_get_process_handle_count(cast(*void) -1, *before);
+            names, ok = list_directory(ROOT, counting);
+            free(names.data, counting);
+            c_get_process_handle_count(cast(*void) -1, *after);
+            if !ok { break; }
+            if after == before { closed = true; break; }
+        }
+        show_bool(closed);
+    } else {
+        f, opened := file_open(FILE, FILE_READ);
+        descriptor := c_fileno(f.handle);
+        file_close(f);
+        names, ok = list_directory(ROOT, counting);
+        free(names.data, counting);
+        f, opened = file_open(FILE, FILE_READ);
+        show_bool(ok && opened && c_fileno(f.handle) == descriptor);
+        file_close(f);
+    }
+    print_string("\n");
+    counter.allocations = 0;
+    counter.frees = 0;
+
+    // On Windows a drive letter and a colon alone name that drive's current
+    // directory, as is_directory takes them, so list_directory lists the
+    // same names for them as for ".", not the drive's root. The drive is
+    // the one where ROOT is found after its letter and colon, the current
+    // directory's. Linux has no drives, and prints the same line.
+    same := true;
+    #if OS == OS_WINDOWS {
+        same = false;
+        drive : [2]u8;
+        drive[1] = 58; // ':'
+        drive_view : []u8 = drive;
+        for letter: 65..90 { // 'A' to 'Z'
+            drive[0] = cast(u8) letter;
+            on_drive := sprint("{}{}", cast(string) drive_view, ROOT);
+            found := is_directory(on_drive);
+            free(on_drive.data);
+            if found {
+                here, here_ok := list_directory(".");
+                there, there_ok := list_directory(cast(string) drive_view);
+                same = here_ok && there_ok && here.count == there.count;
+                if same {
+                    for i: 0..here.count - 1 {
+                        if here[i] != there[i] { same = false; }
+                    }
+                }
+                free(here.data);
+                free(there.data);
+                break;
+            }
+        }
+    }
+    print_string("drive's current directory:");
+    show_bool(same);
+    print_string("\n");
+
+    // An empty directory is true, with nothing allocated.
+    names, ok = list_directory(A, counting);
+    show_refused("empty", names, ok, *counter);
+
+    // A zero byte after the empty directory's path isn't deleted as it.
+    print_string("delete zero byte:");
+    show_bool(delete_directory(A_ZERO));
+    show_bool(is_directory(A));
+    print_string("\n");
+
+    // Refused, with nothing allocated: a file, a missing path, an empty
+    // path, a zero byte, and an allocator with no memory for the listing.
+    names, ok = list_directory(FILE, counting);
+    show_refused("list a file", names, ok, *counter);
+    names, ok = list_directory(MISSING, counting);
+    show_refused("list missing", names, ok, *counter);
+    names, ok = list_directory("", counting);
+    show_refused("list empty path", names, ok, *counter);
+    names, ok = list_directory(ROOT_ZERO, counting);
+    show_refused("list zero byte", names, ok, *counter);
+    names, ok = list_directory(ROOT, failing);
+    show_refused("list no memory", names, ok, *counter);
+
+    // The same line on both systems. Windows refuses the name everywhere,
+    // listing it with nothing allocated. Linux makes it, finds it, lists
+    // the empty directory with nothing allocated, lists it in ROOT as its
+    // one byte, and deletes it.
+    invalid := false;
+    #if OS == OS_WINDOWS {
+        invalid = !make_directory(bad) && !is_directory(bad) && !delete_directory(bad);
+        names, ok = list_directory(bad, counting);
+        invalid = invalid && !ok && names.count == 0 && names.data == null;
+    } else {
+        invalid = make_directory(bad) && is_directory(bad);
+        names, ok = list_directory(bad, counting);
+        invalid = invalid && ok && names.count == 0 && names.data == null;
+        names, ok = list_directory(ROOT, counting);
+        listed := false;
+        for names {
+            if it.count == 1 && it.data[0] == 255 { listed = true; }
+        }
+        free(names.data, counting);
+        invalid = invalid && ok && listed && counter.allocations == 1 && counter.frees == 1;
+        counter.allocations = 0;
+        counter.frees = 0;
+        invalid = invalid && delete_directory(bad);
+    }
+    invalid = invalid && counter.allocations == 0 && counter.frees == 0;
+    print_string("invalid UTF-8:");
+    show_bool(invalid);
+    print_string("\n");
+
+    // A directory with entries and a file aren't deleted; once emptied, the
+    // directory is, and isn't there to delete again.
+    print_string("deleted:");
+    show_bool(delete_directory(ROOT));
+    show_bool(delete_directory(FILE));
+    show_bool(delete_directory(A));
+    show_bool(delete_directory(B));
+    show_bool(delete_directory(CAFE));
+    show_bool(delete_directory(NIHON_CAFE));
+    show_bool(delete_directory(NIHON));
+    show_bool(delete_directory(Z));
+    show_bool(delete_file(FILE));
+    show_bool(delete_directory(ROOT));
+    show_bool(is_directory(ROOT));
+    show_bool(delete_directory(ROOT));
+    print_string("\n");
+}

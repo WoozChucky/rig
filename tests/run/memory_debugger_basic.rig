@@ -12,11 +12,18 @@
 
 PATH :: ".build/tests/memory_debugger_basic.txt";
 
+// The directory list_directory lists, with one directory in it, made
+// before the push and deleted at the end.
+DIRECTORY :: ".build/tests/memory_debugger_basic_dir";
+CHILD :: ".build/tests/memory_debugger_basic_dir/child";
+
 main :: () {
     debugger : Memory_Debugger;
     memory_debugger_init(*debugger);
     debugged := context;
     debugged.allocator = memory_debugger_allocator(*debugger);
+    make_directory(DIRECTORY);
+    make_directory(CHILD);
     push_context debugged {
         p := alloc(8);
         p = resize(p, 8, 64);
@@ -81,9 +88,13 @@ main :: () {
         write_entire_file(PATH, "data");
         contents, ok := read_entire_file(PATH);
         free(contents.data);
+        listing, listed := list_directory(DIRECTORY);
+        free(listing.data);
         value, found := get_environment("RIG_BASIC_TEST");
         free(value.data);
         run_command("exit 0");
+        output, status := run_command_with_output("echo x");
+        free(output.data);
 
         unsorted := int.[5, 3, 9, 1, 7, 2, 8];
         sort(unsorted.data, unsorted.count, size_of(int), less_int);
@@ -94,4 +105,6 @@ main :: () {
     memory_debugger_report(*debugger);
     memory_debugger_free(*debugger);
     delete_file(PATH);
+    delete_directory(CHILD);
+    delete_directory(DIRECTORY);
 }

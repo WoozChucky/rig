@@ -1,0 +1,279 @@
+// Basic's directories: whether a path is one, making one, deleting an
+// empty one, and listing the names in one (issue #157), each through the
+// system's own calls (libc.rig's per-system part), since C17 has none.
+//
+// On Windows they are kernel32's wide calls, GetFileAttributesW,
+// CreateDirectoryW, RemoveDirectoryW and FindFirstFileW with FindNextFileW,
+// which take a path as UTF-16: the path, UTF-8 as every Rig string is, is
+// converted first (to_wide_path), and each name listed is converted back to
+// UTF-8. So a directory named outside the system's ANSI code page, café or
+// 日本, is made, found, listed and deleted by its UTF-8 name, as on Linux.
+// Basic's files, the environment and commands still go through C's ANSI
+// calls (file.rig, environment.rig), so a file whose path has a character
+// outside that code page can't be opened there, even in a directory these
+// procedures made and list (issue #209 is to make them UTF-8 too).
+//
+// On Linux they are POSIX's stat, mkdir, rmdir and opendir with readdir,
+// which take a path as bytes, so a UTF-8 path names what it says, and a
+// name that isn't UTF-8, which Linux allows, is listed as its bytes.
+//
+// Every procedure refuses, with nothing allocated and nothing asked of the
+// file system, an empty path, a path with a zero byte, which would reach the system cut
+// short, another directory's name, and on Windows a path that isn't valid
+// UTF-8, which would have to be changed to be converted and so would name
+// another directory too. The path's copy for the system, UTF-16 on Windows
+// and ended by a zero on Linux, comes from the heap and is given back
+// before the call returns, as file.rig's copies are and for its reasons:
+// not from the context's allocator, which may be an arena's or the
+// temporary storage's, where giving it back frees nothing.
+//
+// A listing holds every entry's name but . and .., files and directories
+// alike, without the directory's path, sorted by bytes (less_string), so
+// it comes in the same order on both systems and on every file system,
+// whose own orders differ (NTFS's ignores case, ext4's is a hash's). It is
+// one allocation from the allocator the call is given, which the caller
+// gives back with one free: the views first, then the names' bytes, each
+// followed by a zero byte its count doesn't include, so a name's data can
+// go to C as it is, as the command-line arguments' can.
+#load "libc.rig";
+#load "string.rig";
+#load "allocators.rig";
+#load "builder.rig";
+#load "sort.rig";
+#load "path.rig";
+
+#if OS == OS_WINDOWS {
+    // path in UTF-16, ended by a zero unit, for kernel32's wide calls, in
+    // memory from the heap, which the caller gives back with free(wide,
+    // HEAP_ALLOCATOR). Null, with nothing allocated, for an empty path, one
+    // with a zero byte, one that isn't valid UTF-8, one longer than a C int
+    // counts, and when the heap has no memory.
+    //
+    // MultiByteToWideChar is asked first how many units the path needs,
+    // which it gives as 0 for bytes that aren't valid UTF-8, given
+    // C_MB_ERR_INVALID_CHARS, and then converts it into room for those and
+    // the zero. It would convert a zero byte as a zero unit, where the
+    // system would see the path end, so that is refused first.
+    to_wide_path :: (path: string) -> *u16 {
+        LARGEST :: 2147483647; // the most bytes MultiByteToWideChar counts
+        if path.count <= 0 || path.count > LARGEST { return null; }
+        if find_byte(path, 0) >= 0 { return null; }
+        count := c_multi_byte_to_wide_char(C_CP_UTF8, C_MB_ERR_INVALID_CHARS, path.data, cast(s32) path.count, null, 0);
+        if count <= 0 { return null; }
+        wide := cast(*u16) alloc((cast(int) count + 1) * 2, HEAP_ALLOCATOR);
+        if wide == null { return null; }
+        if c_multi_byte_to_wide_char(C_CP_UTF8, C_MB_ERR_INVALID_CHARS, path.data, cast(s32) path.count, wide, count) != count {
+            free(wide, HEAP_ALLOCATOR);
+            return null;
+        }
+        wide[count] = 0;
+        return wide;
+    }
+}
+
+// Whether there is a directory at path: false for a file, a missing path,
+// one that can't be reached, and the paths every procedure here refuses. A
+// symbolic link to a directory is one, on both systems. On Windows a
+// directory's link or junction whose target is gone is one too, since the
+// directory attribute is the link's own, though it can't be listed; on
+// Linux stat follows the link and finds nothing, so it isn't.
+is_directory :: (path: string) -> bool {
+    if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
+    #if OS == OS_WINDOWS {
+        wide := to_wide_path(path);
+        if wide == null { return false; }
+        defer free(wide, HEAP_ALLOCATOR);
+        attributes := c_get_file_attributes_w(wide);
+        return attributes != C_INVALID_FILE_ATTRIBUTES && (attributes & C_FILE_ATTRIBUTE_DIRECTORY) != 0;
+    } else {
+        c_path := to_c_string(path, HEAP_ALLOCATOR);
+        if c_path == null { return false; }
+        defer free(c_path, HEAP_ALLOCATOR);
+        status : C_Stat;
+        if c_stat(c_path, *status) != 0 { return false; }
+        return (status.mode & C_S_IFMT) == C_S_IFDIR;
+    }
+}
+
+// Makes one directory at path, whose parent must be there, and gives
+// whether it did: false when anything, a directory or a file, is at path
+// already, as both systems' calls answer, when the parent is missing, and
+// for the paths every procedure here refuses. On Linux its permissions are
+// 0o777 less the process's umask, as a shell's mkdir gives.
+make_directory :: (path: string) -> bool {
+    if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
+    #if OS == OS_WINDOWS {
+        wide := to_wide_path(path);
+        if wide == null { return false; }
+        defer free(wide, HEAP_ALLOCATOR);
+        return c_create_directory_w(wide, null) != 0;
+    } else {
+        c_path := to_c_string(path, HEAP_ALLOCATOR);
+        if c_path == null { return false; }
+        defer free(c_path, HEAP_ALLOCATOR);
+        return c_mkdir(c_path, 511) == 0;
+    }
+}
+
+// Deletes the directory at path, which must be empty, and gives whether it
+// did: false for one with entries, a file, a missing path, which the
+// systems' calls refuse themselves, and the paths every procedure here
+// refuses. Given a symbolic link (or, on Windows, a junction) to a
+// directory, Windows deletes the link itself, whatever its target holds,
+// and leaves the target as it is; Linux's rmdir doesn't follow the link
+// and gives false.
+delete_directory :: (path: string) -> bool {
+    if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
+    #if OS == OS_WINDOWS {
+        wide := to_wide_path(path);
+        if wide == null { return false; }
+        defer free(wide, HEAP_ALLOCATOR);
+        return c_remove_directory_w(wide) != 0;
+    } else {
+        c_path := to_c_string(path, HEAP_ALLOCATOR);
+        if c_path == null { return false; }
+        defer free(c_path, HEAP_ALLOCATOR);
+        return c_rmdir(c_path) == 0;
+    }
+}
+
+// The names in the directory at path, sorted by bytes, and true: every
+// entry's name but . and .., without the path, in one allocation from
+// allocator, the context's unless given, which the caller gives back with
+// free(names.data, allocator). Each name is followed by a zero byte its
+// count doesn't include. An empty directory is the zeroed view and true,
+// allocating nothing. A file, a missing path, one that can't be listed,
+// an error while listing, no memory from allocator, and the paths every
+// procedure here refuses are the zeroed view and false, with nothing left
+// allocated.
+//
+// The names are gathered first, each with its zero, into a builder on the
+// heap, which is given back before the call returns, since how many there
+// are and how long isn't known until the end. Then the one allocation is
+// asked for, with loc, the place of the call unless given
+// (#caller_location, spec 7.2), so an allocator that records where it is
+// asked from sees the caller's line (allocators.rig): the views first, the
+// names' bytes after them. Then the views are sorted, sort's scratch
+// memory from the heap too. Should the heap have no memory for the
+// builder, the builder stops the program, as every builder does
+// (builder.rig).
+//
+// On Windows the listing is FindFirstFileW's of the path and \*, or of *
+// when the path ends with a separator or is a drive letter and a colon
+// alone (C:, that drive's current directory); a drive's root with nothing
+// in it has no . or .. to find, and FindFirstFileW's
+// C_ERROR_FILE_NOT_FOUND there is an empty listing. Each name, at most 259
+// UTF-16 units, is at most 777 bytes of UTF-8, and is converted into a
+// buffer on the stack. A name may hold an unpaired surrogate, which
+// Windows allows and UTF-8 can't hold: it becomes U+FFFD, so that name
+// doesn't reach its entry again, and two such names may list alike. On
+// Linux a name is its bytes as the system keeps them. On Linux errno is set to 0 before each readdir,
+// since its null is both the end and an error, and only errno tells them
+// apart.
+list_directory :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> []string, bool {
+    empty : []string;
+    if path.count <= 0 || find_byte(path, 0) >= 0 { return empty, false; }
+
+    gathered : String_Builder;
+    builder_init(*gathered, HEAP_ALLOCATOR);
+    defer builder_free(*gathered);
+    count := 0;
+
+    #if OS == OS_WINDOWS {
+        BACKSLASH :: 92;
+        STAR :: 42;
+        wide := to_wide_path(path);
+        if wide == null { return empty, false; }
+        defer free(wide, HEAP_ALLOCATOR);
+        // The pattern: the path's units, \ unless the path ends with a
+        // separator or is a drive letter and a colon alone, *, and the
+        // zero, in room for all of them. C: names that drive's current
+        // directory, as the other procedures here take it, and so does C:*,
+        // where C:\* would be the drive's root.
+        units := 0;
+        while wide[units] != 0 { units += 1; }
+        pattern := cast(*u16) alloc((units + 3) * 2, HEAP_ALLOCATOR);
+        if pattern == null { return empty, false; }
+        defer free(pattern, HEAP_ALLOCATOR);
+        copy_memory(pattern, wide, units * 2);
+        COLON :: 58;
+        drive_alone := path.count == 2 && path[1] == COLON;
+        if !is_path_separator(path[path.count - 1]) && !drive_alone {
+            pattern[units] = BACKSLASH;
+            units += 1;
+        }
+        pattern[units] = STAR;
+        pattern[units + 1] = 0;
+
+        entry : C_Find_Data;
+        handle := c_find_first_file_w(pattern, *entry);
+        if cast(int) handle == -1 {
+            error := c_get_last_error();
+            if error == C_ERROR_FILE_NOT_FOUND && is_directory(path) { return empty, true; }
+            return empty, false;
+        }
+        defer c_find_close(handle);
+        while true {
+            buffer : [1024]u8;
+            written := c_wide_char_to_multi_byte(C_CP_UTF8, 0, *entry.name[0], -1, *buffer[0], 1024, null, null);
+            if written <= 0 { return empty, false; }
+            name : string;
+            name.data = *buffer[0];
+            name.count = cast(int) written - 1;
+            if name != "." && name != ".." {
+                append_string(*gathered, name);
+                append_byte(*gathered, 0);
+                count += 1;
+            }
+            if c_find_next_file_w(handle, *entry) == 0 {
+                if c_get_last_error() != C_ERROR_NO_MORE_FILES { return empty, false; }
+                break;
+            }
+        }
+    } else {
+        c_path := to_c_string(path, HEAP_ALLOCATOR);
+        if c_path == null { return empty, false; }
+        defer free(c_path, HEAP_ALLOCATOR);
+        directory := c_opendir(c_path);
+        if directory == null { return empty, false; }
+        defer c_closedir(directory);
+        while true {
+            c_errno_location().* = 0;
+            entry := c_readdir(directory);
+            if entry == null {
+                if c_errno_location().* != 0 { return empty, false; }
+                break;
+            }
+            name : string;
+            name.data = entry + C_DIRENT_NAME_OFFSET;
+            while name.data[name.count] != 0 { name.count += 1; }
+            if name != "." && name != ".." {
+                append_string(*gathered, name);
+                append_byte(*gathered, 0);
+                count += 1;
+            }
+        }
+    }
+
+    if count == 0 { return empty, true; }
+    views_size := count * size_of(string);
+    memory := cast(*u8) alloc(views_size + gathered.count, allocator, loc);
+    if memory == null { return empty, false; }
+    views := cast(*string) memory;
+    bytes := memory + views_size;
+    copy_memory(bytes, gathered.data, gathered.count);
+    at := 0;
+    for i: 0..count - 1 {
+        views[i].data = bytes + at;
+        length := 0;
+        while bytes[at + length] != 0 { length += 1; }
+        views[i].count = length;
+        at += length + 1;
+    }
+    sort(views, count, size_of(string), less_string, HEAP_ALLOCATOR);
+
+    names : []string;
+    names.data = views;
+    names.count = count;
+    return names, true;
+}

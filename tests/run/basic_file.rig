@@ -3,7 +3,7 @@
 // end. A missing file, an empty one, one of every byte value and one of
 // several megabytes, appending, an allocator with no memory, the File
 // procedures, a file read or written in the wrong mode, a directory given
-// as a file, and an empty one, a path with a zero byte, and a File that
+// as a file, and closed again where C opens it, and an empty one, a path with a zero byte, and a File that
 // isn't open.
 #import "Basic";
 
@@ -14,9 +14,9 @@ BINARY :: ".build/tests/basic_file_binary.bin";
 LARGE :: ".build/tests/basic_file_large.bin";
 MISSING :: ".build/tests/basic_file_missing.txt";
 
-// An empty directory, which the runner makes before any test, since C17
-// can't make one, and a file this test makes in it, for a moment, to show
-// the directory is still there.
+// An empty directory, which the runner makes before any test, as it has
+// since before Basic had make_directory, and a file this test makes in it,
+// for a moment, to show the directory is still there.
 EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir";
 IN_EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir/x.txt";
 
@@ -220,6 +220,27 @@ main :: () {
     show_bool(read_ok);
     f, opened = file_open("tests/run", FILE_READ);
     show_bool(opened);
+    print_line("");
+
+    // The directory Linux's C library opened is closed again when its read
+    // fails. C gives a new handle the lowest descriptor free, so A opened
+    // after it gets the descriptor A had before it, which a directory left
+    // open would hold. Windows' C library doesn't open the directory, and
+    // interpreted there c_fileno is the other C runtime's (Basic's libc.rig
+    // says so), which doesn't know this FILE *: the line is true without
+    // asking.
+    print_string("directory closed:");
+    #if OS == OS_LINUX {
+        f, opened = file_open(A, FILE_READ);
+        descriptor := c_fileno(f.handle);
+        file_close(f);
+        f, opened = file_open("tests/run", FILE_READ);
+        f, opened = file_open(A, FILE_READ);
+        show_bool(c_fileno(f.handle) == descriptor);
+        file_close(f);
+    } else {
+        show_bool(true);
+    }
     print_line("");
 
     // An empty directory isn't deleted either, though Linux's remove would

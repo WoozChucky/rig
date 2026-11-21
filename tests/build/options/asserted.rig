@@ -1,0 +1,12 @@
+// The asserted workspace's program (build.rig), built optimised and with
+// bounds_checks false: Basic's assert is no bounds check, and nothing turns
+// it off, so its false condition still stops the program with a runtime
+// error, asserted.err, rather than go on (checked_workspace_test). n is
+// known while compiling, so the optimiser sees the assert always fails,
+// and mustn't take the panic for a path never taken.
+#import "Basic";
+
+main :: () {
+    n := 0;
+    assert(n > 0, "n is positive");
+}

@@ -18,6 +18,12 @@
 // makes before any test; written before the push and deleted at the end.
 PATH :: ".build/tests/basic_context_defaults.txt";
 
+// The directory list_directory lists, with one directory in it, made
+// before the push and deleted at the end; making and deleting take no
+// allocator, their copies of a path being the heap's.
+DIRECTORY :: ".build/tests/basic_context_defaults_dir";
+CHILD :: ".build/tests/basic_context_defaults_dir/child";
+
 // How many times the counting allocator gave memory, or moved it.
 count : int;
 
@@ -60,6 +66,8 @@ main :: () {
     // pushed or not: write_entire_file takes no allocator, and copies its
     // path for C from the heap whatever the context is.
     write_entire_file(PATH, "data");
+    make_directory(DIRECTORY);
+    make_directory(CHILD);
     push_context counting {
         before := count;
         p := alloc(8);
@@ -154,12 +162,22 @@ main :: () {
         grew("read_entire_file", before);
         free(s.data);
         before = count;
+        names : []string;
+        names, ok = list_directory(DIRECTORY);
+        grew("list_directory", before);
+        free(names.data);
+        before = count;
         s, ok = get_environment("RIG_BASIC_TEST");
         grew("get_environment", before);
         free(s.data);
         before = count;
         run_command("exit 0");
         grew("run_command", before);
+        before = count;
+        status : int;
+        s, status = run_command_with_output("echo x");
+        grew("run_command_with_output", before);
+        free(s.data);
         // More than SORT_INSERTION_MAX, so the sort asks for its scratch
         // memory.
         values := int.[6, 5, 4, 3, 2, 1];
@@ -169,4 +187,6 @@ main :: () {
     }
     from_c_call();
     delete_file(PATH);
+    delete_directory(CHILD);
+    delete_directory(DIRECTORY);
 }

@@ -1,0 +1,27 @@
+// Basic's sleep_milliseconds (issue #157): a sleep of 20 ms, ones of 0 and
+// of -5 ms, which return at once, and one of 1001 ms, past a second, which
+// on Linux gives nanosleep a whole second and 1 ms after it. Each is
+// measured by a timer, which goes by the wall clock, so the durations vary
+// from run to run and from host to host and are printed only as
+// comparisons (Decision 10 of the plan): the 20 ms and 1001 ms sleeps took
+// at least half their time, and the two that sleep nothing took well under
+// half a second.
+#import "Basic";
+
+main :: () {
+    timer := timer_start();
+    sleep_milliseconds(20);
+    print("sleep 20 ms: at least 10 ms: {}\n", timer_elapsed_ns(timer) >= 10000000);
+
+    timer = timer_start();
+    sleep_milliseconds(0);
+    print("sleep 0 ms: under half a second: {}\n", timer_elapsed_ns(timer) < 500000000);
+
+    timer = timer_start();
+    sleep_milliseconds(-5);
+    print("sleep -5 ms: under half a second: {}\n", timer_elapsed_ns(timer) < 500000000);
+
+    timer = timer_start();
+    sleep_milliseconds(1001);
+    print("sleep 1001 ms: at least 500 ms: {}\n", timer_elapsed_ns(timer) >= 500000000);
+}

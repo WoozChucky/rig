@@ -1,0 +1,13 @@
+// A call of Preload's __runtime_error (issue #157, spec 8.1) whose text
+// has a negative count is taken as one with none: the program stops with
+// status 101 and writes nothing, rather than reading memory before the
+// text's bytes. Interpreted, the same (spec 10.8).
+#import "Basic";
+
+main :: () {
+    print_line("before");
+    text := "hello\n";
+    text.count = -5;
+    __runtime_error(text, 0);
+    print_line("not reached");
+}
