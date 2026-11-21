@@ -3,11 +3,11 @@
 // the pool, their parent), so its memory comes through the debugger in the
 // context, and what each gives freed as Basic's README says. The report is
 // clean: Basic frees all it allocates, and passes every resize the size it
-// gave. Nothing is written but the report's count, so no place is
-// printed, though print_to_builder's and sprint's allocations name this
-// file's lines too, as the rest's do. The count takes in get_environment's copy of RIG_BASIC_TEST,
-// which bin/run-tests sets for every program it runs, so this test passes
-// only under the runner.
+// gave. Nothing is written but the report's count, so no place is printed,
+// though print_to_builder's and sprint's allocations name this file's
+// lines too, as the rest's do. The count takes in get_environment's copy
+// of RIG_BASIC_TEST, which bin/run-tests sets for every program it runs,
+// so this test passes only under the runner.
 #import "Basic";
 
 PATH :: ".build/tests/memory_debugger_basic.txt";

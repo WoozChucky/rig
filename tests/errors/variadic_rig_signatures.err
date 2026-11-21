@@ -17,5 +17,5 @@ tests/errors/variadic_rig_signatures.rig:9:29: error: #compiler is only for the 
     compiled :: (values: ..int) #compiler;
                                 ^
 tests/errors/variadic_rig_signatures.rig:11:29: error: 'count' needs a default value, since it comes after the '..' parameter
-    not_last :: (values: ..int, count: int) { }
+    trailing :: (values: ..int, count: int) { }
                                 ^

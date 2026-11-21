@@ -808,12 +808,6 @@ Type *call_result_type(Ast_Call *call, s64 i) {
     return call->proc ? call->proc->results[i]->type : call->callee_type->results[i];
 }
 
-// The index of the '..T' parameter of the procedure `call` calls: a
-// procedure's own, anywhere among its parameters (issue #197), even one
-// whose T is an error, which has no type, or one refused on a foreign, a
-// #c_call or a #compiler procedure, whose type is still its []T, so its
-// calls gather and spread as any other's; through a value, its type's last
-// (spec 3.15). -1 when it takes none.
 s64 call_variadic_index(Ast_Call *call) {
     if (call->proc) return variadic_index(call->proc);
     return call->callee_type->is_variadic ? call->callee_type->param_count - 1 : -1;

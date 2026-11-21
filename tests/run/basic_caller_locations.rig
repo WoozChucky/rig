@@ -9,11 +9,11 @@
 // last, is listed under its name: the callee's name in the call on that
 // line. What each gave is freed with Basic's helpers, the context's, on a
 // line of its own after it, so those frees are listed too.
-// print_to_builder and sprint, last, take theirs after their ..Any
-// arguments (issue #197). A place left in print.rig would be named by an
-// absolute path that differs from machine to machine, so for a place in
-// print.rig the allocator prints that file's name rather than the path,
-// and the test fails the same way on every host.
+// print_to_builder and sprint take theirs after their ..Any arguments
+// (issue #197). Last comes sprint through a wrapper, say, whose allocation
+// is listed under its name but names say's own call of sprint. A place in
+// print.rig would be named by an absolute path that differs between hosts,
+// so the allocator prints that file's name instead, the same on every host.
 #import "Basic";
 
 // The file read_entire_file reads, under .build/tests/, which the runner
