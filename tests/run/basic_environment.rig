@@ -201,7 +201,7 @@ main :: () {
 
     // What the program printed is flushed before the command runs, so the
     // command's line comes after it, and before what follows. The
-    // command's C copy is given back once it has run.
+    // command's copy is given back once it has run.
     print_line("before the command");
     status := run_command("echo from the command", counting);
     print_string("status:");
@@ -216,7 +216,7 @@ main :: () {
     print_line("");
 
     // A command with a zero byte would run as "echo a", so it is refused
-    // before its C copy is made: the allocator is asked for nothing.
+    // before its copy is made: the allocator is asked for nothing.
     print_string("zero byte:");
     show_int(run_command("echo a\0b", counting));
     show_counts(*counter);

@@ -1581,6 +1581,14 @@ static String command_input_test(Arena *a, String rig, String unit_tests) {
     String why = build_program(a, build_command(a, rig, ".build/tests", name, program), {}, program);
     if (why.count) return why;
 
+#ifdef _WIN32
+    // cmd.exe expands %LINE% when it reads the line, before set /p runs, so
+    // a LINE the runner was started with would be echoed in place of hello:
+    // it is unset for the two runs and put back afterwards.
+    static wchar_t saved[32768];
+    DWORD saved_length = GetEnvironmentVariableW(L"LINE", saved, 32768);
+    SetEnvironmentVariableW(L"LINE", nullptr);
+#endif
     for (s32 interpreted = 0; interpreted < 2; interpreted++) {
         Array<String> command = {};
         if (interpreted) {
@@ -1596,22 +1604,31 @@ static String command_input_test(Arena *a, String rig, String unit_tests) {
         bool started = os_run_with_input(a, command, {}, timeout, str("hello\n"), &ran);
         array_free(&command);
         if (!started) {
-            return string_printf(a, "couldn't run it %s: " STR_FMT, how, STR_ARG(os_error_message(a)));
+            why = string_printf(a, "couldn't run it %s: " STR_FMT, how, STR_ARG(os_error_message(a)));
+            break;
         }
-        if (ran.timed_out) return string_printf(a, "it took longer than %d seconds %s", timeout, how);
+        if (ran.timed_out) {
+            why = string_printf(a, "it took longer than %d seconds %s", timeout, how);
+            break;
+        }
         ran.out = normalise_newlines(a, ran.out);
         if (!string_eq(ran.out, expected)) {
-            return with_stderr(
+            why = with_stderr(
                 a, first_difference(a, string_cstr(a, string_printf(a, "stdout, %s", how)), expected, ran.out),
                 ran.err);
+            break;
         }
         if (ran.exit_code != 0) {
-            return with_stderr(
+            why = with_stderr(
                 a, string_printf(a, "exit code " STR_FMT " %s, expected 0", STR_ARG(exit_code_text(a, ran.exit_code)), how),
                 ran.err);
+            break;
         }
     }
-    return {};
+#ifdef _WIN32
+    SetEnvironmentVariableW(L"LINE", saved_length > 0 && saved_length < 32768 ? saved : nullptr);
+#endif
+    return why;
 }
 
 #ifdef _WIN32
@@ -1627,7 +1644,7 @@ static String command_input_test(Arena *a, String rig, String unit_tests) {
 // afterwards, and the copy, its directory and the file deleted. Compiled
 // only: interpret mode runs the same Basic.
 static String comspec_test(Arena *a, String rig) {
-    String name = str("windows_shell");
+    String name = str("comspec");
     String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
     String text = str("#import \"Basic\";\n"
                       "main :: () {\n"
@@ -1639,16 +1656,21 @@ static String comspec_test(Arena *a, String rig) {
     String why = build_program(a, build_command(a, rig, ".build/tests", name, program), {}, program);
     if (why.count) return why;
 
-    String shell_directory = str(".build/tests/comspec shell");
-    const wchar_t *shell_copy = L".build\\tests\\comspec shell\\cmd.exe";
-    String decoy = str(".build/tests/comspec.exe");
+    String shell_directory = str(".build/tests/shell copy");
+    const wchar_t *shell_copy = L".build\\tests\\shell copy\\cmd.exe";
+    String decoy = str(".build/tests/shell.exe");
     wchar_t system_shell[MAX_PATH + 16];
     UINT length = GetSystemDirectoryW(system_shell, MAX_PATH);
     if (length == 0 || length >= MAX_PATH) return str("couldn't find the system's directory");
     wcscpy(system_shell + length, L"\\cmd.exe");
+    // A failure from here on still reaches the deletions at the end, so
+    // that no copy of cmd.exe is left behind.
     os_make_directory(shell_directory);
-    if (!CopyFileW(system_shell, shell_copy, FALSE)) return str("couldn't copy cmd.exe");
-    if (!os_write_file(decoy, str("not a program\n"))) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(decoy));
+    if (!CopyFileW(system_shell, shell_copy, FALSE)) {
+        why = str("couldn't copy cmd.exe");
+    } else if (!os_write_file(decoy, str("not a program\n"))) {
+        why = string_printf(a, "couldn't write " STR_FMT, STR_ARG(decoy));
+    }
 
     static wchar_t saved[32768];
     DWORD saved_length = GetEnvironmentVariableW(L"COMSPEC", saved, 32768);
@@ -1664,6 +1686,7 @@ static String comspec_test(Arena *a, String rig) {
         {L".build\\tests\\no such shell.exe", "a shell that isn't there", "false -1\n"},
     };
     for (const Case &c : cases) {
+        if (why.count) break;
         SetEnvironmentVariableW(L"COMSPEC", c.value);
         Array<String> command = {};
         array_add(&command, program);

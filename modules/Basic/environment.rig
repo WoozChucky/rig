@@ -269,11 +269,12 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     // unit after it, in one allocation from allocator at loc, which the
     // caller gives back with free(line, allocator, loc) once the shell has
     // ended, as Linux's C copy is given back. The shell is the one
-    // %COMSPEC% names, cmd.exe's path, or cmd.exe when it is unset or
-    // empty, as for C's system. The shell's path is in quotes, so that one
-    // with a space in it is one word; cmd.exe takes what follows /c as the
-    // command, as it does from system, so a command means what it meant
-    // there.
+    // %COMSPEC% names, cmd.exe's path, or cmd.exe when it is unset (as for
+    // C's system) or empty; a %COMSPEC% naming a shell that isn't there
+    // gives -1 (run_through_shell). The shell's path is in quotes, so that
+    // one with a space in it is one word; cmd.exe takes what follows /c as
+    // the command, as it does from system, so a command means what it
+    // meant there.
     //
     // It is null, with nothing allocated, when the command line isn't valid
     // UTF-8 or allocator has no memory for it. The line is built in a
