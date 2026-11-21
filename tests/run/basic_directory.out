@@ -11,6 +11,7 @@ zero after each: true
 freed: 1 1
 trailing separator: true 6
 listed 日本: true true 1 [café]
+listing closed: true
 drive's current directory: true
 empty: true 0 true 0 0
 delete zero byte: false true
