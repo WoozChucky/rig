@@ -582,6 +582,46 @@ TEST(windows_a_hand_call_given_the_c_runtimes_argv_saves_all_its_arguments) {
     arena_free(&a);
 }
 
+TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
+    // Issue #152 (spec 10.6): _configure_wide_argv sets the C runtime's
+    // __argc to the wide arguments' count, and the narrow ones, split from
+    // the command line in the ANSI code page, may be fewer: U+FF02, a
+    // fullwidth quote, is " in code page 1252, so a＂ b is one narrow
+    // argument, a b, and two wide ones. __save_command_line puts the narrow
+    // count back, so C code that walks __argv up to __argc reads no null.
+    // The program exits with 10 unless __argc counts __argv's elements up
+    // to its null, and with 11 to 13 unless its own arguments are still the
+    // wide ones, its name, a＂ in UTF-8 and b.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "exit :: (status: s32) #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    narrow := __crt_argv().*;\n"
+                                      "    count : s32 = 0;\n"
+                                      "    while narrow[count] != null { count += 1; }\n"
+                                      "    if __crt_argc().* != count { exit(10); }\n"
+                                      "    args := __command_line_arguments;\n"
+                                      "    if args.count != 3 { exit(11); }\n"
+                                      "    if args[1] != \"a\xEF\xBC\x82\" { exit(12); }\n"
+                                      "    if args[2] != \"b\" { exit(13); }\n"
+                                      "}\n");
+    String program = link_module(&a, m, "narrow-argc-test");
+    if (program.count) {
+        wchar_t *wide_path = to_wide(&a, program);
+        for (wchar_t *c = wide_path; *c; c++) {
+            if (*c == L'/') *c = L'\\';
+        }
+        const wchar_t *arguments = L"\" a\xFF02 b";
+        s64 length = (s64)(1 + wcslen(wide_path) + wcslen(arguments));
+        wchar_t *line = arena_new_array<wchar_t>(&a, length + 1);
+        wcscpy(line, L"\"");
+        wcscat(line, wide_path);
+        wcscat(line, arguments);
+        CHECK_EQ(run_wide(line), 0);
+    }
+    arena_free(&a);
+}
+
 TEST(windows_programs_import_only_the_c_runtime_and_kernel32) {
     // Issue #152: reading the arguments in UTF-8 costs a program no DLL it
     // didn't import before: the C runtime's wide arguments come from the

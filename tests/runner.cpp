@@ -541,11 +541,14 @@ static void add_flags(Arena *a, Array<String> *argv, String name) {
 // a line, as UTF-8 text: the file's bytes split at each \n, the piece
 // after the last \n left out when it is empty, so a lone \n is one empty
 // argument, an empty file none, and no argument holds a line break. A \r
-// is an argument's own byte: .gitattributes keeps the file LF. No file,
-// nothing added, not even the `--`.
+// is an argument's own byte: .gitattributes keeps the file LF. A UTF-8
+// byte order mark (EF BB BF) at the file's start, which some editors
+// write, is left out, so the first argument doesn't start with it. No
+// file, nothing added, not even the `--`.
 static void add_args(Arena *a, Array<String> *argv, String name, bool after_dashes) {
     String text = {};
     if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".args", STR_ARG(name)), &text)) return;
+    if (starts_with(text, "\xEF\xBB\xBF")) text = string_slice(text, 3, text.count - 3);
     if (after_dashes) array_add(argv, str("--"));
     s64 start = 0;
     for (s64 i = 0; i < text.count; i++) {
