@@ -77,7 +77,9 @@ bool os_run(Arena *a, Array<String> argv, Process_Result *result);
 // The program's arguments, argv[0] included, as UTF-8. On Linux that's
 // argv; on Windows main's argv is in the ANSI code page (a path like
 // C:\Users\João wouldn't survive), so they're the C runtime's wide ones
-// instead, split from the UTF-16 command line by the same rules.
+// instead, split from the UTF-16 command line by the same rules. The
+// first call on Windows has the C runtime build its wide arguments, which
+// it keeps: call it from one thread.
 Array<String> os_arguments(Arena *a, int argc, char **argv);
 
 // The current directory, without a trailing separator. On Linux, by the
