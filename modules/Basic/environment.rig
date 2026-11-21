@@ -104,17 +104,21 @@ run_command :: (command: string, allocator: Allocator = context.allocator, loc: 
 }
 
 // The program's command-line arguments (spec 7.4): the name it was started
-// by first, then each argument. On Windows they are UTF-8, converted by
-// Preload from the C runtime's wide arguments, so unlike a variable's
-// value above they don't depend on the ANSI code page; on Linux they are
-// the bytes the system gave, as they are. Each string is followed by a
-// zero byte its count doesn't include, so its data can go to C as it is.
-// main's prologue saves them, through Preload's __save_command_line,
-// before main's first line, and this gives the view it saved: the same one
-// every call, its elements and their bytes the program's for the whole
-// run, never freed, and as changeable as any global's. A #run sees the
-// empty view, not even a name: no startup runs while compiling (spec 7.8),
-// and the compiler's own arguments aren't the program's.
+// by first, then each argument. On Windows they are UTF-8: a compiled
+// program's are converted by Preload from the C runtime's wide arguments,
+// an interpreted one's by interpret mode from the wide command line, so
+// unlike a variable's value above they don't depend on the ANSI code page;
+// on Linux they are the bytes the system gave, as they are. The view is
+// empty, not even a name, when the program was started with no argv[0]
+// (argc 0, which Linux before 5.18 allowed), so check its count before
+// reading the name. Each string is followed by a zero byte its count
+// doesn't include, so its data can go to C as it is. main's prologue
+// saves them, through Preload's __save_command_line, before main's first
+// line, and this gives the view it saved: the same one every call, its
+// elements and their bytes the program's for the whole run, never freed,
+// and as changeable as any global's. A #run sees the empty view, not even
+// a name: no startup runs while compiling (spec 7.8), and the compiler's
+// own arguments aren't the program's.
 get_command_line_arguments :: () -> []string {
     return __command_line_arguments;
 }

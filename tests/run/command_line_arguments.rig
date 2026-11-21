@@ -4,7 +4,10 @@
 // compiled and interpreted, each followed by a zero byte its count
 // doesn't include. The name differs between the two runs, so only its
 // zero is shown. A #run sees none, not even a name (spec 7.8), and a
-// Rig call of main leaves them as they were.
+// Rig call of main leaves them as they were. Its .flags changes nothing
+// here, as nothing is indexed out of range, but pins the interpreted
+// command line's order: the flags go before the `--`, so interpret mode
+// takes them and main never sees them as arguments.
 #import "Basic";
 
 WHILE_COMPILING :: #run get_command_line_arguments().count;
