@@ -465,7 +465,9 @@ tprint :: (format: string, args: ..Any) -> string {
 // The bytes go in calls of at most 2^30 bytes, since Windows' count and
 // result are 32 bits, each going on from where the last stopped, as a call
 // may write fewer bytes than it was given. When one writes none or fails,
-// the rest is dropped: there's nowhere left to say so. An empty string, or
+// the rest is dropped: there's nowhere left to say so. On Linux a call a
+// signal stopped before it wrote anything (C_EINTR) is made again, and
+// isn't a failure. An empty string, or
 // a zeroed one, writes nothing, though C's streams are flushed all the
 // same.
 print_error_string :: (s: string) {
@@ -480,6 +482,7 @@ print_error_string :: (s: string) {
             wrote = cast(int) c_write(2, s.data + written, cast(u32) count);
         } else {
             wrote = cast(int) c_write(2, s.data + written, cast(u64) count);
+            if wrote < 0 && c_errno_location().* == C_EINTR { continue; }
         }
         if wrote <= 0 { return; }
         written += wrote;

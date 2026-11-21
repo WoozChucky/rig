@@ -178,6 +178,11 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
         // c_read's count and result are 32 bits on Windows and 64 on
         // Linux; 4096 fits either, and so does what it gives.
         got := cast(int) c_read(descriptor, *buffer[0], 4096);
+        // On Linux a read a signal stopped before it read anything is
+        // made again: it isn't the end.
+        #if OS != OS_WINDOWS {
+            if got < 0 && c_errno_location().* == C_EINTR { continue; }
+        }
         if got <= 0 { break; }
         piece : string;
         piece.data = *buffer[0];

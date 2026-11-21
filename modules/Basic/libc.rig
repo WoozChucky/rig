@@ -429,6 +429,11 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // call.
     c_errno_location :: () -> *s32 #foreign libc "__errno_location";
 
+    // errno's EINTR: a call a signal stopped before it did anything, as
+    // when the program installed a handler without SA_RESTART. Basic's
+    // reads and writes on a descriptor try such a call again.
+    C_EINTR :: 4;
+
     // Basic's run_command_with_output (environment.rig) reads a command's
     // output through POSIX's popen, fileno, read and pclose, from the
     // pipe's descriptor, as on Windows.

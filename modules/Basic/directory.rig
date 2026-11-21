@@ -164,7 +164,10 @@ delete_directory :: (path: string) -> bool {
 // in it has no . or .. to find, and FindFirstFileW's
 // C_ERROR_FILE_NOT_FOUND there is an empty listing. Each name, at most 259
 // UTF-16 units, is at most 777 bytes of UTF-8, and is converted into a
-// buffer on the stack. On Linux errno is set to 0 before each readdir,
+// buffer on the stack. A name may hold an unpaired surrogate, which
+// Windows allows and UTF-8 can't hold: it becomes U+FFFD, so that name
+// doesn't reach its entry again, and two such names may list alike. On
+// Linux a name is its bytes as the system keeps them. On Linux errno is set to 0 before each readdir,
 // since its null is both the end and an error, and only errno tells them
 // apart.
 list_directory :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> []string, bool {

@@ -260,13 +260,21 @@ main :: () {
     // as before, which a find handle left open would add to.
     print_string("listing closed:");
     #if OS == OS_WINDOWS {
-        before : u32;
-        after : u32;
-        c_get_process_handle_count(cast(*void) -1, *before);
-        names, ok = list_directory(ROOT, counting);
-        free(names.data, counting);
-        c_get_process_handle_count(cast(*void) -1, *after);
-        show_bool(ok && after == before);
+        // A handle another thread opens or closes in between changes the
+        // count too, so up to five listings are tried: a find handle left
+        // open would add one every time.
+        closed := false;
+        for 1..5 {
+            before : u32;
+            after : u32;
+            c_get_process_handle_count(cast(*void) -1, *before);
+            names, ok = list_directory(ROOT, counting);
+            free(names.data, counting);
+            c_get_process_handle_count(cast(*void) -1, *after);
+            if !ok { break; }
+            if after == before { closed = true; break; }
+        }
+        show_bool(closed);
     } else {
         f, opened := file_open(FILE, FILE_READ);
         descriptor := c_fileno(f.handle);
