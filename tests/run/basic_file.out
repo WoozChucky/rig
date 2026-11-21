@@ -3,6 +3,8 @@ write: true true
 read: true 6 true
 append: true 12 true
 append makes a file: true 3
+write empties: true 1 true
+helper mode: false false false true
 no memory: false 0 true
 empty: true true true 0 true
 binary: true 256 true
