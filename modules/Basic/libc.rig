@@ -17,7 +17,7 @@
 // the interpreter takes them from the compiler's own copy of the C library,
 // so a FILE * that c_fopen gives is one the other calls accept. Basic's own
 // files use C's file functions, its environment C's getenv, and its
-// commands C's system, only on Linux: on Windows they go through
+// commands C's system and popen, only on Linux: on Windows they go through
 // kernel32's wide calls in the per-system part, which take a path, a name
 // or a command line as UTF-16, where C's read it in the system's ANSI code
 // page (file.rig, environment.rig). The C functions stay declared on both

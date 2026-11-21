@@ -269,8 +269,11 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     // unit after it, in one allocation from allocator at loc, which the
     // caller gives back with free(line, allocator, loc) once the shell has
     // ended, as Linux's C copy is given back. The shell is the one
-    // %COMSPEC% names, cmd.exe's path, or cmd.exe when it is unset (as for
-    // C's system) or empty; a %COMSPEC% naming a shell that isn't there
+    // %COMSPEC% names, cmd.exe's path, or cmd.exe when it is unset or
+    // empty, which CreateProcessW looks for where it looks for any program
+    // named without a path: the program's own directory first, then the
+    // current one, the system's and PATH (C's system tries the current
+    // directory and PATH); a %COMSPEC% naming a shell that isn't there
     // gives -1 (run_through_shell). The shell's path is in quotes, so that
     // one with a space in it is one word; cmd.exe takes what follows /c as
     // the command, as it does from system, so a command means what it

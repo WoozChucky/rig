@@ -184,7 +184,26 @@ main :: () {
         lone := to_wide_string("", counted);
         show_bool(lone != null && lone[0] == 0 && counter.allocations == 1 && counter.last_size == 2);
         free(lone, counted);
-        show_bool(to_wide_string(cast(string) byte_view, counted) == null && counter.allocations == 1);
+        // Not only the byte 255: an overlong form (C0 80), an encoded
+        // surrogate (ED A0 80) and a cut sequence (E6 97) are refused too,
+        // never made U+FFFD, which would name another path.
+        overlong : [2]u8;
+        overlong[0] = 192;
+        overlong[1] = 128;
+        surrogate : [3]u8;
+        surrogate[0] = 237;
+        surrogate[1] = 160;
+        surrogate[2] = 128;
+        cut : [2]u8;
+        cut[0] = 230;
+        cut[1] = 151;
+        overlong_view : []u8 = overlong;
+        surrogate_view : []u8 = surrogate;
+        cut_view : []u8 = cut;
+        show_bool(to_wide_string(cast(string) byte_view, counted) == null &&
+                  to_wide_string(cast(string) overlong_view, counted) == null &&
+                  to_wide_string(cast(string) surrogate_view, counted) == null &&
+                  to_wide_string(cast(string) cut_view, counted) == null && counter.allocations == 1);
         show_bool(to_wide_string("a\0b", counted) == null && counter.allocations == 1);
         show_bool(to_wide_string("日本", Allocator.{failing_allocator_proc, null}) == null);
 
