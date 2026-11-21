@@ -1,0 +1,100 @@
+// Basic's UTF-16, for Windows' wide calls: kernel32's functions that take
+// a path or a name as UTF-16 (CreateFileW, CreateDirectoryW,
+// FindFirstFileW and the rest, in libc.rig's per-system part), where every
+// Rig string is UTF-8. A string goes to them as a copy converted to UTF-16
+// and ended by a zero unit (to_wide_string, to_wide_path), and what they
+// give back is converted to UTF-8 again (from_wide_string). Linux's calls
+// take bytes, so on Linux this file declares nothing.
+//
+// Basic takes the wide calls because C's own on Windows, fopen, remove and
+// the rest, read a path in the system's ANSI code page rather than as
+// UTF-8, so a path with a character outside that code page, 日本 in code
+// page 1252, names another file there, or none. C's wide-character calls,
+// _wfopen and _wremove, would take it right, but interpreted they are a
+// second C runtime's, ucrtbase.dll's (spec 10.8), whose FILE * the
+// compiler's own copy of C refuses. kernel32's calls are the same
+// functions compiled and interpreted: every program links kernel32, and
+// the interpreter looks them up in kernel32.dll (spec 10.6, 10.8).
+//
+// Each copy comes from the allocator the caller gives, at loc, the place
+// of the call unless given (#caller_location, spec 7.2), and the caller
+// gives it back. The file and directory procedures give the heap's, and
+// free it as soon as the call that takes it returns (file.rig says why).
+#load "libc.rig";
+#load "string.rig";
+#load "allocators.rig";
+
+#if OS == OS_WINDOWS {
+    // s in UTF-16, followed by a zero unit, for kernel32's wide calls, in
+    // one allocation from allocator at loc, which the caller gives back
+    // with free(wide, allocator, loc). The empty string is a lone zero
+    // unit. Null, with nothing allocated, for a string with a zero byte,
+    // which the system would read as a shorter one, one that isn't valid
+    // UTF-8, which would have to change to be converted and so would name
+    // something else, one longer than a C int counts, and when allocator
+    // has no memory.
+    //
+    // MultiByteToWideChar is asked first how many units s needs, which it
+    // gives as 0 for bytes that aren't valid UTF-8, given
+    // C_MB_ERR_INVALID_CHARS, and then converts it into room for those and
+    // the zero. It would convert a zero byte as a zero unit, so that is
+    // refused first. It refuses a count of 0 too, so the empty string isn't
+    // given to it.
+    to_wide_string :: (s: string, allocator: Allocator, loc: Source_Code_Location = #caller_location) -> *u16 {
+        LARGEST :: 2147483647; // the most bytes MultiByteToWideChar counts
+        if s.count > LARGEST || find_byte(s, 0) >= 0 { return null; }
+        count : s32 = 0;
+        if s.count > 0 {
+            count = c_multi_byte_to_wide_char(C_CP_UTF8, C_MB_ERR_INVALID_CHARS, s.data, cast(s32) s.count, null, 0);
+            if count <= 0 { return null; }
+        }
+        wide := cast(*u16) alloc((cast(int) count + 1) * 2, allocator, loc);
+        if wide == null { return null; }
+        if count > 0 && c_multi_byte_to_wide_char(C_CP_UTF8, C_MB_ERR_INVALID_CHARS, s.data, cast(s32) s.count, wide, count) != count {
+            free(wide, allocator, loc);
+            return null;
+        }
+        wide[count] = 0;
+        return wide;
+    }
+
+    // path in UTF-16, followed by a zero unit, from the heap, which the
+    // caller gives back with free(wide, HEAP_ALLOCATOR): the copy Basic's
+    // file procedures give kernel32's calls. Null, with nothing allocated,
+    // for an empty path, which names nothing, and for every string
+    // to_wide_string refuses.
+    to_wide_path :: (path: string) -> *u16 {
+        if path.count <= 0 { return null; }
+        return to_wide_string(path, HEAP_ALLOCATOR);
+    }
+
+    // units UTF-16 units at wide, with no zero after them needed, as UTF-8,
+    // in one allocation from allocator at loc of the exact size, which the
+    // caller gives back with free(s.data, allocator, loc), and true. An
+    // unpaired surrogate, which Windows allows in a name and UTF-8 can't
+    // hold, becomes U+FFFD. 0 units are the zeroed string (count 0, data
+    // null) and true, allocating nothing. Fewer than 0 units, more than a
+    // C int counts, a conversion that fails, and no memory are the zeroed
+    // string and false, with nothing left allocated.
+    //
+    // WideCharToMultiByte is asked first how many bytes the units need,
+    // and then converts them into that room.
+    from_wide_string :: (wide: *u16, units: int, allocator: Allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
+        LARGEST :: 2147483647; // the most units WideCharToMultiByte counts
+        empty : string;
+        if units == 0 { return empty, true; }
+        if units < 0 || units > LARGEST { return empty, false; }
+        count := c_wide_char_to_multi_byte(C_CP_UTF8, 0, wide, cast(s32) units, null, 0, null, null);
+        if count <= 0 { return empty, false; }
+        data := cast(*u8) alloc(cast(int) count, allocator, loc);
+        if data == null { return empty, false; }
+        if c_wide_char_to_multi_byte(C_CP_UTF8, 0, wide, cast(s32) units, data, count, null, null) != count {
+            free(data, allocator, loc);
+            return empty, false;
+        }
+        s : string;
+        s.data = data;
+        s.count = cast(int) count;
+        return s, true;
+    }
+}

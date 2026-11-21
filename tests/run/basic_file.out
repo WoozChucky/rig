@@ -14,7 +14,7 @@ wrong mode: false 0
 bad opens: false true false
 directory: false false false
 directory closed: true
-empty directory: false false true true
+empty directory: true false false true true true
 zero byte: false false false
 delete: true true true true true, again: false, exists: false
 null handle: 0 false -1

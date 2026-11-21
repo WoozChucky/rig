@@ -5,11 +5,10 @@
 // calls), found and listed by those names, and on Windows found on disk by
 // their UTF-16 names built by hand, a listing sorted by bytes in one
 // allocation with a zero after each name, a trailing separator, a listing
-// that closes what it opened, on Windows
-// a drive letter and a colon alone, an empty directory, the paths every
-// procedure refuses (empty, with a zero byte, and on Windows not valid
-// UTF-8, which Linux makes and lists as its byte), an allocator with no
-// memory, and deleting, which refuses a
+// that closes what it opened, on Windows a drive letter and a colon alone,
+// an empty directory, the paths every procedure refuses (empty, with a
+// zero byte, and on Windows not valid UTF-8, which Linux makes and lists
+// as its byte), an allocator with no memory, and deleting, which refuses a
 // directory with entries and a file. What a stopped run left is deleted
 // first. Everything printed is the same on both systems. The directory
 // isn't .build/tests/basic_directory, which on Linux is this test's own
@@ -163,9 +162,7 @@ main :: () {
     show_bool(is_directory(A2));
     print_string("\n");
 
-    // Made in an order that isn't the listing's, which is by bytes. The
-    // file's path is ASCII: Basic's files are in the ANSI code page on
-    // Windows.
+    // Made in an order that isn't the listing's, which is by bytes.
     print_string("children:");
     show_bool(make_directory(B));
     show_bool(make_directory(A));

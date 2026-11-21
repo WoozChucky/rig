@@ -1,10 +1,10 @@
-// Basic's files (issue #145): files through C's stdio in binary mode, under
-// .build/tests/, which the runner makes before any test, and removed at the
-// end. A missing file, an empty one, one of every byte value and one of
-// several megabytes, appending, an allocator with no memory, the File
-// procedures, a file read or written in the wrong mode, a directory given
-// as a file, and closed again where C opens it, and an empty one, a path with a zero byte, and a File that
-// isn't open.
+// Basic's files (issue #145), under .build/tests/, which the runner makes
+// before any test, and removed at the end: a missing file, an empty one,
+// one of every byte value and one of several megabytes, appending, an
+// allocator with no memory, the File procedures, a file read or written in
+// the wrong mode, a directory given as a file, and closed again where
+// Linux's C library opens it, an empty directory, which the test makes and
+// deletes, a path with a zero byte, and a File that isn't open.
 #import "Basic";
 
 A :: ".build/tests/basic_file_a.txt";
@@ -14,9 +14,8 @@ BINARY :: ".build/tests/basic_file_binary.bin";
 LARGE :: ".build/tests/basic_file_large.bin";
 MISSING :: ".build/tests/basic_file_missing.txt";
 
-// An empty directory, which the runner makes before any test, as it has
-// since before Basic had make_directory, and a file this test makes in it,
-// for a moment, to show the directory is still there.
+// An empty directory, which this test makes and deletes, and a file it
+// makes in it, for a moment, to show the directory is still there.
 EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir";
 IN_EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir/x.txt";
 
@@ -53,6 +52,7 @@ main :: () {
     delete_file(LARGE);
     delete_file(MISSING);
     delete_file(IN_EMPTY_DIRECTORY);
+    delete_directory(EMPTY_DIRECTORY);
 
     // A missing file is the zeroed string, with nothing allocated.
     print_string("missing:");
@@ -68,7 +68,7 @@ main :: () {
     show_bool(file_exists(A));
     print_line("");
 
-    // Binary mode keeps the line feed one byte on Windows too.
+    // The line feed stays one byte on Windows too: no text mode there.
     data, ok = read_entire_file(A, HEAP_ALLOCATOR);
     print_string("read:");
     show_bool(ok);
@@ -127,7 +127,8 @@ main :: () {
     print_line("");
     free(data.data, HEAP_ALLOCATOR);
 
-    // Five megabytes, more than any buffer C reads through at once.
+    // Five megabytes, more than any buffer C reads through at once on
+    // Linux.
     size := 5 * 1024 * 1024;
     big := cast(*u8) alloc(size, HEAP_ALLOCATOR);
     for 0..size - 1 { big[it] = cast,trunc(u8) (it * 31); }
@@ -193,7 +194,7 @@ main :: () {
     free(data.data, HEAP_ALLOCATOR);
 
     // A file opened to read can't be written, and one opened to write
-    // can't be read: C's fwrite and fread give 0 for them.
+    // can't be read: the system's writes and reads give 0 for them.
     f, opened = file_open(A, FILE_READ);
     print_string("wrong mode:");
     show_bool(file_write(f, "x"));
@@ -225,10 +226,8 @@ main :: () {
     // The directory Linux's C library opened is closed again when its read
     // fails. C gives a new handle the lowest descriptor free, so A opened
     // after it gets the descriptor A had before it, which a directory left
-    // open would hold. Windows' C library doesn't open the directory, and
-    // interpreted there c_fileno is the other C runtime's (Basic's libc.rig
-    // says so), which doesn't know this FILE *: the line is true without
-    // asking.
+    // open would hold. Windows' CreateFileW doesn't open the directory, and
+    // a File there holds no descriptor: the line is true without asking.
     print_string("directory closed:");
     #if OS == OS_LINUX {
         f, opened = file_open(A, FILE_READ);
@@ -245,17 +244,20 @@ main :: () {
 
     // An empty directory isn't deleted either, though Linux's remove would
     // delete it: delete_file asks file_exists first. A file can still be
-    // made in it afterwards, so it is still there.
+    // made in it afterwards, so it is still there, and once that is
+    // deleted, the directory is too.
     print_string("empty directory:");
+    show_bool(make_directory(EMPTY_DIRECTORY));
     show_bool(file_exists(EMPTY_DIRECTORY));
     show_bool(delete_file(EMPTY_DIRECTORY));
     show_bool(write_entire_file(IN_EMPTY_DIRECTORY, "x"));
     show_bool(delete_file(IN_EMPTY_DIRECTORY));
+    show_bool(delete_directory(EMPTY_DIRECTORY));
     print_line("");
 
-    // C would see the path end at the zero, a different name, so the path
-    // is refused and C isn't called: no file named basic_file is made in
-    // the repository's root, where the program runs.
+    // The system would see the path end at the zero, a different name, so
+    // the path is refused and the system isn't called: no file named
+    // basic_file is made in the repository's root, where the program runs.
     zero := "basic_file\0x";
     print_string("zero byte:");
     show_bool(write_entire_file(zero, "x"));

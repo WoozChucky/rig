@@ -1,0 +1,12 @@
+made: true
+write: true true
+append: true
+exists: true true
+read: true true 18
+size: true 18
+listed: true [a.txt] [日本.txt]
+on disk: true
+directory as a file: false false false false true
+invalid UTF-8: true
+deleted: true true false false
+directory deleted: true false

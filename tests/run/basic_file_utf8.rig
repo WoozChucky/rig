@@ -1,0 +1,158 @@
+// Basic's files under a directory named outside the system's ANSI code
+// page, .build/tests/café_日本, which the test makes and deletes, and a file
+// so named, 日本.txt, which Windows reaches through kernel32's wide calls
+// (issue #209): written, appended to, read, measured, listed, and on
+// Windows found on disk by its UTF-16 name built by hand; the directory
+// given as a file, in every mode; a path that isn't valid UTF-8, which
+// Windows refuses and Linux writes as its bytes; and deleted. What a
+// stopped run left is deleted first. Everything printed is the same on
+// both systems.
+#import "Basic";
+
+ROOT :: ".build/tests/café_日本";
+A :: ".build/tests/café_日本/a.txt";
+NIHON :: ".build/tests/café_日本/日本.txt";
+
+// Prints a space, then value.
+show_bool :: (value: bool) {
+    print_string(" ");
+    print_bool(value);
+}
+
+#if OS == OS_WINDOWS {
+    // Whether GetFileAttributesW finds a file at .build/tests/ and tail,
+    // UTF-16 built by hand rather than by Basic's conversion, so that only
+    // a file whose names on disk are tail's units is found: one made in the
+    // ANSI code page from the UTF-8 bytes isn't.
+    on_disk :: (tail: []u16) -> bool {
+        TESTS :: ".build/tests/";
+        wide : [64]u16;
+        for i: 0..TESTS.count - 1 { wide[i] = TESTS[i]; }
+        for i: 0..tail.count - 1 { wide[TESTS.count + i] = tail[i]; }
+        wide[TESTS.count + tail.count] = 0;
+        attributes := c_get_file_attributes_w(*wide[0]);
+        return attributes != C_INVALID_FILE_ATTRIBUTES && (attributes & C_FILE_ATTRIBUTE_DIRECTORY) == 0;
+    }
+}
+
+main :: () {
+    // A name of the byte 255, which is never valid UTF-8, and .txt: Linux
+    // takes a name as plain bytes and makes the file, Windows refuses it
+    // before asking the file system. A string literal can't hold the byte,
+    // so the path is joined from a view of it.
+    byte : [1]u8;
+    byte[0] = 255;
+    byte_view : []u8 = byte;
+    bad := sprint("{}/{}.txt", ROOT, cast(string) byte_view);
+    defer free(bad.data);
+
+    // What a stopped run may have left, the files first: each call is false
+    // when there is nothing to delete.
+    delete_file(A);
+    delete_file(NIHON);
+    delete_file(bad);
+    delete_directory(ROOT);
+
+    print_string("made:");
+    show_bool(make_directory(ROOT));
+    print_string("\n");
+
+    print_string("write:");
+    show_bool(write_entire_file(A, "日本 café\n"));
+    show_bool(write_entire_file(NIHON, "x"));
+    print_string("\nappend:");
+    show_bool(append_to_file(A, "more\n"));
+    print_string("\nexists:");
+    show_bool(file_exists(A));
+    show_bool(file_exists(NIHON));
+    print_string("\n");
+
+    data, ok := read_entire_file(A);
+    print_string("read:");
+    show_bool(ok);
+    show_bool(data == "日本 café\nmore\n");
+    print_string(" ");
+    print_int(data.count);
+    print_string("\n");
+    free(data.data);
+
+    file, opened := file_open(A, FILE_READ);
+    print_string("size:");
+    show_bool(opened);
+    print_string(" ");
+    print_int(file_size(file));
+    print_string("\n");
+    file_close(file);
+
+    names, listed := list_directory(ROOT);
+    print_string("listed:");
+    show_bool(listed);
+    for names {
+        print_string(" [");
+        print_string(it);
+        print_string("]");
+    }
+    print_string("\n");
+    free(names.data);
+
+    // On Windows the names on disk are café_日本's and 日本.txt's own UTF-16
+    // units, found without Basic's conversion; Linux takes the bytes as
+    // they are, and prints the same line.
+    print_string("on disk:");
+    #if OS == OS_WINDOWS {
+        units : [14]u16;
+        units[0] = "c"[0];
+        units[1] = "a"[0];
+        units[2] = "f"[0];
+        units[3] = 233;   // U+00E9, é
+        units[4] = "_"[0];
+        units[5] = 26085; // U+65E5, 日
+        units[6] = 26412; // U+672C, 本
+        units[7] = "/"[0];
+        units[8] = 26085;
+        units[9] = 26412;
+        units[10] = "."[0];
+        units[11] = "t"[0];
+        units[12] = "x"[0];
+        units[13] = "t"[0];
+        units_view : []u16 = units;
+        show_bool(on_disk(units_view));
+    } else {
+        show_bool(file_exists(NIHON));
+    }
+    print_string("\n");
+
+    // A directory isn't a file in any mode: it isn't written over, appended
+    // to, read or deleted, and is still there.
+    print_string("directory as a file:");
+    show_bool(write_entire_file(ROOT, "x"));
+    show_bool(append_to_file(ROOT, "x"));
+    directory_data, directory_ok := read_entire_file(ROOT);
+    show_bool(directory_ok);
+    free(directory_data.data);
+    show_bool(delete_file(ROOT));
+    show_bool(is_directory(ROOT));
+    print_string("\n");
+
+    // The same line on both systems. Windows refuses the path, making
+    // nothing; Linux makes the file and deletes it.
+    invalid := false;
+    #if OS == OS_WINDOWS {
+        invalid = !write_entire_file(bad, "x") && !file_exists(bad);
+    } else {
+        invalid = write_entire_file(bad, "x") && delete_file(bad);
+    }
+    print_string("invalid UTF-8:");
+    show_bool(invalid);
+    print_string("\n");
+
+    print_string("deleted:");
+    show_bool(delete_file(A));
+    show_bool(delete_file(NIHON));
+    show_bool(file_exists(A));
+    show_bool(file_exists(NIHON));
+    print_string("\ndirectory deleted:");
+    show_bool(delete_directory(ROOT));
+    show_bool(is_directory(ROOT));
+    print_string("\n");
+}

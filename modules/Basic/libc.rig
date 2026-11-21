@@ -15,8 +15,13 @@
 // differ (fseek's long offset, fpos_t, struct timespec), the declaration
 // and its comment say how Basic stays within what both agree on. On Windows
 // the interpreter takes them from the compiler's own copy of the C library,
-// so a FILE * that c_fopen gives is one the other calls accept. Some C
-// functions that would seem to fit are left out on purpose:
+// so a FILE * that c_fopen gives is one the other calls accept. Basic's own
+// files use C's file functions only on Linux: on Windows they go through
+// kernel32's wide calls in the per-system part, which take a path as
+// UTF-16, where C's read it in the system's ANSI code page (file.rig). The
+// C functions stay declared on both systems all the same, C17's, for a
+// program to call. Some C functions that would seem to fit are left out on
+// purpose:
 //
 // - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
 //   on Windows and 64 on Linux, so no one declaration fits both, and on
@@ -34,10 +39,14 @@
 // function only one system has, or one whose types differ between them,
 // as c_write's count and result do. A procedure that calls one chooses
 // with a statement #if in its body, and the branch it doesn't take is
-// never checked. On Windows, interpreted, the functions there whose names
-// start with _ come from ucrtbase.dll, a second C runtime with no state in
-// common with the compiler's own copy (spec 10.8), so Basic uses them only
-// with one another, never with a FILE * that the calls above give or take.
+// never checked. On Windows the part holds kernel32's own functions too
+// (Sleep, and the files' and directories' wide calls), which every program
+// links and the interpreter looks up in kernel32.dll (spec 10.6, 10.8), so
+// compiled and interpreted programs call the same ones. On Windows,
+// interpreted, the functions there whose names start with _ come from
+// ucrtbase.dll, a second C runtime with no state in common with the
+// compiler's own copy (spec 10.8), so Basic uses them only with one
+// another, never with a FILE * that the calls above give or take.
 
 // Writes one byte to standard output, through C's own stdout buffer. It is
 // the one call Basic writes to standard output with: it links and runs
@@ -72,9 +81,10 @@ C_Fpos :: struct {
 C_SEEK_SET :: 0;
 C_SEEK_END :: 2;
 
-// Basic's files: opening one with a mode such as "rb" or "wb", which gives
-// a C FILE *, or null when it can't be opened, and closing it, which gives
-// 0, or EOF (-1) when what was still buffered couldn't be written.
+// Basic's files on Linux: opening one with a mode such as "rb" or "wb",
+// which gives a C FILE *, or null when it can't be opened, and closing it,
+// which gives 0, or EOF (-1) when what was still buffered couldn't be
+// written.
 c_fopen :: (path: *u8, mode: *u8) -> *void #foreign libc "fopen";
 c_fclose :: (file: *void) -> s32 #foreign libc "fclose";
 
@@ -253,11 +263,12 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // looks up in kernel32.dll (spec 10.8).
     c_sleep :: (milliseconds: u32) #foreign libc "Sleep";
 
-    // Basic's directories (directory.rig) go through kernel32's wide
-    // calls, which take a path as UTF-16, so a name outside the ANSI code
-    // page is reached. Like Sleep, each is kernel32's, which every program
-    // links and the interpreter looks up in kernel32.dll (spec 10.6, 10.8),
-    // so compiled and interpreted programs call the same functions.
+    // Basic's files (file.rig) and directories (directory.rig) go through
+    // kernel32's wide calls, which take a path as UTF-16, converted from
+    // UTF-8 by wide.rig, so a name outside the ANSI code page is reached.
+    // Like Sleep, each is kernel32's, which every program links and the
+    // interpreter looks up in kernel32.dll (spec 10.6, 10.8), so compiled
+    // and interpreted programs call the same functions.
 
     // WIN32_FIND_DATAW, an entry FindFirstFileW and FindNextFileW fill:
     // 592 bytes, aligned to 4. Basic reads only its name, up to 259 UTF-16
@@ -335,6 +346,63 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // right after the call, before anything else is called, it is that
     // call's, compiled and interpreted.
     c_get_last_error :: () -> u32 #foreign libc "GetLastError";
+
+    // CreateFileW's access rights: reading, writing, and writing only at
+    // the end, where every write lands whatever the position, as C's "ab"
+    // does.
+    C_GENERIC_READ :: 2147483648;
+    C_GENERIC_WRITE :: 1073741824;
+    C_FILE_APPEND_DATA :: 4;
+
+    // CreateFileW's sharing, FILE_SHARE_READ and FILE_SHARE_WRITE: others
+    // may read and write the file while it is open, as C's fopen lets them
+    // on Windows, but not delete it.
+    C_FILE_SHARE_READ_WRITE :: 3;
+
+    // CreateFileW's dispositions: make the file, or empty it when it is
+    // there; open it only when it is there; open it, made when it isn't.
+    C_CREATE_ALWAYS :: 2;
+    C_OPEN_EXISTING :: 3;
+    C_OPEN_ALWAYS :: 4;
+
+    // The attributes of a file CreateFileW makes: none in particular.
+    C_FILE_ATTRIBUTE_NORMAL :: 128;
+
+    // Opens or makes the file path with access, share and disposition, and
+    // gives its handle, which c_close_handle closes, or
+    // INVALID_HANDLE_VALUE (-1, compared as cast(int) handle == -1) with
+    // GetLastError saying why. Basic passes null for security, the
+    // default, and for template, and C_FILE_ATTRIBUTE_NORMAL for flags. It
+    // won't open a directory in any of Basic's modes: that needs
+    // FILE_FLAG_BACKUP_SEMANTICS, which Basic doesn't pass.
+    c_create_file_w :: (path: *u16, access: u32, share: u32, security: *void, disposition: u32, flags: u32, template: *void) -> *void #foreign libc "CreateFileW";
+
+    // Reads up to count bytes from the file into buffer, from where it is,
+    // and writes how many it read, which may be fewer, to read: 0 at the
+    // end. Not 0 when it could, and 0 when it couldn't, as for a handle
+    // opened only to write. Basic passes null for overlapped, a read that
+    // waits for its bytes.
+    c_read_file :: (handle: *void, buffer: *void, count: u32, read: *u32, overlapped: *void) -> s32 #foreign libc "ReadFile";
+
+    // Writes count bytes of data to the file, from where it is, or at its
+    // end for a handle opened with C_FILE_APPEND_DATA alone, with no buffer
+    // of the program's in between, and writes how many it wrote to
+    // written. Not 0 when it could, and 0 when it couldn't, as for a handle
+    // opened only to read. Basic passes null for overlapped.
+    c_write_file :: (handle: *void, data: *void, count: u32, written: *u32, overlapped: *void) -> s32 #foreign libc "WriteFile";
+
+    // Closes a handle, a file's among others: not 0 when it did.
+    c_close_handle :: (handle: *void) -> s32 #foreign libc "CloseHandle";
+
+    // Writes the size of the open file in bytes, 64 bits, to size, its
+    // position left where it was: not 0 when it could. It works on a
+    // handle opened in any of Basic's modes.
+    c_get_file_size_ex :: (handle: *void, size: *s64) -> s32 #foreign libc "GetFileSizeEx";
+
+    // Deletes the file path: not 0 when it did, and 0 for a directory, a
+    // missing file, and a file open without FILE_SHARE_DELETE, as Basic's
+    // and C's files are.
+    c_delete_file_w :: (path: *u16) -> s32 #foreign libc "DeleteFileW";
 
     // Basic's run_command_with_output (environment.rig) reads a command's
     // output through the UCRT's _popen, _fileno, _read and _pclose, used
