@@ -3239,6 +3239,37 @@ TEST(interpret_mode_passes_the_words_after_dashes) {
     arena_free(&a);
 }
 
+#ifdef _WIN32
+TEST(windows_interpret_mode_splits_a_command_line_as_a_compiled_program) {
+    // Issue #205: given the same words on its command line, a program gets
+    // the same arguments interpreted as compiled, test_os.cpp's tricky ones
+    // too, which shell32's CommandLineToArgvW would split otherwise. Each
+    // run's command line is given to CreateProcessW exactly, as no argv
+    // that os_run quotes can say it.
+    Arena a = arena_make();
+    const char *text = "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                       "main :: () {\n"
+                       "    for 1..__command_line_arguments.count - 1 {\n"
+                       "        printf(\"[%s]\\n\", __command_line_arguments[it].data);\n"
+                       "    }\n"
+                       "}\n";
+    String program = link_module(&a, lower_with_preload(&a, text), "split-arguments-test");
+    if (program.count) {
+        String out = {};
+        CHECK_EQ(run_command_line(&a, program_command_line(&a, program, L"", TRICKY_WORDS), "split-compiled", &out), 0);
+        CHECK_STR(without_cr(&a, out), TRICKY_ARGUMENTS);
+    }
+    String path = interpret_test_file(&a, "split_arguments", text);
+    wchar_t *options = to_wide(&a, string_printf(&a, " --interpret " STR_FMT " --", STR_ARG(path)));
+    String out = {};
+    CHECK_EQ(run_command_line(&a, program_command_line(&a, unit_tests_path(&a), options, TRICKY_WORDS),
+                              "split-interpreted", &out),
+             0);
+    CHECK_STR(without_cr(&a, out), TRICKY_ARGUMENTS);
+    arena_free(&a);
+}
+#endif
+
 TEST(interpret_mode_exit) {
     // C's exit ends the process, the mode's, with its status, and flushes
     // what printf wrote before it.

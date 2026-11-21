@@ -1,7 +1,8 @@
 // test_os.cpp: the operating system layer (issue #4). The process tests run
 // this same program, bin/unit-tests, with the helper flags of unit.cpp
-// (--echo-args, --echo-stdin, --cwd, --fail-with, --interleave, --spam,
-// --sleep, --close-and-sleep, --spawn-sleeper, --touch-reserved).
+// (--echo-args, --echo-crt-args, --echo-stdin, --cwd, --fail-with,
+// --interleave, --spam, --sleep, --close-and-sleep, --spawn-sleeper,
+// --touch-reserved).
 
 #include "test.h"
 
@@ -164,6 +165,97 @@ TEST(os_arguments_are_utf8) {
     array_free(&argv);
     arena_free(&a);
 }
+
+#ifdef _WIN32
+// The exit status of the program CreateProcessW starts with exactly this
+// command line, given in UTF-16, as no argv that os_run quotes can say it
+// (test_link.cpp's run_wide), and in *out what it wrote to stdout, byte for
+// byte, through .build/NAME.out. -1 when it can't start or hasn't ended
+// within a minute (it is then ended).
+static s32 run_command_line(Arena *a, const wchar_t *command_line, const char *name, String *out) {
+    *out = {};
+    os_make_directory(str(".build"));
+    String path = string_printf(a, ".build/%s.out", name);
+    SECURITY_ATTRIBUTES inherited = {sizeof inherited, nullptr, TRUE};
+    HANDLE file = CreateFileW(to_wide(a, path), GENERIC_WRITE, FILE_SHARE_READ, &inherited, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return -1;
+    // CreateProcessW may write into the command line it's given.
+    u64 length = (u64)wcslen(command_line);
+    wchar_t *line = arena_new_array<wchar_t>(a, (s64)length + 1);
+    memcpy(line, command_line, (length + 1) * sizeof(wchar_t));
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof startup;
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = file;
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION process = {};
+    BOOL started = CreateProcessW(nullptr, line, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process);
+    CloseHandle(file);
+    if (!started) return -1;
+    s32 status = -1;
+    if (WaitForSingleObject(process.hProcess, 60000) == WAIT_OBJECT_0) {
+        DWORD code = 0;
+        if (GetExitCodeProcess(process.hProcess, &code)) status = (s32)code;
+    } else {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, INFINITE);
+    }
+    CloseHandle(process.hProcess);
+    CloseHandle(process.hThread);
+    if (!os_read_file(a, path, out)) *out = {};
+    return status;
+}
+
+// Command-line words that shell32's CommandLineToArgvW and the C runtime
+// split differently, and others whose backslashes and quotes are easy to
+// get wrong, after a program's name: the arguments the C runtime makes of
+// them, each in [ ] on a line of its own. Inside quotes, "" is a quote that
+// stays inside them (CommandLineToArgvW ends the quotes there, so it makes
+// the first three one, a"b c x"y); 2n+1 backslashes and a quote are n
+// backslashes and a quote, and 2n and a quote, n and the quote's own
+// meaning; "" alone is an empty argument; a backslash before anything but
+// a quote, and one at the end, is a backslash.
+static const wchar_t TRICKY_WORDS[] = L" \"a\"\"b\" c \"x\"\"\"y a\\\\\\\"b \"d\\\\\" \"\" e\\f g\\";
+static const char TRICKY_ARGUMENTS[] = "[a\"b]\n[c]\n[x\"y]\n[a\\\"b]\n[d\\]\n[]\n[e\\f]\n[g\\]\n";
+
+// "PROGRAM"OPTIONS WORDS: the program's path in quotes, with Windows'
+// separators, then the two, each starting with a space.
+static const wchar_t *program_command_line(Arena *a, String program, const wchar_t *options, const wchar_t *words) {
+    wchar_t *wide_path = to_wide(a, program);
+    for (wchar_t *c = wide_path; *c; c++) {
+        if (*c == L'/') *c = L'\\';
+    }
+    s64 length = (s64)(2 + wcslen(wide_path) + wcslen(options) + wcslen(words));
+    wchar_t *line = arena_new_array<wchar_t>(a, length + 1);
+    wcscpy(line, L"\"");
+    wcscat(line, wide_path);
+    wcscat(line, L"\"");
+    wcscat(line, options);
+    wcscat(line, words);
+    return line;
+}
+
+TEST(os_arguments_split_as_the_c_runtime_splits) {
+    // Issue #205: os_arguments gives the words the C runtime splits a
+    // command line into, the ones every Rig program gets (spec 10.6), not
+    // CommandLineToArgvW's. The child echoes what os_arguments gave it, and
+    // then what main's own argv, the C runtime's narrow split, holds: the
+    // same, for these ASCII words.
+    Arena a = arena_make();
+    String program = unit_tests_path(&a);
+    String out = {};
+    CHECK_EQ(run_command_line(&a, program_command_line(&a, program, L" --echo-args", TRICKY_WORDS), "echo-args", &out),
+             0);
+    CHECK_STR(out, TRICKY_ARGUMENTS);
+    CHECK_EQ(run_command_line(&a, program_command_line(&a, program, L" --echo-crt-args", TRICKY_WORDS), "echo-crt-args",
+                              &out),
+             0);
+    CHECK_STR(out, TRICKY_ARGUMENTS);
+    arena_free(&a);
+}
+#endif
 
 TEST(os_run_in_starts_the_program_in_a_directory) {
     Arena a = arena_make();
