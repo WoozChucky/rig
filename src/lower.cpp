@@ -2385,7 +2385,8 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 // on in the other block, which nothing reaches, as after a check that
 // always fails. All of it is at the callee's name, as a #compiler call
 // is, so the interpreter's innermost frame is there: the procedure that
-// called __runtime_error, at that call's name.
+// called __runtime_error, at that call's name. Never in a call's default
+// value (Lowering.filling): a call that returns nothing can't be a value.
 //
 //     __runtime_error(text, n);    %5 = local 16 align 8     (text's copy, the argument)
 //                                  copy %5, %1, 16           (text in the slot %1)
@@ -2410,7 +2411,7 @@ static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> arg
     RIG_ASSERT(args.count == 2);
     Position outer = l->pos;
     l->pos = call->callee->pos;
-    bool filling = fail_in_place(l);
+    RIG_ASSERT(!l->filling);
     s32 count = load_view_count(l, args[0]);
     s32 data = load_view_data(l, args[0]);
     s32 zero = emit_constant(l, IR_I64, 0);
@@ -2425,7 +2426,6 @@ static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> arg
     panic->b = count;
     panic->c = args[1];
     l->block = ok;
-    l->filling = filling;
     l->pos = outer;
 }
 
