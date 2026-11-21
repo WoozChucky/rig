@@ -130,7 +130,10 @@ c_system :: (command: *u8) -> s32 #foreign libc "system";
 // the UCRT, 8 bytes in glibc. The nanoseconds are below 10^9, so on
 // glibc's little-endian long they are the low 4 bytes, and the high 4 are
 // 0. So this struct, 16 bytes, holds either, and its nanoseconds field
-// reads them on both. Basic leaves padding as C wrote it.
+// reads them on both. Basic leaves padding as C wrote it when reading one.
+// It also passes one to C, to Linux's nanosleep (c_nanosleep, below), with
+// padding 0: then glibc's 8-byte tv_nsec, low 4 bytes and high 4 together,
+// is the nanoseconds field's value.
 C_Timespec :: struct {
     seconds: s64;
     nanoseconds: s32;
@@ -241,10 +244,23 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // written \r\n, as C's stdout writes it. It is what the runtime writes
     // a runtime error with (spec 10.5).
     c_write :: (descriptor: s32, data: *void, count: u32) -> s32 #foreign libc "_write";
+
+    // Sleeps for milliseconds, at least: the system wakes the thread at
+    // its next clock tick after that, about 15 ms apart. Its count is a
+    // DWORD, whose largest, 0xFFFFFFFF, is INFINITE, a sleep that never
+    // ends. It is kernel32's, which the program links and the interpreter
+    // finds as it finds the C library's (spec 10.6, 10.8).
+    c_sleep :: (milliseconds: u32) #foreign libc "Sleep";
 } else {
     // Writes count bytes of data to the file descriptor, 2 for standard
     // error, at once, with no buffer of C's in between: the bytes it wrote,
     // which may be fewer, or -1 when it couldn't. It is what the runtime
     // writes a runtime error with (spec 10.5).
     c_write :: (descriptor: s32, data: *void, count: u64) -> s64 #foreign libc "write";
+
+    // Sleeps for the time request holds, at least: 0 when it slept it all,
+    // or -1 when a signal woke it first, having written the time still
+    // left to remaining. request's nanoseconds must be below 10^9, and its
+    // padding 0 (C_Timespec's comment says why).
+    c_nanosleep :: (request: *C_Timespec, remaining: *C_Timespec) -> s32 #foreign libc "nanosleep";
 }
