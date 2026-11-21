@@ -492,6 +492,8 @@ struct Lowering {
     Ast_Proc *save_command_line;  // __save_command_line, which main calls next with C's argc and argv
                                   // (takes_command_line); null without Preload, and on demand, as the
                                   // compile-time world never declares main
+    Ast_Proc *runtime_error;   // __runtime_error, the #compiler procedure whose calls are panics
+                               // (lower_runtime_error_call); null without Preload
     s32 context;               // the slot (an IR_LOCAL ptr) holding the current context's address:
                                // the body's, or the innermost push_context block's (lower_push_context);
                                // -1 without one: a #c_call procedure outside its pushes, the
@@ -2365,6 +2367,53 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
     if (popped >= 0) array_add(results, emit_get(l, element, popped));
 }
 
+// A call of Preload's __runtime_error(text: string, message_start: int)
+// (spec 8.1, 10.5), its arguments worked out into `args`, the string's
+// address and then the int, as for any call: the runtime error whose
+// whole text is the string's bytes, which Basic's assert ends with. It's
+// a runtime check's shape (emit_runtime_check) whose condition is always
+// 1 and whose panic is the dynamic one, the bytes at %data, %count of
+// them, as __rig_bounds_failed's (ir.h), its `c` message_start, where the
+// interpreter's message starts in the text. The code after the call goes
+// on in the other block, which nothing reaches, as after a check that
+// always fails. All of it is at the callee's name, as a #compiler call
+// is, so the interpreter's innermost frame is there: the procedure that
+// called __runtime_error, at that call's name. In a call's default value
+// it's at the statement holding the call that leaves the default out
+// (emitted_at), and while compiling at the name there (fail_in_place).
+//
+//     __runtime_error(text, n);    %5 = local 16 align 8     (text's copy, the argument)
+//                                  copy %5, %1, 16           (text in the slot %1)
+//                                  %6 = load i64 %0          (n, in the slot %0)
+//                                  %7 = load i64 %5          (its count)
+//                                  %8 = const i64 8
+//                                  %9 = ptradd %5, %8
+//                                  %10 = load ptr %9         (its data)
+//                                  %11 = const i1 1
+//                                  branch %11, fail, ok
+//                                fail:
+//                                  panic %10, %7             (c: %6)
+//                                ok:
+//                                  ...
+static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> args) {
+    RIG_ASSERT(args.count == 2);
+    Position outer = l->pos;
+    l->pos = call->callee->pos;
+    bool filling = fail_in_place(l);
+    s32 count = load_view_count(l, args[0]);
+    s32 data = load_view_data(l, args[0]);
+    s32 fail = new_block(l);
+    s32 ok = new_block(l);
+    emit_branch(l, emit_constant(l, IR_I1, 1), fail, ok);
+    Ir_Instr *panic = emit_in(l, fail, IR_PANIC, IR_VOID);
+    panic->a = data;
+    panic->b = count;
+    panic->c = args[1];
+    l->block = ok;
+    l->filling = filling;
+    l->pos = outer;
+}
+
 // A call; `results` gets one value per result of the callee, in order: a
 // scalar's IR value, or an aggregate's address. A built-in procedure's is
 // lower_builtin_call's.
@@ -2421,6 +2470,10 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //   would make, one in a procedure nothing calls too. In a call's default
 //   value, lowered whole, the call and the error are at the statement
 //   holding the call that leaves the default out (emitted_at).
+// - But Preload's __runtime_error (spec 8.1, 10.5), the one #compiler
+//   procedure the program's own code may call, is no call at all: it's the
+//   panic a failing check ends in, in the executable and while compiling
+//   alike (lower_runtime_error_call), so it isn't refused.
 // - A variadic foreign procedure's arguments after its fixed parameters
 //   have none to convert to: each is passed as C's default argument
 //   promotions make its own type (extra_argument_type): an s8 or s16
@@ -2558,13 +2611,19 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
         l->checking_bounds = checking;
     }
     s32 next;
-    if (proc && proc->is_compiler) {
+    if (proc && proc == l->runtime_error) {
+        // No call, so nothing keeps the arguments, and no results.
+        lower_runtime_error_call(l, call, args);
+        array_free(&args);
+        next = -1;
+    } else if (proc && proc->is_compiler) {
         // A #compiler procedure (spec 7.9), which the compiler does: the
         // call is at the callee's name, as a runtime check is at its own
         // place, so a failure's innermost frame, and the place the
         // compiler is told of, are the name. The program's own executable
         // can't make it: lowered whole, as rig build lowers a program, the
         // call is refused there, and still emitted, so the IR stays whole.
+        // (Preload's __runtime_error, above, is the exception: a panic.)
         // In a call's default value, the call and the message are at the
         // statement holding that call (emitted_at): each call that leaves
         // the default out is one the executable would make there. While
@@ -4426,6 +4485,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.default_context = f->default_context;
     l.runtime_init = f->runtime_init;
     l.save_command_line = f->save_command_line;
+    l.runtime_error = f->runtime_error;
     l.array_procs = f->array_procs;
     l.source_code_location_type = f->source_code_location_type;
     l.context = -1;
@@ -4512,6 +4572,7 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
         l->context_type = file->context_type;
         l->default_context = file->default_context;
         l->runtime_init = file->runtime_init;
+        l->runtime_error = file->runtime_error;
         l->array_procs = file->array_procs;
         l->source_code_location_type = file->source_code_location_type;
         m->context_type = file->context_type;

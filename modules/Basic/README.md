@@ -395,6 +395,18 @@ How each value is written:
 - **Any other tag:** a description whose tag isn't one of the nine writes nothing.
 - **Cycles:** a pointer isn't followed, but a view's data (a resizable array's too) and an `Any`'s `value_pointer` are, so a view or an `Any` that reaches a value it is part of makes a cycle: a struct whose view field views an array holding it (`nodes[0].kids = nodes;`), the struct an `Any` is a field of (`h.a = h;`), the array it is an element of (`arr[0] = arr;`), or anything that contains it deeper down. That one is written by recursing until the stack runs out, as recursion that never ends does: interpreted, `stack overflow`; compiled, the program crashes, and what C still buffers of its output is lost. It is the program's mistake, and isn't caught.
 
+## Assertions (`assert.rig`)
+
+A condition the program holds to be true, checked as it runs (issue #157). A false one stops the program with a runtime error (spec 8.1) at the place of the `assert`'s call, its caller's (`#caller_location`, spec 7.2): what was printed comes out first, then this line on standard error, and the exit status is 101, compiled and interpreted.
+
+```text
+main.rig:7:5: runtime error: assertion failed: n is positive
+```
+
+It ends through Preload's `__runtime_error` ([`../Preload/README.md`](../Preload/README.md)), not C's `exit`, so a failing `assert` in a `#run`'s code is an error at the `#run`, `#run failed: runtime error: assertion failed: MESSAGE` with the calls that led to it, as a failing check there is, and the build goes on to report the rest (spec 7.8); `exit` would end rig itself there. No deferred statement runs, as after any runtime error (spec 6.12). An optimised build checks every `assert` too: nothing turns them off.
+
+- `assert(condition: bool, message: string = "", loc: Source_Code_Location = #caller_location)`: does nothing when `condition` is true, and allocates nothing. When it is false, it stops the program with the message `assertion failed`, followed by `: ` and `message` when `message` isn't empty: `assert(n > 0, "n is positive")`. `message` is written as it is, a `{}` in it included: it is no format, since a parameter with a default can't come before a `..` one. The line names `loc`'s place, or none when `loc`'s line is 0 or less, no place (a zeroed one's). It is built on the heap, never on `context.allocator`, and isn't given back: the program, or the `#run`, ends there.
+
 ## Memory debugger (`memory_debugger.rig`)
 
 An allocator that wraps another and records every allocation it gives, so a program learns what it never freed: each allocation's size, its number, and the place it was asked for at (issue #159). A program checks itself by pushing the debugger's allocator in the context once, in `main` (spec 6.13), so that everything that takes its memory from the context's allocator, Basic's procedures and the program's own, takes it through the debugger, which passes each call on to the allocator it wraps. At the end, `memory_debugger_report` writes what isn't freed, and says whether all was well:

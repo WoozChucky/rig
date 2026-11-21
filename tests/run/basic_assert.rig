@@ -1,0 +1,18 @@
+// Basic's assert (issue #157): a true condition does nothing and prints
+// nothing; a false one stops the program as a runtime error does (spec
+// 8.1), its line naming the place of the assert's call, its message after
+// "assertion failed: ", and the exit status 101. The message is written as
+// it is given, a {} in it included: it is no format. A runtime error runs
+// no deferred statement (spec 6.12), so the deferred line is never
+// printed, and nothing after the failing assert runs.
+#import "Basic";
+
+main :: () {
+    assert(true);
+    assert(1 + 1 == 2, "arithmetic");
+    print_line("the passing asserts printed nothing");
+    defer print_line("a deferred line, which no runtime error runs");
+    n := 0;
+    assert(n > 0, "n is positive, here {} isn't a format");
+    print_line("not reached");
+}

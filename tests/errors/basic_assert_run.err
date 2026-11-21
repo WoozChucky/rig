@@ -1,0 +1,9 @@
+tests/errors/basic_assert_run.rig:15:10: error: #run failed: runtime error: assertion failed: the count is positive
+    COUNT :: #run count_of_things();
+             ^
+    in assert (@MODULES@/Basic/assert.rig:65:5)
+    in count_of_things (tests/errors/basic_assert_run.rig:11:5)
+    in #run (tests/errors/basic_assert_run.rig:15:10)
+tests/errors/basic_assert_run.rig:21:15: error: a value of type 'string' doesn't convert to 'int' implicitly
+    wrong : int = "x";
+                  ^

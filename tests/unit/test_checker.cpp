@@ -8327,6 +8327,31 @@ TEST(preload_declares_the_command_line) {
     arena_free(&a);
 }
 
+TEST(preload_declares_runtime_error) {
+    // Issue #157 (spec 8.1, 10.5): the checker finds Preload's
+    // __runtime_error as it finds __save_command_line, and keeps it on the
+    // tree, for lowering, which makes each call of it a panic. It's a
+    // #compiler procedure: no body, nothing C or the program has.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    CHECK(tree->runtime_error != nullptr);
+    if (!tree->runtime_error) {
+        arena_free(&a);
+        return;
+    }
+    Ast_Proc *runtime_error = tree->runtime_error;
+    CHECK_STR(runtime_error->name, "__runtime_error");
+    CHECK(runtime_error->is_compiler);
+    CHECK_EQ(runtime_error->params.count, 2);
+    CHECK_EQ(runtime_error->results.count, 0);
+    if (runtime_error->params.count == 2) {
+        CHECK_STR(type_name(&a, runtime_error->params[0]->type), "string");
+        CHECK_STR(type_name(&a, runtime_error->params[1]->type), "int");
+    }
+    arena_free(&a);
+}
+
 TEST(context_is_a_place) {
     // context is the current context, a place of type Context: read, copied,
     // its address taken, its fields read and assigned, and itself assigned.

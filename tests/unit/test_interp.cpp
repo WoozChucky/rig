@@ -1077,6 +1077,48 @@ TEST(interp_panic_without_a_prefix) {
     arena_free(&a);
 }
 
+TEST(a_runtime_error_call_fails_with_its_text) {
+    // Issue #157 (spec 8.1, 10.8): a call of Preload's __runtime_error,
+    // which lowering makes a panic (test_ir.cpp's
+    // a_runtime_error_call_is_a_panic, whose program this is), fails the
+    // run as a failing check does: panic_text the whole text, as the
+    // compiled program writes it, and the message what follows
+    // message_start, without the final newline; the innermost frame the
+    // procedure that called it, at the call's name. A message_start
+    // outside the text, -1 here, gives the whole text as the message.
+    Arena a = arena_make();
+    struct Expected {
+        int start;
+        const char *message;
+    };
+    Expected expected[] = {
+        {26, "boom"},
+        {-1, "x.rig:1:1: runtime error: boom"},
+    };
+    for (const Expected &e : expected) {
+        Ir_Module *m = nullptr;
+        CHECK_STR(lower_messages(&a, runtime_error_program(&a, e.start), &m), "");
+        Interp *in = interp_new(m);
+        Interp_Result r = {};
+        interp_run(in, interp_test_proc(m, "main"), {}, &a, &r);
+        CHECK(!r.ok);
+        CHECK_STR(r.message, e.message);
+        CHECK_STR(r.panic_text, "x.rig:1:1: runtime error: boom\n");
+        CHECK_EQ(r.frames.count, 2);
+        if (r.frames.count == 2) {
+            CHECK_STR(r.frames[0].proc, "f");
+            CHECK_EQ(r.frames[0].pos.line, 2);
+            CHECK_EQ(r.frames[0].pos.col, 11);
+            CHECK_STR(r.frames[1].proc, "main");
+            CHECK_EQ(r.frames[1].pos.line, 3);
+            CHECK_EQ(r.frames[1].pos.col, 14);
+        }
+        interp_test_free(&r);
+        interp_free(in);
+    }
+    arena_free(&a);
+}
+
 TEST(interp_call_of_an_address_that_isnt_a_procedure) {
     // A call through an address in the range procedures' values come from,
     // but no Rig procedure's: between two, one past the module's last, or

@@ -280,10 +280,12 @@ enum Ir_Op : u8 {
     IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
                                      // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
-                                     // From lowering, the text is "PATH:L:C: runtime error: MESSAGE\n",
+                                     // From a check, the text is "PATH:L:C: runtime error: MESSAGE\n",
                                      // and the panic knows how long that prefix is (`constant`, `c`;
                                      // unknown, -1, when built by hand), so the interpreter can give
-                                     // MESSAGE alone; ir_print doesn't show the length
+                                     // MESSAGE alone; ir_print doesn't show the length. From a call of
+                                     // Preload's __runtime_error, it's the program's own text, and `c`
+                                     // the message_start it was given
     IR_UNREACHABLE,                  // unreachable           control never gets here
 };
 
@@ -320,8 +322,10 @@ struct Ir_Instr {
                        // IR_LOCAL of bytes, IR_COPY, IR_ZERO: the number of bytes;
                        // IR_PANIC: the length of the message's prefix, "PATH:L:C: runtime
                        // error: ", when `target` names its global; c is the value holding
-                       // that length when the message is %a and %b; -1 (as constant: all
-                       // ones) when unknown, as in a module built by hand (ir_emit)
+                       // that length when the message is %a and %b (from __runtime_error,
+                       // its message_start, any i64: one outside the text means the whole
+                       // text is the message); -1 (as constant: all ones) when unknown, as
+                       // in a module built by hand (ir_emit)
     u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
     Array<s32> args;   // IR_CALL's and IR_CALL_INDIRECT's arguments, IR_RET's values
     Ir_Proc *signature;  // IR_CALL_INDIRECT: what the procedure called takes and gives, an Ir_Proc

@@ -634,7 +634,10 @@
 //   module's file, as Type_Info and Any, and keeps them on the tree
 //   (Ast_File.context_type, default_context, runtime_init); and so
 //   __save_command_line, which main's prologue calls next with C's argc and
-//   argv (issue #152, spec 7.4: Ast_File.save_command_line).
+//   argv (issue #152, spec 7.4: Ast_File.save_command_line), and the
+//   #compiler procedure __runtime_error, whose calls lowering makes a
+//   panic, the runtime error Basic's assert ends with (issue #157, spec
+//   8.1: Ast_File.runtime_error).
 // - context is a keyword: the current context, a place of type Context.
 //   Its fields are read and assigned, it's assigned and copied, *context
 //   is a *Context, and converted to an Any it gives its own address.

@@ -4721,6 +4721,72 @@ TEST(lowering_refuses_compiler_calls) {
     arena_free(&a);
 }
 
+// The program a_runtime_error_call_is_a_panic and test_interp.cpp's
+// a_runtime_error_call_fails_with_its_text lower: a module's file, as
+// lower_messages takes it, declaring the __runtime_error Preload declares,
+// which the checker finds by name in any module's file, and calling it,
+// with a message_start of `start`.
+static const char *runtime_error_program(Arena *a, int start) {
+    return string_cstr(a, string_printf(a,
+                                        "__runtime_error :: (text: string, message_start: int) #compiler;\n"
+                                        "f :: () { __runtime_error(\"x.rig:1:1: runtime error: boom\\n\", %d); }\n"
+                                        "main :: () { f(); }\n",
+                                        start));
+}
+
+TEST(a_runtime_error_call_is_a_panic) {
+    // Issue #157 (spec 8.1, 10.5): Preload's __runtime_error is the one
+    // #compiler procedure the program's own executable may call, which
+    // lowering makes the panic a failing check ends in, the string's bytes
+    // its text and the second argument its prefix's length: rig build's
+    // lowering says nothing of it, and nothing calls a procedure. The
+    // panic has a block of its own, as a check's has, and the code after
+    // the call goes on in the other.
+    Arena a = arena_make();
+    Ir_Module *m = nullptr;
+    CHECK_STR(lower_messages(&a, runtime_error_program(&a, 26), &m), "");
+    String f = proc_ir(ir_print(&a, m), "f");
+    CHECK_STR(f, "proc @f() {\n"
+                 "b0:\n"
+                 "  %0 = addr @str.0\n"
+                 "  %1 = local 16 align 8\n"
+                 "  %2 = const i64 31\n"
+                 "  store i64 %2, %1\n"
+                 "  %3 = const i64 8\n"
+                 "  %4 = ptradd %1, %3\n"
+                 "  store ptr %0, %4\n"
+                 "  %5 = local 16 align 8\n"  // the argument's copy
+                 "  copy %5, %1, 16\n"
+                 "  %6 = const i64 26\n"
+                 "  %7 = load i64 %5\n"  // its count
+                 "  %8 = const i64 8\n"
+                 "  %9 = ptradd %5, %8\n"
+                 "  %10 = load ptr %9\n"  // its data
+                 "  %11 = const i1 1\n"
+                 "  branch %11, b1, b2\n"
+                 "b1:\n"
+                 "  panic %10, %7\n"
+                 "b2:\n"
+                 "  ret\n"
+                 "}\n");
+    CHECK(!contains(f, "call @__runtime_error"));
+    // ir_print doesn't show the prefix's length: it's message_start, %6.
+    Ir_Instr *panic = nullptr;
+    for (s64 i = 0; i < m->procs.count; i++) {
+        Ir_Proc *p = m->procs[i];
+        if (string_eq(p->name, str("f")) && p->blocks.count == 3 && p->blocks[1]->instrs.count == 1) {
+            panic = &p->blocks[1]->instrs[0];
+        }
+    }
+    CHECK(panic != nullptr);
+    if (panic) {
+        CHECK(panic->op == IR_PANIC);
+        CHECK_EQ(panic->target, -1);
+        CHECK_EQ(panic->c, 6);
+    }
+    arena_free(&a);
+}
+
 // Issue #147: #if in a body (spec 4.9, 10.7).
 
 TEST(an_if_directive_makes_no_scope) {

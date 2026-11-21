@@ -14,9 +14,9 @@
 // path reads nothing more: a file is read once.
 //
 // It holds the allocator's shape and the heap, type information, Any, the
-// context, the temporary storage and its allocator, [..]T's layout and the
-// helpers of its built-ins, Resizable_Array, Source_Code_Location (the
-// place a default #caller_location is), and the command-line arguments.
+// context, the temporary storage and its allocator, Resizable_Array ([..]T's
+// layout) and its built-ins' helpers, Source_Code_Location, the command-line
+// arguments, and __runtime_error, the runtime error Basic's assert ends with.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -386,6 +386,24 @@ __save_command_line :: (argc: s32, argv: **u8) #c_call {
     __command_line_arguments.data = elements;
     __command_line_arguments.count = argc;
 }
+
+// Ends the program with a runtime error whose whole text is text (spec
+// 8.1, 10.5), as a failing check ends it: compiled, the C library's
+// streams flushed, text written to standard error, and exit status 101;
+// interpreted, the run fails with the message from text's byte
+// message_start on, its final newline dropped (all of text when
+// message_start is outside it), and a #run that calls it fails as one
+// whose check failed does, at the call's name (spec 7.8). text is the
+// whole line, "PATH:L:C: runtime error: MESSAGE\n", and message_start
+// where MESSAGE starts in it, as the compiler's own checks have them.
+// Basic's assert calls it.
+//
+// It's the one #compiler procedure the program's own code may call: the
+// compiler doesn't do it while compiling, as it does the Compiler module's,
+// but makes each call of it the panic a failing check ends in, in the
+// executable and in the compile-time world alike. No deferred
+// statement runs, as none runs after a runtime error (spec 6.12).
+__runtime_error :: (text: string, message_start: int) #compiler;
 
 // C's memmove, under Preload's own name, as __malloc is: the temporary
 // allocator's RESIZE copies with it, and so do the resizable arrays'

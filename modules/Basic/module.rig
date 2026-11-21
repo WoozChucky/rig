@@ -8,9 +8,9 @@
 // builder, hash tables, sorting and searching, paths, files, the clock and
 // the calendar, random numbers, the environment's variables, commands run
 // by the system's shell and the command-line arguments, formatted printing
-// to standard output, to a string builder and to a string, and a memory
-// debugger, an allocator that records what it gives and reports what isn't
-// freed. Whatever hands back memory it allocates takes it from the
+// to standard output, to a string builder and to a string, assert, and a
+// memory debugger, an allocator that records what it gives and reports what
+// isn't freed. Whatever hands back memory it allocates takes it from the
 // context's allocator unless it is given another (spec 7.10); talloc and
 // tprint take theirs from the context's temporary storage instead.
 // sprint's and print_to_builder's scratch builders and the file
@@ -39,8 +39,8 @@
 // often it is named, so the order here is only the reading order. It is
 // README.md's, so the two can be read side by side: print.rig, which loads
 // libc.rig, numbers.rig, string.rig and builder.rig, comes after the
-// others, and memory_debugger.rig, which writes through print.rig, comes
-// last.
+// others, then assert.rig, and memory_debugger.rig, which writes through
+// print.rig, comes last.
 #load "libc.rig";
 #load "char.rig";
 #load "math.rig";
@@ -58,4 +58,5 @@
 #load "random.rig";
 #load "environment.rig";
 #load "print.rig";
+#load "assert.rig";
 #load "memory_debugger.rig";
