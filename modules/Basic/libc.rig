@@ -16,10 +16,11 @@
 // and its comment say how Basic stays within what both agree on. On Windows
 // the interpreter takes them from the compiler's own copy of the C library,
 // so a FILE * that c_fopen gives is one the other calls accept. Basic's own
-// files use C's file functions only on Linux: on Windows they go through
-// kernel32's wide calls in the per-system part, which take a path as
-// UTF-16, where C's read it in the system's ANSI code page (file.rig). The
-// C functions stay declared on both systems all the same, C17's, for a
+// files use C's file functions, and its environment C's getenv, only on
+// Linux: on Windows they go through kernel32's wide calls in the
+// per-system part, which take a path or a name as UTF-16, where C's read
+// it in the system's ANSI code page (file.rig, environment.rig). The C
+// functions stay declared on both systems all the same, C17's, for a
 // program to call. Some C functions that would seem to fit are left out on
 // purpose:
 //
@@ -41,13 +42,14 @@
 // as c_write's count and result do. A procedure that calls one chooses
 // with a statement #if in its body, and the branch it doesn't take is
 // never checked. On Windows the part holds kernel32's own functions too
-// (Sleep, and the files' and directories' wide calls), which every program
-// links and the interpreter looks up in kernel32.dll (spec 10.6, 10.8), so
-// compiled and interpreted programs call the same ones. On Windows,
-// interpreted, the functions there whose names start with _ come from
-// ucrtbase.dll, a second C runtime with no state in common with the
-// compiler's own copy (spec 10.8), so Basic uses them only with one
-// another, never with a FILE * that the calls above give or take.
+// (Sleep, and the files', directories' and environment's wide calls),
+// which every program links and the interpreter looks up in kernel32.dll
+// (spec 10.6, 10.8), so compiled and interpreted programs call the same
+// ones. On Windows, interpreted, the functions there whose names start
+// with _ come from ucrtbase.dll, a second C runtime with no state in
+// common with the compiler's own copy (spec 10.8), so Basic uses them only
+// with one another, never with a FILE * that the calls above give or
+// take.
 
 // Writes one byte to standard output, through C's own stdout buffer. It is
 // the one call Basic writes to standard output with: it links and runs
@@ -404,6 +406,20 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // missing file, and a file open without FILE_SHARE_DELETE, as Basic's
     // and C's files are.
     c_delete_file_w :: (path: *u16) -> s32 #foreign libc "DeleteFileW";
+
+    // Basic's get_environment (environment.rig) reads a variable through
+    // kernel32's wide call too, which takes the name and gives the value
+    // as UTF-16, where C's getenv gives them in the ANSI code page.
+
+    // Writes the value of the environment's variable name to buffer, which
+    // has room for size UTF-16 units, followed by a zero, and gives the
+    // units written, the zero not counted. Given too small a size, 0
+    // included, it writes nothing and gives the units needed, the zero
+    // counted, so a variable set to "" gives 1. 0 when the variable isn't
+    // set (GetLastError 203, ERROR_ENVVAR_NOT_FOUND), and, with a buffer,
+    // for a variable set to "", which leaves GetLastError alone. A name is
+    // found whatever its case.
+    c_get_environment_variable_w :: (name: *u16, buffer: *u16, size: u32) -> u32 #foreign libc "GetEnvironmentVariableW";
 
     // Basic's run_command_with_output (environment.rig) reads a command's
     // output through the UCRT's _popen, _fileno, _read and _pclose, used

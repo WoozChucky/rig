@@ -1,20 +1,23 @@
 // Basic's environment: the value of a variable of the environment the
-// program was started with and a command run through the system's shell,
-// each through C's stdlib (libc.rig), a command run with its standard
+// program was started with, through kernel32's GetEnvironmentVariableW on
+// Windows and C's getenv on Linux (libc.rig), a command run through the
+// system's shell, through C's system, a command run with its standard
 // output captured, through the system's popen (libc.rig's per-system
 // part), and the command line the program was started with, which Preload
 // saves before main's first line.
 //
-// A variable's name and a command go to C as copies ended by a zero
-// (to_c_string), which C reads up to its first zero. So a name or a
-// command with a zero byte in it would reach C cut short, another name or
-// another command, and get_environment, run_command and
-// run_command_with_output refuse it without calling C. The copies come
-// from the allocator each procedure is given, the context's unless another
-// is, and go back to it before the procedure returns, once C is done with
-// them.
+// A variable's name goes to the system as a copy, in UTF-16 and ended by a
+// zero unit on Windows (to_wide_string, wide.rig) and ended by a zero on
+// Linux (to_c_string), and a command goes to C as a copy ended by a zero.
+// The system reads each up to its first zero, so a name or a command with
+// a zero byte in it would reach it cut short, another name or another
+// command, and get_environment, run_command and run_command_with_output
+// refuse it without calling the system. The copies come from the
+// allocator each procedure is given, the context's unless another is, and
+// go back to it before the procedure returns, once the system is done
+// with them.
 //
-// The systems differ in what they hand C, and Basic doesn't hide it:
+// The systems differ in what they are handed, and Basic doesn't hide it:
 // Windows' variable names are case-insensitive, so "Path" finds PATH
 // there, and Linux's aren't; a command runs in cmd.exe on Windows and in
 // sh on Linux, with each one's syntax, cmd's echo ending its line with
@@ -29,56 +32,100 @@
 // its errors still reach the program's standard error (a command can send
 // them into the pipe too with 2>&1).
 //
-// A name, a value and a command are bytes to C. Linux's C library takes
-// them as they are, so UTF-8 stays UTF-8, but Windows' reads and gives them
-// in the system's ANSI code page rather than as UTF-8, so one with a
-// character outside ASCII means something else there. Windows'
-// wide-character calls, such as _wgetenv, _wsystem and _wpopen, would take
-// them right, but Basic doesn't call them yet (issue #209).
+// A variable's name and value are UTF-8 on both systems. Linux's C library
+// takes and gives them as bytes, so UTF-8 stays UTF-8. Windows' wide call
+// takes the name and gives the value in UTF-16, converted from and to
+// UTF-8 (wide.rig), where C's getenv would read and give them in the
+// system's ANSI code page, so that one with a character outside it, 日本 in
+// code page 1252, would mean something else there; a name that isn't
+// valid UTF-8, which would have to change to be converted, is refused
+// there. A command is bytes to C: Linux's takes it as it is, but Windows'
+// reads it in the system's ANSI code page rather than as UTF-8, so one
+// with a character outside ASCII means something else there. Windows'
+// wide-character calls, such as _wsystem and _wpopen, would take it right,
+// but Basic doesn't call them yet (issue #209).
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";
 #load "memory.rig";
 #load "builder.rig";
+#load "wide.rig";
 
 // A copy of the value of the environment's variable name, in memory from
 // allocator, the context's unless given, which the caller gives back with
-// free(value.data, allocator), and true. C's getenv gives a pointer to its
-// own copy, which a later call may change, so the value is copied out at
-// once, its zero not included. A variable set to "" is the zeroed string
+// free(value.data, allocator), and true. The system gives the value in
+// memory of its own, which a later call may change, so it is copied out
+// at once, converted from UTF-16 to UTF-8 on Windows and as its bytes on
+// Linux, its zero not included. A variable set to "" is the zeroed string
 // (count 0, data null), which allocates nothing, and true.
 //
 // It is the zeroed string and false, with nothing left allocated, when the
-// variable isn't set, when the allocator has no memory for the name's C
-// copy or the value's, and for a name C would read wrong: an empty name,
-// one with '=', which ends a name in the environment (NAME=value), and one
-// with a zero byte, which C would read as a shorter name.
+// variable isn't set, when the allocator has no memory for the name's copy
+// or the value's, and for a name the system would read wrong: an empty
+// name, one with '=', which ends a name in the environment (NAME=value),
+// one with a zero byte, which the system would read as a shorter name, and
+// on Windows one that isn't valid UTF-8, which would have to change to be
+// converted and so would name another variable.
 //
-// The name's C copy and the value's are asked for, and the C copy given
+// On Windows GetEnvironmentVariableW is asked first for the value's size
+// in UTF-16 units, its zero counted: 0 when the variable isn't set, and 1
+// when it is set to "". The value is then read into a buffer of that size
+// on the heap, given back before the call returns, as the file
+// procedures' copies of a path are (file.rig says why), and converted into
+// one allocation from allocator. A value another thread changed between
+// the two calls, so that the second doesn't give one unit fewer than the
+// size, is false, as is no memory for the buffer.
+//
+// The name's copy and the value's are asked for, and the name's copy given
 // back, with loc, the place of the call unless given (#caller_location,
 // spec 7.2), so an allocator that records where it is asked from sees the
 // caller's line (allocators.rig).
 get_environment :: (name: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
     if name.count == 0 || find_byte(name, "="[0]) >= 0 || find_byte(name, 0) >= 0 { return empty, false; }
-    c_name := to_c_string(name, allocator, loc);
-    if c_name == null { return empty, false; }
-    c_value := c_getenv(c_name);
-    free(c_name, allocator, loc);
-    if c_value == null { return empty, false; }
+    #if OS == OS_WINDOWS {
+        // The name's copy is given back as soon as the system has read it,
+        // before the value's is asked for, as on Linux, so an allocator
+        // sees the same calls in the same order on both systems.
+        wide_name := to_wide_string(name, allocator, loc);
+        if wide_name == null { return empty, false; }
+        size := c_get_environment_variable_w(wide_name, null, 0);
+        if size <= 1 {
+            free(wide_name, allocator, loc);
+            return empty, size == 1;
+        }
+        units := cast(*u16) alloc(cast(int) size * 2, HEAP_ALLOCATOR);
+        if units == null {
+            free(wide_name, allocator, loc);
+            return empty, false;
+        }
+        defer free(units, HEAP_ALLOCATOR);
+        got := c_get_environment_variable_w(wide_name, units, size);
+        free(wide_name, allocator, loc);
+        if got != size - 1 { return empty, false; }
+        value, converted := from_wide_string(units, cast(int) got, allocator, loc);
+        return value, converted;
+    } else {
+        c_name := to_c_string(name, allocator, loc);
+        if c_name == null { return empty, false; }
+        c_value := c_getenv(c_name);
+        free(c_name, allocator, loc);
+        if c_value == null { return empty, false; }
 
-    // C's string ends at its first zero, which is how its length is found.
-    count := 0;
-    while c_value[count] != 0 { count += 1; }
-    if count == 0 { return empty, true; }
-    data := cast(*u8) alloc(count, allocator, loc);
-    if data == null { return empty, false; }
-    copy_memory(data, c_value, count);
+        // C's string ends at its first zero, which is how its length is
+        // found.
+        count := 0;
+        while c_value[count] != 0 { count += 1; }
+        if count == 0 { return empty, true; }
+        data := cast(*u8) alloc(count, allocator, loc);
+        if data == null { return empty, false; }
+        copy_memory(data, c_value, count);
 
-    value : string;
-    value.data = data;
-    value.count = count;
-    return value, true;
+        value : string;
+        value.data = data;
+        value.count = count;
+        return value, true;
+    }
 }
 
 // Runs command through the system's shell, cmd.exe on Windows and sh on
@@ -205,19 +252,19 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
 // The program's command-line arguments (spec 7.4): the name it was started
 // by first, then each argument. On Windows they are UTF-8: a compiled
 // program's are converted by Preload from the C runtime's wide arguments,
-// an interpreted one's by interpret mode from the wide command line, so
-// unlike a variable's value above they don't depend on the ANSI code page;
-// on Linux they are the bytes the system gave, as they are. The view is
-// empty, not even a name, when the program was started with no argv[0]
-// (argc 0, which Linux before 5.18 allowed), so check its count before
-// reading the name. Each string is followed by a zero byte its count
-// doesn't include, so its data can go to C as it is. main's prologue
-// saves them, through Preload's __save_command_line, before main's first
-// line, and this gives the view it saved: the same one every call, its
-// elements and their bytes the program's for the whole run, never freed,
-// and as changeable as any global's. A #run sees the empty view, not even
-// a name: no startup runs while compiling (spec 7.8), and the compiler's
-// own arguments aren't the program's.
+// an interpreted one's by interpret mode from the wide command line, so,
+// like a variable's name and value above, they don't depend on the ANSI
+// code page; on Linux they are the bytes the system gave, as they are.
+// The view is empty, not even a name, when the program was started with
+// no argv[0] (argc 0, which Linux before 5.18 allowed), so check its count
+// before reading the name. Each string is followed by a zero byte its
+// count doesn't include, so its data can go to C as it is. main's
+// prologue saves them, through Preload's __save_command_line, before
+// main's first line, and this gives the view it saved: the same one every
+// call, its elements and their bytes the program's for the whole run,
+// never freed, and as changeable as any global's. A #run sees the empty
+// view, not even a name: no startup runs while compiling (spec 7.8), and
+// the compiler's own arguments aren't the program's.
 get_command_line_arguments :: () -> []string {
     return __command_line_arguments;
 }

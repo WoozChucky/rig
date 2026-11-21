@@ -16,15 +16,16 @@
 // talloc and tprint take theirs from the context's temporary storage
 // instead. sprint's, print_to_builder's and print_error's scratch builders,
 // the file and directory procedures' copies of a path for the system,
-// list_directory's gathered names and sorting scratch, and
-// run_command_with_output's gathered output come from the heap, and are
-// freed before the call returns; the memory debugger's records come from
-// the heap too, and stay until memory_debugger_free, and its report's
-// sorted copy of them and the scratch it gives sort are the heap's, freed
-// before it returns. sort's scratch memory and the environment's C copies
-// come from the allocator the call is given, the context's unless another
-// is. The command-line arguments are Preload's, saved before main's first
-// line, and never freed.
+// list_directory's gathered names and sorting scratch, get_environment's
+// UTF-16 buffer for the value on Windows, and run_command_with_output's
+// gathered output come from the heap, and are freed before the call
+// returns; the memory debugger's records come from the heap too, and stay
+// until memory_debugger_free, and its report's sorted copy of them and the
+// scratch it gives sort are the heap's, freed before it returns. sort's
+// scratch memory and the environment's copies for the system (UTF-16 on
+// Windows) come from the allocator the call is given, the context's unless
+// another is. The command-line arguments are Preload's, saved before
+// main's first line, and never freed.
 //
 // Basic ships with rig, so a program imports all of it through this file
 // by the module's name (spec 2.14):

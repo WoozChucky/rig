@@ -51,8 +51,8 @@ recording_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data:
 main :: () {
     recording := context;
     recording.allocator = Allocator.{recording_proc, null};
-    // Writing the file takes no allocator: its path's copy for C is the
-    // heap's, whatever the context is.
+    // Writing the file takes no allocator: its path's copy for the system
+    // is the heap's, whatever the context is.
     write_entire_file(PATH, "data");
     make_directory(DIRECTORY);
     make_directory(CHILD);
@@ -119,7 +119,7 @@ main :: () {
         s, ok = read_entire_file(PATH);
         free(s.data);
         // The runner sets RIG_BASIC_TEST, so the value is copied out after
-        // the name's copy for C is freed.
+        // the name's copy for the system is freed, on both systems.
         print("{}\n", "get_environment");
         s, ok = get_environment("RIG_BASIC_TEST");
         free(s.data);

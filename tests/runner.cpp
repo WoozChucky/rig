@@ -24,10 +24,12 @@
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
 // Before any test the runner makes .build/tests, where the tests write
 // what they make. At its start the runner sets RIG_BASIC_TEST=set by
-// bin/run-tests, and RIG_BASIC_TEST_EMPTY to "", in its own environment,
-// which every program it runs inherits, compiled and interpreted, so
-// tests/run/basic_environment reads a variable whose value it knows and one
-// set to "" (and passes only under the runner).
+// bin/run-tests, RIG_BASIC_TEST_EMPTY to "", RIG_BASIC_TEST_UTF8 to
+// 日本 café and RIG_BASIC_TEST_日本 to x in its own environment, which
+// every program it runs inherits, compiled and interpreted, so
+// tests/run/basic_environment reads a variable whose value it knows, one
+// set to "", one whose value is outside ASCII and one whose name is (and
+// passes only under the runner).
 //
 // Then every program of tests/run again, interpreted: `bin/unit-tests
 // --interpret tests/run/NAME.rig`, with the words of NAME.flags after it,
@@ -51,8 +53,9 @@
 // (default_output_test), a runtime error's order after the program's
 // output when stdout and stderr are one pipe (merged_output_test), and
 // Basic's print_error lines, and the standard error of a command run by
-// run_command_with_output, in order with the program's output so, compiled
-// and interpreted (print_error_order_test). On Linux a fourth:
+// run_command_with_output, in order with the program's output when stdout
+// and stderr are one pipe too, compiled and interpreted
+// (print_error_order_test). On Linux a fourth:
 // run_command_with_output's whole output when a signal stops its read
 // (interrupted_read_test).
 //
@@ -1538,8 +1541,8 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
         if (ran.timed_out) return string_printf(a, "it took longer than %d seconds %s", timeout, how);
         ran.out = normalise_newlines(a, ran.out);
         if (!string_eq(ran.out, expected)) {
-            return first_difference(a, interpreted ? "stdout and stderr, interpreted" : "stdout and stderr, compiled",
-                                    expected, ran.out);
+            return first_difference(a, string_cstr(a, string_printf(a, "stdout and stderr, %s", how)), expected,
+                                    ran.out);
         }
         if (ran.exit_code != 0) {
             return string_printf(a, "exit code " STR_FMT " %s, expected 0", STR_ARG(exit_code_text(a, ran.exit_code)), how);
@@ -3836,22 +3839,29 @@ int main(int argc, char **argv) {
     // Every program the runner starts inherits this.
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 #endif
-    // Two variables every program the runner starts inherits, compiled and
+    // Four variables every program the runner starts inherits, compiled and
     // interpreted, so tests/run/basic_environment can read one whose value
-    // it knows and one set to "". Each program starts with the runner's own
-    // environment: on Windows CreateProcessW is given no environment of its
-    // own, so it passes the process's, which _putenv_s changes as well as
-    // the C runtime's copy; on Linux posix_spawnp is given environ, which
-    // setenv changes. _putenv_s with "" deletes a variable instead of
-    // setting it to "", so on Windows the empty one is set in the process's
-    // environment directly, where the program's C runtime finds it, set to
-    // "".
+    // it knows, one set to "", one whose value is outside ASCII and one
+    // whose name is. Each program starts with the runner's own environment:
+    // on Windows CreateProcessW is given no environment of its own, so it
+    // passes the process's, which _putenv_s changes as well as the C
+    // runtime's copy; on Linux posix_spawnp is given environ, which setenv
+    // changes. _putenv_s with "" deletes a variable instead of setting it to
+    // "", so on Windows the empty one is set in the process's environment
+    // directly, where Basic's GetEnvironmentVariableW finds it, set to "".
+    // _putenv_s takes a name and a value in the ANSI code page, which holds
+    // no 日本, so the two outside ASCII are set there directly too, in
+    // UTF-16; on Linux they are UTF-8 bytes, as setenv takes them.
 #ifdef _WIN32
     _putenv_s("RIG_BASIC_TEST", "set by bin/run-tests");
     SetEnvironmentVariableW(L"RIG_BASIC_TEST_EMPTY", L"");
+    SetEnvironmentVariableW(L"RIG_BASIC_TEST_UTF8", L"\u65E5\u672C caf\u00E9");  // 日本 café
+    SetEnvironmentVariableW(L"RIG_BASIC_TEST_\u65E5\u672C", L"x");               // RIG_BASIC_TEST_日本
 #else
     setenv("RIG_BASIC_TEST", "set by bin/run-tests", 1);
     setenv("RIG_BASIC_TEST_EMPTY", "", 1);
+    setenv("RIG_BASIC_TEST_UTF8", "\xE6\x97\xA5\xE6\x9C\xAC caf\xC3\xA9", 1);  // 日本 café
+    setenv("RIG_BASIC_TEST_\xE6\x97\xA5\xE6\x9C\xAC", "x", 1);                 // RIG_BASIC_TEST_日本
 #endif
     Arena a = arena_make();
     Array<String> args = os_arguments(&a, argc, argv);
