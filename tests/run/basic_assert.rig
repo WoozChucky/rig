@@ -4,15 +4,28 @@
 // "assertion failed: ", and the exit status 101. The message is written as
 // it is given, a {} in it included: it is no format. A runtime error runs
 // no deferred statement (spec 6.12), so the deferred line is never
-// printed, and nothing after the failing assert runs.
+// printed, and nothing after the failing assert runs. The asserts run
+// under an allocator in the context that prints a line on every call, and
+// none is printed: a passing assert allocates nothing, and a failing one
+// builds its line on the heap, never on context.allocator.
 #import "Basic";
 
+// Prints that it was called, and gives the call to the heap.
+telling_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    print_line("the context's allocator was called");
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
 main :: () {
-    assert(true);
-    assert(1 + 1 == 2, "arithmetic");
-    print_line("the passing asserts printed nothing");
-    defer print_line("a deferred line, which no runtime error runs");
-    n := 0;
-    assert(n > 0, "n is positive, here {} isn't a format");
-    print_line("not reached");
+    telling := context;
+    telling.allocator = Allocator.{telling_proc, null};
+    push_context telling {
+        assert(true);
+        assert(1 + 1 == 2, "arithmetic");
+        print_line("the passing asserts printed nothing");
+        defer print_line("a deferred line, which no runtime error runs");
+        n := 0;
+        assert(n > 0, "n is positive, here {} isn't a format");
+        print_line("not reached");
+    }
 }

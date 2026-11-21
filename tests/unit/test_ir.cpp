@@ -4791,6 +4791,24 @@ TEST(a_runtime_error_call_is_a_panic) {
     arena_free(&a);
 }
 
+TEST(an_ordinary_runtime_error_is_called) {
+    // Issue #157 (spec 10.5): only a #compiler __runtime_error is taken for
+    // the panic. One with a body, in a module's file, is an ordinary
+    // procedure, and a call of it is a call, its body run.
+    Arena a = arena_make();
+    Ir_Module *m = nullptr;
+    CHECK_STR(lower_messages(&a,
+                             "__runtime_error :: (text: string, message_start: int) { }\n"
+                             "f :: () { __runtime_error(\"x.rig:1:1: runtime error: boom\\n\", 26); }\n"
+                             "main :: () { f(); }\n",
+                             &m),
+              "");
+    String f = proc_ir(ir_print(&a, m), "f");
+    CHECK(contains(f, "call @__runtime_error"));
+    CHECK(!contains(f, "panic"));
+    arena_free(&a);
+}
+
 // Issue #147: #if in a body (spec 4.9, 10.7).
 
 TEST(an_if_directive_makes_no_scope) {
