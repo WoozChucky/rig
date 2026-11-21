@@ -496,17 +496,17 @@ static Array<String> imported_dlls(Arena *a, String program) {
 }
 
 // Issue #152's program for Windows' arguments: it exits with 10 unless it
-// has seven, its name and six more; with N unless the N-th is the N-th of
+// has eight, its name and seven more; with N unless the N-th is the N-th of
 // `expected`; with 20 + N unless a zero follows it. The strings hold UTF-8's
 // raw bytes, as Rig has no \x escape.
 static const char WIDE_ARGUMENTS[] =
     "exit :: (status: s32) #foreign libc;\n"
     "main :: () {\n"
     "    args := __command_line_arguments;\n"
-    "    if args.count != 7 { exit(10); }\n"
+    "    if args.count != 8 { exit(10); }\n"
     "    expected := string.[\"\", \"a\xEF\xBF\xBDz\", \"\xEF\xBF\xBD\", \"\", \"W\xC3\xB6rld\", "
-    "\"\xE6\x97\xA5\xE6\x9C\xAC\", \"x\\\"y\"];\n"
-    "    for 1..6 {\n"
+    "\"\xE6\x97\xA5\xE6\x9C\xAC\", \"x\\\"y\", \"*\"];\n"
+    "    for 1..7 {\n"
     "        if args[it] != expected[it] { exit(cast(s32) it); }\n"
     "        if args[it].data[args[it].count] != 0 { exit(cast(s32) (20 + it)); }\n"
     "    }\n"
@@ -519,9 +519,11 @@ TEST(windows_arguments_reach_main_in_utf8) {
     // in its place, converted to UTF-8. An unpaired surrogate,
     // which no UTF-8 holds, becomes U+FFFD, EF BF BD, the rest of its
     // argument kept; an empty argument stays one, and \" inside quotes is
-    // a quote, both split as the C runtime splits them. The command line
-    // is UTF-16, given to CreateProcessW as it is, so the surrogates reach
-    // the program.
+    // a quote, both split as the C runtime splits them; and *, unquoted,
+    // stays *, no wildcard expanded, as in the narrow argv (the test runs
+    // in a directory with files, which an expanding split would list, so
+    // the count would be wrong). The command line is UTF-16, given to
+    // CreateProcessW as it is, so the surrogates reach the program.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
     String program = link_module(&a, m, "wide-arguments-test");
@@ -531,7 +533,7 @@ TEST(windows_arguments_reach_main_in_utf8) {
         for (wchar_t *c = wide_path; *c; c++) {
             if (*c == L'/') *c = L'\\';
         }
-        const wchar_t *arguments = L"\" a\xD800z \xDC00 \"\" W\x00F6rld \x65E5\x672C \"x\\\"y\"";
+        const wchar_t *arguments = L"\" a\xD800z \xDC00 \"\" W\x00F6rld \x65E5\x672C \"x\\\"y\" *";
         s64 length = (s64)(1 + wcslen(wide_path) + wcslen(arguments));
         wchar_t *line = arena_new_array<wchar_t>(&a, length + 1);
         wcscpy(line, L"\"");

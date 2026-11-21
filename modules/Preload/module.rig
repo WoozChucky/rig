@@ -247,8 +247,9 @@ __runtime_init :: () #c_call {
 
 // The program's command-line arguments (spec 7.4, 10.5): its name as it was
 // started first, then each argument, each a string over the bytes of one of
-// C's argv strings, so a zero byte its count doesn't include follows it.
-// main's prologue saves them, through __save_command_line, before main's
+// C's argv strings (on Windows, in a compiled program, over Preload's own
+// UTF-8 copy of the C runtime's wide ones: __save_command_line), so a zero
+// byte its count doesn't include follows it. main's prologue saves them, through __save_command_line, before main's
 // first line; until then, and in the compile-time world, where no startup
 // runs (spec 7.8), this is the empty view. Programs read it through Basic's
 // get_command_line_arguments. Neither the elements nor the bytes are ever
@@ -277,17 +278,20 @@ __command_line_arguments : []string;
 // say so (spec 10.4). A null argv keeps what was saved: a Rig call of main
 // passes 0 and null. An argc of 0 or less saves the empty view (Linux
 // before 5.18 let a program be started with no argv[0], and a hand call
-// may pass 0). Otherwise the elements come from one __malloc, the i-th
+// may pass 0), except on Windows when argv is the C runtime's own (below).
+// Otherwise the elements come from one __malloc, the i-th
 // viewing argv[i]'s bytes up to its zero, which stay where C put them;
 // when __malloc gives null, what was saved stays.
 //
 // On Windows the C runtime's argv isn't UTF-8: the C runtime converts the
 // command line, which Windows keeps in UTF-16, to the ANSI code page, so
 // Wörld's ö is one byte (F6 in code page 1252) and 日本 is ??, lost. So
-// when argv is the C runtime's own, __argv, which only a compiled main's
-// prologue passes, the arguments are the C runtime's wide ones instead,
-// split from the same command line by the same rules, each converted to
-// UTF-8, an unpaired surrogate becoming U+FFFD (spec 10.6). Any other argv
+// when argv is the C runtime's own, __argv, as a compiled main's prologue
+// passes it, the arguments are the C runtime's wide ones instead, as many
+// as the C runtime's own count says, split from the same command line by
+// the same rules, each converted to UTF-8, an unpaired surrogate becoming
+// U+FFFD (spec 10.6). A hand call that passes __argv gets the same, the
+// argc it gives unused. Any other argv
 // is saved as given: one a program or a #run makes by hand, and interpret
 // mode's, which are UTF-8 already and never __argv (an interpreted
 // program's __p___argv is ucrtbase.dll's own, whose __argv is null). When
