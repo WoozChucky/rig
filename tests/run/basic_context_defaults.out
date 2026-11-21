@@ -17,6 +17,7 @@ to_upper_copy true
 to_lower_copy true
 path_join true
 read_entire_file true
+list_directory true
 get_environment true
 run_command true
 run_command_with_output true

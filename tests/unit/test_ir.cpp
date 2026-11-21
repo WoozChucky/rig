@@ -4738,11 +4738,10 @@ TEST(a_runtime_error_call_is_a_panic) {
     // Issue #157 (spec 8.1, 10.5): Preload's __runtime_error is the one
     // #compiler procedure the program's own executable may call, which
     // lowering makes the panic a failing check ends in, the string's bytes
-    // its text (a count below 0 taken as 0) and the second argument its
-    // prefix's length: rig build's lowering says nothing of it, and
-    // nothing calls a procedure. The
-    // panic has a block of its own, as a check's has, and the code after
-    // the call goes on in the other.
+    // its text (a count below 0, or null data, taken as 0) and the second
+    // argument its prefix's length: rig build's lowering says nothing of
+    // it, and nothing calls a procedure. The panic has a block of its own,
+    // as a check's has, and the code after the call goes on in the other.
     Arena a = arena_make();
     Ir_Module *m = nullptr;
     CHECK_STR(lower_messages(&a, runtime_error_program(&a, 26), &m), "");
@@ -4763,13 +4762,16 @@ TEST(a_runtime_error_call_is_a_panic) {
                  "  %8 = const i64 8\n"
                  "  %9 = ptradd %5, %8\n"
                  "  %10 = load ptr %9\n"  // its data
-                 "  %11 = const i64 0\n"  // a count below 0 taken as 0
+                 "  %11 = const i64 0\n"  // a count below 0, or null data, taken as 0
                  "  %12 = cmp slt i64 %7, %11\n"
-                 "  %13 = select i64 %12, %11, %7\n"
-                 "  %14 = const i1 1\n"
-                 "  branch %14, b1, b2\n"
+                 "  %13 = const ptr 0\n"
+                 "  %14 = cmp eq ptr %10, %13\n"
+                 "  %15 = or i1 %12, %14\n"
+                 "  %16 = select i64 %15, %11, %7\n"
+                 "  %17 = const i1 1\n"
+                 "  branch %17, b1, b2\n"
                  "b1:\n"
-                 "  panic %10, %13\n"
+                 "  panic %10, %16\n"
                  "b2:\n"
                  "  ret\n"
                  "}\n");

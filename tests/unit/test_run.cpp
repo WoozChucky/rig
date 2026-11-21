@@ -1013,6 +1013,22 @@ TEST(a_runtime_error_fails_a_run) {
     arena_free(&a);
 }
 
+TEST(a_runtime_error_with_null_data_fails_a_run) {
+    // Issue #157 (spec 8.1): a text whose data is null, a count of 5 set by
+    // hand, is taken as empty, as one whose count is below 0 is: the #run
+    // fails with no message, rather than the interpreter reading the five
+    // bytes through the null pointer.
+    Arena a = arena_make();
+    CHECK_STR(check_module_source(&a, "__runtime_error :: (text: string, message_start: int) #compiler;\n"
+                                      "g :: () -> int { t : string; t.count = 5; __runtime_error(t, 0); return 1; }\n"
+                                      "X :: #run g();\n"
+                                      "main :: () {}\n"),
+              "3:6: #run failed: runtime error: \n"
+              "    in g (test.rig:2:43)\n"
+              "    in #run (test.rig:3:6)\n");
+    arena_free(&a);
+}
+
 TEST(world_counts_its_runs_time) {
     // A world adds up the time its #runs take, for rig build's report (spec
     // 10.1): the expression run while the program checks, then the top-level

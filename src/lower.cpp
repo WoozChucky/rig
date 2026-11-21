@@ -2377,9 +2377,10 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 // a runtime check's shape (emit_runtime_check) whose condition is always
 // 1 and whose panic is the dynamic one, the bytes at %data, %count of
 // them, as __rig_bounds_failed's (ir.h), its `c` message_start, where the
-// interpreter's message starts in the text. A count below 0, which no
-// check builds but a program's own string may have, is taken as 0, so the
-// panic writes nothing rather than read before the bytes (or, while
+// interpreter's message starts in the text. A count below 0, or data that
+// is null, which no check builds but a program's own string may have
+// (`t : string; t.count = 5;`), is taken as 0, so the panic writes
+// nothing rather than read before the bytes or through null (or, while
 // compiling, ask for that much memory). The code after the call goes
 // on in the other block, which nothing reaches, as after a check that
 // always fails. All of it is at the callee's name, as a #compiler call
@@ -2397,11 +2398,14 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //                                  %10 = load ptr %9         (its data)
 //                                  %11 = const i64 0
 //                                  %12 = cmp slt i64 %7, %11
-//                                  %13 = select i64 %12, %11, %7
-//                                  %14 = const i1 1
-//                                  branch %14, fail, ok
+//                                  %13 = const ptr 0
+//                                  %14 = cmp eq ptr %10, %13
+//                                  %15 = or i1 %12, %14
+//                                  %16 = select i64 %15, %11, %7
+//                                  %17 = const i1 1
+//                                  branch %17, fail, ok
 //                                fail:
-//                                  panic %10, %13            (c: %6)
+//                                  panic %10, %16            (c: %6)
 //                                ok:
 //                                  ...
 static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> args) {
@@ -2412,7 +2416,9 @@ static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> arg
     s32 count = load_view_count(l, args[0]);
     s32 data = load_view_data(l, args[0]);
     s32 zero = emit_constant(l, IR_I64, 0);
-    count = emit_select(l, IR_I64, emit_compare(l, IR_SLT, IR_I64, count, zero), zero, count);
+    s32 negative = emit_compare(l, IR_SLT, IR_I64, count, zero);
+    s32 null = emit_compare(l, IR_EQ, IR_PTR, data, emit_constant(l, IR_PTR, 0));
+    count = emit_select(l, IR_I64, emit_binary(l, IR_OR, IR_I1, negative, null), zero, count);
     s32 fail = new_block(l);
     s32 ok = new_block(l);
     emit_branch(l, emit_constant(l, IR_I1, 1), fail, ok);
