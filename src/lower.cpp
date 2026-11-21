@@ -998,11 +998,11 @@ static bool takes_context(Lowering *l, Ast_Proc *proc) {
 
 // Whether procedure `proc`'s IR takes C's argc and argv, an i32 and a ptr
 // (spec 7.4, 10.4), which its prologue hands to Preload's
-// __save_command_line: it's main, with a body, in a program that has
-// __save_command_line. Without Preload there's nothing to save them into,
-// as there's no context, so main takes nothing (a unit test's single
-// file); nor on demand, which never declares main (Lowering's
-// save_command_line). They come before main's i32 result and after
+// __save_command_line: it's main (which the checker requires to have a
+// body), in a program that has __save_command_line. Without Preload
+// there's no __save_command_line to give them to, so main takes nothing
+// (a unit test's single file); nor on demand, which never declares main
+// (Lowering's save_command_line). They come before main's i32 result and after
 // everything else, which main has none of.
 static bool takes_command_line(Lowering *l, Ast_Proc *proc) {
     return l->save_command_line && !proc->is_foreign && !proc->is_compiler && string_eq(proc->name, str("main"));

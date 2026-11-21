@@ -1,0 +1,10 @@
+// A .args that starts with a UTF-8 byte order mark (issue #152): the test
+// runner drops it (add_args in tests/runner.cpp), so the first argument
+// is its own five bytes, not eight.
+#import "Basic";
+
+main :: () {
+    args := get_command_line_arguments();
+    print("{} arguments\n", args.count - 1);
+    for 1..args.count - 1 { print("[{}] {} bytes\n", args[it], args[it].count); }
+}

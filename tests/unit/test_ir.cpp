@@ -6185,6 +6185,10 @@ TEST(main_takes_cs_argc_and_argv) {
               "  ret %4\n"
               "}\n");
     CHECK(contains(ir, "proc @__save_command_line(i32, ptr) {\n"));
+    // Like __runtime_init, __save_command_line has no debug information.
+    String debug = ir_print_debug(&a, lower_with_preload(&a, "main :: () { }\n"));
+    String save = line_with(debug, "; source __save_command_line at ");
+    CHECK(save.count >= 15 && string_eq(string_slice(save, save.count - 15, 15), str(", no debug info")));
     arena_free(&a);
 }
 
