@@ -3,8 +3,8 @@
 // given, and its status; a command that writes only to standard error,
 // whose line is the program's own standard error, not captured; a failing
 // command; an empty one; a file of more than 4096 bytes written out by the
-// shell, which comes back byte for byte, read in several pieces with no
-// line ending changed; and the commands refused before they run (a zero
+// shell, which comes back byte for byte, read in several pieces with its
+// \r\n line endings unchanged; and the commands refused before they run (a zero
 // byte, no memory for the command's C copy), and one whose output finds no
 // memory. cmd.exe and sh differ in their line endings and their statuses,
 // so only what both agree on is printed: an output with its line ending
@@ -118,15 +118,16 @@ main :: () {
     show_int(status);
     print_line("");
 
-    // A file of 9019 bytes, more than one read of 4096 takes, written out
+    // A file of 9022 bytes, more than one read of 4096 takes, written out
     // by the shell's own command, comes back as its bytes, every one, each
-    // \n a \n: the output is read in binary mode on Windows. cmd.exe's
-    // type needs the path with \, and sh's cat takes it with /.
+    // \r\n still a \r\n: the output is read in binary mode on Windows,
+    // where text mode would turn each into \n. cmd.exe's type needs the
+    // path with \, and sh's cat takes it with /.
     contents : String_Builder;
     builder_init(*contents, HEAP_ALLOCATOR);
-    append_string(*contents, "line one\nline two\n");
+    append_string(*contents, "line one\r\nline two\r\n");
     for i: 0..8999 { append_byte(*contents, "x"[0]); }
-    append_byte(*contents, "\n"[0]);
+    append_string(*contents, "\r\n");
     text : string;
     text.data = contents.data;
     text.count = contents.count;

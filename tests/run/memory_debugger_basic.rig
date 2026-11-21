@@ -84,6 +84,8 @@ main :: () {
         value, found := get_environment("RIG_BASIC_TEST");
         free(value.data);
         run_command("exit 0");
+        output, status := run_command_with_output("echo x");
+        free(output.data);
 
         unsorted := int.[5, 3, 9, 1, 7, 2, 8];
         sort(unsorted.data, unsorted.count, size_of(int), less_int);

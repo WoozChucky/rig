@@ -19,5 +19,6 @@ path_join true
 read_entire_file true
 get_environment true
 run_command true
+run_command_with_output true
 sort true
 from_c_call true

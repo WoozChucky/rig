@@ -60,60 +60,65 @@ get_environment
 run_command
     ALLOCATE 127:9
     FREE 127:9
-list_directory
+run_command_with_output
     ALLOCATE 132:21
+    ALLOCATE 132:21
+    FREE 132:21
     FREE 133:9
+list_directory
+    ALLOCATE 138:21
+    FREE 139:9
 sort
-    ALLOCATE 138:9
-    FREE 138:9
+    ALLOCATE 144:9
+    FREE 144:9
 table_set
-    ALLOCATE 148:9
-    ALLOCATE 148:9
+    ALLOCATE 154:9
+    ALLOCATE 154:9
 table_set
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
-    ALLOCATE 151:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
+    ALLOCATE 157:20
 table_set
-    ALLOCATE 153:9
-    ALLOCATE 153:9
-    FREE 153:9
+    ALLOCATE 159:9
+    ALLOCATE 159:9
+    FREE 159:9
 table_remove
-    FREE 155:9
+    FREE 161:9
 table_free
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-    FREE 157:9
-int_table_set
-    ALLOCATE 161:21
-int_table_set
-    ALLOCATE 163:9
     FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+    FREE 163:9
+int_table_set
+    ALLOCATE 167:21
+int_table_set
+    ALLOCATE 169:9
+    FREE 169:9
 int_table_free
-    FREE 165:9
-print_to_builder
-    ALLOCATE 170:9
     FREE 171:9
+print_to_builder
+    ALLOCATE 176:9
+    FREE 177:9
 sprint
-    ALLOCATE 174:13
-    FREE 175:9
+    ALLOCATE 180:13
+    FREE 181:9
 sprint through a wrapper
-    ALLOCATE 188:12
-    FREE 178:9
+    ALLOCATE 194:12
+    FREE 184:9

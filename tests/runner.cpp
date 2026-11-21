@@ -53,7 +53,8 @@
 // Then three fixed cases: rig build without -o from another directory
 // (default_output_test), a runtime error's order after the program's
 // output when stdout and stderr are one pipe (merged_output_test), and
-// Basic's print_error lines in order with the program's output so, compiled
+// Basic's print_error lines, and the standard error of a command run by
+// run_command_with_output, in order with the program's output so, compiled
 // and interpreted (print_error_order_test).
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
@@ -1482,12 +1483,14 @@ static String merged_output_test(Arena *a, String rig) {
 }
 
 // Basic's print_error and print_error_string between lines printed to
-// standard output, with stdout and stderr in one pipe: each line must come
-// out where it was written. stdout is a pipe, so C buffers it, and Basic
-// flushes C's streams before it writes to standard error, as the runtime
-// does before a runtime error. The program is written here, in
-// .build/tests, and run compiled and then interpreted (bin/unit-tests
-// --interpret), each exiting 0 with the same four lines.
+// standard output, then a command run by run_command_with_output that
+// writes to standard error, with stdout and stderr in one pipe: each line
+// must come out where it was written. stdout is a pipe, so C buffers it,
+// and Basic flushes C's streams before it writes to standard error, as the
+// runtime does before a runtime error, and before it runs the command. The
+// program is written here, in .build/tests, and run compiled and then
+// interpreted (bin/unit-tests --interpret), each exiting 0 with the same
+// six lines.
 static String print_error_order_test(Arena *a, String rig, String unit_tests) {
     String name = str("print_error_order");
     String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
@@ -1497,9 +1500,11 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
                       "    print_error(\"err {}\\n\", 1);\n"
                       "    print_line(\"out 2\");\n"
                       "    print_error_string(\"err 2\\n\");\n"
+                      "    print_line(\"out 3\");\n"
+                      "    run_command_with_output(\"1>&2 echo err 3\", HEAP_ALLOCATOR);\n"
                       "}\n");
     if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
-    String expected = str("out 1\nerr 1\nout 2\nerr 2\n");
+    String expected = str("out 1\nerr 1\nout 2\nerr 2\nout 3\nerr 3\n");
 
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
     remove(string_cstr(a, program));

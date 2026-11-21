@@ -160,6 +160,11 @@ main :: () {
         before = count;
         run_command("exit 0");
         grew("run_command", before);
+        before = count;
+        status : int;
+        s, status = run_command_with_output("echo x");
+        grew("run_command_with_output", before);
+        free(s.data);
         // More than SORT_INSERTION_MAX, so the sort asks for its scratch
         // memory.
         values := int.[6, 5, 4, 3, 2, 1];
