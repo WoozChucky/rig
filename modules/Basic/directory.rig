@@ -17,8 +17,8 @@
 // which take a path as bytes, so a UTF-8 path names what it says, and a
 // name that isn't UTF-8, which Linux allows, is listed as its bytes.
 //
-// Every procedure refuses, with nothing allocated and no system call, an
-// empty path, a path with a zero byte, which would reach the system cut
+// Every procedure refuses, with nothing allocated and nothing asked of the
+// file system, an empty path, a path with a zero byte, which would reach the system cut
 // short, another directory's name, and on Windows a path that isn't valid
 // UTF-8, which would have to be changed to be converted and so would name
 // another directory too. The path's copy for the system, UTF-16 on Windows
@@ -118,7 +118,10 @@ make_directory :: (path: string) -> bool {
 // Deletes the directory at path, which must be empty, and gives whether it
 // did: false for one with entries, a file, a missing path, which the
 // systems' calls refuse themselves, and the paths every procedure here
-// refuses.
+// refuses. Given a symbolic link (or, on Windows, a junction) to a
+// directory, Windows deletes the link itself, whatever its target holds,
+// and leaves the target as it is; Linux's rmdir doesn't follow the link
+// and gives false.
 delete_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
     #if OS == OS_WINDOWS {

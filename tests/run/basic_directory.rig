@@ -2,11 +2,13 @@
 // which the test makes and deletes: a directory made, found and made
 // again, one whose parent is missing, a file in the way, children named in
 // ASCII and outside it (café, 日本, which Windows reaches through its wide
-// calls), found and listed by those names, a listing sorted by bytes in
-// one allocation with a zero after each name, a trailing separator, on
-// Windows a drive letter and a colon alone, an empty directory, the paths
-// every procedure refuses (empty, with a zero byte, and on Windows not
-// valid UTF-8), an allocator with no memory, and deleting, which refuses a
+// calls), found and listed by those names, and on Windows found on disk by
+// their UTF-16 names built by hand, a listing sorted by bytes in one
+// allocation with a zero after each name, a trailing separator, on Windows
+// a drive letter and a colon alone, an empty directory, the paths every
+// procedure refuses (empty, with a zero byte, and on Windows not valid
+// UTF-8, which Linux makes and lists as its byte), an allocator with no
+// memory, and deleting, which refuses a
 // directory with entries and a file. What a stopped run left is deleted
 // first. Everything printed is the same on both systems. The directory
 // isn't .build/tests/basic_directory, which on Linux is this test's own
@@ -77,6 +79,22 @@ counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
+#if OS == OS_WINDOWS {
+    // Whether GetFileAttributesW finds a directory at ROOT, a separator and
+    // tail, UTF-16 built by hand rather than by Basic's conversion, so that
+    // only a directory whose name on disk is tail's units is found: a name
+    // made in the ANSI code page from the UTF-8 bytes, cafÃ© for café, isn't.
+    on_disk :: (tail: []u16) -> bool {
+        wide : [64]u16;
+        for i: 0..ROOT.count - 1 { wide[i] = cast(u16) ROOT[i]; }
+        wide[ROOT.count] = 47; // '/'
+        for i: 0..tail.count - 1 { wide[ROOT.count + 1 + i] = tail[i]; }
+        wide[ROOT.count + 1 + tail.count] = 0;
+        attributes := c_get_file_attributes_w(*wide[0]);
+        return attributes != C_INVALID_FILE_ATTRIBUTES && (attributes & C_FILE_ATTRIBUTE_DIRECTORY) != 0;
+    }
+}
+
 // Gives no memory, as an allocator that has run out would.
 failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
@@ -101,8 +119,8 @@ main :: () {
     failing := Allocator.{failing_allocator_proc, null};
 
     // A name of one byte, 255, which is never valid UTF-8: Linux takes a
-    // name as plain bytes and makes it, Windows refuses it before calling
-    // the system. A string literal can't hold the byte, so the path is
+    // name as plain bytes and makes it, Windows refuses it before asking
+    // the file system. A string literal can't hold the byte, so the path is
     // joined from a view of it.
     byte : [1]u8;
     byte[0] = 255;
@@ -151,6 +169,27 @@ main :: () {
     print_string("\nfound:");
     show_bool(is_directory(CAFE));
     show_bool(is_directory(NIHON));
+    // On Windows the names on disk are café's and 日本's own UTF-16 units,
+    // found without Basic's conversion; Linux takes the bytes as they are,
+    // and prints the same line.
+    print_string("\non disk:");
+    #if OS == OS_WINDOWS {
+        cafe : [4]u16;
+        cafe[0] = 99;  // 'c'
+        cafe[1] = 97;  // 'a'
+        cafe[2] = 102; // 'f'
+        cafe[3] = 233; // U+00E9, é
+        nihon : [2]u16;
+        nihon[0] = 26085; // U+65E5, 日
+        nihon[1] = 26412; // U+672C, 本
+        cafe_view : []u16 = cafe;
+        nihon_view : []u16 = nihon;
+        show_bool(on_disk(cafe_view));
+        show_bool(on_disk(nihon_view));
+    } else {
+        show_bool(is_directory(CAFE));
+        show_bool(is_directory(NIHON));
+    }
     // Nothing is made over the file, which is still a file.
     print_string("\na file:");
     show_bool(is_directory(FILE));
@@ -265,14 +304,31 @@ main :: () {
     names, ok = list_directory(ROOT, failing);
     show_refused("list no memory", names, ok, *counter);
 
-    // The same line on both systems: Windows refuses the name, Linux makes
-    // it and deletes it.
+    // The same line on both systems. Windows refuses the name everywhere,
+    // listing it with nothing allocated. Linux makes it, finds it, lists
+    // the empty directory with nothing allocated, lists it in ROOT as its
+    // one byte, and deletes it.
     invalid := false;
     #if OS == OS_WINDOWS {
-        invalid = !make_directory(bad);
+        invalid = !make_directory(bad) && !is_directory(bad) && !delete_directory(bad);
+        names, ok = list_directory(bad, counting);
+        invalid = invalid && !ok && names.count == 0 && names.data == null;
     } else {
-        invalid = make_directory(bad) && delete_directory(bad);
+        invalid = make_directory(bad) && is_directory(bad);
+        names, ok = list_directory(bad, counting);
+        invalid = invalid && ok && names.count == 0 && names.data == null;
+        names, ok = list_directory(ROOT, counting);
+        listed := false;
+        for names {
+            if it.count == 1 && it.data[0] == 255 { listed = true; }
+        }
+        free(names.data, counting);
+        invalid = invalid && ok && listed && counter.allocations == 1 && counter.frees == 1;
+        counter.allocations = 0;
+        counter.frees = 0;
+        invalid = invalid && delete_directory(bad);
     }
+    invalid = invalid && counter.allocations == 0 && counter.frees == 0;
     print_string("invalid UTF-8:");
     show_bool(invalid);
     print_string("\n");

@@ -260,8 +260,8 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // so compiled and interpreted programs call the same functions.
 
     // WIN32_FIND_DATAW, an entry FindFirstFileW and FindNextFileW fill:
-    // 592 bytes, aligned to 4. Basic reads its attributes and its name, up
-    // to 259 UTF-16 units and a zero; times holds its three FILETIMEs
+    // 592 bytes, aligned to 4. Basic reads only its name, up to 259 UTF-16
+    // units and a zero; times holds its three FILETIMEs
     // (made, last read, last written), each two u32s.
     C_Find_Data :: struct {
         attributes: u32;

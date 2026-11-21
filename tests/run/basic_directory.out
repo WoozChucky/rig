@@ -4,6 +4,7 @@ no parent: false
 refused: false false false false
 children: true true true true true true
 found: true true
+on disk: true true
 a file: false false false true
 listed: true 6 [Z] [a] [b] [café] [m.txt] [日本]
 zero after each: true
