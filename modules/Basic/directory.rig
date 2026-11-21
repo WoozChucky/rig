@@ -73,7 +73,10 @@
 
 // Whether there is a directory at path: false for a file, a missing path,
 // one that can't be reached, and the paths every procedure here refuses. A
-// symbolic link to a directory is one, on both systems.
+// symbolic link to a directory is one, on both systems. On Windows a
+// directory's link or junction whose target is gone is one too, since the
+// directory attribute is the link's own, though it can't be listed; on
+// Linux stat follows the link and finds nothing, so it isn't.
 is_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
     #if OS == OS_WINDOWS {
@@ -153,12 +156,14 @@ delete_directory :: (path: string) -> bool {
 // (builder.rig).
 //
 // On Windows the listing is FindFirstFileW's of the path and \*, or of *
-// when the path ends with a separator; a drive's root with nothing in it
-// has no . or .. to find, and FindFirstFileW's C_ERROR_FILE_NOT_FOUND
-// there is an empty listing. Each name, at most 259 UTF-16 units, is at
-// most 777 bytes of UTF-8, and is converted into a buffer on the stack. On
-// Linux errno is set to 0 before each readdir, since its null is both the
-// end and an error, and only errno tells them apart.
+// when the path ends with a separator or is a drive letter and a colon
+// alone (C:, that drive's current directory); a drive's root with nothing
+// in it has no . or .. to find, and FindFirstFileW's
+// C_ERROR_FILE_NOT_FOUND there is an empty listing. Each name, at most 259
+// UTF-16 units, is at most 777 bytes of UTF-8, and is converted into a
+// buffer on the stack. On Linux errno is set to 0 before each readdir,
+// since its null is both the end and an error, and only errno tells them
+// apart.
 list_directory :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> []string, bool {
     empty : []string;
     if path.count <= 0 || find_byte(path, 0) >= 0 { return empty, false; }
@@ -175,14 +180,19 @@ list_directory :: (path: string, allocator: Allocator = context.allocator, loc: 
         if wide == null { return empty, false; }
         defer free(wide, HEAP_ALLOCATOR);
         // The pattern: the path's units, \ unless the path ends with a
-        // separator, *, and the zero, in room for all of them.
+        // separator or is a drive letter and a colon alone, *, and the
+        // zero, in room for all of them. C: names that drive's current
+        // directory, as the other procedures here take it, and so does C:*,
+        // where C:\* would be the drive's root.
         units := 0;
         while wide[units] != 0 { units += 1; }
         pattern := cast(*u16) alloc((units + 3) * 2, HEAP_ALLOCATOR);
         if pattern == null { return empty, false; }
         defer free(pattern, HEAP_ALLOCATOR);
         copy_memory(pattern, wide, units * 2);
-        if !is_path_separator(path[path.count - 1]) {
+        COLON :: 58;
+        drive_alone := path.count == 2 && path[1] == COLON;
+        if !is_path_separator(path[path.count - 1]) && !drive_alone {
             pattern[units] = BACKSLASH;
             units += 1;
         }

@@ -1,27 +1,38 @@
 // Basic's directories (issue #157), under .build/tests/basic_directory_dir,
 // which the test makes and deletes: a directory made, found and made
-// again, one whose parent is missing, children named in ASCII and outside
-// it (café, 日本, which Windows reaches through its wide calls), a listing
-// sorted by bytes in one allocation with a zero after each name, a
-// trailing separator, an empty directory, the paths every procedure
-// refuses (empty, with a zero byte, and on Windows not valid UTF-8), an
-// allocator with no memory, and deleting, which refuses a directory with
-// entries and a file. What a stopped run left is deleted first. Everything
-// printed is the same on both systems. The directory isn't
-// .build/tests/basic_directory, which on Linux is this test's own program,
-// built there by the runner.
+// again, one whose parent is missing, a file in the way, children named in
+// ASCII and outside it (café, 日本, which Windows reaches through its wide
+// calls), found and listed by those names, a listing sorted by bytes in
+// one allocation with a zero after each name, a trailing separator, on
+// Windows a drive letter and a colon alone, an empty directory, the paths
+// every procedure refuses (empty, with a zero byte, and on Windows not
+// valid UTF-8), an allocator with no memory, and deleting, which refuses a
+// directory with entries and a file. What a stopped run left is deleted
+// first. Everything printed is the same on both systems. The directory
+// isn't .build/tests/basic_directory, which on Linux is this test's own
+// program, built there by the runner.
 #import "Basic";
 
 ROOT :: ".build/tests/basic_directory_dir";
 ROOT_SLASH :: ".build/tests/basic_directory_dir/";
 A :: ".build/tests/basic_directory_dir/a";
+A2 :: ".build/tests/basic_directory_dir/a2";
 B :: ".build/tests/basic_directory_dir/b";
 Z :: ".build/tests/basic_directory_dir/Z";
 CAFE :: ".build/tests/basic_directory_dir/café";
 NIHON :: ".build/tests/basic_directory_dir/日本";
+NIHON_CAFE :: ".build/tests/basic_directory_dir/日本/café";
 FILE :: ".build/tests/basic_directory_dir/m.txt";
 MISSING :: ".build/tests/basic_directory_dir/missing";
 NO_PARENT :: ".build/tests/basic_directory_dir/x/y";
+
+// Paths with a zero byte after a real directory's path and a separator, so
+// that one cut short at the zero, as the system would see it, would name
+// that directory (ROOT, an empty A) or one that can be made (A2): only the
+// procedures' own refusal keeps the answer false.
+ROOT_ZERO :: ".build/tests/basic_directory_dir/\0x";
+A_ZERO :: ".build/tests/basic_directory_dir/a/\0x";
+A2_ZERO :: ".build/tests/basic_directory_dir/a2\0x";
 
 // Prints s between brackets, so an empty string shows as [].
 show_text :: (s: string) {
@@ -102,10 +113,12 @@ main :: () {
     // What a stopped run may have left, deleted children first: each call
     // is false when there is nothing to delete.
     delete_file(FILE);
+    delete_directory(NIHON_CAFE);
     delete_directory(NIHON);
     delete_directory(CAFE);
     delete_directory(B);
     delete_directory(A);
+    delete_directory(A2);
     delete_directory(Z);
     delete_directory(bad);
     delete_directory(ROOT);
@@ -120,7 +133,9 @@ main :: () {
     show_bool(make_directory(NO_PARENT));
     print_string("\nrefused:");
     show_bool(is_directory(""));
-    show_bool(make_directory("a\0b"));
+    show_bool(is_directory(ROOT_ZERO));
+    show_bool(make_directory(A2_ZERO));
+    show_bool(is_directory(A2));
     print_string("\n");
 
     // Made in an order that isn't the listing's, which is by bytes. The
@@ -133,8 +148,15 @@ main :: () {
     show_bool(make_directory(NIHON));
     show_bool(make_directory(Z));
     show_bool(write_entire_file(FILE, "m"));
+    print_string("\nfound:");
+    show_bool(is_directory(CAFE));
+    show_bool(is_directory(NIHON));
+    // Nothing is made over the file, which is still a file.
     print_string("\na file:");
     show_bool(is_directory(FILE));
+    show_bool(make_directory(FILE));
+    show_bool(is_directory(FILE));
+    show_bool(file_exists(FILE));
     print_string("\n");
 
     // Every name but . and .., sorted by bytes: Z (90) before a (97), and
@@ -169,9 +191,66 @@ main :: () {
     counter.allocations = 0;
     counter.frees = 0;
 
+    // A directory whose own path is outside ASCII is listed too: on Windows
+    // its pattern is made from the converted path.
+    print_string("listed 日本:");
+    show_bool(make_directory(NIHON_CAFE));
+    names, ok = list_directory(NIHON, counting);
+    show_bool(ok);
+    show_int(names.count);
+    for names {
+        print_string(" ");
+        show_text(it);
+    }
+    print_string("\n");
+    free(names.data, counting);
+    counter.allocations = 0;
+    counter.frees = 0;
+
+    // On Windows a drive letter and a colon alone name that drive's current
+    // directory, as is_directory takes them, so list_directory lists the
+    // same names for them as for ".", not the drive's root. The drive is
+    // the one where ROOT is found after its letter and colon, the current
+    // directory's. Linux has no drives, and prints the same line.
+    same := true;
+    #if OS == OS_WINDOWS {
+        same = false;
+        drive : [2]u8;
+        drive[1] = 58; // ':'
+        drive_view : []u8 = drive;
+        for letter: 65..90 { // 'A' to 'Z'
+            drive[0] = cast(u8) letter;
+            on_drive := sprint("{}{}", cast(string) drive_view, ROOT);
+            found := is_directory(on_drive);
+            free(on_drive.data);
+            if found {
+                here, here_ok := list_directory(".");
+                there, there_ok := list_directory(cast(string) drive_view);
+                same = here_ok && there_ok && here.count == there.count;
+                if same {
+                    for i: 0..here.count - 1 {
+                        if here[i] != there[i] { same = false; }
+                    }
+                }
+                free(here.data);
+                free(there.data);
+                break;
+            }
+        }
+    }
+    print_string("drive's current directory:");
+    show_bool(same);
+    print_string("\n");
+
     // An empty directory is true, with nothing allocated.
     names, ok = list_directory(A, counting);
     show_refused("empty", names, ok, *counter);
+
+    // A zero byte after the empty directory's path isn't deleted as it.
+    print_string("delete zero byte:");
+    show_bool(delete_directory(A_ZERO));
+    show_bool(is_directory(A));
+    print_string("\n");
 
     // Refused, with nothing allocated: a file, a missing path, an empty
     // path, a zero byte, and an allocator with no memory for the listing.
@@ -181,7 +260,7 @@ main :: () {
     show_refused("list missing", names, ok, *counter);
     names, ok = list_directory("", counting);
     show_refused("list empty path", names, ok, *counter);
-    names, ok = list_directory("a\0b", counting);
+    names, ok = list_directory(ROOT_ZERO, counting);
     show_refused("list zero byte", names, ok, *counter);
     names, ok = list_directory(ROOT, failing);
     show_refused("list no memory", names, ok, *counter);
@@ -206,6 +285,7 @@ main :: () {
     show_bool(delete_directory(A));
     show_bool(delete_directory(B));
     show_bool(delete_directory(CAFE));
+    show_bool(delete_directory(NIHON_CAFE));
     show_bool(delete_directory(NIHON));
     show_bool(delete_directory(Z));
     show_bool(delete_file(FILE));

@@ -20,6 +20,12 @@
 // makes before any test; written before the push and deleted at the end.
 PATH :: ".build/tests/basic_caller_locations.txt";
 
+// The directory list_directory lists, with one directory in it, made
+// before the push and deleted at the end; making and deleting take no
+// allocator, their copies of a path being the heap's.
+DIRECTORY :: ".build/tests/basic_caller_locations_dir";
+CHILD :: ".build/tests/basic_caller_locations_dir/child";
+
 // The heap, printing the mode it is asked for and the place in
 // context.allocation_location, indented under the name of the procedure
 // called. Printing to standard output takes no allocator, so it doesn't
@@ -48,6 +54,8 @@ main :: () {
     // Writing the file takes no allocator: its path's copy for C is the
     // heap's, whatever the context is.
     write_entire_file(PATH, "data");
+    make_directory(DIRECTORY);
+    make_directory(CHILD);
     push_context recording {
         print("{}\n", "alloc");
         p := alloc(8);
@@ -117,6 +125,12 @@ main :: () {
         free(s.data);
         print("{}\n", "run_command");
         run_command("exit 0");
+        // Its gathering builder and its sort's scratch are the heap's, so
+        // only the listing is the allocator's.
+        print("{}\n", "list_directory");
+        names : []string;
+        names, ok = list_directory(DIRECTORY);
+        free(names.data);
         // More than SORT_INSERTION_MAX, so the sort asks for its scratch
         // memory.
         values := int.[7, 6, 5, 4, 3, 2, 1];
@@ -164,6 +178,8 @@ main :: () {
         free(s.data);
     }
     delete_file(PATH);
+    delete_directory(CHILD);
+    delete_directory(DIRECTORY);
 }
 
 // A procedure of the program's own that takes ..Any can't pass a place on
