@@ -1,14 +1,14 @@
 // Basic's environment: the value of a variable of the environment the
-// program was started with, and a command run through the system's shell,
-// both through C's stdlib (libc.rig), and the command line it was started
-// with, which Preload saves before main's first line.
+// program was started with and a command run through the system's shell,
+// each through C's stdlib (libc.rig), and the command line the program
+// was started with, which Preload saves before main's first line.
 //
 // A variable's name and a command go to C as copies ended by a zero
 // (to_c_string), which C reads up to its first zero. So a name or a
 // command with a zero byte in it would reach C cut short, another name or
-// another command, and both procedures here refuse it without calling C.
-// The copies come from the allocator each procedure is given, the
-// context's unless another is, and go back to it as soon as the C call
+// another command, and get_environment and run_command refuse it without
+// calling C. The copies come from the allocator each procedure is given,
+// the context's unless another is, and go back to it as soon as the C call
 // that takes them returns.
 //
 // The systems differ in what they hand C, and Basic doesn't hide it:
@@ -22,7 +22,7 @@
 // in the system's ANSI code page rather than as UTF-8, so one with a
 // character outside ASCII means something else there. Windows'
 // wide-character calls, _wgetenv and _wsystem, would take them right, but
-// only Windows has them, which waits on conditional compilation.
+// Basic doesn't call them yet.
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";

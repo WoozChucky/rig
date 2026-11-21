@@ -20,8 +20,8 @@
 // C17's own call, thrd_sleep (<threads.h>, optional), is on both systems,
 // but MSVC's <threads.h> defines it only inline, over the Visual C++
 // runtime's _thrd_sleep64, which the compiler doesn't link it to and the
-// interpreter doesn't find; and a system's own (Sleep, nanosleep) waits on
-// conditional compilation.
+// interpreter doesn't find; and Basic doesn't call either system's own
+// (Sleep, nanosleep) yet.
 #load "libc.rig";
 #load "numbers.rig";
 

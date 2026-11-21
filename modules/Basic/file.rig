@@ -28,8 +28,8 @@
 // Windows' reads it in the system's ANSI code page rather than as UTF-8,
 // so a path with a character outside ASCII names another file there (with
 // code page 1252, "café.txt" makes cafÃ©.txt). Windows' wide-character
-// calls, _wfopen and _wremove, would take it right, but only Windows has
-// them, which waits on conditional compilation.
+// calls, _wfopen and _wremove, would take it right, but Basic doesn't
+// call them yet.
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";

@@ -2379,6 +2379,9 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //   body but a #c_call one or main, takes_context; through a value, one of
 //   a type that isn't #c_call, type_takes_context), the caller's current
 //   one, its address loaded from the caller's slot (Lowering.context).
+// - Then, in a direct call of main (spec 7.4), which takes no context, 0
+//   and null for C's argc and argv (takes_command_line): its prologue hands
+//   them to __save_command_line, which keeps what was saved before.
 // - Then the arguments, in order, each converted to its parameter's type;
 //   an aggregate one is copied into a temporary as soon as it's worked out,
 //   and the temporary's address passed. So the callee's parameter is the
