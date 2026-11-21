@@ -172,9 +172,10 @@
 //   a local of the block's scope at the keyword (lower.cpp's
 //   lower_push_context). A #c_call procedure has one only inside its pushes.
 //   Each is a *Context, and named context, so a debugger shows it and passes
-//   it to a procedure it calls (gdb's `print twice(context, 4)`). Temporaries
-//   and hidden result pointers aren't variables here: the source has no name
-//   for them. (The backend still describes each hidden result pointer to a
+//   it to a procedure it calls (gdb's `print twice(context, 4)`). Temporaries,
+//   hidden result pointers and main's argc and argv (C's, which its prologue
+//   hands to Preload's __save_command_line) aren't variables here: the source
+//   has no name for them. (The backend still describes each hidden result pointer to a
 //   debugger, from Ir_Proc.source_results, as an artificial parameter named
 //   result$: llvm_backend.cpp's declare_variables.)
 // - Constants (spec 4.2, issue #172): every one the program declares, used

@@ -549,13 +549,18 @@ TEST(windows_a_hand_call_given_the_c_runtimes_argv_saves_all_its_arguments) {
     // __save_command_line saves as many wide arguments as the C runtime
     // counted, whatever the argc it is given. A compiled main's prologue
     // always passes __argc with __argv, so only a hand call can tell the
-    // two apart: this one passes 1, and the program exits with 10 unless
-    // all three arguments, its name and two more, were saved again, and
-    // with 11 unless the last is Wörld in UTF-8.
+    // two apart. The program first saves no arguments, so that what the
+    // prologue saved is gone (it exits with 12 if any are left), then
+    // passes 1 with __argv, and exits with 10 unless that call saved all
+    // three arguments, its name and two more, and with 11 unless the last
+    // is Wörld in UTF-8.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a,
                                       "exit :: (status: s32) #foreign libc;\n"
                                       "main :: () {\n"
+                                      "    none : [1]*u8;\n"
+                                      "    __save_command_line(0, *none[0]);\n"
+                                      "    if __command_line_arguments.count != 0 { exit(12); }\n"
                                       "    __save_command_line(1, __crt_argv().*);\n"
                                       "    if __command_line_arguments.count != 3 { exit(10); }\n"
                                       "    if __command_line_arguments[2] != \"W\xC3\xB6rld\" { exit(11); }\n"
