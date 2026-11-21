@@ -28,8 +28,13 @@
 // Windows' reads it in the system's ANSI code page rather than as UTF-8,
 // so a path with a character outside ASCII names another file there (with
 // code page 1252, "café.txt" makes cafÃ©.txt). Windows' wide-character
-// calls, _wfopen and _wremove, would take it right, but Basic doesn't
-// call them yet.
+// calls, _wfopen and _wremove, would take it right, but Basic's files
+// don't call them: interpreted, _wfopen's FILE * would be a second C
+// runtime's, which the other calls here refuse (libc.rig). Basic's
+// directories (directory.rig) do take a UTF-8 path on Windows, through
+// kernel32's wide calls, so a directory named outside the ANSI code page
+// is made and listed by its name, but a file in it, or one so named,
+// can't be opened here (issue #209 is to make files UTF-8 too).
 #load "libc.rig";
 #load "string.rig";
 #load "allocators.rig";

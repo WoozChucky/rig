@@ -14,9 +14,9 @@ BINARY :: ".build/tests/basic_file_binary.bin";
 LARGE :: ".build/tests/basic_file_large.bin";
 MISSING :: ".build/tests/basic_file_missing.txt";
 
-// An empty directory, which the runner makes before any test, since C17
-// can't make one, and a file this test makes in it, for a moment, to show
-// the directory is still there.
+// An empty directory, which the runner makes before any test, as it has
+// since before Basic had make_directory, and a file this test makes in it,
+// for a moment, to show the directory is still there.
 EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir";
 IN_EMPTY_DIRECTORY :: ".build/tests/basic_file_empty_dir/x.txt";
 

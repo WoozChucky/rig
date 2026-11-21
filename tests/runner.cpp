@@ -24,9 +24,10 @@
 // byte. .out and .err aren't normalised; .gitattributes keeps them LF.
 // Before any test the runner makes .build/tests, and in it an empty
 // directory, .build/tests/basic_file_empty_dir, which tests/run/basic_file
-// gives Basic's file procedures as a path: Basic, on C17 alone, can't make
-// one. At its start the runner sets RIG_BASIC_TEST=set by bin/run-tests,
-// and RIG_BASIC_TEST_EMPTY to "", in its own environment, which every
+// gives Basic's file procedures as a path, made here since before Basic
+// had make_directory; that test could make it itself now. At its start
+// the runner sets RIG_BASIC_TEST=set by bin/run-tests, and
+// RIG_BASIC_TEST_EMPTY to "", in its own environment, which every
 // program it runs inherits, compiled and interpreted, so
 // tests/run/basic_environment reads a variable whose value it knows and one
 // set to "" (and passes only under the runner).
