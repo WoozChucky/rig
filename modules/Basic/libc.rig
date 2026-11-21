@@ -8,30 +8,42 @@
 // Everything else in Basic is written in Rig over these and over Preload's
 // heap allocator (spec 2.14).
 //
-// Each of them links and runs on Windows (the UCRT) and Linux (glibc's libc
-// and, for <math.h>, its libm, which every program links too, spec 10.6),
-// compiled and interpreted, with one declaration that serves both: where
-// C's types differ (fseek's long offset, fpos_t, struct timespec), the
-// declaration and its comment say how Basic stays within what both agree
-// on. On Windows the interpreter takes them from the compiler's own copy of
-// the C library, so a FILE * that c_fopen gives is one the other calls
-// accept. Some C functions that would seem to fit are left out on purpose:
+// The ones before the per-system part at the end of this file each link
+// and run on Windows (the UCRT) and Linux (glibc's libc and, for <math.h>,
+// its libm, which every program links too, spec 10.6), compiled and
+// interpreted, with one declaration that serves both: where C's types
+// differ (fseek's long offset, fpos_t, struct timespec), the declaration
+// and its comment say how Basic stays within what both agree on. On Windows
+// the interpreter takes them from the compiler's own copy of the C library,
+// so a FILE * that c_fopen gives is one the other calls accept. Some C
+// functions that would seem to fit are left out on purpose:
 //
 // - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
 //   on Windows and 64 on Linux, so no one declaration fits both, and on
 //   Windows a file past 2 GiB is out of reach. A file's size comes from
 //   fgetpos at its end instead, 64 bits on both.
-// - _ftelli64 and ftello: each is on one system only, and on Windows the
-//   interpreter takes _ftelli64 from a second C runtime, whose calls refuse
-//   the compiler's own FILE *.
+// - _ftelli64 and ftello: one for each system, which the per-system part
+//   could declare, but on Windows the interpreter takes _ftelli64 from a
+//   second C runtime, whose calls refuse the compiler's own FILE *.
 // - time: whole seconds, where timespec_get gives nanoseconds.
 // - clock: a different clock on each system, the wall time since the
 //   program started on Windows and the processor time on Linux.
+//
+// The per-system part, at the end, is a top-level #if (spec 4.9) whose two
+// branches declare each system's own functions under one c_ name: a
+// function only one system has, or one whose types differ between them,
+// as c_write's count and result do. A procedure that calls one chooses
+// with a statement #if in its body, and the branch it doesn't take is
+// never checked. On Windows, interpreted, the functions there whose names
+// start with _ come from ucrtbase.dll, a second C runtime with no state in
+// common with the compiler's own copy (spec 10.8), so Basic uses them only
+// with one another, never with a FILE * that the calls above give or take.
 
 // Writes one byte to standard output, through C's own stdout buffer. It is
-// the one call Basic writes with: unlike POSIX's write or Windows' _write,
-// putchar links and runs everywhere, compiled and interpreted, and its
-// bytes stay in order with the ones a program writes with C's printf.
+// the one call Basic writes to standard output with: it links and runs
+// everywhere, compiled and interpreted, with one declaration, and its bytes
+// stay in order with the ones a program writes with C's printf. Standard
+// error is written with c_write, in the per-system part below.
 c_putchar :: (c: s32) -> s32 #foreign libc "putchar";
 
 // C's heap, for a program that imports Basic. Basic itself takes heap
@@ -93,7 +105,8 @@ c_ferror :: (file: *void) -> s32 #foreign libc "ferror";
 
 // Writes out what C holds in a stream's buffer: 0 when it could. Given
 // null it flushes every stream, which Basic does before running a command,
-// so what the program printed comes out before what the command prints.
+// so what the program printed comes out before what the command prints,
+// and before writing to standard error, so it comes out before that too.
 c_fflush :: (file: *void) -> s32 #foreign libc "fflush";
 
 // Deletes the file at path: 0 when it did, and not 0 when it didn't. On
@@ -216,3 +229,22 @@ c_truncf :: (x: float32) -> float32 #foreign libc "truncf";
 
 // The remainder of x / y with x's sign, as c_fmod.
 c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
+
+// Each system's own functions (the header says why they're apart). Each
+// name is declared in both branches, with that system's signature, unless
+// only one system has it.
+#if OS == OS_WINDOWS {
+    // Writes count bytes of data to the file descriptor, 2 for standard
+    // error, at once, with no buffer of C's in between: the bytes it wrote,
+    // or -1 when it couldn't. Its count is 32 bits, and so is its result.
+    // A descriptor is in text mode unless set otherwise, so each \n is
+    // written \r\n, as C's stdout writes it. It is what the runtime writes
+    // a runtime error with (spec 10.5).
+    c_write :: (descriptor: s32, data: *void, count: u32) -> s32 #foreign libc "_write";
+} else {
+    // Writes count bytes of data to the file descriptor, 2 for standard
+    // error, at once, with no buffer of C's in between: the bytes it wrote,
+    // which may be fewer, or -1 when it couldn't. It is what the runtime
+    // writes a runtime error with (spec 10.5).
+    c_write :: (descriptor: s32, data: *void, count: u64) -> s64 #foreign libc "write";
+}

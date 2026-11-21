@@ -1,0 +1,23 @@
+// Basic's standard error (issue #157): print_error formats as print does
+// and print_error_string writes a string as it is, each to standard error,
+// their lines here interleaved with standard output's. The runner checks the
+// two streams apart (basic_print_error.out and .err); its fixed case
+// print_error_order_test runs a program like this one with both in one
+// pipe, where each line must come out where it was written. An empty
+// string and a zeroed one write nothing, and a placeholder with no argument
+// is written {!MISSING}, as print writes it.
+#import "Basic";
+
+main :: () {
+    print("to standard output {}\n", 1);
+    print_error("to standard error {} {}\n", 1, "two");
+    print_line("to standard output 2");
+    print_error_string("a string to standard error\n");
+    print_error_string("");
+    empty : string;
+    print_error_string(empty);
+    print_error("{} and {} {}\n", "a", 2);
+    print_error("no newline");
+    print_error("\n");
+    print_line("done");
+}

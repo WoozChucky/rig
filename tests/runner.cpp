@@ -49,9 +49,11 @@
 // whole, and one at least (its NAME.exit is the compiled run's).
 // The interpreter is always bin/unit-tests's, whatever RIG is given.
 //
-// Then two fixed cases: rig build without -o from another directory
-// (default_output_test), and a runtime error's order after the program's
-// output when stdout and stderr are one pipe (merged_output_test).
+// Then three fixed cases: rig build without -o from another directory
+// (default_output_test), a runtime error's order after the program's
+// output when stdout and stderr are one pipe (merged_output_test), and
+// Basic's print_error lines in order with the program's output so, compiled
+// and interpreted (print_error_order_test).
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
@@ -1463,6 +1465,69 @@ static String merged_output_test(Arena *a, String rig) {
     ran.out = normalise_newlines(a, ran.out);
     if (!string_eq(ran.out, expected)) return first_difference(a, "stdout and stderr", expected, ran.out);
     if (ran.exit_code != 101) return string_printf(a, "exit code " STR_FMT ", expected 101", STR_ARG(exit_code_text(a, ran.exit_code)));
+    return {};
+}
+
+// Basic's print_error and print_error_string between lines printed to
+// standard output, with stdout and stderr in one pipe: each line must come
+// out where it was written. stdout is a pipe, so C buffers it, and Basic
+// flushes C's streams before it writes to standard error, as the runtime
+// does before a runtime error. The program is written here, in
+// .build/tests, and run compiled and then interpreted (bin/unit-tests
+// --interpret), each exiting 0 with the same four lines.
+static String print_error_order_test(Arena *a, String rig, String unit_tests) {
+    String name = str("print_error_order");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = str("#import \"Basic\";\n"
+                      "main :: () {\n"
+                      "    print_line(\"out 1\");\n"
+                      "    print_error(\"err {}\\n\", 1);\n"
+                      "    print_line(\"out 2\");\n"
+                      "    print_error_string(\"err 2\\n\");\n"
+                      "}\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String expected = str("out 1\nerr 1\nout 2\nerr 2\n");
+
+    String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
+    remove(string_cstr(a, program));
+    Array<String> argv = build_command(a, rig, ".build/tests", name, program);
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+
+    for (s32 interpreted = 0; interpreted < 2; interpreted++) {
+        Array<String> command = {};
+        if (interpreted) {
+            array_add(&command, unit_tests);
+            array_add(&command, str("--interpret"));
+            array_add(&command, source);
+        } else {
+            array_add(&command, program);
+        }
+        s32 timeout = interpreted ? INTERPRETED_TIMEOUT : TIMEOUT;
+        const char *how = interpreted ? "interpreted" : "compiled";
+        Process_Result ran = {};
+        started = os_run_merged(a, command, {}, timeout, &ran);
+        array_free(&command);
+        if (!started) {
+            return string_printf(a, "couldn't run it %s: " STR_FMT, how, STR_ARG(os_error_message(a)));
+        }
+        if (ran.timed_out) return string_printf(a, "it took longer than %d seconds %s", timeout, how);
+        ran.out = normalise_newlines(a, ran.out);
+        if (!string_eq(ran.out, expected)) {
+            return first_difference(a, interpreted ? "stdout and stderr, interpreted" : "stdout and stderr, compiled",
+                                    expected, ran.out);
+        }
+        if (ran.exit_code != 0) {
+            return string_printf(a, "exit code " STR_FMT " %s, expected 0", STR_ARG(exit_code_text(a, ran.exit_code)), how);
+        }
+    }
     return {};
 }
 
@@ -3719,6 +3784,8 @@ int main(int argc, char **argv) {
     report("rig build without -o, from another directory", default_output_test(&a, rig), &passed, &failed);
     report("a runtime error after the program's output, both in one pipe", merged_output_test(&a, rig), &passed,
            &failed);
+    report("print_error's lines in order with the program's output, both in one pipe",
+           print_error_order_test(&a, rig, unit_tests), &passed, &failed);
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     build_directory_tests(&a, rig, &passed, &failed);
     report("rig build sub/build.rig from its parent", build_program_elsewhere_test(&a, rig), &passed, &failed);
