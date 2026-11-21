@@ -195,7 +195,8 @@ struct Ast_Proc : Ast {
     bool is_c_call;             // #c_call: called the way C calls, so C can call it (spec 7.6); a
                                 // foreign procedure is C's, and isn't marked
     Position c_call_pos;        // where that #c_call is written
-    bool is_compiler;           // #compiler: no body; the compiler does it, while compiling (spec 7.9)
+    bool is_compiler;           // #compiler: no body; the compiler does it, while compiling (spec 7.9),
+                                // but Preload's __runtime_error, each call of which is a panic
     Position compiler_pos;      // where that #compiler is written
     bool is_broken;             // the parser gave up on it
     String foreign_library;     // #foreign's library name

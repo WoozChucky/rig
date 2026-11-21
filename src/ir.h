@@ -595,11 +595,12 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // run time, and so is the index of a resizable array's built-in procedure
 // (array_insert's and the removes', array_pop's last), but in a procedure
 // marked #no_abc (spec 7.7). Lowering finds one error the checker can't,
-// reported to `d`: a call of a #compiler procedure, which only the
+// reported to `d`: a call of a #compiler procedure (but Preload's
+// __runtime_error, whose calls lowering makes panics), which only the
 // compiler can make, while compiling, is "'create_workspace' can only be
 // called while compiling", at the callee's name (spec 7.9), or, in a
 // call's default value, at the statement holding the call that leaves it
-// out (but Preload's __runtime_error, whose calls lowering makes panics).
+// out.
 // The module is whole even then, but no executable may be made of it.
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 

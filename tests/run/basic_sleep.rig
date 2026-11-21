@@ -3,9 +3,8 @@
 // on Linux gives nanosleep a whole second and 1 ms after it. Each is
 // measured by a timer, which goes by the wall clock, so the durations vary
 // from run to run and from host to host and are printed only as
-// comparisons (Decision 10 of the plan): the 20 ms and 1001 ms sleeps took
-// at least half their time, and the two that sleep nothing took well under
-// half a second.
+// comparisons: the 20 ms and 1001 ms sleeps took at least half their time,
+// and the two that sleep nothing took well under half a second.
 #import "Basic";
 
 main :: () {

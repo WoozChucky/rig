@@ -15,7 +15,7 @@
 // with no word of where the #run is or what else is wrong in the program,
 // and a runtime error fails the #run as a failing check does, an error at
 // the #run with the calls that led to it, and the build goes on to report
-// the rest. Compiled and interpreted, the two would write the same line.
+// the rest. A compiled and an interpreted run would write the same line.
 //
 // It can't be turned off: an optimised build checks every assert too.
 #load "builder.rig";
@@ -31,12 +31,12 @@
 // a runtime error there would; a loc with no place, its line 0 or less (a
 // zeroed one, which a call through a procedure value, given no default,
 // may pass), leaves it out, as the memory debugger leaves out a place it
-// doesn't have. The line is
-// built on the heap, never on context.allocator, whose arena or memory
-// debugger needn't see it, and isn't given back: the program, or the #run,
-// ends there. No deferred statement runs, as after any runtime error (spec
-// 6.12). Should the heap have no memory for it, the builder stops the
-// program with its own runtime error (builder.rig) instead.
+// doesn't have. The line is built on the heap, never on context.allocator,
+// whose arena or memory debugger needn't see it, and isn't given back: the
+// program, or the #run, ends there. No deferred statement runs, as after
+// any runtime error (spec 6.12). Should the heap have no memory for it, the
+// builder stops the program with its own runtime error (builder.rig)
+// instead.
 assert :: (condition: bool, message: string = "", loc: Source_Code_Location = #caller_location) {
     if condition { return; }
     line : String_Builder;
@@ -62,5 +62,6 @@ assert :: (condition: bool, message: string = "", loc: Source_Code_Location = #c
     text : string;
     text.data = line.data;
     text.count = line.count;
+    // tests/errors/basic_assert_run.err names this line.
     __runtime_error(text, message_start);
 }

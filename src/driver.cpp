@@ -20,9 +20,9 @@
 // error: ...", compilation_load), and so does rig check. Otherwise it lowers
 // the program (without the bounds checks of a[i] with --no-bounds-checks,
 // spec 8.5). Lowering finds errors of its own, a call of a #compiler
-// procedure but Preload's __runtime_error (a panic) the program would make
-// (spec 7.9), printed as the others are, and then rig stops there too,
-// writing no object (exit 1). Otherwise it has LLVM write the object file
+// procedure the program would make (spec 7.9), printed as the others are,
+// and then rig stops there too, writing no object (exit 1). Preload's
+// __runtime_error is no such error: each call of it is a panic. Otherwise it has LLVM write the object file
 // .build/NAME.obj (Windows) or .build/NAME.o (Linux) in the current
 // directory, and links it into OUTPUT, by default NAME.exe or NAME in the
 // current directory, NAME being FILE.rig's name (the main file's) without
@@ -303,11 +303,11 @@ static void compilation_end_runs(Compilation *c) {
 
 // Lowers the checked program, its indexes bounds-checked when bounds_checks
 // is set. Null when lowering found errors of its own, the calls of
-// #compiler procedures but Preload's __runtime_error (a panic) the program
-// would make (spec 7.9), which are then in c->d. Lowered while d still
-// holds the files' paths, which a runtime error's message names, and their
-// absolute paths and directories, which the debug information does; the
-// module keeps its own copies.
+// #compiler procedures the program would make (spec 7.9), which are then
+// in c->d. Preload's __runtime_error's calls aren't errors: each is a
+// panic. Lowered while d still holds the files' paths, which a runtime
+// error's message names, and their absolute paths and directories, which
+// the debug information does; the module keeps its own copies.
 static Ir_Module *compilation_lower(Compilation *c, bool bounds_checks) {
     s64 errors = c->d.error_count;
     s64 start = os_nanoseconds();

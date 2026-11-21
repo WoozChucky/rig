@@ -704,9 +704,17 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         }
         // A #compiler procedure (spec 7.9) has no code in any module, so it
         // has no address: only a direct call, which the compiler does, can
-        // name it.
+        // name it. Preload's __runtime_error is one the compiler doesn't do,
+        // since lowering makes each call of it a panic, so its refusal says
+        // what it lacks instead.
         if (proc->is_compiler) {
-            diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it", STR_ARG(proc->name));
+            if (proc == c->file->runtime_error) {
+                diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: it has no code of its own, only calls",
+                           STR_ARG(proc->name));
+            } else {
+                diag_error(c->diag, name->pos, "'" STR_FMT "' can't be a value: the compiler does it",
+                           STR_ARG(proc->name));
+            }
             return nullptr;
         }
         if (proc->is_c_variadic) {

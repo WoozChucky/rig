@@ -1,5 +1,5 @@
-// Basic's time: the wall clock, a timer that measures by it, and a time
-// turned into the calendar's fields and written as ISO 8601.
+// Basic's time: the wall clock, a timer that measures by it, a time turned
+// into the calendar's fields and written as ISO 8601, and sleeping.
 //
 // A time is an int of nanoseconds since 1970-01-01T00:00:00Z, the Unix
 // epoch, wrapped in a struct of its own, Time, so a procedure's signature

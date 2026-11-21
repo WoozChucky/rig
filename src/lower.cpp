@@ -2385,9 +2385,7 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 // on in the other block, which nothing reaches, as after a check that
 // always fails. All of it is at the callee's name, as a #compiler call
 // is, so the interpreter's innermost frame is there: the procedure that
-// called __runtime_error, at that call's name. In a call's default value
-// it's at the statement holding the call that leaves the default out
-// (emitted_at), and while compiling at the name there (fail_in_place).
+// called __runtime_error, at that call's name.
 //
 //     __runtime_error(text, n);    %5 = local 16 align 8     (text's copy, the argument)
 //                                  copy %5, %1, 16           (text in the slot %1)
