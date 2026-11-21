@@ -205,24 +205,29 @@ main :: () {
     // joined from a view of the byte since a string literal can't hold it.
     // Windows refuses it, as it can't be converted to UTF-16 as it is:
     // nothing runs and the allocator is asked for nothing. Linux's sh takes
-    // it as bytes and echoes them. The results differ, so one check of
-    // them is printed, the same line on both systems.
+    // it as bytes and echoes them. run_command is given : and the byte,
+    // which Windows refuses as well, and which sh's : takes as an argument
+    // and does nothing with, so nothing is printed. The results differ, so
+    // one check of them is printed, the same line on both systems.
     byte : [1]u8;
     byte[0] = 255;
     byte_view : []u8 = byte;
     bad_command := sprint("echo {}", cast(string) byte_view);
     output, status = run_command_with_output(bad_command, counting);
+    quiet_command := sprint(": {}", cast(string) byte_view);
+    quiet_status := run_command(quiet_command, counting);
     expected := false;
     #if OS == OS_WINDOWS {
-        expected = status == -1 && output.count == 0 && counter.allocations == 0;
+        expected = status == -1 && output.count == 0 && quiet_status == -1 && counter.allocations == 0;
     } else {
-        expected = status == 0;
+        expected = status == 0 && quiet_status == 0;
     }
     print_string("invalid UTF-8:");
     show_bool(expected);
     print_line("");
     free(output.data, counting);
     free(bad_command.data);
+    free(quiet_command.data);
     counter.allocations = 0;
     counter.frees = 0;
 

@@ -171,12 +171,12 @@ main :: () {
 
     // Windows' conversions at their edges, from a counting allocator, each
     // check one value: "" is a lone zero unit, in one allocation of 2 bytes
-    // asked from here; a string that isn't valid UTF-8, or an allocator
-    // with no memory, is null, allocating nothing; 0 units are the zeroed
-    // string and true, allocating nothing; and 日, an unpaired surrogate and
-    // a are 日, U+FFFD (written as itself below) and a, in one allocation
-    // of their 7 bytes asked from here. Linux has no conversions, and
-    // prints the same line.
+    // asked from here; a string that isn't valid UTF-8, one with a zero
+    // byte, or an allocator with no memory, is null, allocating nothing;
+    // 0 units are the zeroed string and true, allocating nothing; and 日,
+    // an unpaired surrogate and a are 日, U+FFFD (written as itself below)
+    // and a, in one allocation of their 7 bytes asked from here. Linux has
+    // no conversions, and prints the same line.
     print_string("wide:");
     #if OS == OS_WINDOWS {
         counter := Counter.{0, 0, 0, true};
@@ -185,6 +185,7 @@ main :: () {
         show_bool(lone != null && lone[0] == 0 && counter.allocations == 1 && counter.last_size == 2);
         free(lone, counted);
         show_bool(to_wide_string(cast(string) byte_view, counted) == null && counter.allocations == 1);
+        show_bool(to_wide_string("a\0b", counted) == null && counter.allocations == 1);
         show_bool(to_wide_string("日本", Allocator.{failing_allocator_proc, null}) == null);
 
         wide_units : [3]u16;
@@ -198,7 +199,7 @@ main :: () {
         free(converted.data, counted);
         show_bool(counter.frees == 2 && counter.all_here);
     } else {
-        for 1..6 { show_bool(true); }
+        for 1..7 { show_bool(true); }
     }
     print_string("\n");
 
