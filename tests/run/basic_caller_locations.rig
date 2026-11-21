@@ -125,8 +125,8 @@ main :: () {
         free(s.data);
         print("{}\n", "run_command");
         run_command("exit 0");
-        // Its gathering builder is the heap's, so only the command's C copy
-        // and the output, which isn't empty, are the allocator's.
+        // Only the command's copy and the output are the allocator's (its
+        // builder is the heap's), the copy freed before the output is made.
         print("{}\n", "run_command_with_output");
         status : int;
         s, status = run_command_with_output("echo x");

@@ -4,6 +4,10 @@ standard error: [] 0
 exit 3: [] true true 1 1
 empty: [] 0
 exact: true 9022 0
+utf-8 path: true 0 2 2
+deleted by a command: 0 false
+top exit code: true
+invalid UTF-8: true
 zero byte: [] -1 0 0
 no memory: [] -1
 no memory for the output: [] 0 true 2 1

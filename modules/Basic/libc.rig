@@ -16,13 +16,13 @@
 // and its comment say how Basic stays within what both agree on. On Windows
 // the interpreter takes them from the compiler's own copy of the C library,
 // so a FILE * that c_fopen gives is one the other calls accept. Basic's own
-// files use C's file functions, and its environment C's getenv, only on
-// Linux: on Windows they go through kernel32's wide calls in the
-// per-system part, which take a path or a name as UTF-16, where C's read
-// it in the system's ANSI code page (file.rig, environment.rig). The C
-// functions stay declared on both systems all the same, C17's, for a
-// program to call. Some C functions that would seem to fit are left out on
-// purpose:
+// files use C's file functions, its environment C's getenv, and its
+// commands C's system, only on Linux: on Windows they go through
+// kernel32's wide calls in the per-system part, which take a path, a name
+// or a command line as UTF-16, where C's read it in the system's ANSI code
+// page (file.rig, environment.rig). The C functions stay declared on both
+// systems all the same, C17's, for a program to call. Some C functions
+// that would seem to fit are left out on purpose:
 //
 // - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
 //   on Windows and 64 on Linux, so no one declaration fits both, and on
@@ -42,14 +42,15 @@
 // as c_write's count and result do. A procedure that calls one chooses
 // with a statement #if in its body, and the branch it doesn't take is
 // never checked. On Windows the part holds kernel32's own functions too
-// (Sleep, and the files', directories' and environment's wide calls),
-// which every program links and the interpreter looks up in kernel32.dll
-// (spec 10.6, 10.8), so compiled and interpreted programs call the same
-// ones. On Windows, interpreted, the functions there whose names start
-// with _ come from ucrtbase.dll, a second C runtime with no state in
-// common with the compiler's own copy (spec 10.8), so Basic uses them only
-// with one another, never with a FILE * that the calls above give or
-// take.
+// (Sleep, and the wide calls of the files, the directories, the
+// environment and the commands), which every program links and the
+// interpreter looks up in kernel32.dll (spec 10.6, 10.8), so compiled and
+// interpreted programs call the same ones. On Windows, interpreted, the
+// one function there whose name starts with _, _write, comes from
+// ucrtbase.dll, a second C runtime with no state in common with the
+// compiler's own copy (spec 10.8), so Basic gives it only standard
+// error's descriptor, 2, which both runtimes have, never a FILE * that
+// the calls above give or take.
 
 // Writes one byte to standard output, through C's own stdout buffer. It is
 // the one call Basic writes to standard output with: it links and runs
@@ -421,32 +422,114 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // found whatever its case.
     c_get_environment_variable_w :: (name: *u16, buffer: *u16, size: u32) -> u32 #foreign libc "GetEnvironmentVariableW";
 
-    // Basic's run_command_with_output (environment.rig) reads a command's
-    // output through the UCRT's _popen, _fileno, _read and _pclose, used
-    // only with one another: interpreted, they are ucrtbase.dll's, and the
-    // compiler's own fread would refuse _popen's FILE *, so the output is
-    // read from its descriptor with _read, never with c_fread.
+    // Basic's run_command and run_command_with_output (environment.rig)
+    // start the shell through kernel32's CreateProcessW too, which takes
+    // the command line as UTF-16, where C's system and _popen read it in
+    // the ANSI code page. A captured output comes through a pipe of
+    // CreatePipe's, read with c_read_file, above.
 
-    // Runs command through cmd.exe, as c_system does, with its standard
-    // output going into a pipe this end reads, and gives that end as a
-    // FILE *, or null when it can't. Basic's mode is "rb", binary, so the
-    // output's bytes come as the command wrote them, cmd's \r\n included.
-    // The command is bytes in the system's ANSI code page, as c_system's
-    // is.
-    c_popen :: (command: *u8, mode: *u8) -> *void #foreign libc "_popen";
+    // SECURITY_ATTRIBUTES, 24 bytes, which CreatePipe takes: Basic sets
+    // only length, to its size, and inherit, to 1, so that both of the
+    // pipe's handles can be inherited by the command's process. padding
+    // and padding2 are where C aligns the pointer and the struct's end.
+    C_Security_Attributes :: struct {
+        length: u32;
+        padding: u32;
+        descriptor: *void;
+        inherit: s32;
+        padding2: u32;
+    }
 
-    // Waits for the command c_popen ran to end, closes its pipe, and gives
-    // its status as c_system gives it, the command's exit code, or -1 when
-    // it can't.
-    c_pclose :: (stream: *void) -> s32 #foreign libc "_pclose";
+    // STARTUPINFOW, 104 bytes, which CreateProcessW takes: Basic sets only
+    // size, to its size, flags, to C_STARTF_USESTDHANDLES, and the three
+    // standard handles the command's process starts with. The fields
+    // between say where a console window would go and how it would look,
+    // which a command in the program's own console never uses.
+    C_Startup_Info :: struct {
+        size: u32;
+        padding: u32;
+        reserved: *void;
+        desktop: *u16;
+        title: *u16;
+        x: u32;
+        y: u32;
+        x_size: u32;
+        y_size: u32;
+        x_count_chars: u32;
+        y_count_chars: u32;
+        fill_attribute: u32;
+        flags: u32;
+        show_window: u16;
+        reserved2_count: u16;
+        padding2: u32;
+        reserved2: *u8;
+        standard_input: *void;
+        standard_output: *void;
+        standard_error: *void;
+    }
 
-    // The file descriptor under a FILE * of _popen's, for c_read.
-    c_fileno :: (stream: *void) -> s32 #foreign libc "_fileno";
+    // PROCESS_INFORMATION, 24 bytes, which CreateProcessW fills: the new
+    // process's handle and its first thread's, which the caller closes,
+    // and their ids.
+    C_Process_Information :: struct {
+        process: *void;
+        thread: *void;
+        process_id: u32;
+        thread_id: u32;
+    }
 
-    // Reads up to count bytes from the file descriptor into buffer: the
-    // bytes it read, 0 at the end, or -1 when it couldn't. Its count is 32
-    // bits, and so is its result.
-    c_read :: (descriptor: s32, buffer: *void, count: u32) -> s32 #foreign libc "_read";
+    // STARTUPINFOW's flag that makes the new process start with the three
+    // handles it holds as its standard input, output and error.
+    C_STARTF_USESTDHANDLES :: 256;
+
+    // SetHandleInformation's bit for whether a handle can be inherited.
+    C_HANDLE_FLAG_INHERIT :: 1;
+
+    // WaitForSingleObject's time for a wait that ends only when the
+    // process does.
+    C_INFINITE :: 4294967295;
+
+    // GetStdHandle's numbers for the program's standard input, output and
+    // error: -10, -11 and -12, as the DWORD they are passed as.
+    C_STD_INPUT_HANDLE :: 4294967286;
+    C_STD_OUTPUT_HANDLE :: 4294967285;
+    C_STD_ERROR_HANDLE :: 4294967284;
+
+    // Makes a pipe, writing its end to read from to read and its end to
+    // write to to write, each closed with c_close_handle: not 0 when it
+    // could. security says whether the two can be inherited; a size of 0
+    // is the system's own buffer size.
+    c_create_pipe :: (read: **void, write: **void, security: *C_Security_Attributes, size: u32) -> s32 #foreign libc "CreatePipe";
+
+    // Sets the bits of handle's flags that mask picks to flags' bits: not
+    // 0 when it could. Basic clears C_HANDLE_FLAG_INHERIT with it, on the
+    // pipe's end the program keeps.
+    c_set_handle_information :: (handle: *void, mask: u32, flags: u32) -> s32 #foreign libc "SetHandleInformation";
+
+    // The program's standard input, output or error handle, as which names
+    // it, C_STD_INPUT_HANDLE, C_STD_OUTPUT_HANDLE or C_STD_ERROR_HANDLE:
+    // the handles C's streams read and write through, so a command given
+    // them reads and writes where the program does.
+    c_get_std_handle :: (which: u32) -> *void #foreign libc "GetStdHandle";
+
+    // Starts a process that runs command_line, a program and its
+    // arguments ended by a zero unit, which the call may change while it
+    // reads it, so it is never a literal's: not 0 when it could, with
+    // information filled, and 0 when it couldn't, as for a program that
+    // isn't there. Basic passes null for application (the program is the
+    // command line's first word), for both securities, the environment
+    // (the program's) and the directory (the program's current one), 1
+    // for inherit, so the process gets the program's inheritable handles,
+    // its standard ones among them, and 0 for flags.
+    c_create_process_w :: (application: *u16, command_line: *u16, process_security: *void, thread_security: *void, inherit: s32, flags: u32, environment: *void, directory: *u16, startup: *C_Startup_Info, information: *C_Process_Information) -> s32 #foreign libc "CreateProcessW";
+
+    // Waits until the process (or other object) handle names ends, or
+    // milliseconds pass: 0 when it ended. Basic passes C_INFINITE.
+    c_wait_for_single_object :: (handle: *void, milliseconds: u32) -> u32 #foreign libc "WaitForSingleObject";
+
+    // Writes the exit code of the process handle names to code, 32 bits
+    // with no sign, so exit -1 is 4294967295: not 0 when it could.
+    c_get_exit_code_process :: (handle: *void, code: *u32) -> s32 #foreign libc "GetExitCodeProcess";
 } else {
     // Writes count bytes of data to the file descriptor, 2 for standard
     // error, at once, with no buffer of C's in between: the bytes it wrote,
@@ -521,7 +604,7 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
 
     // Basic's run_command_with_output (environment.rig) reads a command's
     // output through POSIX's popen, fileno, read and pclose, from the
-    // pipe's descriptor, as on Windows.
+    // pipe's descriptor.
 
     // Runs command through sh, as c_system does, with its standard output
     // going into a pipe this end reads, and gives that end as a FILE *, or
