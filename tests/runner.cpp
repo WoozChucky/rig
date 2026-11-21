@@ -1558,8 +1558,9 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
 // half second, so the read gives -1 with EINTR before the command writes.
 // Basic must read again, and give the whole output and the command's
 // status 0. Compiled only: the interpreter can't hand C a Rig procedure,
-// and the handler is one, as in tests/run/qsort_callback. Linux only, as
-// Windows has no signals that stop a read.
+// and the handler is one. Passed to C inside a struct, as here, it isn't
+// refused as tests/run/qsort_callback's is: interpreted, C's call of it
+// crashes. Linux only, as Windows has no signals that stop a read.
 static String interrupted_read_test(Arena *a, String rig) {
     String name = str("interrupted_read");
     String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
