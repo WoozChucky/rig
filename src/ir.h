@@ -474,7 +474,8 @@ struct Ir_Proc {
                                // default argument promotions (types.h's type_c_promoted)
     bool is_export;            // visible to the linker; otherwise internal
     bool is_compiler;          // a #compiler procedure: declared, no blocks; the interpreter calls the compiler's
-                               // C++ for it (interp.h), and the program's lowering refuses a call of it
+                               // C++ for it (interp.h), and the program's lowering refuses a call of it (but
+                               // Preload's __runtime_error, whose calls lowering makes panics)
     Array<Ir_Block *> blocks;  // blocks[0] is the entry
     s32 value_count;           // the values numbered so far
     // For a debugger. A procedure the compiler makes has none of them,
@@ -598,7 +599,8 @@ bool ir_block_has_ended(Ir_Proc *p, s32 block);
 // compiler can make, while compiling, is "'create_workspace' can only be
 // called while compiling", at the callee's name (spec 7.9), or, in a
 // call's default value, at the statement holding the call that leaves it
-// out. The module is whole even then, but no executable may be made of it.
+// out (but Preload's __runtime_error, whose calls lowering makes panics).
+// The module is whole even then, but no executable may be made of it.
 Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks);
 
 // Lowering on demand (#115): what the code #run runs while compiling needs,

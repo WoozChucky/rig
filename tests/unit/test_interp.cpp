@@ -1103,6 +1103,7 @@ TEST(a_runtime_error_call_fails_with_its_text) {
         interp_run(in, interp_test_proc(m, "main"), {}, &a, &r);
         CHECK(!r.ok);
         CHECK_STR(r.message, e.message);
+        CHECK(r.panicked);
         CHECK_STR(r.panic_text, "x.rig:1:1: runtime error: boom\n");
         CHECK_EQ(r.frames.count, 2);
         if (r.frames.count == 2) {
@@ -1514,6 +1515,7 @@ TEST(interp_recursion_to_the_limit) {
     CHECK(time(nullptr) - start < 10);
     CHECK(!r.ok);
     CHECK_STR(r.message, "stack overflow");
+    CHECK(!r.panicked);
     CHECK_STR(r.panic_text, "");
     CHECK(r.frames.count > 1000);
     if (r.frames.count > 0) {

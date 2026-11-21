@@ -773,6 +773,8 @@
 //   value: the compiler does it", at the name. Its calls run only while
 //   compiling: the program's lowering refuses one its executable would
 //   make (lower.cpp), so rig check, which never lowers, says nothing of it.
+//   But Preload's __runtime_error, whose every call lowering makes a panic
+//   (spec 8.1, 10.5).
 //
 // Conditional compilation (issue #147, spec 4.9).
 // - #if in a body is a statement, decided where it is, when the body is

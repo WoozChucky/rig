@@ -113,7 +113,8 @@
 // output before a workspace's file that can't be read is said
 // (workspace_output_order_test), tests/build/options once more, where the
 // workspaces whose bounds checks are left on by default, unoptimised and
-// optimised, stop at their index past the end (checked_workspace_test), rig
+// optimised, stop at their index past the end, and the one optimised with
+// bounds_checks false at its failing assert (checked_workspace_test), rig
 // build's report, without --quiet, checked by its shape, its times adding
 // up and its lines counted: of tests/run/hello.rig, its lines and Preload's
 // (hello_report_test), of tests/run/run_slow.rig, whose slow constant's
@@ -1309,13 +1310,11 @@ static String optimised_object_test(Arena *a, String rig) {
 // bounds-checked (spec 10.2), and so has its checked_fast workspace, the
 // same program optimised, so both programs, checked and checked_fast, stop
 // at its index one past the end: exit 101, nothing on stdout, and
-// checked.err on stderr. {} when they do, otherwise why not.
+// checked.err on stderr. Its asserted workspace, built optimised and with
+// bounds_checks false, still checks its assert (Basic's, spec 8.1), and
+// stops so too, with asserted.err. {} when they do, otherwise why not.
 static String checked_workspace_test(Arena *a, String rig) {
     String dir = str(".build/tests/checked");
-    String expected_err = {};
-    if (!os_read_file(a, str("tests/build/options/checked.err"), &expected_err)) {
-        return str("can't read tests/build/options/checked.err");
-    }
     Process_Result built = {};
     String why = {};
     if (!build_copy(a, rig, str("options"), dir, false, &built, &why)) return why;
@@ -1323,9 +1322,22 @@ static String checked_workspace_test(Arena *a, String rig) {
         return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
                            built.err);
     }
-    const char *names[] = {"checked", "checked_fast"};
-    for (const char *name : names) {
-        String program = string_printf(a, STR_FMT "/%s%s", STR_ARG(dir), name, EXE);
+    struct Stopped {
+        const char *name;
+        const char *err;  // what it writes to stderr, in tests/build/options
+    };
+    const Stopped stopped[] = {
+        {"checked", "checked.err"},
+        {"checked_fast", "checked.err"},
+        {"asserted", "asserted.err"},
+    };
+    for (const Stopped &s : stopped) {
+        String err_path = string_printf(a, "tests/build/options/%s", s.err);
+        String expected_err = {};
+        if (!os_read_file(a, err_path, &expected_err)) {
+            return string_printf(a, "can't read " STR_FMT, STR_ARG(err_path));
+        }
+        String program = string_printf(a, STR_FMT "/%s%s", STR_ARG(dir), s.name, EXE);
         if (!os_file_exists(program)) return string_printf(a, "rig build wrote no " STR_FMT, STR_ARG(program));
         Array<String> command = {};
         array_add(&command, program);
@@ -2297,13 +2309,14 @@ struct Report_Workspace {
     const char *name;
     bool optimised;
     const char *files[2];  // its build file and what that #loads, if anything
+    const char *module;    // a module its files #import, Basic, if any
 };
 
 // The lines block `i` of tests/build/NAME's report counts, its own
 // compilation's, added to *lines: block 0's, the build program's, are
 // build.rig's and Compiler's, which it imports, and block i's after it
-// workspace i - 1's files'; each has Preload's too, which every compilation
-// imports (spec 2.14). False when a file can't be read.
+// workspace i - 1's files' and its module's; each has Preload's too, which
+// every compilation imports (spec 2.14). False when a file can't be read.
 static bool block_lines(Arena *a, const char *name, const Report_Workspace *workspaces, s64 i, s64 *lines) {
     if (!module_lines(a, "Preload", lines)) return false;
     if (i == 0) {
@@ -2314,7 +2327,7 @@ static bool block_lines(Arena *a, const char *name, const Report_Workspace *work
         String path = string_printf(a, "tests/build/%s/%s", name, workspaces[i - 1].files[f]);
         if (!file_lines(a, path, lines)) return false;
     }
-    return true;
+    return !workspaces[i - 1].module || module_lines(a, workspaces[i - 1].module, lines);
 }
 
 // tests/build/NAME built in .build/tests/report-NAME (build_copy, without
@@ -2383,23 +2396,25 @@ static String build_program_report(Arena *a, String rig, const char *name, const
 // all, after what the #runs printed.
 static String build_program_report_test(Arena *a, String rig) {
     const Report_Workspace workspaces[] = {
-        {"greeter", false, {"greeter.rig"}},
-        {"counter", false, {"src/counter.rig"}},
+        {"greeter", false, {"greeter.rig"}, nullptr},
+        {"counter", false, {"src/counter.rig"}, nullptr},
     };
     return build_program_report(a, rig, "two_workspaces", workspaces, 2);
 }
 
-// tests/build/options's report: the workspaces built with optimize, fast
-// and checked_fast, have their optimising line, and the others none.
+// tests/build/options's report: the workspaces built with optimize, fast,
+// checked_fast and asserted, have their optimising line, and the others
+// none.
 static String optimised_report_test(Arena *a, String rig) {
     const Report_Workspace workspaces[] = {
-        {"plain", false, {"sums.rig"}},
-        {"fast", true, {"fast.rig", "sums.rig"}},
-        {"unchecked", false, {"past_the_end.rig"}},
-        {"checked", false, {"checked.rig"}},
-        {"checked_fast", true, {"checked_fast.rig", "checked.rig"}},
+        {"plain", false, {"sums.rig"}, nullptr},
+        {"fast", true, {"fast.rig", "sums.rig"}, nullptr},
+        {"unchecked", false, {"past_the_end.rig"}, nullptr},
+        {"checked", false, {"checked.rig"}, nullptr},
+        {"checked_fast", true, {"checked_fast.rig", "checked.rig"}, nullptr},
+        {"asserted", true, {"asserted.rig"}, "Basic"},
     };
-    return build_program_report(a, rig, "options", workspaces, 5);
+    return build_program_report(a, rig, "options", workspaces, 6);
 }
 
 // tests/build/workspace_failures built in .build/tests/report-failed
@@ -3795,7 +3810,8 @@ int main(int argc, char **argv) {
            workspace_output_order_test(&a, rig, str("workspace_errors"), true), &passed, &failed);
     report("the build program's #run output before a workspace's unreadable file, both in one pipe",
            workspace_output_order_test(&a, rig, str("workspace_unreadable"), false), &passed, &failed);
-    report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not",
+    report("a workspace whose bounds checks are on by default is bounds-checked, optimised or not, and an "
+           "optimised unchecked one's assert still fails",
            checked_workspace_test(&a, rig), &passed, &failed);
     report("rig build's report: every phase, hello.rig's and Preload's lines", hello_report_test(&a, rig), &passed,
            &failed);

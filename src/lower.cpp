@@ -269,7 +269,9 @@
 //   The program's own lowering (ir_lower) refuses each call, the one error
 //   lowering reports: "'create_workspace' can only be called while
 //   compiling" (lower_call_results), once for a call in deferred code,
-//   however many copies of it there are.
+//   however many copies of it there are. But Preload's __runtime_error's
+//   is never refused: each is the panic a failing check ends in, in the
+//   executable too (lower_runtime_error_call).
 // - What a debugger needs (ir.h's "Debug information") is kept as the code
 //   is lowered: each instruction is stamped with the position and scope of
 //   the statement being lowered (Lowering.pos and scope, emit_in);
@@ -405,7 +407,8 @@ struct Loop {
 struct Lowering {
     Arena *arena;
     Diagnostics *diag;        // the source files' paths, which runtime errors name, and the one error
-                              // lowering reports: a #compiler call in the program (lower_call_results)
+                              // lowering reports: a call in the program of a #compiler procedure but
+                              // __runtime_error (lower_call_results)
     Ir_Module *module;
     Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
     Table<s32> global_index;  // a global variable's index in module->globals, by name
@@ -2374,7 +2377,10 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 // a runtime check's shape (emit_runtime_check) whose condition is always
 // 1 and whose panic is the dynamic one, the bytes at %data, %count of
 // them, as __rig_bounds_failed's (ir.h), its `c` message_start, where the
-// interpreter's message starts in the text. The code after the call goes
+// interpreter's message starts in the text. A count below 0, which no
+// check builds but a program's own string may have, is taken as 0, so the
+// panic writes nothing rather than read before the bytes (or, while
+// compiling, ask for that much memory). The code after the call goes
 // on in the other block, which nothing reaches, as after a check that
 // always fails. All of it is at the callee's name, as a #compiler call
 // is, so the interpreter's innermost frame is there: the procedure that
@@ -2389,10 +2395,13 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 //                                  %8 = const i64 8
 //                                  %9 = ptradd %5, %8
 //                                  %10 = load ptr %9         (its data)
-//                                  %11 = const i1 1
-//                                  branch %11, fail, ok
+//                                  %11 = const i64 0
+//                                  %12 = cmp slt i64 %7, %11
+//                                  %13 = select i64 %12, %11, %7
+//                                  %14 = const i1 1
+//                                  branch %14, fail, ok
 //                                fail:
-//                                  panic %10, %7             (c: %6)
+//                                  panic %10, %13            (c: %6)
 //                                ok:
 //                                  ...
 static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> args) {
@@ -2402,6 +2411,8 @@ static void lower_runtime_error_call(Lowering *l, Ast_Call *call, Array<s32> arg
     bool filling = fail_in_place(l);
     s32 count = load_view_count(l, args[0]);
     s32 data = load_view_data(l, args[0]);
+    s32 zero = emit_constant(l, IR_I64, 0);
+    count = emit_select(l, IR_I64, emit_compare(l, IR_SLT, IR_I64, count, zero), zero, count);
     s32 fail = new_block(l);
     s32 ok = new_block(l);
     emit_branch(l, emit_constant(l, IR_I1, 1), fail, ok);

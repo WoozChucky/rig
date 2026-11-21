@@ -2,8 +2,10 @@
 // a failing runtime check there is (spec 7.8), with the calls that led to
 // it, the innermost assert's own call of Preload's __runtime_error, then
 // the assert's call in count_of_things. rig doesn't stop there: the build
-// goes on, and reports the error after it too. COUNT has no value, and
-// nothing more is said of it.
+// goes on, and reports the errors after it too. COUNT has no value, and
+// nothing more is said of it. An assert given a loc with no place, a
+// zeroed one, fails its #run the same way, its message "assertion failed:
+// no place" whole, though its line has no place before "runtime error: ".
 #import "Basic";
 
 count_of_things :: () -> int {
@@ -13,6 +15,13 @@ count_of_things :: () -> int {
 }
 
 COUNT :: #run count_of_things();
+
+no_place :: () -> int {
+    assert(false, "no place", .{});
+    return 0;
+}
+
+NO_PLACE :: #run no_place();
 
 main :: () {
     a : [COUNT]int;

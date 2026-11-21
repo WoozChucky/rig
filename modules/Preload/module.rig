@@ -396,7 +396,7 @@ __save_command_line :: (argc: s32, argv: **u8) #c_call {
 // whose check failed does, at the call's name (spec 7.8). text is the
 // whole line, "PATH:L:C: runtime error: MESSAGE\n", and message_start
 // where MESSAGE starts in it, as the compiler's own checks have them.
-// Basic's assert calls it.
+// Basic's assert calls it. A text whose count is below 0 is taken as empty.
 //
 // It's the one #compiler procedure the program's own code may call: the
 // compiler doesn't do it while compiling, as it does the Compiler module's,
