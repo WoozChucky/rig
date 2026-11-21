@@ -4,16 +4,20 @@
 // tests/run/NAME.rig is built with `RIG build tests/run/NAME.rig -o
 // .build/tests/NAME`, followed by the words of NAME.flags when there is one
 // (`--no-bounds-checks`; words separated by spaces, tabs or line breaks,
-// on any number of lines: add_flags), then --quiet, and run; its stdout
-// must equal NAME.out, its exit code the number in NAME.exit (0 when
-// there's none), and its stderr NAME.err (a runtime error's message, say),
-// or be empty when there's no NAME.err. What rig build itself prints to
-// stdout, what the program's top-level #runs print while compiling (spec
-// 7.8), must equal NAME.build.out, or be empty when there's none: --quiet
-// leaves out the report of its phases' times (spec 10.1), which differ
-// from one run to the next, so a .build.out holds none. A program prints
-// while compiling only from its top-level #runs: rig check runs its
-// expression #runs too, and must print nothing (check_tests).
+// on any number of lines: add_flags), then --quiet, and run, with the
+// lines of NAME.args after its path when there is one (its command-line
+// arguments, spec 7.4: one a line, as UTF-8 text, an empty line an empty
+// argument, so none holds a line break: add_args); its stdout must equal
+// NAME.out, its exit code the number in NAME.exit (0 when there's none),
+// and its stderr NAME.err (a runtime error's message, say), or be empty
+// when there's no NAME.err. What rig build itself prints to stdout, what
+// the program's top-level #runs print while compiling (spec 7.8), must
+// equal NAME.build.out, or be empty when there's none: --quiet leaves out
+// the report of its phases' times (spec 10.1), which differ from one run
+// to the next, so a .build.out holds none. A program prints while
+// compiling only from its top-level #runs: rig check runs its expression
+// #runs too, and must print nothing (check_tests); it reads no NAME.args,
+// as no program runs.
 // On Windows the program's newlines are normalised first, since C's
 // text-mode streams write \r\n for each \n: every \r\n in its stdout and
 // stderr becomes \n (normalise_newlines). The rest is compared byte for
@@ -29,10 +33,13 @@
 //
 // Then every program of tests/run again, interpreted: `bin/unit-tests
 // --interpret tests/run/NAME.rig`, with the words of NAME.flags after it,
-// runs it on the compiler's IR interpreter (tests/unit/interpret_mode.cpp;
-// the runner has no compiler in it), which must give what the compiled
-// program gives, held to the same NAME.out, NAME.exit and NAME.err (or
-// nothing on stderr), its newlines normalised alike (interpreted_test).
+// and then, when there is a NAME.args, `--` and its lines, which interpret
+// mode passes to main after the file's path, as the compiled program's
+// are after its own (spec 10.8), runs it on the compiler's IR interpreter
+// (tests/unit/interpret_mode.cpp; the runner has no compiler in it), which
+// must give what the compiled program gives, held to the same NAME.out,
+// NAME.exit and NAME.err (or nothing on stderr), its newlines normalised
+// alike (interpreted_test).
 // Interpret mode runs the top-level #runs too, before main, so its stdout
 // is NAME.build.out followed by NAME.out. It is reported as `interpreted
 // tests/run/NAME`. A program the interpreter can't run, one that hands C a
@@ -527,6 +534,28 @@ static void add_flags(Arena *a, Array<String> *argv, String name) {
     }
 }
 
+// The lines of tests/run/NAME.args, the program's command-line arguments
+// (spec 7.4), added to a command line: after the compiled program's path,
+// or, with after_dashes, after `--` on bin/unit-tests --interpret's, which
+// passes the words after it to main as they are (spec 10.8). One argument
+// a line, as UTF-8 text: the file's bytes split at each \n, the piece
+// after the last \n left out when it is empty, so a lone \n is one empty
+// argument, an empty file none, and no argument holds a line break. A \r
+// is an argument's own byte: .gitattributes keeps the file LF. No file,
+// nothing added, not even the `--`.
+static void add_args(Arena *a, Array<String> *argv, String name, bool after_dashes) {
+    String text = {};
+    if (!os_read_file(a, string_printf(a, "tests/run/" STR_FMT ".args", STR_ARG(name)), &text)) return;
+    if (after_dashes) array_add(argv, str("--"));
+    s64 start = 0;
+    for (s64 i = 0; i < text.count; i++) {
+        if (text.data[i] != '\n') continue;
+        array_add(argv, string_slice(text, start, i - start));
+        start = i + 1;
+    }
+    if (start < text.count) array_add(argv, string_slice(text, start, text.count - start));
+}
+
 // Runs rig build's command line `argv` (which it frees) in `directory` ({}
 // for this one), which must write `program` (a path from this one). {} when
 // it did, otherwise why not. With `out`, what rig build wrote to stdout is
@@ -614,8 +643,8 @@ static String held_to_expected(Arena *a, String name, Process_Result *ran, Strin
 }
 
 // A program that must build, with --quiet, printing its .build.out (nothing
-// without one), run and print its .out. {} when it passes, otherwise why
-// not.
+// without one), run with its .args (add_args) and print its .out. {} when
+// it passes, otherwise why not.
 static String run_test(Arena *a, String rig, String name) {
     String program = string_printf(a, ".build/tests/" STR_FMT "%s", STR_ARG(name), EXE);
     Array<String> argv = build_command(a, rig, "tests/run", name, program);
@@ -632,6 +661,7 @@ static String run_test(Arena *a, String rig, String name) {
 
     Array<String> command = {};
     array_add(&command, program);
+    add_args(a, &command, name, false);
     Process_Result ran = {};
     bool started = run(a, command, {}, &ran, &why);
     array_free(&command);
@@ -642,17 +672,18 @@ static String run_test(Arena *a, String rig, String name) {
 }
 
 // A program of tests/run interpreted by `unit_tests`, bin/unit-tests
-// --interpret, which must give what the compiled program gives, its
-// .build.out first (its top-level #runs print it before main starts); or,
-// with a NAME.interp.err, stop with that on stderr and 101, having printed
-// its .build.out and the first lines of its .out, one at least. {} when it
-// passes, otherwise why not.
+// --interpret, given the same .args after `--` (add_args), which must give
+// what the compiled program gives, its .build.out first (its top-level
+// #runs print it before main starts); or, with a NAME.interp.err, stop
+// with that on stderr and 101, having printed its .build.out and the first
+// lines of its .out, one at least. {} when it passes, otherwise why not.
 static String interpreted_test(Arena *a, String unit_tests, String name) {
     Array<String> argv = {};
     array_add(&argv, unit_tests);
     array_add(&argv, str("--interpret"));
     array_add(&argv, string_printf(a, "tests/run/" STR_FMT ".rig", STR_ARG(name)));
     add_flags(a, &argv, name);
+    add_args(a, &argv, name, true);
     Process_Result ran = {};
     String why = {};
     bool started = run_within(a, argv, {}, INTERPRETED_TIMEOUT, &ran, &why);

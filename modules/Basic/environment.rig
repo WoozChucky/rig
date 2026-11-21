@@ -1,6 +1,7 @@
 // Basic's environment: the value of a variable of the environment the
 // program was started with, and a command run through the system's shell,
-// both through C's stdlib (libc.rig).
+// both through C's stdlib (libc.rig), and the command line it was started
+// with, which Preload saves before main's first line.
 //
 // A variable's name and a command go to C as copies ended by a zero
 // (to_c_string), which C reads up to its first zero. So a name or a
@@ -100,4 +101,20 @@ run_command :: (command: string, allocator: Allocator = context.allocator, loc: 
     status := c_system(c_command);
     free(c_command, allocator, loc);
     return status;
+}
+
+// The program's command-line arguments (spec 7.4): the name it was started
+// by first, then each argument. On Windows they are UTF-8, converted by
+// Preload from the C runtime's wide arguments, so unlike a variable's
+// value above they don't depend on the ANSI code page; on Linux they are
+// the bytes the system gave, as they are. Each string is followed by a
+// zero byte its count doesn't include, so its data can go to C as it is.
+// main's prologue saves them, through Preload's __save_command_line,
+// before main's first line, and this gives the view it saved: the same one
+// every call, its elements and their bytes the program's for the whole
+// run, never freed, and as changeable as any global's. A #run sees the
+// empty view, not even a name: no startup runs while compiling (spec 7.8),
+// and the compiler's own arguments aren't the program's.
+get_command_line_arguments :: () -> []string {
+    return __command_line_arguments;
 }

@@ -1,0 +1,29 @@
+// A program's command-line arguments (issue #152, spec 7.4): Basic's
+// get_command_line_arguments gives the program's name first, then each
+// line of command_line_arguments.args, in UTF-8 on both systems,
+// compiled and interpreted, each followed by a zero byte its count
+// doesn't include. The name differs between the two runs, so only its
+// zero is shown. A #run sees none, not even a name (spec 7.8), and a
+// Rig call of main leaves them as they were.
+#import "Basic";
+
+WHILE_COMPILING :: #run get_command_line_arguments().count;
+
+again := false;
+
+main :: () {
+    args := get_command_line_arguments();
+    print("{} while compiling, {} now\n", WHILE_COMPILING, args.count);
+    for args {
+        zero := it.data[it.count] == 0;
+        if it_index == 0 {
+            print("0: the program, zero after: {}\n", zero);
+            continue;
+        }
+        print("{}: [{}] {} bytes, zero after: {}\n", it_index, it, it.count, zero);
+    }
+    if !again {
+        again = true;
+        main();
+    }
+}
