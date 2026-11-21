@@ -3108,7 +3108,8 @@ TEST(interpret_mode_runs_a_program) {
 
 TEST(interpret_mode_command_line) {
     // The words after --interpret are FILE.rig and --no-bounds-checks, in
-    // either order, each once; anything else is the usage, with exit status
+    // either order, each once, until a --, after which every word is the
+    // program's (issue #152); anything else is the usage, with exit status
     // 2. The program reads one past the end of a struct's array, which
     // without the bounds check is the field after it, 42, its exit status.
     Arena a = arena_make();
@@ -3122,7 +3123,7 @@ TEST(interpret_mode_command_line) {
                                       "    exit(cast(s32) h.a[i]);\n"
                                       "}\n");
     String flag = str("--no-bounds-checks");
-    const char *usage = "usage: unit-tests --interpret FILE.rig [--no-bounds-checks]\n";
+    const char *usage = "usage: unit-tests --interpret FILE.rig [--no-bounds-checks] [-- ARGS...]\n";
 
     String checked[] = {path};
     Process_Result r = interpret_test_run(&a, checked, 1, false);
@@ -3138,16 +3139,24 @@ TEST(interpret_mode_command_line) {
     r = interpret_test_run(&a, flag_first, 2, false);
     CHECK_STR(r.err, "");
     CHECK_EQ(r.exit_code, 42);
+    // After --, the flag is the program's argument, not the mode's: the
+    // program runs bounds-checked.
+    String flag_after_dashes[] = {path, str("--"), flag};
+    r = interpret_test_run(&a, flag_after_dashes, 3, false);
+    CHECK_STR(r.err, ".build/tests/interp/unchecked.rig:7:23: runtime error: index 4 is out of bounds (count 4)\n");
+    CHECK_EQ(r.exit_code, 101);
 
     String no_file[] = {flag};
     String unknown[] = {path, str("--bogus")};
     String flag_twice[] = {path, flag, flag};
     String two_files[] = {path, str(".build/tests/interp/other.rig")};
+    String file_after_dashes[] = {str("--"), path};  // FILE after -- is the program's argument
     struct Words {
         const String *words;
         s64 count;
     };
-    Words malformed[] = {{nullptr, 0}, {no_file, 1}, {unknown, 2}, {flag_twice, 3}, {two_files, 2}};
+    Words malformed[] = {{nullptr, 0},    {no_file, 1},   {unknown, 2},
+                         {flag_twice, 3}, {two_files, 2}, {file_after_dashes, 2}};
     for (const Words &w : malformed) {
         r = interpret_test_run(&a, w.words, w.count, false);
         CHECK_STR(r.out, "");
@@ -3188,6 +3197,45 @@ TEST(interpret_mode_reads_a_utf8_path) {
     CHECK_STR(r.err,
               ".build/tests/interp/a\xC3\xA7\xC3\xA3o \xE6\x97\xA5\xE6\x9C\xAC.rig:3:12: runtime error: division by zero\n");
     CHECK_EQ(r.exit_code, 101);
+    arena_free(&a);
+}
+
+TEST(interpret_mode_passes_the_words_after_dashes) {
+    // Issue #152: main is given argv[0], FILE as given, then every word
+    // after --, as it is, an empty one, --no-bounds-checks and a second --
+    // included, in UTF-8; each is followed by a zero byte its count doesn't
+    // include. With no --, or nothing after it, the program has FILE alone.
+    Arena a = arena_make();
+    String path = interpret_test_file(&a, "arguments",
+                                      "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    printf(\"%d\\n\", cast(s32) __command_line_arguments.count);\n"
+                                      "    for __command_line_arguments { printf(\"[%s] %d\\n\", it.data, cast(s32) "
+                                      "it.data[it.count]); }\n"
+                                      "}\n");
+    String words[] = {path, str("--"), str("one"), str("two words"), str(""), str("--no-bounds-checks"), str("--"),
+                      str("W\xC3\xB6rld \xE6\x97\xA5\xE6\x9C\xAC")};
+    Process_Result r = interpret_test_run(&a, words, 8, false);
+    CHECK_STR(r.out, "7\n"
+                     "[.build/tests/interp/arguments.rig] 0\n"
+                     "[one] 0\n"
+                     "[two words] 0\n"
+                     "[] 0\n"
+                     "[--no-bounds-checks] 0\n"
+                     "[--] 0\n"
+                     "[W\xC3\xB6rld \xE6\x97\xA5\xE6\x9C\xAC] 0\n");
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 0);
+
+    const char *alone = "1\n[.build/tests/interp/arguments.rig] 0\n";
+    r = interpret_test_run(&a, words, 1, false);
+    CHECK_STR(r.out, alone);
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 0);
+    r = interpret_test_run(&a, words, 2, false);
+    CHECK_STR(r.out, alone);
+    CHECK_STR(r.err, "");
+    CHECK_EQ(r.exit_code, 0);
     arena_free(&a);
 }
 

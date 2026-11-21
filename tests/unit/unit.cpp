@@ -6,9 +6,10 @@
 //   bin/unit-tests              every test
 //   bin/unit-tests lex          the tests whose names, or files' names, contain "lex"
 //   bin/unit-tests --self-test  checks that the harness can fail
-//   bin/unit-tests --interpret FILE.rig [--no-bounds-checks]
+//   bin/unit-tests --interpret FILE.rig [--no-bounds-checks] [-- ARGS...]
 //                               runs a program interpreted (interpret_mode.cpp),
-//                               as bin/run-tests does with every tests/run program
+//                               as bin/run-tests does with every tests/run program;
+//                               the words after -- are the program's arguments
 
 #include "../../src/all.cpp"
 #include "test.h"

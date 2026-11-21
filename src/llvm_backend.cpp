@@ -1148,8 +1148,9 @@ static s64 result_pointers(Ir_Proc *p) {
 // lexical blocks, in body->scopes. Nothing for a procedure without a source
 // name (one the compiler made) or in a module without debug information.
 static void begin_procedure_debug_info(Backend *b, Arena *a, Ir_Proc *p, LLVMValueRef function, Body *body) {
-    // Preload's __runtime_init has none either (Ir_Proc.no_debug_info), as
-    // the compiler's own procedures: a debugger steps over main's call of it.
+    // Preload's __runtime_init and __save_command_line have none either
+    // (Ir_Proc.no_debug_info), as the compiler's own procedures: a debugger
+    // steps over main's calls of them.
     if (!b->debug || p->source_name.count == 0 || p->no_debug_info) return;
     RIG_ASSERT(p->scopes.count > 0);
     // The procedure's type: a list of types, its result's first (null for

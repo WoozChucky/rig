@@ -1,0 +1,11 @@
+// A program started with no arguments (issue #152, spec 7.4): Basic's
+// get_command_line_arguments still gives one string, the program's name as
+// the runner started it, which isn't empty here (the compiled program's
+// path, or interpret mode's FILE). Its bytes differ between the compiled
+// run and the interpreted one, so only whether it has any is shown.
+#import "Basic";
+
+main :: () {
+    args := get_command_line_arguments();
+    print("{} {}\n", args.count, args[0].count > 0);
+}

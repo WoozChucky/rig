@@ -253,9 +253,13 @@
 //   the block's, one outside it, run by a return, break or continue in the
 //   block, with its own (lower_deferred).
 // - Rig's main is C's main (ir.h): exported, its every return a ret of C's
-//   int 0, so the program needs no wrapper around it. Its prologue calls
-//   Preload's __runtime_init, then keeps default_context's address as its
-//   context (emit_startup_context), before its first line.
+//   int 0, so the program needs no wrapper around it. With Preload it takes
+//   C's argc and argv, two hidden parameters, an i32 and a ptr, which no
+//   Rig signature says (spec 7.4, 10.4; takes_command_line), and a Rig call
+//   of it passes 0 and null (lower_call_results). Its prologue calls
+//   Preload's __runtime_init, then __save_command_line(argc, argv), which
+//   keeps the program's arguments, then keeps default_context's address as
+//   its context (emit_startup_context), before its first line.
 // - A #compiler procedure (spec 7.9) is declared as any procedure is, its
 //   struct and string parameters and results passed as a Rig procedure's
 //   are (above), but with no body: the compiler does it, while compiling,
@@ -289,19 +293,22 @@
 //   So does the context, an artificial one: the hidden parameter, arg 1, or
 //   main's and a run's slot, a local (lower_body), or a push_context's
 //   slot, a local of its block's scope at its keyword (lower_push_context).
-//   __runtime_init has no debug information at all (Ir_Proc.no_debug_info),
-//   and main's call of it no position, so `break main` stops at main's
-//   first line with the context set up. Each copy of deferred code is a
-//   scope of its own too, at the deferred statement, inside the scope the
-//   defer was reached in, its instructions at their own lines
-//   (lower_deferred); the ret or jump that leaves after the copies is where
-//   it is without them (a return's, break's or continue's at its keyword,
-//   an if's block's at its '}', a loop body's at the loop's keyword, the
-//   body's ret at its '}'), so a debugger steps through the deferred lines
-//   in the order they run, then to that place, when it has an instruction
-//   there (a jump to the block laid out right after it has none, so a break
-//   at the end of a while body goes straight on after the loop); a block
-//   statement has no jump of its own, and goes on to the next statement.
+//   __runtime_init and __save_command_line have no debug information at
+//   all (Ir_Proc.no_debug_info), and main's calls of them no position, so
+//   `break main` stops at main's first line with the context set up and
+//   the arguments saved; main's argc and argv are no Ir_Var, so a debugger
+//   shows main taking nothing, as its Rig signature says (spec 10.7). Each
+//   copy of deferred code is a scope of its own too, at the deferred
+//   statement, inside the scope the defer was reached in, its instructions
+//   at their own lines (lower_deferred); the ret or jump that leaves after
+//   the copies is where it is without them (a return's, break's or
+//   continue's at its keyword, an if's block's at its '}', a loop body's at
+//   the loop's keyword, the body's ret at its '}'), so a debugger steps
+//   through the deferred lines in the order they run, then to that place,
+//   when it has an instruction there (a jump to the block laid out right
+//   after it has none, so a break at the end of a while body goes straight
+//   on after the loop); a block statement has no jump of its own, and goes
+//   on to the next statement.
 //
 // Blocks are numbered in the order they're made, and made in the order
 // their code comes in the source (deferred code's where each copy is
@@ -482,6 +489,9 @@ struct Lowering {
     Type *context_type;        // Preload's Context
     Ast_Var *default_context;  // the global main and each run's procedure start with
     Ast_Proc *runtime_init;    // __runtime_init, which sets it up, called first by those
+    Ast_Proc *save_command_line;  // __save_command_line, which main calls next with C's argc and argv
+                                  // (takes_command_line); null without Preload, and on demand, as the
+                                  // compile-time world never declares main
     s32 context;               // the slot (an IR_LOCAL ptr) holding the current context's address:
                                // the body's, or the innermost push_context block's (lower_push_context);
                                // -1 without one: a #c_call procedure outside its pushes, the
@@ -971,7 +981,8 @@ enum Context_Source : u8 {
     CONTEXT_NONE,     // none: a #c_call procedure, which C calls with none, until it pushes one;
                       // or a program without Preload (a unit test's single file)
     CONTEXT_PARAM,    // the hidden parameter, after the result pointers
-    CONTEXT_STARTUP,  // __runtime_init(), then *default_context: main, and each #run's procedure
+    CONTEXT_STARTUP,  // __runtime_init() (and main's __save_command_line(argc, argv)), then
+                      // *default_context: main, and each #run's procedure
 };
 
 // Whether procedure `proc`'s IR takes the context, a ptr after its result
@@ -983,6 +994,18 @@ enum Context_Source : u8 {
 static bool takes_context(Lowering *l, Ast_Proc *proc) {
     return l->context_type && !proc->is_foreign && !proc->is_compiler && !proc->is_c_call &&
            !string_eq(proc->name, str("main"));
+}
+
+// Whether procedure `proc`'s IR takes C's argc and argv, an i32 and a ptr
+// (spec 7.4, 10.4), which its prologue hands to Preload's
+// __save_command_line: it's main (which the checker requires to have a
+// body), in a program that has __save_command_line. Without Preload
+// there's no __save_command_line to give them to, so main takes nothing
+// (a unit test's single file); nor on demand, which never declares main
+// (Lowering's save_command_line). They come before main's i32 result and after
+// everything else, which main has none of.
+static bool takes_command_line(Lowering *l, Ast_Proc *proc) {
+    return l->save_command_line && !proc->is_foreign && !proc->is_compiler && string_eq(proc->name, str("main"));
 }
 
 // Whether a call through a value of procedure type t passes the context: t
@@ -2407,11 +2430,11 @@ static void lower_builtin_call(Lowering *l, Ast_Call *call, Array<s32> *results)
 // (The calls below but the first are of procedures that take no context,
 // as without Preload: a unit test's single file.)
 //
-//     n := twice(4);             %2 = local i64            (n; main's context in the slot %0)
-//                                %3 = load ptr %0          (the context)
-//                                %4 = const i64 4
-//                                %5 = call @twice(%3, %4)
-//                                store i64 %5, %2
+//     n := twice(4);             %4 = local i64            (n; main's context in the slot %2)
+//                                %5 = load ptr %2          (the context)
+//                                %6 = const i64 4
+//                                %7 = call @twice(%5, %6)
+//                                store i64 %7, %4
 //
 //     v := make(3);              %0 = local 8 align 4      (v)
 //                                %1 = local 8 align 4      (the result)
@@ -2477,6 +2500,14 @@ static void lower_call_results(Lowering *l, Ast_Call *call, Array<s32> *results)
     // before the arguments. An argument may change the context's fields,
     // never which context is current, so the order can't show.
     if (proc ? takes_context(l, proc) : type_takes_context(l, callee)) array_add(&args, load_context(l));
+    // A Rig call of main (spec 7.4), which takes no context, passes 0 and
+    // null for C's argc and argv: __save_command_line, which main's
+    // prologue hands them to, keeps what was saved for them. main can't be
+    // a value, so only a direct call gets here.
+    if (proc && takes_command_line(l, proc)) {
+        array_add(&args, emit_constant(l, IR_I32, 0));
+        array_add(&args, emit_constant(l, IR_PTR, 0));
+    }
     // A '..T' parameter's []T, at its index among the parameters (through a
     // value, the last); the arguments before it are the fixed ones (without
     // one, all of them: C's extra ones too). Every argument after them is
@@ -2689,11 +2720,11 @@ static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) 
 // lower_deferred). Then the context is the one around again, however the
 // block is left: the push is lexical, so nothing is undone at run time.
 //
-//     push_context c { use(); }      (c a local, its slot %2; main's context %0)
-//     %4 = local ptr
-//     store ptr %2, %4
-//     %5 = load ptr %4
-//     call @use(%5)
+//     push_context c { use(); }      (c a local, its slot %4; main's context %2)
+//     %6 = local ptr
+//     store ptr %4, %6
+//     %7 = load ptr %6
+//     call @use(%7)
 static void lower_push_context(Lowering *l, Ast_Push_Context *push, Ast_Proc *source) {
     RIG_ASSERT(l->context_type);  // the checker refused a push without Preload's Context
     s32 address = lower_value_address(l, push->context, push->is_place);
@@ -4187,9 +4218,15 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     // returning C's int, 0 for success, which the C runtime that calls it
     // hands to exit. (The checker made sure it takes and returns nothing in
     // Rig; a Rig call of main ignores the int.) So a debugger's `break
-    // main` stops in the program's own main.
+    // main` stops in the program's own main. With Preload it takes C's int
+    // argc and char **argv too (takes_command_line), which the C runtime
+    // always passes, an i32 as C's int is, with no extension, and a ptr.
     if (has_body && string_eq(source->name, str("main"))) {
         p->is_export = true;
+        if (takes_command_line(l, source)) {
+            ir_add_param(p, IR_I32, IR_EXT_NONE);
+            ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        }
         array_add(&p->results, {IR_I32, IR_EXT_NONE});
     }
     if (has_body) {
@@ -4197,11 +4234,12 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
         p->pos = source->pos;
         p->body = source->body->pos;
         for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
-        // Preload's __runtime_init, which main calls before its first line,
-        // has no debug information (ir.h's "Positions"): a debugger steps
-        // over the call, and `break main` stops at main's first line, the
-        // context set up.
-        p->no_debug_info = source == l->runtime_init;
+        // Preload's __runtime_init and __save_command_line, which main calls
+        // before its first line, have no debug information (ir.h's
+        // "Positions"): a debugger steps over the calls, and `break main`
+        // stops at main's first line, the context set up and the arguments
+        // saved.
+        p->no_debug_info = source == l->runtime_init || source == l->save_command_line;
     }
     s32 index = (s32)(l->module->procs.count - 1);
     table_put(&l->proc_index, source->name, index);
@@ -4212,20 +4250,31 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
 
 // The prologue of main and of each #run's procedure, which nothing gives a
 // context (CONTEXT_STARTUP): Preload's __runtime_init called, which sets
-// default_context up the first time, then a slot holding default_context's
+// default_context up the first time; with `saves_command_line`, in a main
+// that takes C's argc and argv (takes_command_line), Preload's
+// __save_command_line called with them, %0 and %1, which saves the
+// program's arguments (spec 7.4); then a slot holding default_context's
 // address, the current context from here on (Lowering.context): the
 // variable context, artificial, in the body's scope, at `pos`, the
 // procedure's name (a run's: the #run). All of it with no position (ir.h's
-// "Positions"): the call too, so `break main` stops at main's first line,
-// once it's done, and a debugger steps over it.
+// "Positions"): the calls too, so `break main` stops at main's first line,
+// once they're done, and a debugger steps over them. A run's procedure
+// saves no arguments: no startup runs while compiling (spec 7.8). main's:
 //
 //     call @__runtime_init()
-//     %0 = local ptr
-//     %1 = addr @default_context
-//     store ptr %1, %0
-static void emit_startup_context(Lowering *l, Position pos) {
+//     call @__save_command_line(%0, %1)
+//     %2 = local ptr
+//     %3 = addr @default_context
+//     store ptr %3, %2
+static void emit_startup_context(Lowering *l, bool saves_command_line, Position pos) {
     place(l, {}, -1);
     emit_call(l, proc_index_of(l, l->runtime_init), {});
+    if (saves_command_line) {
+        Array<s32> args = {};  // the call instruction keeps it
+        array_add(&args, 0);
+        array_add(&args, 1);
+        emit_call(l, proc_index_of(l, l->save_command_line), args);
+    }
     s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
     emit_store(l, IR_PTR, address_of(l, l->default_context), slot);
     l->context = slot;
@@ -4264,7 +4313,10 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     // slot as a scalar parameter is, which holds the current context from
     // here on (Lowering.context): context, artificial, at the procedure's
     // name. The visible parameters come after it, their values and their
-    // `arg`s one more.
+    // `arg`s one more. main's argc and argv, the only parameters main has
+    // (takes_command_line), are no variable either: they're C's, which the
+    // prologue hands on (emit_startup_context), and a debugger shows main
+    // taking nothing, as its Rig signature says.
     // None of it has a position: this is the prologue's work, before any
     // line of the body (a debugger's breakpoint on the procedure stops
     // after it, at the first instruction with a line).
@@ -4297,7 +4349,7 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
         array_add(&l->locals, {(Ast *)param, slot});
         array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg, 0, false});
     }
-    if (from == CONTEXT_STARTUP) emit_startup_context(l, source->pos);
+    if (from == CONTEXT_STARTUP) emit_startup_context(l, !is_run && takes_command_line(l, source), source->pos);
     place(l, source->body->pos, body_scope);
     lower_block(l, source->body, source);
     if (!ir_block_has_ended(l->proc, l->block)) {
@@ -4370,6 +4422,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.context_type = f->context_type;
     l.default_context = f->default_context;
     l.runtime_init = f->runtime_init;
+    l.save_command_line = f->save_command_line;
     l.array_procs = f->array_procs;
     l.source_code_location_type = f->source_code_location_type;
     l.context = -1;
@@ -4449,7 +4502,9 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->string_equal = -1;
     l->block = -1;
     // The tree's context, and a [..]T's allocator type, as ir_lower takes
-    // them; none without a tree.
+    // them; none without a tree. Not __save_command_line: main, which takes
+    // C's argc and argv, never runs while compiling (spec 7.8), so a call
+    // of __save_command_line here is an ordinary call.
     if (file) {
         l->context_type = file->context_type;
         l->default_context = file->default_context;
@@ -4516,7 +4571,7 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
         // The operand's context is the run's own, the world's default one,
         // as a block run's is (emit_startup_context).
         l->context = -1;
-        if (l->context_type) emit_startup_context(l, run->pos);
+        if (l->context_type) emit_startup_context(l, false, run->pos);
         place(l, run->pos, scope);
         if (!t) {
             if (!run->operand->is_constant) lower_expr(l, run->operand);

@@ -2615,6 +2615,13 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             if (decl->kind == AST_PROC && string_eq(name, str("__runtime_init"))) {
                 c->file->runtime_init = (Ast_Proc *)decl;
             }
+            // And the procedure main's prologue calls next, with C's argc
+            // and argv (spec 7.4, 10.5): with it, main is given them, two
+            // hidden parameters (lower.cpp); without Preload, main takes
+            // none.
+            if (decl->kind == AST_PROC && string_eq(name, str("__save_command_line"))) {
+                c->file->save_command_line = (Ast_Proc *)decl;
+            }
             // And the resizable arrays' layout (spec 3.17), whose last field
             // is the allocator a [..]T holds: without it, no [..]T.
             if (decl->kind == AST_STRUCT && string_eq(name, str("Resizable_Array"))) {

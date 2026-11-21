@@ -694,9 +694,10 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         // Nor is there about a signature in a circle, said already.
         Ast_Proc *proc = (Ast_Proc *)decl;
         if (proc->is_broken || !check_proc_signature(c, proc)) return nullptr;
-        // main is C's main, returning C's int to the C runtime (lower.cpp),
-        // which its type, (), doesn't say: a call through a value of it
-        // would call it as the wrong function. A direct call knows.
+        // main is C's main, returning C's int to the C runtime and, with
+        // Preload, taking C's argc and argv (lower.cpp, spec 7.4), none of
+        // which its type, (), says: a call through a value of it would call
+        // it as the wrong function. A direct call knows.
         if (string_eq(proc->name, str("main"))) {
             diag_error(c->diag, name->pos, "'main' can't be a value: it's where the program starts");
             return nullptr;

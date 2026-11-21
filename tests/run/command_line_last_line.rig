@@ -1,0 +1,10 @@
+// A .args whose last line has no \n (issue #152): the test runner still
+// gives that line as the program's last argument (add_args in
+// tests/runner.cpp), so a file saved without a final newline loses none.
+#import "Basic";
+
+main :: () {
+    args := get_command_line_arguments();
+    print("{} arguments\n", args.count - 1);
+    for 1..args.count - 1 { print("[{}]\n", args[it]); }
+}

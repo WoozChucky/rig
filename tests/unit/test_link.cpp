@@ -396,6 +396,285 @@ TEST(windows_hypotf_links_and_runs_as_the_ucrts_hypotf) {
     CHECK_EQ(result.exit_code, 0);
     arena_free(&a);
 }
+
+// The exit status of the program CreateProcessW starts with exactly this
+// command line, given in UTF-16, so a test can hand a program what no
+// UTF-8 argv can say, an unpaired surrogate. Its stdout and stderr are the
+// test's own. -1 when it can't start or hasn't ended within a minute (it
+// is then ended).
+static s32 run_wide(const wchar_t *command_line) {
+    // CreateProcessW may write into the command line it's given, so it gets
+    // a copy.
+    Arena scratch = arena_make();
+    u64 length = (u64)wcslen(command_line);
+    wchar_t *line = arena_new_array<wchar_t>(&scratch, (s64)length + 1);
+    memcpy(line, command_line, (length + 1) * sizeof(wchar_t));
+    STARTUPINFOW startup = {};
+    startup.cb = sizeof startup;
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    PROCESS_INFORMATION process = {};
+    BOOL started = CreateProcessW(nullptr, line, nullptr, nullptr, TRUE, 0, nullptr, nullptr, &startup, &process);
+    arena_free(&scratch);
+    if (!started) return -1;
+    s32 status = -1;
+    if (WaitForSingleObject(process.hProcess, 60000) == WAIT_OBJECT_0) {
+        DWORD code = 0;
+        if (GetExitCodeProcess(process.hProcess, &code)) status = (s32)code;
+    } else {
+        TerminateProcess(process.hProcess, 1);
+        WaitForSingleObject(process.hProcess, INFINITE);
+    }
+    CloseHandle(process.hProcess);
+    CloseHandle(process.hThread);
+    return status;
+}
+
+// The little-endian u16 or u32 at `at` in `bytes`, or 0 past its end: a
+// PE file's fields are little-endian, as x64 is.
+static u32 pe_u16(String bytes, u64 at) {
+    if (at + 2 > (u64)bytes.count) return 0;
+    return (u32)bytes.data[at] | (u32)bytes.data[at + 1] << 8;
+}
+static u32 pe_u32(String bytes, u64 at) {
+    if (at + 4 > (u64)bytes.count) return 0;
+    return pe_u16(bytes, at) | pe_u16(bytes, at + 2) << 16;
+}
+
+// The file offset of `rva` in a PE file whose section table, of `sections`
+// 40-byte entries, is at `table`, or 0 when no section holds it: the
+// section's file offset (at 20) plus how far past its virtual address (at
+// 12) the RVA is, within the larger of its sizes in memory (at 8) and in
+// the file (at 16).
+static u64 pe_offset_of(String bytes, u64 table, u32 sections, u32 rva) {
+    for (u32 i = 0; i < sections; i++) {
+        u64 section = table + 40 * (u64)i;
+        u32 address = pe_u32(bytes, section + 12);
+        u32 size = pe_u32(bytes, section + 8);
+        if (size < pe_u32(bytes, section + 16)) size = pe_u32(bytes, section + 16);
+        if (rva >= address && rva - address < size) return rva - address + pe_u32(bytes, section + 20);
+    }
+    return 0;
+}
+
+// The names of the DLLs a PE32+ program imports, in its import directory's
+// order, read from the file's bytes. The DOS header's e_lfanew (at 0x3C)
+// is where the PE signature is; the 20-byte file header after it says how
+// many sections there are and how long the optional header is, which
+// follows it; the optional header's second data directory (at 120 in a
+// PE32+ one) is the import directory, an RVA. An RVA is an address in the
+// loaded image, so the section table, after the optional header, turns it
+// into a place in the file: the section holding it, 40 bytes each, its
+// virtual address at 12 and its file offset at 20. The import directory is
+// a list of 20-byte descriptors, each naming its DLL by the RVA at 12, up
+// to one that is all zero. None when the file can't be read or isn't one.
+static Array<String> imported_dlls(Arena *a, String program) {
+    Array<String> names = {};
+    String bytes = {};
+    if (!os_read_file(a, program, &bytes)) return names;
+    u64 pe = pe_u32(bytes, 0x3C);
+    if (pe_u32(bytes, pe) != 0x00004550) return names;  // "PE\0\0"
+    u32 sections = pe_u16(bytes, pe + 6);
+    u64 optional = pe + 24;
+    if (pe_u16(bytes, optional) != 0x20B) return names;  // PE32+
+    u32 imports = pe_u32(bytes, optional + 120);
+    u64 table = optional + pe_u16(bytes, pe + 20);
+    u64 descriptor = imports ? pe_offset_of(bytes, table, sections, imports) : 0;
+    while (descriptor && descriptor + 20 <= (u64)bytes.count) {
+        u32 name = pe_u32(bytes, descriptor + 12);
+        if (!name) break;
+        u64 at = pe_offset_of(bytes, table, sections, name);
+        if (!at) break;
+        s64 count = 0;
+        while ((s64)at + count < bytes.count && bytes.data[at + count]) count++;
+        array_add(&names, String{bytes.data + at, count});
+        descriptor += 20;
+    }
+    return names;
+}
+
+// Issue #152's program for Windows' arguments: it exits with 10 unless it
+// has eight, its name and seven more; with N unless the N-th is the N-th of
+// `expected`; with 20 + N unless a zero follows it. The strings hold UTF-8's
+// raw bytes, as Rig has no \x escape.
+static const char WIDE_ARGUMENTS[] =
+    "exit :: (status: s32) #foreign libc;\n"
+    "main :: () {\n"
+    "    args := __command_line_arguments;\n"
+    "    if args.count != 8 { exit(10); }\n"
+    "    expected := string.[\"\", \"a\xEF\xBF\xBDz\", \"\xEF\xBF\xBD\", \"\", \"W\xC3\xB6rld\", "
+    "\"\xE6\x97\xA5\xE6\x9C\xAC\", \"x\\\"y\", \"*\"];\n"
+    "    for 1..7 {\n"
+    "        if args[it] != expected[it] { exit(cast(s32) it); }\n"
+    "        if args[it].data[args[it].count] != 0 { exit(cast(s32) (20 + it)); }\n"
+    "    }\n"
+    "}\n";
+
+TEST(windows_arguments_reach_main_in_utf8) {
+    // Issue #152 (spec 10.6): the C runtime gives main its argv in the
+    // ANSI code page, where Wörld's ö is one byte, F6, and 日本 is ??, so
+    // Preload's __save_command_line takes the C runtime's wide arguments
+    // in its place, converted to UTF-8. An unpaired surrogate,
+    // which no UTF-8 holds, becomes U+FFFD, EF BF BD, the rest of its
+    // argument kept; an empty argument stays one, and \" inside quotes is
+    // a quote, both split as the C runtime splits them; and *, unquoted,
+    // stays *, no wildcard expanded, as in the narrow argv (the test runs
+    // in a directory with files, which an expanding split would list, so
+    // the count would be wrong). The command line is UTF-16, given to
+    // CreateProcessW as it is, so the surrogates reach the program.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
+    String program = link_module(&a, m, "wide-arguments-test");
+    if (program.count) {
+        // The path with Windows' separators, quoted, then the arguments.
+        wchar_t *wide_path = to_wide(&a, program);
+        for (wchar_t *c = wide_path; *c; c++) {
+            if (*c == L'/') *c = L'\\';
+        }
+        const wchar_t *arguments = L"\" a\xD800z \xDC00 \"\" W\x00F6rld \x65E5\x672C \"x\\\"y\" *";
+        s64 length = (s64)(1 + wcslen(wide_path) + wcslen(arguments));
+        wchar_t *line = arena_new_array<wchar_t>(&a, length + 1);
+        wcscpy(line, L"\"");
+        wcscat(line, wide_path);
+        wcscat(line, arguments);
+        CHECK_EQ(run_wide(line), 0);
+    }
+    arena_free(&a);
+}
+
+TEST(windows_a_hand_call_given_the_c_runtimes_argv_saves_all_its_arguments) {
+    // Issue #152 (spec 10.5): when argv is the C runtime's own __argv,
+    // __save_command_line saves as many wide arguments as the C runtime
+    // counted, whatever the argc it is given. A compiled main's prologue
+    // always passes __argc with __argv, so only a hand call can tell the
+    // two apart. The program first saves no arguments, so that what the
+    // prologue saved is gone (it exits with 12 if any are left), then
+    // passes 1 with __argv, and exits with 10 unless that call saved all
+    // three arguments, its name and two more, and with 11 unless the last
+    // is Wörld in UTF-8.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "exit :: (status: s32) #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    none : [1]*u8;\n"
+                                      "    __save_command_line(0, *none[0]);\n"
+                                      "    if __command_line_arguments.count != 0 { exit(12); }\n"
+                                      "    __save_command_line(1, __crt_argv().*);\n"
+                                      "    if __command_line_arguments.count != 3 { exit(10); }\n"
+                                      "    if __command_line_arguments[2] != \"W\xC3\xB6rld\" { exit(11); }\n"
+                                      "}\n");
+    String program = link_module(&a, m, "hand-saved-arguments-test");
+    if (program.count) {
+        wchar_t *wide_path = to_wide(&a, program);
+        for (wchar_t *c = wide_path; *c; c++) {
+            if (*c == L'/') *c = L'\\';
+        }
+        const wchar_t *arguments = L"\" one W\x00F6rld";
+        s64 length = (s64)(1 + wcslen(wide_path) + wcslen(arguments));
+        wchar_t *line = arena_new_array<wchar_t>(&a, length + 1);
+        wcscpy(line, L"\"");
+        wcscat(line, wide_path);
+        wcscat(line, arguments);
+        CHECK_EQ(run_wide(line), 0);
+    }
+    arena_free(&a);
+}
+
+TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
+    // Issue #152 (spec 10.6): _configure_wide_argv sets the C runtime's
+    // __argc to the wide arguments' count, and the narrow ones, split from
+    // the command line in the ANSI code page, may be fewer: U+FF02, a
+    // fullwidth quote, is " in code page 1252, so a＂ b is one narrow
+    // argument, a b, and two wide ones. __save_command_line puts the narrow
+    // count back, so C code that walks __argv up to __argc reads no null.
+    // The program exits with 10 unless __argc counts __argv's elements up
+    // to its null, and with 11 to 13 unless its own arguments are still the
+    // wide ones, its name, a＂ in UTF-8 and b.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "exit :: (status: s32) #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    narrow := __crt_argv().*;\n"
+                                      "    count : s32 = 0;\n"
+                                      "    while narrow[count] != null { count += 1; }\n"
+                                      "    if __crt_argc().* != count { exit(10); }\n"
+                                      "    args := __command_line_arguments;\n"
+                                      "    if args.count != 3 { exit(11); }\n"
+                                      "    if args[1] != \"a\xEF\xBC\x82\" { exit(12); }\n"
+                                      "    if args[2] != \"b\" { exit(13); }\n"
+                                      "}\n");
+    String program = link_module(&a, m, "narrow-argc-test");
+    if (program.count) {
+        wchar_t *wide_path = to_wide(&a, program);
+        for (wchar_t *c = wide_path; *c; c++) {
+            if (*c == L'/') *c = L'\\';
+        }
+        const wchar_t *arguments = L"\" a\xFF02 b";
+        s64 length = (s64)(1 + wcslen(wide_path) + wcslen(arguments));
+        wchar_t *line = arena_new_array<wchar_t>(&a, length + 1);
+        wcscpy(line, L"\"");
+        wcscat(line, wide_path);
+        wcscat(line, arguments);
+        CHECK_EQ(run_wide(line), 0);
+    }
+    arena_free(&a);
+}
+
+TEST(windows_programs_import_only_the_c_runtime_and_kernel32) {
+    // Issue #152: reading the arguments in UTF-8 costs a program no DLL it
+    // didn't import before: the C runtime's wide arguments come from the
+    // Universal C Runtime's api-ms-win-crt-runtime set, WideCharToMultiByte
+    // from KERNEL32.dll, which every program imports already. shell32.dll's
+    // CommandLineToArgvW would fail this. Issue #125's own startup code
+    // makes it exactly ucrtbase.dll and kernel32.dll.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
+    String program = link_module(&a, m, "imports-test");
+    Array<String> dlls = imported_dlls(&a, program);
+    bool kernel32 = false, runtime = false;
+    for (s64 i = 0; i < dlls.count; i++) {
+        const char *name = string_cstr(&a, dlls[i]);
+        bool known = _stricmp(name, "KERNEL32.dll") == 0 || _stricmp(name, "VCRUNTIME140.dll") == 0 ||
+                     (_strnicmp(name, "api-ms-win-crt-", 15) == 0 && dlls[i].count > 19 &&
+                      _stricmp(name + dlls[i].count - 4, ".dll") == 0);
+        if (!known) fprintf(stderr, "  imports %s\n", name);
+        CHECK(known);
+        if (_stricmp(name, "KERNEL32.dll") == 0) kernel32 = true;
+        if (_stricmp(name, "api-ms-win-crt-runtime-l1-1-0.dll") == 0) runtime = true;
+    }
+    CHECK(kernel32);
+    CHECK(runtime);
+    array_free(&dlls);
+    arena_free(&a);
+}
+#endif
+
+#ifndef _WIN32
+TEST(linux_arguments_are_the_bytes_given) {
+    // Issue #152 (spec 10.6): on Linux a program's arguments are argv's
+    // bytes as the system gives them, no encoding assumed: FF FE, which is
+    // no UTF-8, arrives as those two bytes, and an empty argument as an
+    // empty string, each with a zero after it. The program's own name is
+    // first, so there are three.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "exit :: (status: s32) #foreign libc;\n"
+                                          "main :: () {\n"
+                                          "    args := __command_line_arguments;\n"
+                                          "    if args.count != 3 { exit(10); }\n"
+                                          "    if args[1] != \"\xFF\xFE\" { exit(1); }\n"
+                                          "    if args[2] != \"\" { exit(2); }\n"
+                                          "    if args[1].data[2] != 0 || args[2].data[0] != 0 { exit(3); }\n"
+                                          "}\n");
+    Array<String> words = strings({"\xFF\xFE", ""});
+    Process_Result result = run_module(&a, m, "arguments-test", words);
+    CHECK_STR(result.out, "");
+    CHECK_STR(result.err, "");
+    CHECK_EQ(result.exit_code, 0);
+    array_free(&words);
+    arena_free(&a);
+}
 #endif
 
 TEST(windows_linker_falls_back_to_lld_link) {

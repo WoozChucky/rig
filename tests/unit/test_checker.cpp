@@ -8298,6 +8298,35 @@ TEST(preload_declares_the_context) {
     arena_free(&a);
 }
 
+TEST(preload_declares_the_command_line) {
+    // Issue #152 (spec 7.4, 10.5): the checker finds Preload's
+    // __save_command_line as it finds __runtime_init, and keeps it on the
+    // tree, for lowering: main's prologue calls it with C's argc and argv.
+    // It's #c_call, as C's main's arguments are C's. What it saves into is
+    // an ordinary global of Preload's, __command_line_arguments.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "main :: () { }\n", &tree), "");
+    CHECK(tree->save_command_line != nullptr);
+    if (!tree->save_command_line) {
+        arena_free(&a);
+        return;
+    }
+    Ast_Proc *save = tree->save_command_line;
+    CHECK_STR(save->name, "__save_command_line");
+    CHECK(save->is_c_call);
+    CHECK_EQ(save->params.count, 2);
+    CHECK_EQ(save->results.count, 0);
+    if (save->params.count == 2) {
+        CHECK_STR(type_name(&a, save->params[0]->type), "s32");
+        CHECK_STR(type_name(&a, save->params[1]->type), "**u8");
+    }
+    Ast *arguments = top_level_named(tree, "__command_line_arguments");
+    CHECK(arguments->kind == AST_VAR);
+    if (arguments->kind == AST_VAR) CHECK_STR(type_name(&a, ((Ast_Var *)arguments)->type), "[]string");
+    arena_free(&a);
+}
+
 TEST(context_is_a_place) {
     // context is the current context, a place of type Context: read, copied,
     // its address taken, its fields read and assigned, and itself assigned.

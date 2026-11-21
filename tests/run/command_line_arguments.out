@@ -1,0 +1,16 @@
+0 while compiling, 7 now
+0: the program, zero after: true
+1: [one] 3 bytes, zero after: true
+2: [two words] 9 bytes, zero after: true
+3: ["quoted" and \back\slash\] 25 bytes, zero after: true
+4: [] 0 bytes, zero after: true
+5: [Wörld] 6 bytes, zero after: true
+6: [日本] 6 bytes, zero after: true
+0 while compiling, 7 now
+0: the program, zero after: true
+1: [one] 3 bytes, zero after: true
+2: [two words] 9 bytes, zero after: true
+3: ["quoted" and \back\slash\] 25 bytes, zero after: true
+4: [] 0 bytes, zero after: true
+5: [Wörld] 6 bytes, zero after: true
+6: [日本] 6 bytes, zero after: true

@@ -14,9 +14,9 @@
 // path reads nothing more: a file is read once.
 //
 // It holds the allocator's shape and the heap, type information, Any, the
-// context, the temporary storage and its allocator, the resizable array
-// [..]T's layout, Resizable_Array, and the helpers of its built-ins, and
-// the place a default #caller_location is, Source_Code_Location.
+// context, the temporary storage and its allocator, [..]T's layout,
+// Resizable_Array, and its built-ins' helpers, Source_Code_Location, the
+// place a default #caller_location is, and the command-line arguments.
 //
 // What Preload declares joins the program's one top level, so a program
 // can't declare those names. README.md lists the ones that are for
@@ -243,6 +243,148 @@ __runtime_init :: () #c_call {
     __temporary_storage.overflow_allocator = HEAP_ALLOCATOR;
     default_context.allocator = HEAP_ALLOCATOR;
     default_context.temporary_storage = *__temporary_storage;
+}
+
+// The program's command-line arguments (spec 7.4, 10.5): its name as it was
+// started first, then each argument, each a string over the bytes of one of
+// C's argv strings (on Windows, in a compiled program, over Preload's own
+// UTF-8 copy of the C runtime's wide ones: __save_command_line), so a zero
+// byte its count doesn't include follows it. main's prologue saves them,
+// through __save_command_line, before main's first line; until then, and
+// in the compile-time world, where no startup runs (spec 7.8), this is the
+// empty view. Programs read it through Basic's get_command_line_arguments.
+// Neither the elements nor the bytes are ever freed: they are the
+// program's for the whole run.
+__command_line_arguments : []string;
+
+// What __save_command_line reads the arguments from on Windows (spec 10.6):
+// the Universal C Runtime's _configure_wide_argv, which splits the command
+// line into wide arguments too, its argc, argv and wide argv, and kernel32's
+// WideCharToMultiByte, which converts UTF-16 to UTF-8. Under Preload's own
+// names, as __malloc is, so that a program keeps C's and Windows' names: it
+// may declare __p___argv itself. Every program imports their DLLs already,
+// the C runtime's api-ms-win-crt-runtime set and KERNEL32.dll, so they cost
+// it none more.
+#if OS == OS_WINDOWS {
+    __configure_wide_argv :: (mode: s32) -> s32 #foreign libc "_configure_wide_argv";
+    __crt_argc :: () -> *s32 #foreign libc "__p___argc";
+    __crt_argv :: () -> ***u8 #foreign libc "__p___argv";
+    __crt_wargv :: () -> ***u16 #foreign libc "__p___wargv";
+    __wide_char_to_multi_byte :: (code_page: u32, flags: u32, wide: *u16, wide_count: s32, bytes: *u8, byte_count: s32, default_char: *u8, used_default: *s32) -> s32 #foreign libc "WideCharToMultiByte";
+}
+
+// Saves C's argc and argv as __command_line_arguments. main's prologue
+// calls it right after __runtime_init, with the argc and argv the C
+// runtime gave C's main, which main takes though its Rig signature doesn't
+// say so (spec 10.4). A null argv keeps what was saved: a Rig call of main
+// passes 0 and null. An argc of 0 or less saves the empty view (Linux
+// before 5.18 let a program be started with no argv[0], and a hand call
+// may pass 0), except on Windows when argv is the C runtime's own (below).
+// Otherwise the elements come from one __malloc, the i-th
+// viewing argv[i]'s bytes up to its zero, which stay where C put them;
+// when __malloc gives null, what was saved stays.
+//
+// On Windows the C runtime's argv isn't UTF-8: the C runtime converts the
+// command line, which Windows keeps in UTF-16, to the ANSI code page, so
+// Wörld's ö is one byte (F6 in code page 1252) and 日本 is ??, lost. So
+// when argv is the C runtime's own, __argv, as a compiled main's prologue
+// passes it, the arguments are the C runtime's wide ones instead, split by
+// the same rules from the command line in UTF-16, each converted to UTF-8,
+// an unpaired surrogate becoming U+FFFD (spec 10.6). The narrow argv was
+// split from the line in the ANSI code page, so the two counts can differ:
+// U+FF02, a fullwidth quote, is " in code page 1252. The arguments are as
+// many as the wide count, which _configure_wide_argv puts in the C
+// runtime's __argc; __argc then gets the narrow count back, so C code
+// that reads it with __argv still finds them matching. A hand call that
+// passes __argv gets the same, the argc it gives unused. Any other argv is
+// saved as given: one a program or a #run makes by hand, and interpret
+// mode's, which are UTF-8 already and never __argv (an interpreted
+// program's __p___argv is ucrtbase.dll's own, whose __argv is null). When
+// the wide arguments can't be had or converted, or __malloc gives null,
+// what it took goes back and argv is saved as given. Issue #125's startup
+// code may give main its argv in UTF-8 itself, from these same functions,
+// so that argv is no longer __argv and this part is never taken: #125 may
+// then delete it and its declarations.
+//
+// #c_call, so it uses no context, as __runtime_init; and, as it, it has no
+// debug information, so a debugger steps over main's call of it. It is all
+// one procedure, the Windows part too, so that none of it has any. Nothing
+// it saves is ever freed.
+__save_command_line :: (argc: s32, argv: **u8) #c_call {
+    if argv == null { return; }
+    #if OS == OS_WINDOWS {
+        CP_UTF8 :: 65001;
+        // _crt_argv_unexpanded_arguments: split, with no wildcard expanded,
+        // as the narrow argv was.
+        if argv == __crt_argv().* {
+            // _configure_wide_argv sets __argc to the wide count, which is
+            // read here; C code reads __argc with the narrow __argv, so it
+            // gets the narrow count back whatever the call did.
+            narrow_count := __crt_argc().*;
+            configured := __configure_wide_argv(1) == 0;
+            count := __crt_argc().*;
+            __crt_argc().* = narrow_count;
+            wide := __crt_wargv().*;
+            // All the arguments' bytes in UTF-8, each one's zero included
+            // (its size from WideCharToMultiByte given -1 counts it), or 0
+            // when there are none or one can't be converted.
+            total := 0;
+            if configured && count > 0 && wide != null {
+                for 0..count - 1 {
+                    size := __wide_char_to_multi_byte(CP_UTF8, 0, wide[it], -1, null, 0, null, null);
+                    if size <= 0 {
+                        total = 0;
+                        break;
+                    }
+                    total += size;
+                }
+            }
+            if total > 0 {
+                // One block for the elements, one for all the bytes, each
+                // argument's right after the one before's zero. done
+                // reaches total only when every one was converted. The
+                // size is a u64's product, which a large count can't wrap.
+                elements := cast(*string) __malloc(cast(u64) count * size_of(string));
+                bytes := cast(*u8) __malloc(cast(u64) total);
+                done := 0;
+                if elements != null && bytes != null {
+                    for 0..count - 1 {
+                        size := __wide_char_to_multi_byte(CP_UTF8, 0, wide[it], -1, bytes + done, cast(s32) (total - done), null, null);
+                        if size <= 0 {
+                            done = -1;
+                            break;
+                        }
+                        elements[it].data = bytes + done;
+                        elements[it].count = size - 1;
+                        done += size;
+                    }
+                }
+                if done == total {
+                    __command_line_arguments.data = elements;
+                    __command_line_arguments.count = count;
+                    return;
+                }
+                __free(elements);
+                __free(bytes);
+            }
+        }
+    }
+    if argc <= 0 {
+        empty : []string;
+        __command_line_arguments = empty;
+        return;
+    }
+    // A u64's product, as above, which a large argc can't wrap.
+    elements := cast(*string) __malloc(cast(u64) argc * size_of(string));
+    if elements == null { return; }
+    for 0..argc - 1 {
+        count := 0;
+        while argv[it][count] != 0 { count += 1; }
+        elements[it].data = argv[it];
+        elements[it].count = count;
+    }
+    __command_line_arguments.data = elements;
+    __command_line_arguments.count = argc;
 }
 
 // C's memmove, under Preload's own name, as __malloc is: the temporary

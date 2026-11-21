@@ -113,17 +113,19 @@
 //   them. In a procedure of the source, only the prologue's work has none:
 //   each scalar parameter's slot and the store into it, and the context's
 //   slot and what it's given (spec 7.10: the hidden parameter; or, in main
-//   and a run's procedure, the call of Preload's __runtime_init, then
-//   default_context's address), before the body's first line (a debugger's
-//   breakpoint on the procedure stops at the first instruction with a
-//   line, once they're done). __runtime_init itself has no debug
-//   information (Ir_Proc.no_debug_info), as the procedures the compiler
-//   makes have none: located at line 0, the call would be given main's own
-//   line, and `break main` would stop there before the call ran; with no
-//   location, LLVM refuses a call of a procedure that has debug
-//   information. So __runtime_init has none, the call has no location, and
-//   `break main` stops at main's first line with the context set up, and a
-//   debugger steps over the call.
+//   and a run's procedure, the call of Preload's __runtime_init, in main
+//   then the call of __save_command_line with C's argc and argv (spec 7.4),
+//   then default_context's address), before the body's first line (a
+//   debugger's breakpoint on the procedure stops at the first instruction
+//   with a line, once they're done). __runtime_init and
+//   __save_command_line themselves have no debug information
+//   (Ir_Proc.no_debug_info), as the procedures the compiler makes have
+//   none: located at line 0, a call would be given main's own line, and
+//   `break main` would stop there before the call ran; with no location,
+//   LLVM refuses a call of a procedure that has debug information. So they
+//   have none, the calls have no location, and `break main` stops at main's
+//   first line with the context set up and the arguments saved, and a
+//   debugger steps over the calls.
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
 //   once, in the procedure's debug scope, and each line in it. So a call's
@@ -170,11 +172,12 @@
 //   a local of the block's scope at the keyword (lower.cpp's
 //   lower_push_context). A #c_call procedure has one only inside its pushes.
 //   Each is a *Context, and named context, so a debugger shows it and passes
-//   it to a procedure it calls (gdb's `print twice(context, 4)`). Temporaries
-//   and hidden result pointers aren't variables here: the source has no name
-//   for them. (The backend still describes each hidden result pointer to a
-//   debugger, from Ir_Proc.source_results, as an artificial parameter named
-//   result$: llvm_backend.cpp's declare_variables.)
+//   it to a procedure it calls (gdb's `print twice(context, 4)`). Temporaries,
+//   hidden result pointers and main's argc and argv (C's, which its prologue
+//   hands to Preload's __save_command_line) aren't variables here: the source
+//   has no name for them. (The backend still describes each hidden result
+//   pointer to a debugger, from Ir_Proc.source_results, as an artificial
+//   parameter named result$: llvm_backend.cpp's declare_variables.)
 // - Constants (spec 4.2, issue #172): every one the program declares, used
 //   or not, so a debugger shows each by its name, as C's debuggers show an
 //   enum's values. A constant naming a procedure isn't one (the debugger
@@ -482,9 +485,10 @@ struct Ir_Proc {
     Array<Type *> source_results;  // its results' Rig types, in order, aggregates too (each of
                                    // them is a hidden pointer parameter in the IR); none for Rig's
                                    // main, though C's returns an int
-    bool no_debug_info;        // Preload's __runtime_init: a procedure of the source with no
-                               // subprogram and no line table, as the compiler's own have none, so
-                               // a debugger steps over main's call of it (see "Positions" above)
+    bool no_debug_info;        // Preload's __runtime_init and __save_command_line: procedures of the
+                               // source with no subprogram and no line table, as the compiler's own
+                               // have none, so a debugger steps over main's calls of them (see
+                               // "Positions" above)
 };
 
 // A file of the program, for a debugger: how to find it, and whether the
@@ -647,9 +651,10 @@ String ir_print(Arena *a, Ir_Module *m);
 // constant's place is its bits, in decimal, or its const.N. A variable the
 // compiler made, the context, says `artificial` after its place and its
 // arg, when it has one (`; var context *Context slot %2 arg 1 artificial in
-// 0 at 1:1`; main's and a push's have none: `; var context *Context slot %0
-// artificial in 0 at 3:1`), and the source line of a procedure with no
-// debug information, __runtime_init, ends in `, no debug info`:
+// 0 at 1:1`; main's and a push's have none: `; var context *Context slot %2
+// artificial in 0 at 3:1`, main's slot coming after its argc and argv),
+// and the source line of a procedure with no debug information,
+// __runtime_init or __save_command_line, ends in `, no debug info`:
 //
 //   ; source C:\dev\rig\test.rig md5 0123456789abcdef0123456789abcdef
 //   ; source C:\dev\rig\sums.rig md5 fedcba9876543210fedcba9876543210
