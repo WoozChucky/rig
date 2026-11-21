@@ -3,7 +3,7 @@ empty: [] true true 1 1
 unset: [] false true 1 1
 utf-8 value: [日本 café] true 2 1
 utf-8 name: [x] true
-invalid UTF-8 name: false
+invalid UTF-8 name: true
 PATH: true true
 refused names: false true false true false true 0 0
 no memory: [] false -1

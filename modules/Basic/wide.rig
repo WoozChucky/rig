@@ -75,11 +75,11 @@
     // units UTF-16 units at wide, with no zero after them needed, as UTF-8,
     // in one allocation from allocator at loc of the exact size, which the
     // caller gives back with free(s.data, allocator, loc), and true. An
-    // unpaired surrogate, which Windows allows in a name and UTF-8 can't
-    // hold, becomes U+FFFD. 0 units are the zeroed string (count 0, data
-    // null) and true, allocating nothing. Fewer than 0 units, more than a
-    // C int counts, a conversion that fails, and no memory are the zeroed
-    // string and false, with nothing left allocated.
+    // unpaired surrogate, which Windows allows in a name or a value and
+    // UTF-8 can't hold, becomes U+FFFD. 0 units are the zeroed string
+    // (count 0, data null) and true, allocating nothing. Fewer than 0
+    // units, more than a C int counts, a conversion that fails, and no
+    // memory are the zeroed string and false, with nothing left allocated.
     //
     // WideCharToMultiByte is asked first how many bytes the units need,
     // and then converts them into that room.

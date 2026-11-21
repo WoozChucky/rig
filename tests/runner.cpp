@@ -3849,9 +3849,10 @@ int main(int argc, char **argv) {
     // changes. _putenv_s with "" deletes a variable instead of setting it to
     // "", so on Windows the empty one is set in the process's environment
     // directly, where Basic's GetEnvironmentVariableW finds it, set to "".
-    // _putenv_s takes a name and a value in the ANSI code page, which holds
-    // no 日本, so the two outside ASCII are set there directly too, in
-    // UTF-16; on Linux they are UTF-8 bytes, as setenv takes them.
+    // _putenv_s takes a name and a value in the ANSI code page, which may
+    // not hold 日本 (code page 1252 doesn't), so the two outside ASCII are
+    // set there directly too, in UTF-16; on Linux they are UTF-8 bytes, as
+    // setenv takes them.
 #ifdef _WIN32
     _putenv_s("RIG_BASIC_TEST", "set by bin/run-tests");
     SetEnvironmentVariableW(L"RIG_BASIC_TEST_EMPTY", L"");

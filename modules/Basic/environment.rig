@@ -53,11 +53,14 @@
 
 // A copy of the value of the environment's variable name, in memory from
 // allocator, the context's unless given, which the caller gives back with
-// free(value.data, allocator), and true. The system gives the value in
-// memory of its own, which a later call may change, so it is copied out
-// at once, converted from UTF-16 to UTF-8 on Windows and as its bytes on
-// Linux, its zero not included. A variable set to "" is the zeroed string
-// (count 0, data null), which allocates nothing, and true.
+// free(value.data, allocator), and true. On Linux C's getenv gives a
+// pointer to its own copy, which a later call may change, so the value is
+// copied out at once, as its bytes, its zero not included; on Windows
+// GetEnvironmentVariableW writes it, in UTF-16, into a buffer Basic gives
+// (below), and it is converted to UTF-8 from there. On Windows an unpaired
+// surrogate in the value, which Windows allows, becomes U+FFFD. A variable
+// set to "" is the zeroed string (count 0, data null), which allocates
+// nothing, and true.
 //
 // It is the zeroed string and false, with nothing left allocated, when the
 // variable isn't set, when the allocator has no memory for the name's copy

@@ -128,17 +128,24 @@ main :: () {
 
     // A name of RIG_ and the byte 255, which is never valid UTF-8, joined
     // from a view of the byte since a string literal can't hold it. No
-    // such variable is set: Windows refuses the name before allocating,
-    // as it can't be converted to UTF-16 as it is, and Linux makes and
-    // frees its C copy and doesn't find it, so the counts, which differ,
-    // aren't printed.
+    // such variable is set, so it isn't found on either system, but the
+    // counts tell why: Windows refuses the name, as it can't be converted
+    // to UTF-16 as it is, and asks the allocator for nothing, and Linux
+    // makes and frees its C copy and doesn't find it. The counts differ, so
+    // one check of them is printed, the same line on both systems.
     byte : [1]u8;
     byte[0] = 255;
     byte_view : []u8 = byte;
     bad_name := sprint("RIG_{}", cast(string) byte_view);
     value, found = get_environment(bad_name, counting);
+    refused := false;
+    #if OS == OS_WINDOWS {
+        refused = !found && counter.allocations == 0 && counter.frees == 0;
+    } else {
+        refused = !found && counter.allocations == 1 && counter.frees == 1;
+    }
     print_string("invalid UTF-8 name:");
-    show_bool(found);
+    show_bool(refused);
     print_line("");
     free(bad_name.data);
     counter.allocations = 0;
