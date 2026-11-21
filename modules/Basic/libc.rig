@@ -245,11 +245,12 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // a runtime error with (spec 10.5).
     c_write :: (descriptor: s32, data: *void, count: u32) -> s32 #foreign libc "_write";
 
-    // Sleeps for milliseconds, at least: the system wakes the thread at
-    // its next clock tick after that, about 15 ms apart. Its count is a
-    // DWORD, whose largest, 0xFFFFFFFF, is INFINITE, a sleep that never
-    // ends. It is kernel32's, which the program links and the interpreter
-    // finds as it finds the C library's (spec 10.6, 10.8).
+    // Sleeps for about milliseconds: it works in the system's clock ticks,
+    // about 15.6 ms apart, so the thread may wake up to a tick early, or
+    // later, as its documentation says. Its count is a DWORD, whose
+    // largest, 0xFFFFFFFF, is INFINITE, a sleep that never ends. It is
+    // kernel32's, which every program links (spec 10.6) and the interpreter
+    // looks up in kernel32.dll (spec 10.8).
     c_sleep :: (milliseconds: u32) #foreign libc "Sleep";
 } else {
     // Writes count bytes of data to the file descriptor, 2 for standard

@@ -207,9 +207,11 @@ format_time :: (calendar: Calendar, buffer: []u8) -> string {
     return written;
 }
 
-// Sleeps for ms milliseconds, at least: the system may wake the program
-// later than that, on Windows at its next clock tick, about 15 ms apart.
-// An ms of 0 or less returns at once and calls nothing.
+// Sleeps for ms milliseconds. On Linux it is at least that long, and the
+// system may wake the program later. On Windows it is about that long:
+// Sleep works in the system's clock ticks, about 15.6 ms apart, so it may
+// wake the program up to a tick early, or later, as its documentation
+// says. An ms of 0 or less returns at once and calls nothing.
 //
 // Windows' Sleep takes a DWORD, whose largest, 0xFFFFFFFF, is INFINITE, a
 // sleep that never ends, so the time is slept in pieces of at most
