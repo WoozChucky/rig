@@ -544,6 +544,39 @@ TEST(windows_arguments_reach_main_in_utf8) {
     arena_free(&a);
 }
 
+TEST(windows_a_hand_call_given_the_c_runtimes_argv_saves_all_its_arguments) {
+    // Issue #152 (spec 10.5): when argv is the C runtime's own __argv,
+    // __save_command_line saves as many wide arguments as the C runtime
+    // counted, whatever the argc it is given. A compiled main's prologue
+    // always passes __argc with __argv, so only a hand call can tell the
+    // two apart: this one passes 1, and the program exits with 10 unless
+    // all three arguments, its name and two more, were saved again, and
+    // with 11 unless the last is Wörld in UTF-8.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "exit :: (status: s32) #foreign libc;\n"
+                                      "main :: () {\n"
+                                      "    __save_command_line(1, __crt_argv().*);\n"
+                                      "    if __command_line_arguments.count != 3 { exit(10); }\n"
+                                      "    if __command_line_arguments[2] != \"W\xC3\xB6rld\" { exit(11); }\n"
+                                      "}\n");
+    String program = link_module(&a, m, "hand-saved-arguments-test");
+    if (program.count) {
+        wchar_t *wide_path = to_wide(&a, program);
+        for (wchar_t *c = wide_path; *c; c++) {
+            if (*c == L'/') *c = L'\\';
+        }
+        const wchar_t *arguments = L"\" one W\x00F6rld";
+        s64 length = (s64)(1 + wcslen(wide_path) + wcslen(arguments));
+        wchar_t *line = arena_new_array<wchar_t>(&a, length + 1);
+        wcscpy(line, L"\"");
+        wcscat(line, wide_path);
+        wcscat(line, arguments);
+        CHECK_EQ(run_wide(line), 0);
+    }
+    arena_free(&a);
+}
+
 TEST(windows_programs_import_only_the_c_runtime_and_kernel32) {
     // Issue #152: reading the arguments in UTF-8 costs a program no DLL it
     // didn't import before: the C runtime's wide arguments come from the
