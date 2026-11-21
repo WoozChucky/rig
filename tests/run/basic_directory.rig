@@ -1,4 +1,4 @@
-// Basic's directories (issue #157), under .build/tests/basic_directory,
+// Basic's directories (issue #157), under .build/tests/basic_directory_dir,
 // which the test makes and deletes: a directory made, found and made
 // again, one whose parent is missing, children named in ASCII and outside
 // it (café, 日本, which Windows reaches through its wide calls), a listing
@@ -7,19 +7,21 @@
 // refuses (empty, with a zero byte, and on Windows not valid UTF-8), an
 // allocator with no memory, and deleting, which refuses a directory with
 // entries and a file. What a stopped run left is deleted first. Everything
-// printed is the same on both systems.
+// printed is the same on both systems. The directory isn't
+// .build/tests/basic_directory, which on Linux is this test's own program,
+// built there by the runner.
 #import "Basic";
 
-ROOT :: ".build/tests/basic_directory";
-ROOT_SLASH :: ".build/tests/basic_directory/";
-A :: ".build/tests/basic_directory/a";
-B :: ".build/tests/basic_directory/b";
-Z :: ".build/tests/basic_directory/Z";
-CAFE :: ".build/tests/basic_directory/café";
-NIHON :: ".build/tests/basic_directory/日本";
-FILE :: ".build/tests/basic_directory/m.txt";
-MISSING :: ".build/tests/basic_directory/missing";
-NO_PARENT :: ".build/tests/basic_directory/x/y";
+ROOT :: ".build/tests/basic_directory_dir";
+ROOT_SLASH :: ".build/tests/basic_directory_dir/";
+A :: ".build/tests/basic_directory_dir/a";
+B :: ".build/tests/basic_directory_dir/b";
+Z :: ".build/tests/basic_directory_dir/Z";
+CAFE :: ".build/tests/basic_directory_dir/café";
+NIHON :: ".build/tests/basic_directory_dir/日本";
+FILE :: ".build/tests/basic_directory_dir/m.txt";
+MISSING :: ".build/tests/basic_directory_dir/missing";
+NO_PARENT :: ".build/tests/basic_directory_dir/x/y";
 
 // Prints s between brackets, so an empty string shows as [].
 show_text :: (s: string) {
