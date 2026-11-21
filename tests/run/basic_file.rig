@@ -1,10 +1,11 @@
 // Basic's files (issue #145), under .build/tests/, which the runner makes
 // before any test, and removed at the end: a missing file, an empty one,
 // one of every byte value and one of several megabytes, appending, an
-// allocator with no memory, the File procedures, a file read or written in
-// the wrong mode, a directory given as a file, and closed again where
-// Linux's C library opens it, an empty directory, which the test makes and
-// deletes, a path with a zero byte, and a File that isn't open.
+// allocator with no memory, the File procedures, a file open twice at once
+// and deleted while open, a file read or written in the wrong mode, a
+// directory given as a file, and closed again where Linux's C library
+// opens it, an empty directory, which the test makes and deletes, a path
+// with a zero byte, and a File that isn't open.
 #import "Basic";
 
 A :: ".build/tests/basic_file_a.txt";
@@ -173,9 +174,12 @@ main :: () {
     // Opening to write empties the file; writing "" writes nothing and is
     // still a success.
     f, opened = file_open(A, FILE_WRITE);
+    // file_size measures a file opened to write too, and one opened to
+    // append, below.
     print_string("write mode:");
     show_bool(file_write(f, "abc"));
     show_bool(file_write(f, ""));
+    show_int(file_size(f));
     file_close(f);
     data, ok = read_entire_file(A, HEAP_ALLOCATOR);
     print_string(" ");
@@ -186,12 +190,32 @@ main :: () {
     f, opened = file_open(A, FILE_APPEND);
     print_string("append mode:");
     show_bool(file_write(f, "def"));
+    show_int(file_size(f));
     file_close(f);
     data, ok = read_entire_file(A, HEAP_ALLOCATOR);
     print_string(" ");
     show_text(data);
     print_line("");
     free(data.data, HEAP_ALLOCATOR);
+
+    // A file open to append opens again to read, on both systems. Windows
+    // doesn't delete it while it is open: Basic opens no file with
+    // FILE_SHARE_DELETE. Linux deletes it, open or not, so there it is made
+    // again with what it held. Both are closed before the last delete.
+    f, opened = file_open(A, FILE_APPEND);
+    g, again := file_open(A, FILE_READ);
+    print_string("open twice:");
+    show_bool(opened);
+    show_bool(again);
+    #if OS == OS_WINDOWS {
+        show_bool(!delete_file(A));
+    } else {
+        show_bool(delete_file(A) && write_entire_file(A, "abcdef"));
+    }
+    file_close(g);
+    file_close(f);
+    show_bool(file_exists(A));
+    print_line("");
 
     // A file opened to read can't be written, and one opened to write
     // can't be read: the system's writes and reads give 0 for them.

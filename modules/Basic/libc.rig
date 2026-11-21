@@ -25,8 +25,9 @@
 //
 // - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
 //   on Windows and 64 on Linux, so no one declaration fits both, and on
-//   Windows a file past 2 GiB is out of reach. A file's size comes from
-//   fgetpos at its end instead, 64 bits on both.
+//   Windows a file past 2 GiB is out of reach. Basic's file_size takes a
+//   file's size from fgetpos at its end on Linux instead, and from
+//   kernel32's GetFileSizeEx on Windows, 64 bits on both.
 // - _ftelli64 and ftello: one for each system, which the per-system part
 //   could declare, but on Windows the interpreter takes _ftelli64 from a
 //   second C runtime, whose calls refuse the compiler's own FILE *.

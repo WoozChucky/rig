@@ -2,7 +2,9 @@
 // whether one is there and deleting it, and an open file read or written a
 // piece at a time, through kernel32's wide calls on Windows (CreateFileW,
 // ReadFile, WriteFile, GetFileSizeEx, CloseHandle and DeleteFileW) and C's
-// stdio on Linux (libc.rig). Each procedure chooses with a statement #if.
+// stdio on Linux (libc.rig). Each procedure that differs between the
+// systems chooses with a statement #if; the rest reach the system only
+// through those.
 //
 // A path is UTF-8, as every Rig string is, and names the file it says on
 // both systems. Windows' calls take it as UTF-16, so it is converted first

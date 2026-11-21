@@ -2721,7 +2721,7 @@ hello, Ada
 1 + 2 = 3
 ```
 
-`greeting` allocates its builder's memory and its string without being handed an allocator: Basic's allocator parameters default to `context.allocator` (section 7.2), so every allocation it makes comes from the arena `main` pushed, which `free_all` gives back at once. `tprint` formats into the temporary storage, which `reset_temporary_storage` empties.
+`greeting` allocates its builder's memory and its string without being handed an allocator: Basic's allocator parameters, but a few its README names, default to `context.allocator` (section 7.2), so every allocation it makes comes from the arena `main` pushed, which `free_all` gives back at once. `tprint` formats into the temporary storage, which `reset_temporary_storage` empties.
 
 **Left for later:** fields a program adds to the context (Jai's `#add_context`), a logger and an assertion handler in it, threads and a context for each, and a `push_allocator` that needs no block.
 

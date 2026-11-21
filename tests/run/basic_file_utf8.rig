@@ -4,9 +4,10 @@
 // (issue #209): written, appended to, read, measured, listed, and on
 // Windows found on disk by its UTF-16 name built by hand; the directory
 // given as a file, in every mode; a path that isn't valid UTF-8, which
-// Windows refuses and Linux writes as its bytes; and deleted. What a
-// stopped run left is deleted first. Everything printed is the same on
-// both systems.
+// Windows refuses and Linux writes as its bytes; and deleted. Windows'
+// conversions to and from UTF-16 (wide.rig) are checked at their edges.
+// What a stopped run left is deleted first. Everything printed is the same
+// on both systems.
 #import "Basic";
 
 ROOT :: ".build/tests/café_日本";
@@ -17,6 +18,28 @@ NIHON :: ".build/tests/café_日本/日本.txt";
 show_bool :: (value: bool) {
     print_string(" ");
     print_bool(value);
+}
+
+// What a counting allocator was asked: how many allocations and frees, how
+// many bytes the last allocation was for, and whether every place it was
+// asked from is in this file, the caller's, rather than in wide.rig.
+Counter :: struct { allocations: int; frees: int; last_size: int; all_here: bool; }
+
+// Passes every call on to the heap, counting allocations and frees.
+counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    counter := cast(*Counter) data;
+    if mode == ALLOCATE {
+        counter.allocations += 1;
+        counter.last_size = size;
+    }
+    if mode == FREE { counter.frees += 1; }
+    if !ends_with(context.allocation_location.file, "basic_file_utf8.rig") { counter.all_here = false; }
+    return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
+}
+
+// Gives no memory, as an allocator that has run out would.
+failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    return null;
 }
 
 #if OS == OS_WINDOWS {
@@ -144,6 +167,39 @@ main :: () {
     }
     print_string("invalid UTF-8:");
     show_bool(invalid);
+    print_string("\n");
+
+    // Windows' conversions at their edges, from a counting allocator, each
+    // check one value: "" is a lone zero unit, in one allocation of 2 bytes
+    // asked from here; a string that isn't valid UTF-8, or an allocator
+    // with no memory, is null, allocating nothing; 0 units are the zeroed
+    // string and true, allocating nothing; and 日, an unpaired surrogate and
+    // a are 日, U+FFFD (written as itself below) and a, in one allocation
+    // of their 7 bytes asked from here. Linux has no conversions, and
+    // prints the same line.
+    print_string("wide:");
+    #if OS == OS_WINDOWS {
+        counter := Counter.{0, 0, 0, true};
+        counted := Allocator.{counting_allocator_proc, *counter};
+        lone := to_wide_string("", counted);
+        show_bool(lone != null && lone[0] == 0 && counter.allocations == 1 && counter.last_size == 2);
+        free(lone, counted);
+        show_bool(to_wide_string(cast(string) byte_view, counted) == null && counter.allocations == 1);
+        show_bool(to_wide_string("日本", Allocator.{failing_allocator_proc, null}) == null);
+
+        wide_units : [3]u16;
+        wide_units[0] = 26085; // U+65E5, 日
+        wide_units[1] = 0xD800;
+        wide_units[2] = "a"[0];
+        none, none_ok := from_wide_string(*wide_units[0], 0, counted);
+        show_bool(none_ok && none.count == 0 && none.data == null && counter.allocations == 1);
+        converted, converted_ok := from_wide_string(*wide_units[0], 3, counted);
+        show_bool(converted_ok && converted == "日�a" && counter.allocations == 2 && counter.last_size == 7);
+        free(converted.data, counted);
+        show_bool(counter.frees == 2 && counter.all_here);
+    } else {
+        for 1..6 { show_bool(true); }
+    }
     print_string("\n");
 
     print_string("deleted:");

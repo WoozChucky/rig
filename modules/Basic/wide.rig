@@ -3,8 +3,10 @@
 // FindFirstFileW and the rest, in libc.rig's per-system part), where every
 // Rig string is UTF-8. A string goes to them as a copy converted to UTF-16
 // and ended by a zero unit (to_wide_string, to_wide_path), and what they
-// give back is converted to UTF-8 again (from_wide_string). Linux's calls
-// take bytes, so on Linux this file declares nothing.
+// give back is converted to UTF-8 again: from_wide_string converts it into
+// memory of its own, while list_directory converts each name into a buffer
+// on its stack itself. Linux's calls take bytes, so on Linux this file
+// declares nothing.
 //
 // Basic takes the wide calls because C's own on Windows, fopen, remove and
 // the rest, read a path in the system's ANSI code page rather than as
