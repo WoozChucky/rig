@@ -55,7 +55,9 @@
 // output when stdout and stderr are one pipe (merged_output_test), and
 // Basic's print_error lines, and the standard error of a command run by
 // run_command_with_output, in order with the program's output so, compiled
-// and interpreted (print_error_order_test).
+// and interpreted (print_error_order_test). On Linux a fourth:
+// run_command_with_output's whole output when a signal stops its read
+// (interrupted_read_test).
 //
 // tests/errors/NAME.rig must fail to build: rig exits 1, its stderr equals
 // NAME.err, its stdout is empty (none prints from a top-level #run), and it
@@ -1548,6 +1550,70 @@ static String print_error_order_test(Arena *a, String rig, String unit_tests) {
     }
     return {};
 }
+
+#ifndef _WIN32
+// run_command_with_output's read of the pipe, stopped by a signal: the
+// program installs a SIGALRM handler with sigaction, without SA_RESTART,
+// and a timer that fires 100 ms into a command that sleeps half a second,
+// so the read gives -1 with EINTR before the command writes. Basic must
+// read again, and give the whole output and the command's status 0.
+// Compiled only: the interpreter can't hand C a Rig procedure, and the
+// handler is one (qsort_callback). Linux only, as Windows has no signals
+// that stop a read.
+static String interrupted_read_test(Arena *a, String rig) {
+    String name = str("interrupted_read");
+    String source = string_printf(a, ".build/tests/" STR_FMT ".rig", STR_ARG(name));
+    String text = str("#import \"Basic\";\n"
+                      "C_Sigaction :: struct { handler: (signal: s32) #c_call; mask: [16]u64; flags: s32; pad: s32;"
+                      " restorer: *void; }\n"
+                      "C_Timer :: struct { interval_seconds: s64; interval_microseconds: s64; seconds: s64;"
+                      " microseconds: s64; }\n"
+                      "sigaction :: (signal: s32, action: *C_Sigaction, old: *C_Sigaction) -> s32 #foreign libc;\n"
+                      "setitimer :: (which: s32, value: *C_Timer, old: *C_Timer) -> s32 #foreign libc;\n"
+                      "alarms := 0;\n"
+                      "on_alarm :: (signal: s32) #c_call { alarms += 1; }\n"
+                      "main :: () {\n"
+                      "    action : C_Sigaction;\n"
+                      "    action.handler = on_alarm;\n"
+                      "    timer : C_Timer;\n"
+                      "    timer.microseconds = 100000;\n"
+                      "    if sigaction(14, *action, null) != 0 || setitimer(0, *timer, null) != 0 {\n"
+                      "        print_line(\"no alarm\");\n"
+                      "        return;\n"
+                      "    }\n"
+                      "    output, status := run_command_with_output(\"sleep 0.5; echo done\", HEAP_ALLOCATOR);\n"
+                      "    print(\"[{}] {} {}\\n\", output, status, alarms);\n"
+                      "}\n");
+    if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
+    String expected = str("[done\n] 0 1\n");
+
+    String program = string_printf(a, ".build/tests/" STR_FMT, STR_ARG(name));
+    remove(string_cstr(a, program));
+    Array<String> argv = build_command(a, rig, ".build/tests", name, program);
+    Process_Result built = {};
+    String why = {};
+    bool started = run(a, argv, {}, &built, &why);
+    array_free(&argv);
+    if (!started) return why;
+    if (built.exit_code != 0) {
+        return with_stderr(a, string_printf(a, "rig build exited with " STR_FMT, STR_ARG(exit_code_text(a, built.exit_code))),
+                           built.err);
+    }
+
+    Array<String> command = {};
+    array_add(&command, program);
+    Process_Result ran = {};
+    started = os_run_merged(a, command, {}, TIMEOUT, &ran);
+    array_free(&command);
+    if (!started) return string_printf(a, "couldn't run it: " STR_FMT, STR_ARG(os_error_message(a)));
+    if (ran.timed_out) return string_printf(a, "it took longer than %d seconds", TIMEOUT);
+    if (!string_eq(ran.out, expected)) return first_difference(a, "stdout and stderr", expected, ran.out);
+    if (ran.exit_code != 0) {
+        return string_printf(a, "exit code " STR_FMT ", expected 0", STR_ARG(exit_code_text(a, ran.exit_code)));
+    }
+    return {};
+}
+#endif
 
 // rig build of a program whose top-level #runs print and then fail, its
 // stdout and stderr in one pipe: what the runs printed must come out first,
@@ -3807,6 +3873,10 @@ int main(int argc, char **argv) {
            &failed);
     report("print_error's lines in order with the program's output, both in one pipe",
            print_error_order_test(&a, rig, unit_tests), &passed, &failed);
+#ifndef _WIN32
+    report("run_command_with_output's whole output when a signal stops its read", interrupted_read_test(&a, rig),
+           &passed, &failed);
+#endif
     run_directory(&a, rig, "", "tests/errors", error_test, &passed, &failed);
     build_directory_tests(&a, rig, &passed, &failed);
     report("rig build sub/build.rig from its parent", build_program_elsewhere_test(&a, rig), &passed, &failed);
