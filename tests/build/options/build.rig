@@ -5,8 +5,10 @@
 // built with bounds_checks false, whose index past the end isn't checked,
 // and one built with the default options, whose index past the end is, and
 // the same program optimised, whose index still is (checked_workspace_test).
-// The unchecked, checked and checked_fast workspaces' executables take
-// their files' names, past_the_end, checked and checked_fast.
+// And a program built optimised and with bounds_checks false, whose failing
+// assert still stops it (asserted.rig). The unchecked, checked,
+// checked_fast and asserted workspaces' executables take their files'
+// names, past_the_end, checked, checked_fast and asserted.
 #import "Compiler";
 
 #run {
@@ -37,4 +39,11 @@
     o.optimize = true;
     set_build_options(checked_fast, o);
     add_build_file(checked_fast, "checked_fast.rig");
+
+    asserted := create_workspace("asserted");
+    o = get_build_options(asserted);
+    o.optimize = true;
+    o.bounds_checks = false;
+    set_build_options(asserted, o);
+    add_build_file(asserted, "asserted.rig");
 }

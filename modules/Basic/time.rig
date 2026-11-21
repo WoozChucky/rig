@@ -16,12 +16,14 @@
 //
 // The calendar is always UTC, the proleptic Gregorian calendar's, as ISO
 // 8601 has it: no time zones and no leap seconds (each day has 86400
-// seconds, as POSIX and timespec_get count them). Nothing here sleeps:
-// C17's own call, thrd_sleep (<threads.h>, optional), is on both systems,
-// but MSVC's <threads.h> defines it only inline, over the Visual C++
-// runtime's _thrd_sleep64, which the compiler doesn't link it to and the
-// interpreter doesn't find; and Basic doesn't call either system's own
-// (Sleep, nanosleep) yet.
+// seconds, as POSIX and timespec_get count them).
+//
+// sleep_milliseconds sleeps by each system's own call, kernel32's Sleep on
+// Windows and nanosleep on Linux (libc.rig's per-system part), and not by
+// C17's thrd_sleep (<threads.h>, optional): it is on both systems, but
+// MSVC's <threads.h> defines it only inline, over the Visual C++ runtime's
+// _thrd_sleep64, which the compiler doesn't link it to and the interpreter
+// doesn't find.
 #load "libc.rig";
 #load "numbers.rig";
 
@@ -203,4 +205,40 @@ format_time :: (calendar: Calendar, buffer: []u8) -> string {
     written := cast(string) buffer;
     written.count = count;
     return written;
+}
+
+// Sleeps for ms milliseconds. On Linux it is at least that long, and the
+// system may wake the program later. On Windows it is about that long:
+// Sleep works in the system's clock ticks, about 15.6 ms apart, so it may
+// wake the program up to a tick early, or later, as its documentation
+// says. An ms of 0 or less returns at once and calls nothing.
+//
+// Windows' Sleep takes a DWORD, whose largest, 0xFFFFFFFF, is INFINITE, a
+// sleep that never ends, so the time is slept in pieces of at most
+// 2^31 - 1 ms each, and INFINITE is never passed. Linux's nanosleep takes
+// whole seconds and the nanoseconds after them, below 10^9, with padding 0
+// (C_Timespec's comment says why); when a signal wakes it before the time
+// is up, it gives -1 and writes the time left, which is slept in turn.
+sleep_milliseconds :: (ms: int) {
+    if ms <= 0 { return; }
+    #if OS == OS_WINDOWS {
+        MOST :: 2147483647; // the most milliseconds one call is given
+        left := ms;
+        while left > 0 {
+            piece := left;
+            if piece > MOST { piece = MOST; }
+            c_sleep(cast(u32) piece);
+            left -= piece;
+        }
+    } else {
+        request := C_Timespec.{ms / 1000, cast(s32) ((ms % 1000) * 1000000), 0};
+        while true {
+            // Zeroed before each call, so a failure that writes nothing
+            // (none but a signal's should come) leaves no time to sleep.
+            remaining : C_Timespec;
+            if c_nanosleep(*request, *remaining) == 0 { break; }
+            if remaining.seconds <= 0 && remaining.nanoseconds <= 0 { break; }
+            request = remaining;
+        }
+    }
 }

@@ -1,0 +1,15 @@
+tests/errors/basic_assert_run.rig:17:10: error: #run failed: runtime error: assertion failed: the count is positive
+    COUNT :: #run count_of_things();
+             ^
+    in assert (@MODULES@/Basic/assert.rig:65:5)
+    in count_of_things (tests/errors/basic_assert_run.rig:13:5)
+    in #run (tests/errors/basic_assert_run.rig:17:10)
+tests/errors/basic_assert_run.rig:24:13: error: #run failed: runtime error: assertion failed: no place
+    NO_PLACE :: #run no_place();
+                ^
+    in assert (@MODULES@/Basic/assert.rig:65:5)
+    in no_place (tests/errors/basic_assert_run.rig:20:5)
+    in #run (tests/errors/basic_assert_run.rig:24:13)
+tests/errors/basic_assert_run.rig:30:15: error: a value of type 'string' doesn't convert to 'int' implicitly
+    wrong : int = "x";
+                  ^

@@ -5,11 +5,11 @@
 // out in the order it was printed, compiled and interpreted.
 //
 // A string is bytes, and they're written as they are: no encoding is
-// checked or changed, so UTF-8 text prints as UTF-8. There's no portable
-// way to reach standard error from Rig yet (its C FILE * is a call,
-// __acrt_iob_func(2), on Windows but a data symbol, stderr, in glibc,
-// which Rig can't declare: #if can choose the system, but not reach
-// glibc's), so Basic prints only to standard output.
+// checked or changed, so UTF-8 text prints as UTF-8. print_error and
+// print_error_string, at the end, write to standard error instead: C's
+// streams flushed, then c_write on descriptor 2, as the runtime writes a
+// runtime error (spec 10.5), so what was printed before comes out before
+// them even when standard output and standard error go to one place.
 //
 // Numbers are written into a buffer on the stack by numbers.rig and then
 // printed, so printing to standard output never allocates.
@@ -449,4 +449,62 @@ tprint :: (format: string, args: ..Any) -> string {
     text.data = builder.data;
     text.count = builder.count;
     return text;
+}
+
+// Writes the bytes of s to standard error, as they are, and nothing else.
+// What was printed to standard output before, by Basic or by C's printf,
+// comes out first: standard output into a pipe or a file is buffered and
+// standard error isn't, so C's streams are flushed first, as the runtime
+// flushes them before a runtime error (spec 8.1). Then the bytes go to
+// descriptor 2 with c_write (libc.rig), the call the runtime writes a
+// runtime error with (spec 10.5), on both systems. Not through C's stderr:
+// on Windows it is a call, __acrt_iob_func(2), but in glibc a data symbol,
+// which #foreign can't declare, and a second stream over descriptor 2
+// (fdopen's) would have a buffer of its own to keep and flush.
+//
+// The bytes go in calls of at most 2^30 bytes, since Windows' count and
+// result are 32 bits, each going on from where the last stopped, as a call
+// may write fewer bytes than it was given. When one writes none or fails,
+// the rest is dropped: there's nowhere left to say so. On Linux a call a
+// signal stopped before it wrote anything (C_EINTR) is made again, and
+// isn't a failure. An empty string, or a zeroed one, writes nothing,
+// though C's streams are flushed all the same.
+print_error_string :: (s: string) {
+    c_fflush(null);
+    MOST :: 1 << 30; // the most bytes one call is given
+    written := 0;
+    while written < s.count {
+        count := s.count - written;
+        if count > MOST { count = MOST; }
+        wrote := 0;
+        #if OS == OS_WINDOWS {
+            wrote = cast(int) c_write(2, s.data + written, cast(u32) count);
+        } else {
+            wrote = cast(int) c_write(2, s.data + written, cast(u64) count);
+            if wrote < 0 && c_errno_location().* == C_EINTR { continue; }
+        }
+        if wrote <= 0 { return; }
+        written += wrote;
+    }
+}
+
+// Writes to standard error what print would write to standard output:
+// print_error("can't read {}\n", path). The text is formatted into a
+// builder of its own on the heap first, and then given to
+// print_error_string whole, so a line goes out in one call rather than a
+// piece at a time, and comes out after what was printed before it, as
+// print_error_string says. The heap's memory is freed before it returns.
+//
+// It takes its memory from the heap only, never from context.allocator, so
+// an arena or a memory debugger the program set sees nothing of an error
+// message, and it takes no loc: no allocator it is given would see one.
+print_error :: (format: string, args: ..Any) {
+    scratch : String_Builder;
+    builder_init(*scratch, HEAP_ALLOCATOR);
+    defer builder_free(*scratch);
+    print_formatted(*scratch, format, args);
+    text : string;
+    text.data = scratch.data;
+    text.count = scratch.count;
+    print_error_string(text);
 }

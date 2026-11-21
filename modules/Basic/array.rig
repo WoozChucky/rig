@@ -1,9 +1,9 @@
-// Basic's bounds check, which the hash tables use to stop a program with
-// the language's own message when an entry index is outside their entries:
-// there is no portable way to write a message of Basic's own to standard
-// error. Basic's untyped growable array is gone: resizable arrays are the
-// language's, [..]T (spec 3.17), grown and shrunk by its built-in
-// procedures, array_add and the others.
+// Basic's bounds check, which the hash tables use to stop a program when an
+// entry index is outside their entries, with the language's own check: so
+// its message, place and exit status are an indexing failure's, and
+// --no-bounds-checks turns it off as it turns off indexing's. Basic's
+// untyped growable array is gone: resizable arrays are the language's,
+// [..]T (spec 3.17), grown and shrunk by its built-in procedures.
 
 // Stops the program unless index is at least 0 and less than count, as
 // indexing does: with the language's own runtime error, "index I is out of

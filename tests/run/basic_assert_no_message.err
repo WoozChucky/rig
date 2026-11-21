@@ -1,0 +1,1 @@
+tests/run/basic_assert_no_message.rig:8:5: runtime error: assertion failed

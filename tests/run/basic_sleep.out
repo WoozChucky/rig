@@ -1,0 +1,4 @@
+sleep 20 ms: at least 10 ms: true
+sleep 0 ms: under half a second: true
+sleep -5 ms: under half a second: true
+sleep 1001 ms: at least 500 ms: true

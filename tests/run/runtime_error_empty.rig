@@ -1,0 +1,12 @@
+// A program's own call of Preload's __runtime_error (issue #157, spec 8.1)
+// with an empty text: it stops the program as a failing check does, exit
+// status 101, and writes its text, which is nothing, so stderr is empty.
+// Interpreted, the same (spec 10.8): the text as given, not a line made up
+// from where the call is.
+#import "Basic";
+
+main :: () {
+    print_line("before");
+    __runtime_error("", 0);
+    print_line("not reached");
+}

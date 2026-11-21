@@ -885,6 +885,7 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             // isn't given to interp_fail, which would copy it again.
             interp_fail(in, frame, block, index, a, result, {});
             result->message = string_slice(all, start, end - start);
+            result->panicked = true;
             result->panic_text = all;
             return;
         }

@@ -2622,6 +2622,15 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             if (decl->kind == AST_PROC && string_eq(name, str("__save_command_line"))) {
                 c->file->save_command_line = (Ast_Proc *)decl;
             }
+            // And the one #compiler procedure the program's own code may
+            // call (spec 8.1, 10.5), which lowering makes a panic, the
+            // runtime error Basic's assert ends with: only a #compiler one,
+            // since any other would be an ordinary procedure, called as
+            // one.
+            if (decl->kind == AST_PROC && ((Ast_Proc *)decl)->is_compiler &&
+                string_eq(name, str("__runtime_error"))) {
+                c->file->runtime_error = (Ast_Proc *)decl;
+            }
             // And the resizable arrays' layout (spec 3.17), whose last field
             // is the allocator a [..]T holds: without it, no [..]T.
             if (decl->kind == AST_STRUCT && string_eq(name, str("Resizable_Array"))) {

@@ -88,6 +88,7 @@ struct Interp_Result {
     bool ok;
     Array<u64> results;          // ok: one per IR result, canonical bits (below)
     String message;              // failed: "division by zero", "stack overflow", ...
+    bool panicked;               // failed by IR_PANIC, whose text, empty or not, is panic_text
     String panic_text;           // failed by IR_PANIC: its bytes as the program writes them; empty otherwise
     Array<Interp_Frame> frames;  // failed: innermost first, compiler-made procedures left out; none when
                                  // the run failed before it started (a program that can't run at all,

@@ -1,0 +1,24 @@
+missing: false
+made: true false true
+no parent: false
+refused: false false false false
+children: true true true true true true
+found: true true
+on disk: true true
+a file: false false false true
+listed: true 6 [Z] [a] [b] [café] [m.txt] [日本]
+zero after each: true
+freed: 1 1
+trailing separator: true 6
+listed 日本: true true 1 [café]
+listing closed: true
+drive's current directory: true
+empty: true 0 true 0 0
+delete zero byte: false true
+list a file: false 0 true 0 0
+list missing: false 0 true 0 0
+list empty path: false 0 true 0 0
+list zero byte: false 0 true 0 0
+list no memory: false 0 true 0 0
+invalid UTF-8: true
+deleted: false false true true true true true true true true false false

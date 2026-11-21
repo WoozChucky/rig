@@ -8,30 +8,42 @@
 // Everything else in Basic is written in Rig over these and over Preload's
 // heap allocator (spec 2.14).
 //
-// Each of them links and runs on Windows (the UCRT) and Linux (glibc's libc
-// and, for <math.h>, its libm, which every program links too, spec 10.6),
-// compiled and interpreted, with one declaration that serves both: where
-// C's types differ (fseek's long offset, fpos_t, struct timespec), the
-// declaration and its comment say how Basic stays within what both agree
-// on. On Windows the interpreter takes them from the compiler's own copy of
-// the C library, so a FILE * that c_fopen gives is one the other calls
-// accept. Some C functions that would seem to fit are left out on purpose:
+// The ones before the per-system part at the end of this file each link
+// and run on Windows (the UCRT) and Linux (glibc's libc and, for <math.h>,
+// its libm, which every program links too, spec 10.6), compiled and
+// interpreted, with one declaration that serves both: where C's types
+// differ (fseek's long offset, fpos_t, struct timespec), the declaration
+// and its comment say how Basic stays within what both agree on. On Windows
+// the interpreter takes them from the compiler's own copy of the C library,
+// so a FILE * that c_fopen gives is one the other calls accept. Some C
+// functions that would seem to fit are left out on purpose:
 //
 // - ftell and a nonzero fseek offset: they take or give C's long, 32 bits
 //   on Windows and 64 on Linux, so no one declaration fits both, and on
 //   Windows a file past 2 GiB is out of reach. A file's size comes from
 //   fgetpos at its end instead, 64 bits on both.
-// - _ftelli64 and ftello: each is on one system only, and on Windows the
-//   interpreter takes _ftelli64 from a second C runtime, whose calls refuse
-//   the compiler's own FILE *.
+// - _ftelli64 and ftello: one for each system, which the per-system part
+//   could declare, but on Windows the interpreter takes _ftelli64 from a
+//   second C runtime, whose calls refuse the compiler's own FILE *.
 // - time: whole seconds, where timespec_get gives nanoseconds.
 // - clock: a different clock on each system, the wall time since the
 //   program started on Windows and the processor time on Linux.
+//
+// The per-system part, at the end, is a top-level #if (spec 4.9) whose two
+// branches declare each system's own functions under one c_ name: a
+// function only one system has, or one whose types differ between them,
+// as c_write's count and result do. A procedure that calls one chooses
+// with a statement #if in its body, and the branch it doesn't take is
+// never checked. On Windows, interpreted, the functions there whose names
+// start with _ come from ucrtbase.dll, a second C runtime with no state in
+// common with the compiler's own copy (spec 10.8), so Basic uses them only
+// with one another, never with a FILE * that the calls above give or take.
 
 // Writes one byte to standard output, through C's own stdout buffer. It is
-// the one call Basic writes with: unlike POSIX's write or Windows' _write,
-// putchar links and runs everywhere, compiled and interpreted, and its
-// bytes stay in order with the ones a program writes with C's printf.
+// the one call Basic writes to standard output with: it links and runs
+// everywhere, compiled and interpreted, with one declaration, and its bytes
+// stay in order with the ones a program writes with C's printf. Standard
+// error is written with c_write, in the per-system part below.
 c_putchar :: (c: s32) -> s32 #foreign libc "putchar";
 
 // C's heap, for a program that imports Basic. Basic itself takes heap
@@ -93,7 +105,8 @@ c_ferror :: (file: *void) -> s32 #foreign libc "ferror";
 
 // Writes out what C holds in a stream's buffer: 0 when it could. Given
 // null it flushes every stream, which Basic does before running a command,
-// so what the program printed comes out before what the command prints.
+// so what the program printed comes out before what the command prints,
+// and before writing to standard error, so it comes out before that too.
 c_fflush :: (file: *void) -> s32 #foreign libc "fflush";
 
 // Deletes the file at path: 0 when it did, and not 0 when it didn't. On
@@ -117,7 +130,10 @@ c_system :: (command: *u8) -> s32 #foreign libc "system";
 // the UCRT, 8 bytes in glibc. The nanoseconds are below 10^9, so on
 // glibc's little-endian long they are the low 4 bytes, and the high 4 are
 // 0. So this struct, 16 bytes, holds either, and its nanoseconds field
-// reads them on both. Basic leaves padding as C wrote it.
+// reads them on both. Basic leaves padding as C wrote it when reading one.
+// It also passes one to C, to Linux's nanosleep (c_nanosleep, below), with
+// padding 0: then glibc's 8-byte tv_nsec, low 4 bytes and high 4 together,
+// is the nanoseconds field's value.
 C_Timespec :: struct {
     seconds: s64;
     nanoseconds: s32;
@@ -216,3 +232,228 @@ c_truncf :: (x: float32) -> float32 #foreign libc "truncf";
 
 // The remainder of x / y with x's sign, as c_fmod.
 c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
+
+// Each system's own functions (the header says why they're apart). Each
+// name is declared in both branches, with that system's signature, unless
+// only one system has it.
+#if OS == OS_WINDOWS {
+    // Writes count bytes of data to the file descriptor, 2 for standard
+    // error, at once, with no buffer of C's in between: the bytes it wrote,
+    // or -1 when it couldn't. Its count is 32 bits, and so is its result.
+    // A descriptor is in text mode unless set otherwise, so each \n is
+    // written \r\n, as C's stdout writes it. It is what the runtime writes
+    // a runtime error with (spec 10.5).
+    c_write :: (descriptor: s32, data: *void, count: u32) -> s32 #foreign libc "_write";
+
+    // Sleeps for about milliseconds: it works in the system's clock ticks,
+    // about 15.6 ms apart, so the thread may wake up to a tick early, or
+    // later, as its documentation says. Its count is a DWORD, whose
+    // largest, 0xFFFFFFFF, is INFINITE, a sleep that never ends. It is
+    // kernel32's, which every program links (spec 10.6) and the interpreter
+    // looks up in kernel32.dll (spec 10.8).
+    c_sleep :: (milliseconds: u32) #foreign libc "Sleep";
+
+    // Basic's directories (directory.rig) go through kernel32's wide
+    // calls, which take a path as UTF-16, so a name outside the ANSI code
+    // page is reached. Like Sleep, each is kernel32's, which every program
+    // links and the interpreter looks up in kernel32.dll (spec 10.6, 10.8),
+    // so compiled and interpreted programs call the same functions.
+
+    // WIN32_FIND_DATAW, an entry FindFirstFileW and FindNextFileW fill:
+    // 592 bytes, aligned to 4. Basic reads only its name, up to 259 UTF-16
+    // units and a zero; times holds its three FILETIMEs
+    // (made, last read, last written), each two u32s.
+    C_Find_Data :: struct {
+        attributes: u32;
+        times: [6]u32;
+        size_high: u32;
+        size_low: u32;
+        reserved0: u32;
+        reserved1: u32;
+        name: [260]u16;
+        alternate_name: [14]u16;
+    }
+
+    // What GetFileAttributesW gives for a path it can't find or read, and
+    // its bit for a directory.
+    C_INVALID_FILE_ATTRIBUTES :: 4294967295;
+    C_FILE_ATTRIBUTE_DIRECTORY :: 16;
+
+    // GetLastError's numbers: FindFirstFileW found nothing to list (as in a
+    // drive's root with no entries, which has no . or ..), and
+    // FindNextFileW has no entry left.
+    C_ERROR_FILE_NOT_FOUND :: 2;
+    C_ERROR_NO_MORE_FILES :: 18;
+
+    // The code page of UTF-8, and MultiByteToWideChar's flag that makes it
+    // give 0 for bytes that aren't valid UTF-8, rather than turn them into
+    // U+FFFD, which would name another path.
+    C_CP_UTF8 :: 65001;
+    C_MB_ERR_INVALID_CHARS :: 8;
+
+    // Converts byte_count bytes in code_page to UTF-16 in wide, which has
+    // room for wide_count units, and gives the units written; given a
+    // wide_count of 0 it writes nothing and gives the units needed. 0 for
+    // a byte_count of 0, and with C_MB_ERR_INVALID_CHARS for bytes that
+    // aren't valid.
+    c_multi_byte_to_wide_char :: (code_page: u32, flags: u32, bytes: *u8, byte_count: s32, wide: *u16, wide_count: s32) -> s32 #foreign libc "MultiByteToWideChar";
+
+    // Converts UTF-16 to code_page in bytes, which has room for byte_count
+    // of them, and gives the bytes written; a wide_count of -1 converts up
+    // to the zero that ends wide, and writes and counts that zero too. In
+    // UTF-8 an unpaired surrogate becomes U+FFFD. Preload declares the same
+    // function as __wide_char_to_multi_byte, for the command line, and two
+    // declarations of one C function are allowed (spec 7.6).
+    c_wide_char_to_multi_byte :: (code_page: u32, flags: u32, wide: *u16, wide_count: s32, bytes: *u8, byte_count: s32, default_char: *u8, used_default: *s32) -> s32 #foreign libc "WideCharToMultiByte";
+
+    // The attributes of what is at path, C_INVALID_FILE_ATTRIBUTES when
+    // nothing is there or it can't be read.
+    c_get_file_attributes_w :: (path: *u16) -> u32 #foreign libc "GetFileAttributesW";
+
+    // Makes the directory path, whose parent must be there; not 0 when it
+    // did, and 0 when it didn't, as when anything is at path already.
+    // Basic passes null for security, the default.
+    c_create_directory_w :: (path: *u16, security: *void) -> s32 #foreign libc "CreateDirectoryW";
+
+    // Deletes the directory path, which must be empty; not 0 when it did.
+    c_remove_directory_w :: (path: *u16) -> s32 #foreign libc "RemoveDirectoryW";
+
+    // Starts a listing of the entries pattern matches, a directory's path
+    // and \*, and fills data with the first: a handle for the next ones,
+    // which c_find_close closes, or INVALID_HANDLE_VALUE (-1, compared as
+    // cast(int) handle == -1) with GetLastError saying why.
+    c_find_first_file_w :: (pattern: *u16, data: *C_Find_Data) -> *void #foreign libc "FindFirstFileW";
+
+    // Fills data with the listing's next entry: not 0 when it did, and 0
+    // at the end (GetLastError C_ERROR_NO_MORE_FILES) or on an error.
+    c_find_next_file_w :: (handle: *void, data: *C_Find_Data) -> s32 #foreign libc "FindNextFileW";
+
+    // Closes a listing's handle: not 0 when it did.
+    c_find_close :: (handle: *void) -> s32 #foreign libc "FindClose";
+
+    // The error of the last kernel32 call on this thread that failed. Read
+    // right after the call, before anything else is called, it is that
+    // call's, compiled and interpreted.
+    c_get_last_error :: () -> u32 #foreign libc "GetLastError";
+
+    // Basic's run_command_with_output (environment.rig) reads a command's
+    // output through the UCRT's _popen, _fileno, _read and _pclose, used
+    // only with one another: interpreted, they are ucrtbase.dll's, and the
+    // compiler's own fread would refuse _popen's FILE *, so the output is
+    // read from its descriptor with _read, never with c_fread.
+
+    // Runs command through cmd.exe, as c_system does, with its standard
+    // output going into a pipe this end reads, and gives that end as a
+    // FILE *, or null when it can't. Basic's mode is "rb", binary, so the
+    // output's bytes come as the command wrote them, cmd's \r\n included.
+    // The command is bytes in the system's ANSI code page, as c_system's
+    // is.
+    c_popen :: (command: *u8, mode: *u8) -> *void #foreign libc "_popen";
+
+    // Waits for the command c_popen ran to end, closes its pipe, and gives
+    // its status as c_system gives it, the command's exit code, or -1 when
+    // it can't.
+    c_pclose :: (stream: *void) -> s32 #foreign libc "_pclose";
+
+    // The file descriptor under a FILE * of _popen's, for c_read.
+    c_fileno :: (stream: *void) -> s32 #foreign libc "_fileno";
+
+    // Reads up to count bytes from the file descriptor into buffer: the
+    // bytes it read, 0 at the end, or -1 when it couldn't. Its count is 32
+    // bits, and so is its result.
+    c_read :: (descriptor: s32, buffer: *void, count: u32) -> s32 #foreign libc "_read";
+} else {
+    // Writes count bytes of data to the file descriptor, 2 for standard
+    // error, at once, with no buffer of C's in between: the bytes it wrote,
+    // which may be fewer, or -1 when it couldn't. It is what the runtime
+    // writes a runtime error with (spec 10.5).
+    c_write :: (descriptor: s32, data: *void, count: u64) -> s64 #foreign libc "write";
+
+    // Sleeps for the time request holds, at least: 0 when it slept it all,
+    // or -1 when a signal woke it first, having written the time still
+    // left to remaining. request's nanoseconds must be below 10^9, and its
+    // padding 0 (C_Timespec's comment says why).
+    c_nanosleep :: (request: *C_Timespec, remaining: *C_Timespec) -> s32 #foreign libc "nanosleep";
+
+    // Basic's directories (directory.rig) go through POSIX's calls, which
+    // take a path as bytes, so a UTF-8 path names what it says.
+
+    // glibc's struct stat on x86-64, 144 bytes, which stat fills: Basic
+    // reads only mode, st_mode, at offset 24; rest holds the fields after
+    // it.
+    C_Stat :: struct {
+        device: u64;
+        inode: u64;
+        links: u64;
+        mode: u32;
+        rest: [116]u8;
+    }
+
+    // st_mode's bits for the kind of file, and their value for a directory.
+    C_S_IFMT :: 61440;
+    C_S_IFDIR :: 16384;
+
+    // Where d_name, the entry's name ended by a zero, is in glibc's struct
+    // dirent on x86-64: after d_ino (8 bytes), d_off (8), d_reclen (2) and
+    // d_type (1).
+    C_DIRENT_NAME_OFFSET :: 19;
+
+    // Fills buffer with what is known of what is at path, following a
+    // symbolic link: 0 when it could, -1 when nothing is there or it can't
+    // be reached. libc.so.6 exports stat from glibc 2.33 on, older than the
+    // 2.34 every program needs already.
+    c_stat :: (path: *u8, buffer: *C_Stat) -> s32 #foreign libc "stat";
+
+    // Makes the directory path, whose parent must be there, with the
+    // permissions mode less the process's umask: 0 when it did, -1 when it
+    // didn't, as when anything is at path already.
+    c_mkdir :: (path: *u8, mode: u32) -> s32 #foreign libc "mkdir";
+
+    // Deletes the directory path, which must be empty: 0 when it did.
+    c_rmdir :: (path: *u8) -> s32 #foreign libc "rmdir";
+
+    // Opens the directory path for listing: a DIR *, which c_closedir
+    // closes, or null when it can't, as for a file or a missing path.
+    c_opendir :: (path: *u8) -> *void #foreign libc "opendir";
+
+    // The directory's next entry, the address of a struct dirent that
+    // stays the C library's (its name at C_DIRENT_NAME_OFFSET), or null at
+    // the end and on an error, which only errno tells apart.
+    c_readdir :: (directory: *void) -> *u8 #foreign libc "readdir";
+
+    // Closes a directory c_opendir opened: 0 when it did.
+    c_closedir :: (directory: *void) -> s32 #foreign libc "closedir";
+
+    // The address of this thread's errno, which a #foreign declaration
+    // can't reach by its name, since in glibc it is a macro over this
+    // call.
+    c_errno_location :: () -> *s32 #foreign libc "__errno_location";
+
+    // errno's EINTR: a call a signal stopped before it did anything, as
+    // when the program installed a handler without SA_RESTART. Basic's
+    // reads and writes on a descriptor try such a call again.
+    C_EINTR :: 4;
+
+    // Basic's run_command_with_output (environment.rig) reads a command's
+    // output through POSIX's popen, fileno, read and pclose, from the
+    // pipe's descriptor, as on Windows.
+
+    // Runs command through sh, as c_system does, with its standard output
+    // going into a pipe this end reads, and gives that end as a FILE *, or
+    // null when it can't. glibc's mode takes only r, w and e, and refuses
+    // any other letter, b included, so Basic's mode is "r": Linux's pipes
+    // have no text mode, and the bytes come as the command wrote them.
+    c_popen :: (command: *u8, mode: *u8) -> *void #foreign libc "popen";
+
+    // Waits for the command c_popen ran to end, closes its pipe, and gives
+    // its status as c_system gives it, a wait status, or -1 when it can't.
+    c_pclose :: (stream: *void) -> s32 #foreign libc "pclose";
+
+    // The file descriptor under a FILE *, for c_read.
+    c_fileno :: (stream: *void) -> s32 #foreign libc "fileno";
+
+    // Reads up to count bytes from the file descriptor into buffer: the
+    // bytes it read, which may be fewer, 0 at the end, or -1 when it
+    // couldn't.
+    c_read :: (descriptor: s32, buffer: *void, count: u64) -> s64 #foreign libc "read";
+}

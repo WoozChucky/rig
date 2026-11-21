@@ -192,8 +192,10 @@ static void interpret_mode(void *data) {
         mode->status = (s32)(u32)r.results[0];
     } else {
         fflush(nullptr);
-        if (r.panic_text.count) {
-            fwrite(r.panic_text.data, 1, (size_t)r.panic_text.count, stderr);
+        if (r.panicked) {
+            // A panic's text as the compiled program writes it: nothing
+            // when it's empty, not a line made up from the frame.
+            if (r.panic_text.count) fwrite(r.panic_text.data, 1, (size_t)r.panic_text.count, stderr);
         } else if (r.frames.count) {
             Position pos = r.frames[0].pos;
             fprintf(stderr, STR_FMT ":%d:%d: runtime error: " STR_FMT "\n", STR_ARG(paths[pos.file]), pos.line, pos.col,
