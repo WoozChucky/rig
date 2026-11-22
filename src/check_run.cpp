@@ -396,22 +396,23 @@ static bool walk_enum(Reach *r, Type *t) {
     return true;
 }
 
-// A type reached: each struct in it, held by value, through arrays,
-// views and resizable arrays, has every field's type made now
-// (check_late_field). The #run may come in the declaration pass, before
-// resolve_late_fields has made a late field's type, and lowering and
-// baking need them all. A resizable array (spec 3.17) reaches Preload's
-// Resizable_Array too, its layout, whose last field is its allocator's
-// type. A pointer's target isn't looked behind: holding one needs no more
-// than its address (code that moves it reaches its target where it does,
-// walk_expression). Nor is an enum's members' values (spec 3.18): holding
-// one needs only its integer type, which it has from its declaration, and
-// lowering and baking read no more; a member the code names worked its
-// enum's values out when it was checked (find_enum_member), and a
-// description needs them (walk_described). So a member's #run may hold a
-// value of its own enum. False when a struct has no layout (a circle, too
-// big, too deep), or is still being laid out (a circle through this #run,
-// check_finished_layout), or a field has no type: errors, said.
+// A type reached: each struct in it, held by value, through arrays, views
+// and resizable arrays, has every field's type made now (check_late_field).
+// The #run may come in the declaration pass, before resolve_late_fields has
+// made a late field's type, and lowering and baking need them all. A
+// resizable array (spec 3.17) reaches Preload's Resizable_Array too, its
+// layout, whose last field is its allocator's type. A pointer's target
+// isn't looked behind: holding one needs no more than its address (code
+// that moves it reaches its target where it does, walk_expression). Nor is
+// an enum's members' values (spec 3.18): holding one needs only its integer
+// type, which it has from its declaration, and lowering and baking read no
+// more; a member the code names worked its enum's values out when it was
+// checked (find_enum_member), or, named with its enum inside its own enum's
+// body, was worked out already, and a description needs them
+// (walk_described). So a member's #run may hold a value of its own enum.
+// False when a struct has no layout (a circle, too big, too deep), or is
+// still being laid out (a circle through this #run, check_finished_layout),
+// or a field has no type: errors, said.
 static bool walk_type(Reach *r, Type *t) {
     if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) {
         reach_type(r, t->element);

@@ -304,7 +304,7 @@
                     "match": "\\b(?:OS)\\b"
                 },
                 {
-                    "comment": "The predeclared enum (spec 2.5), OS's type, src/checker.cpp's OPERATING_SYSTEM: a type's scope, where a type is written too, as #type-name includes #constants first.",
+                    "comment": "The predeclared enum (spec 2.5), OS's type, src/checker.cpp's OPERATING_SYSTEM: a type's scope, where a type is written too, as #type includes #constants before #type-name.",
                     "name": "support.type.rig",
                     "match": "\\bOperating_System\\b"
                 }
