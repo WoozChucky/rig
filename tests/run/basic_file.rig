@@ -3,10 +3,11 @@
 // one of every byte value and one of several megabytes, appending,
 // writing over a file that is there, write_file_in_mode given a mode it
 // doesn't write in, an allocator with no memory, the File procedures, a
-// file open twice at once and deleted while open, a file read or written
-// in the wrong mode, a directory given as a file, and closed again where
-// Linux's C library opens it, an empty directory, which the test makes and
-// deletes, a path with a zero byte, and a File that isn't open.
+// file open twice at once and deleted while open, or refused, on Windows,
+// a file read or written in the wrong mode, a directory given as a file,
+// and closed again where Linux's C library opens it, an empty directory,
+// which the test makes and deletes, a path with a zero byte, and a File
+// that isn't open.
 #import "Basic";
 
 A :: ".build/tests/basic_file_a.txt";

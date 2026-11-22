@@ -22,11 +22,11 @@
 // spec 8.5). Lowering finds errors of its own, a call of a #compiler
 // procedure the program would make (spec 7.9), printed as the others are,
 // and then rig stops there too, writing no object (exit 1). Preload's
-// __runtime_error is no such error: each call of it is a panic. Otherwise it has LLVM write the object file
-// .build/NAME.obj (Windows) or .build/NAME.o (Linux) in the current
-// directory, and links it into OUTPUT, by default NAME.exe or NAME in the
-// current directory, NAME being FILE.rig's name (the main file's) without
-// its directory and .rig (exit 0).
+// __runtime_error is no such error: each call of it is a panic. Otherwise
+// it has LLVM write the object file .build/NAME.obj (Windows) or
+// .build/NAME.o (Linux) in the current directory, and links it into OUTPUT,
+// by default NAME.exe or NAME in the current directory, NAME being FILE.rig's
+// name (the main file's) without its directory and .rig (exit 0).
 //
 // The checker runs the program's expression #runs while it checks, where it
 // first needs their values (spec 7.8), in rig check too: what they print
