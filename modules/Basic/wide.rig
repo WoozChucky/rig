@@ -14,19 +14,21 @@
 // system's ANSI code page rather than as UTF-8, so one with a character
 // outside that code page, 日本 in code page 1252, means something else
 // there: another file, variable or command, or none. C's wide-character
-// calls for files, _wfopen and _wremove, would take a path right, but
-// interpreted they are a second C runtime's, ucrtbase.dll's (spec 10.8),
+// call for opening a file, _wfopen, would take a path right, but
+// interpreted it is a second C runtime's, ucrtbase.dll's (spec 10.8),
 // whose FILE * the compiler's own copy of C refuses. That reason isn't
-// the commands': _wsystem gives no FILE *, and _wpopen's could be read
-// with its own runtime's _fileno and _read, as _popen's was. Basic takes
-// CreateProcessW for them so that its commands, like its files and its
-// environment, reach only kernel32. _wsystem and _wpopen would be
-// ucrtbase.dll's both ways, but compiled that is the C runtime the
-// program's other C calls go to, and interpreted a second one, sharing no
-// state (its streams, heap, errno) with the compiler's own copy of C,
-// which those calls go to there. kernel32's calls are the same functions,
-// with the same state, both ways: every program links kernel32, and the
-// interpreter looks them up in kernel32.dll (spec 10.6, 10.8).
+// _wremove's or the commands': _wremove and _wsystem give no FILE *, and
+// _wpopen's could be read with its own runtime's _fileno and _read, as
+// _popen's was. Basic takes DeleteFileW and CreateProcessW for them so
+// that its files, its commands and its environment reach only kernel32.
+// _wremove, _wsystem and _wpopen would be ucrtbase.dll's both ways, but
+// compiled that is the C runtime the program's other C calls go to, and
+// interpreted a second one, sharing no state (its streams, heap, errno)
+// with the compiler's own copy of C, which the program's standard C calls
+// (stdio, malloc, errno and the rest of C17) go to there. kernel32's calls
+// are the same functions, with the same state, both ways: every program
+// links kernel32, and the interpreter looks them up in kernel32.dll (spec
+// 10.6, 10.8).
 //
 // Each copy comes from the allocator the caller gives, at loc, the place
 // of the call unless given (#caller_location, spec 7.2), and the caller
