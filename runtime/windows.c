@@ -23,7 +23,7 @@ typedef unsigned long long size_t;
 typedef unsigned short wchar_t;
 
 // The Universal C Runtime's.
-int _set_app_type(int type);
+void _set_app_type(int type);
 int _configure_narrow_argv(int mode);
 int _configure_wide_argv(int mode);
 int _initialize_narrow_environment(void);
@@ -33,6 +33,9 @@ wchar_t ***__p___wargv(void);
 void *malloc(size_t size);
 void free(void *block);
 _Noreturn void exit(int status);
+_Noreturn void _exit(int status);
+struct _EXCEPTION_POINTERS;
+int _seh_filter_exe(unsigned long code, struct _EXCEPTION_POINTERS *pointers);
 int _crt_atexit(void (*function)(void));
 int _crt_at_quick_exit(void (*function)(void));
 
@@ -130,6 +133,16 @@ static char **utf8_arguments(int *count) {
 // the exit handlers and flushes C's streams. A program's own procedure
 // named mainCRTStartup is the program's alone (tests/run/own_start_names):
 // Rig's procedures aren't visible to the linker by their names.
+//
+// main and exit run inside the C runtime's exception filter,
+// _seh_filter_exe, as there: a hardware exception, an access violation,
+// an illegal instruction or a floating-point one, reaches the handler C's
+// signal installed for SIGSEGV, SIGILL or SIGFPE only through it. The
+// filter calls that handler and has the program go on where the exception
+// was; with none installed it lets the exception pass, and the program
+// dies of it as it would without the filter. When the filter has the
+// exception handled here instead, the program ends at once, the
+// exception's code its exit status, as there.
 void mainCRTStartup(void) {
     _set_app_type(CONSOLE_APP);
     if (_configure_narrow_argv(UNEXPANDED_ARGUMENTS) != 0) __fastfail(FAST_FAIL_FATAL_APP_EXIT);
@@ -140,7 +153,11 @@ void mainCRTStartup(void) {
         argc = *__p___argc();
         argv = *__p___argv();
     }
-    exit(main(argc, argv));
+    __try {
+        exit(main(argc, argv));
+    } __except (_seh_filter_exe(_exception_code(), _exception_info())) {
+        _exit((int)_exception_code());
+    }
 }
 
 // The mark of floating point. Microsoft's C compiler, and LLVM targeting
@@ -176,13 +193,14 @@ __asm__(".text\n"
         "    leaq 24(%rsp), %rcx\n"
         "    cmpq $0x1000, %rax\n"
         "    jb 2f\n"
-        // A page at a time while a page or more is left.
+        // A page at a time: the first when a page or more is left, each
+        // after it while more than a page is.
         "1:  subq $0x1000, %rcx\n"
         "    testq %rcx, (%rcx)\n"
         "    subq $0x1000, %rax\n"
         "    cmpq $0x1000, %rax\n"
         "    ja 1b\n"
-        // What is left, less than a page: the frame's lowest byte.
+        // What is left, at most a page, reaches the frame's lowest byte.
         "2:  subq %rax, %rcx\n"
         "    testq %rcx, (%rcx)\n"
         "    popq %rax\n"

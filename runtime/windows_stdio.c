@@ -22,8 +22,10 @@
 //     C runtime's current one, and the arguments: a variadic function
 //     takes its own with __builtin_va_start and passes the list, as its v
 //     twin passes the one it is given.
-// The result is the entry point's, except that the functions writing into
-// a buffer give -1 for any negative one, as their inline definitions do.
+// The result is the entry point's, except that the sprintf kind, those
+// writing into a buffer and those counting what they would write
+// (_scprintf and its kind), give -1 for any negative one, as their inline
+// definitions do.
 //
 // Compiled freestanding, with no header (build.bat): the SDK's headers
 // define these same functions inline, and their pragmas would put

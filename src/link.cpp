@@ -139,10 +139,11 @@ static bool run_linker(Arena *a, Array<String> argv, String *error) {
         return false;
     }
     if (result.exit_code != 0) {
-        // lld-link writes its errors to stdout, ld.lld to stderr, so both
-        // are taken. A \r before a \n goes: rig prints the text through the
-        // C runtime, which on Windows turns \n into \r\n itself, so a line
-        // a linker ended with \r\n would end in \r\r\n.
+        // lld-link and ld.lld write their errors to stderr; stdout is taken
+        // too, so that nothing a linker prints is lost. A \r before a \n
+        // goes: lld-link on Windows ends its lines with \r\n, and rig prints
+        // the text through the C runtime, which on Windows turns \n into
+        // \r\n itself, so its lines would end in \r\r\n.
         String both = string_printf(a, STR_FMT STR_FMT, STR_ARG(result.out), STR_ARG(result.err));
         u8 *text = (u8 *)arena_alloc(a, both.count ? both.count : 1, 1);
         s64 n = 0;

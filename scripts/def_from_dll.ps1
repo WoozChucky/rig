@@ -37,6 +37,12 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Both paths made full the way PowerShell resolves them, from its current
+# location: .NET's file functions take a relative path from the process's
+# current directory, which Windows PowerShell 5.1 doesn't move when a
+# script or its session changes location.
+$Dll = (Resolve-Path -LiteralPath $Dll).ProviderPath
+$Out = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Out)
 $bytes = [IO.File]::ReadAllBytes($Dll)
 
 function Read-U16([int64]$at) { [BitConverter]::ToUInt16($bytes, $at) }

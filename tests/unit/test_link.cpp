@@ -140,6 +140,11 @@ TEST(missing_rig_files_say_how_to_get_them) {
     CHECK_STR(error, "/nonexistent/rig_runtime.o wasn't found; rebuild Rig with build.sh, which puts it beside rig, "
                      "or install Rig again");
     array_free(&paths);
+    paths = strings({"/nonexistent/a.lib", ".build/fake-rig-file", "/nonexistent/b.lib"});
+    CHECK(!check_rig_files(&a, paths, "build.sh", &error));
+    CHECK_STR(error, "/nonexistent/a.lib wasn't found; rebuild Rig with build.sh, which puts it beside rig, "
+                     "or install Rig again");
+    array_free(&paths);
     paths = strings({".build/fake-rig-file"});
     CHECK(check_rig_files(&a, paths, "build.sh", &error));
     array_free(&paths);
@@ -445,11 +450,14 @@ TEST(windows_c_runtime_extras_link_and_run) {
     // C program has them, standard rounding (%.0f of 0.5, 1.5 and 2.5 gives
     // 0 2 2) and the legacy wide specifiers (_snwprintf's %s of a UTF-16 hi
     // is wide); _snprintf leaving out the terminator when the text fills its
-    // size (the eight x's after abcd stay), and snprintf, which C defines,
+    // size (the four x's after abcd stay), and snprintf, which C defines,
     // keeping it; the bounds-checked sprintf_s and sscanf_s, which takes a
-    // size after a %s's buffer (too fits in 4); _scprintf's count, and
+    // size after a %s's buffer (abcdef doesn't fit in 4, so one field is
+    // converted and the buffer left empty, where a scanf that ignored the
+    // size would read all six letters and give 2); _scprintf's count, and
     // swprintf's; msvcrt.lib's aliases, _strcmpi for _stricmp and _stat for
-    // _stat32; and _onexit, whose handler runs when main returns.
+    // _stat32; and _onexit, which gives back the handler it registers, and
+    // whose handler runs when main returns.
     Arena a = arena_make();
     Ir_Module *m = lower_source(&a,
                                 "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
@@ -487,13 +495,18 @@ TEST(windows_c_runtime_extras_link_and_run) {
                                 "    n = swprintf(w.data, 8, format.data, hi.data);\n"
                                 "    printf(\"swprintf: %d %d %d\\n\", n, w[0], w[1]);\n"
                                 "    x : s32;\n"
-                                "    word : [4]u8;\n"
-                                "    n = sscanf_s(\"42 toolong\", \"%d %3s\", *x, word.data, cast(u32) 4);\n"
-                                "    printf(\"sscanf_s: %d %d %s\\n\", n, x, word.data);\n"
+                                "    word : [8]u8;\n"
+                                "    for 0..7 { word[it] = 120; }\n"
+                                "    n = sscanf_s(\"42 abcdef\", \"%d %s\", *x, word.data, cast(u32) 4);\n"
+                                "    printf(\"sscanf_s: %d %d [%.8s]\\n\", n, x, word.data);\n"
                                 "    st : [64]u8;\n"
                                 "    printf(\"_strcmpi: %d _stat: %d\\n\", _strcmpi(\"RIG\", \"rig\"), "
                                 "_stat(\".build/tests/no-such-file\", st.data));\n"
-                                "    _onexit(on_exit);\n"
+                                "    if cast(*void) _onexit(on_exit) == cast(*void) on_exit {\n"
+                                "        printf(\"_onexit: the handler\\n\");\n"
+                                "    } else {\n"
+                                "        printf(\"_onexit: another\\n\");\n"
+                                "    }\n"
                                 "}\n");
     Process_Result result = run_module(&a, m, "c-runtime-extras-test");
     CHECK_STR(without_cr(&a, result.out), "rounding: 0 2 2 1.234568e+04\n"
@@ -503,11 +516,41 @@ TEST(windows_c_runtime_extras_link_and_run) {
                                           "_scprintf: 5\n"
                                           "_snwprintf: 2 104 105 0\n"
                                           "swprintf: 2 104 105\n"
-                                          "sscanf_s: 2 42 too\n"
+                                          "sscanf_s: 1 42 []\n"
                                           "_strcmpi: 0 _stat: -1\n"
+                                          "_onexit: the handler\n"
                                           "onexit handler\n");
     CHECK_STR(without_cr(&a, result.err), "");
     CHECK_EQ(result.exit_code, 0);
+    arena_free(&a);
+}
+
+TEST(windows_signal_handlers_catch_hardware_exceptions) {
+    // Issue #125 (spec 10.6): the Universal C Runtime runs the handler C's
+    // signal installed for SIGSEGV (11) only through the filter that Rig's
+    // start-up, as Visual Studio's, calls main inside. The program writes
+    // through a wild pointer; its handler says so and exits with 3, where a
+    // program without the filter dies of the access violation.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "signal :: (sig: s32, handler: (s: s32) #c_call) -> *void #foreign libc;\n"
+                                "exit :: (status: s32) #foreign libc;\n"
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "fflush :: (stream: *void) -> s32 #foreign libc;\n"
+                                "on_signal :: (s: s32) #c_call {\n"
+                                "    printf(\"caught %d\\n\", s);\n"
+                                "    fflush(null);\n"
+                                "    exit(3);\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    signal(11, on_signal);\n"
+                                "    wild := cast(*s32) cast(u64) 16;\n"
+                                "    wild.* = 1;\n"
+                                "}\n");
+    Process_Result result = run_module(&a, m, "signal-test");
+    CHECK_STR(without_cr(&a, result.out), "caught 11\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 3);
     arena_free(&a);
 }
 
@@ -550,31 +593,67 @@ static const char *const PRINTF_FAMILY[219] = {
     "wprintf_s", "wscanf", "wscanf_s",
 };
 
+// A program that links each of the `count` functions `names`, declared
+// under their own names after `declarations`, and exits with 1 + its index
+// when one is null, then runs `rest`, the end of main. They are only taken
+// as values, which a procedure taking C's '..' can't be, so each is declared
+// with one parameter: the linker goes by names alone. A function's address
+// compared with null is folded to false as the IR is built (a function
+// that isn't weak is never at null), and the reference to it goes with the
+// comparison, so nothing would be left for the linker to find: each
+// address is stored into a table instead, and the table's elements are
+// compared as the program runs. The stores leave every name in the object
+// for the linker to resolve, so a name that nothing defines fails the link.
+static const char *program_linking(Arena *a, const char *const *names, s64 count, const char *declarations,
+                                   const char *rest) {
+    String text = string_printf(a, "exit :: (status: s32) #foreign libc;\n%s", declarations);
+    for (s64 i = 0; i < count; i++) {
+        text = string_printf(a, STR_FMT "%s :: (x: *void) -> s32 #foreign libc;\n", STR_ARG(text), names[i]);
+    }
+    text = string_printf(a, STR_FMT "main :: () {\n    table : [%lld]*void;\n", STR_ARG(text), (long long)count);
+    for (s64 i = 0; i < count; i++) {
+        text = string_printf(a, STR_FMT "    table[%lld] = cast(*void) %s;\n", STR_ARG(text), (long long)i, names[i]);
+    }
+    text = string_printf(a,
+                         STR_FMT "    for 0..%lld { if table[it] == null { exit(cast(s32) (1 + it)); } }\n"
+                                 "%s}\n",
+                         STR_ARG(text), (long long)(count - 1), rest);
+    return string_cstr(a, text);
+}
+
 TEST(windows_the_printf_family_links) {
-    // Each of the 219, declared under its own name, links (the program exits
-    // with 1 + its index when one is null), with the options a C program
-    // reads through __local_stdio_printf_options and
-    // __local_stdio_scanf_options (250 and 251 when they aren't those). They
-    // are only taken as values, which a procedure taking C's '..' can't be,
-    // so each is declared with one parameter: the linker goes by names alone.
+    // Each of the 219 links (program_linking: one more name that nothing
+    // defines fails the link), with the options a C program reads through
+    // __local_stdio_printf_options and __local_stdio_scanf_options (the
+    // program exits with 250 and 251 when they aren't those).
     Arena a = arena_make();
-    String text = string_printf(&a, "exit :: (status: s32) #foreign libc;\n"
-                                    "__local_stdio_printf_options :: () -> *u64 #foreign libc;\n"
-                                    "__local_stdio_scanf_options :: () -> *u64 #foreign libc;\n");
-    for (s64 i = 0; i < 219; i++) {
-        text = string_printf(&a, STR_FMT "%s :: (x: *void) -> s32 #foreign libc;\n", STR_ARG(text), PRINTF_FAMILY[i]);
-    }
-    text = string_printf(&a, STR_FMT "main :: () {\n", STR_ARG(text));
-    for (s64 i = 0; i < 219; i++) {
-        text = string_printf(&a, STR_FMT "    if cast(*void) %s == null { exit(%lld); }\n", STR_ARG(text), PRINTF_FAMILY[i],
-                             (long long)(1 + i));
-    }
-    text = string_printf(&a,
-                         STR_FMT "    if __local_stdio_printf_options().* != 36 { exit(250); }\n"
-                                 "    if __local_stdio_scanf_options().* != 2 { exit(251); }\n"
-                                 "}\n",
-                         STR_ARG(text));
-    Process_Result result = run_module(&a, lower_source(&a, string_cstr(&a, text)), "printf-family-test");
+    const char *text = program_linking(&a, PRINTF_FAMILY, 219,
+                                       "__local_stdio_printf_options :: () -> *u64 #foreign libc;\n"
+                                       "__local_stdio_scanf_options :: () -> *u64 #foreign libc;\n",
+                                       "    if __local_stdio_printf_options().* != 36 { exit(250); }\n"
+                                       "    if __local_stdio_scanf_options().* != 2 { exit(251); }\n");
+    Process_Result result = run_module(&a, lower_source(&a, text), "printf-family-test");
+    CHECK_STR(without_cr(&a, result.out), "");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    arena_free(&a);
+}
+
+TEST(windows_msvcrt_libs_other_names_link) {
+    // The rest of what Rig's runtime gives in msvcrt.lib's place
+    // (runtime/windows.c), each linked as program_linking links a name: its
+    // 20 aliases, whose targets the linker looks for only when a program
+    // names the alias, so a target misspelt fails here and not first in a
+    // user's program, and the exit handlers' wrappers.
+    static const char *const names[] = {
+        "_findfirst", "_findfirsti64", "_findnext", "_findnexti64", "_fstat", "_fstati64", "_getdcwd_nolock",
+        "_mbscat", "_mbscpy", "_mbsdup", "_stat", "_stati64", "_strcmpi", "_wfindfirst", "_wfindfirsti64",
+        "_wfindnext", "_wfindnexti64", "_wgetdcwd_nolock", "_wstat", "_wstati64", "atexit", "at_quick_exit",
+        "_onexit",
+    };
+    Arena a = arena_make();
+    const char *text = program_linking(&a, names, sizeof names / sizeof names[0], "", "");
+    Process_Result result = run_module(&a, lower_source(&a, text), "msvcrt-names-test");
     CHECK_STR(without_cr(&a, result.out), "");
     CHECK_STR(without_cr(&a, result.err), "");
     CHECK_EQ(result.exit_code, 0);
@@ -776,10 +855,14 @@ TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
     // narrow count back, so C code that walks __argv up to __argc reads no
     // null. The program exits with 10 unless __argc counts __argv's elements
     // up to its null, and with 11 to 13 unless its own arguments are still
-    // the wide ones, its name, a＂ in UTF-8 and b.
+    // the wide ones, its name, a＂ in UTF-8 and b. __argv stays the narrow
+    // array, as a C program has it: the program exits with 14 if __argv's
+    // first string is main's, the start-up's UTF-8 copy, and, in code page
+    // 1252, with 15 unless __argv holds the two narrow arguments.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a,
                                       "exit :: (status: s32) #foreign libc;\n"
+                                      "GetACP :: () -> u32 #foreign libc;\n"
                                       "crt_argc :: () -> *s32 #foreign libc \"__p___argc\";\n"
                                       "crt_argv :: () -> ***u8 #foreign libc \"__p___argv\";\n"
                                       "main :: () {\n"
@@ -791,6 +874,8 @@ TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
                                       "    if args.count != 3 { exit(11); }\n"
                                       "    if args[1] != \"a\xEF\xBC\x82\" { exit(12); }\n"
                                       "    if args[2] != \"b\" { exit(13); }\n"
+                                      "    if narrow[0] == args[0].data { exit(14); }\n"
+                                      "    if GetACP() == 1252 && count != 2 { exit(15); }\n"
                                       "}\n");
     String program = link_module(&a, m, "narrow-argc-test");
     if (program.count) {
