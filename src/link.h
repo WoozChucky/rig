@@ -28,9 +28,17 @@
 
 // The first candidate directory holding both libc.so.6 and libm.so.6,
 // glibc's shared libraries. False with a sentence naming the candidates.
-// Rig passes /usr/lib/x86_64-linux-gnu, /usr/lib64, /usr/lib,
-// /lib/x86_64-linux-gnu and /lib64 (link_linux.cpp).
+// Rig passes linux_libc_candidates (link_linux.cpp).
 bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String *error);
+
+// The directories Rig looks for glibc in, in order:
+// /usr/lib/x86_64-linux-gnu, /usr/lib64, /usr/lib, /lib/x86_64-linux-gnu
+// and /lib64 (spec 10.6).
+Array<String> linux_libc_candidates();
+
+// The files rig links with on Linux, which build.sh puts in runtime_dir,
+// rig's directory: ld.lld and rig_runtime.o, for check_rig_files.
+Array<String> linux_rig_files(Arena *a, String runtime_dir);
 
 // True when every one of `paths`, files rig links with, exists. False at
 // the first that doesn't, with a sentence naming it and how to get it back:
@@ -51,7 +59,9 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
 // ld.lld's arguments, argv[0] included:
 //   LD_LLD -o OUTPUT --eh-frame-hdr -m elf_x86_64
 //          -dynamic-linker /lib64/ld-linux-x86-64.so.2
-//          DIR/rig_runtime.o OBJECTS... LIBC/libc.so.6 LIBC/libm.so.6
+//          DIR/rig_runtime.o OBJECTS... LIBC/libc.so.6
+//          --as-needed /lib64/ld-linux-x86-64.so.2 --no-as-needed
+//          LIBC/libm.so.6
 // DIR being the directory of Rig's runtime, rig's, and LIBC glibc's
 // (find_libc_directory). The objects' DWARF (.debug_* sections) is kept in
 // the executable as it is: ld.lld drops it only when told to (-S,

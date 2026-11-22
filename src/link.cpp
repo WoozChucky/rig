@@ -37,6 +37,28 @@ bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String
     return false;
 }
 
+// Where distributions keep glibc's libraries, in order: Debian's and
+// Ubuntu's multiarch directory, Fedora's and openSUSE's lib64, Arch's lib
+// (where Fedora keeps 32-bit libraries, so after lib64), then the first
+// two's places outside /usr, for a system whose /usr isn't merged with /
+// (an older Debian keeps glibc in /lib/x86_64-linux-gnu).
+Array<String> linux_libc_candidates() {
+    Array<String> candidates = {};
+    array_add(&candidates, str("/usr/lib/x86_64-linux-gnu"));
+    array_add(&candidates, str("/usr/lib64"));
+    array_add(&candidates, str("/usr/lib"));
+    array_add(&candidates, str("/lib/x86_64-linux-gnu"));
+    array_add(&candidates, str("/lib64"));
+    return candidates;
+}
+
+Array<String> linux_rig_files(Arena *a, String runtime_dir) {
+    Array<String> files = {};
+    array_add(&files, string_printf(a, STR_FMT "/ld.lld", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "/rig_runtime.o", STR_ARG(runtime_dir)));
+    return files;
+}
+
 bool check_rig_files(Arena *a, Array<String> paths, const char *build_script, String *error) {
     for (s64 i = 0; i < paths.count; i++) {
         if (os_file_exists(paths[i])) continue;
@@ -133,8 +155,15 @@ Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, St
     // files' linker scripts. ld.lld takes shared libraries in any order, but
     // the order is the one the dynamic loader searches them in at run time,
     // so libc.so.6 goes first: a name both export (copysign, frexp, ldexp,
-    // modf, scalbn) is libc's.
+    // modf, scalbn) is libc's. Between the two, as libc.so's script has it
+    // (AS_NEEDED), glibc's dynamic loader, for the few names only it exports
+    // (__tls_get_addr, _r_debug), which the interpreter finds too (spec
+    // 10.8): --as-needed makes it a library the program needs only when the
+    // program uses one of them.
     array_add(&argv, string_printf(a, STR_FMT "/libc.so.6", STR_ARG(libc_dir)));
+    array_add(&argv, str("--as-needed"));
+    array_add(&argv, str("/lib64/ld-linux-x86-64.so.2"));
+    array_add(&argv, str("--no-as-needed"));
     array_add(&argv, string_printf(a, STR_FMT "/libm.so.6", STR_ARG(libc_dir)));
     return argv;
 }

@@ -72,6 +72,9 @@ TEST(linux_link_command) {
         "/opt/rig/bin/rig_runtime.o",
         ".build/hello.o",
         "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "--as-needed",
+        "/lib64/ld-linux-x86-64.so.2",
+        "--no-as-needed",
         "/usr/lib/x86_64-linux-gnu/libm.so.6",
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));
@@ -130,6 +133,23 @@ TEST(libc_directory_is_the_first_with_both) {
     arena_free(&a);
 }
 
+TEST(linux_looks_for_its_files_where_they_are) {
+    // The directories glibc is looked for in, in their order (spec 10.6):
+    // the 64-bit ones ahead of /usr/lib, which may hold a 32-bit glibc, and
+    // the places outside /usr last, for a system whose /usr isn't merged.
+    // And rig's own files, beside it, checked before linking, so a missing
+    // one gets check_rig_files' sentence rather than ld.lld's.
+    Arena a = arena_make();
+    Array<String> candidates = linux_libc_candidates();
+    CHECK_STR(joined(&a, candidates),
+              "[/usr/lib/x86_64-linux-gnu][/usr/lib64][/usr/lib][/lib/x86_64-linux-gnu][/lib64]");
+    array_free(&candidates);
+    Array<String> files = linux_rig_files(&a, str("/opt/rig/bin"));
+    CHECK_STR(joined(&a, files), "[/opt/rig/bin/ld.lld][/opt/rig/bin/rig_runtime.o]");
+    array_free(&files);
+    arena_free(&a);
+}
+
 TEST(missing_rig_files_say_how_to_get_them) {
     // The files rig links with, which its build script puts beside it: the
     // first that isn't there is named, with how to get it.
@@ -169,18 +189,14 @@ TEST(finds_this_machines_runtime) {
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     array_free(&paths);
 #else
-    // And glibc's libraries are in one of the directories link_linux.cpp
-    // looks in.
-    Array<String> candidates =
-        strings({"/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib/x86_64-linux-gnu", "/lib64"});
+    // And glibc's libraries are in one of the directories rig looks in.
+    Array<String> candidates = linux_libc_candidates();
     String libc = {};
     bool found = find_libc_directory(&a, candidates, &libc, &error);
     CHECK(found);
     if (!found) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     array_free(&candidates);
-    Array<String> paths = {};
-    const char *files[] = {"ld.lld", "rig_runtime.o"};
-    for (const char *file : files) array_add(&paths, string_printf(&a, STR_FMT "/%s", STR_ARG(dir), file));
+    Array<String> paths = linux_rig_files(&a, dir);
     bool ok = check_rig_files(&a, paths, "build.sh", &error);
     CHECK(ok);
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
@@ -1119,6 +1135,64 @@ TEST(linux_programs_need_only_libc_and_libm) {
     CHECK_STR(joined(&a, needed), "[libc.so.6][libm.so.6]");
     CHECK_STR(elf_interpreter(&a, program), "/lib64/ld-linux-x86-64.so.2");
     array_free(&needed);
+    arena_free(&a);
+}
+
+TEST(linux_names_only_the_dynamic_loader_exports_link) {
+    // Issue #125 (spec 10.6): __tls_get_addr, which glibc's dynamic loader
+    // exports and libc.so.6 doesn't, links, as the interpreter finds it
+    // (spec 10.8), and only then does the program need the loader as a
+    // library too, between libc.so.6 and libm.so.6, as libc.so's linker
+    // script had it.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "__tls_get_addr :: (index: *void) -> *void #foreign libc;\n"
+                                    "exit :: (status: s32) #foreign libc;\n"
+                                    "main :: () {\n"
+                                    "    loader_function := cast(*void) __tls_get_addr;\n"
+                                    "    if loader_function == null { exit(1); }\n"
+                                    "}\n");
+    Process_Result result = run_module(&a, m, "loader-test");
+    CHECK_STR(result.err, "");
+    CHECK_EQ(result.exit_code, 0);
+    Array<String> needed = needed_libraries(&a, str(".build/loader-test"));
+    CHECK_STR(joined(&a, needed), "[libc.so.6][ld-linux-x86-64.so.2][libm.so.6]");
+    array_free(&needed);
+    arena_free(&a);
+}
+
+TEST(linux_pthread_atfork_handlers_run) {
+    // POSIX's fork handlers, which a program links from Rig's runtime (spec
+    // 10.6): prepare runs before fork, parent after it in the parent, child
+    // after it in the child. The child exits with what it saw, which the
+    // parent prints after waiting for it, so the output is the same each run.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "pthread_atfork :: (prepare: () #c_call, parent: () #c_call, child: () #c_call) "
+                                    "-> s32 #foreign libc;\n"
+                                    "fork :: () -> s32 #foreign libc;\n"
+                                    "waitpid :: (pid: s32, status: *s32, options: s32) -> s32 #foreign libc;\n"
+                                    "_exit :: (status: s32) #foreign libc;\n"
+                                    "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                    "prepared : s32 = 0;\n"
+                                    "in_parent : s32 = 0;\n"
+                                    "in_child : s32 = 0;\n"
+                                    "prepare :: () #c_call { prepared += 1; }\n"
+                                    "parent :: () #c_call { in_parent += 1; }\n"
+                                    "child :: () #c_call { in_child += 1; }\n"
+                                    "main :: () {\n"
+                                    "    printf(\"pthread_atfork: %d\\n\", pthread_atfork(prepare, parent, child));\n"
+                                    "    pid := fork();\n"
+                                    "    if pid == 0 { _exit(prepared + 2 * in_parent + 4 * in_child); }\n"
+                                    "    status : s32 = 0;\n"
+                                    "    waitpid(pid, *status, 0);\n"
+                                    "    printf(\"parent: prepare %d, parent %d, child %d\\n\", prepared, in_parent, "
+                                    "in_child);\n"
+                                    "    printf(\"child: %d\\n\", status >> 8);\n"
+                                    "}\n");
+    Process_Result result = run_module(&a, m, "atfork-test");
+    // The child's 5 is prepare (1) and child (4), without parent (2).
+    CHECK_STR(result.out, "pthread_atfork: 0\nparent: prepare 1, parent 1, child 0\nchild: 5\n");
+    CHECK_STR(result.err, "");
+    CHECK_EQ(result.exit_code, 0);
     arena_free(&a);
 }
 #endif
