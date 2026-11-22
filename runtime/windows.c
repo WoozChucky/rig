@@ -149,7 +149,7 @@ void mainCRTStartup(void) {
     _set_app_type(CONSOLE_APP);
     if (_configure_narrow_argv(UNEXPANDED_ARGUMENTS) != 0) __fastfail(FAST_FAIL_FATAL_APP_EXIT);
     if (_initialize_narrow_environment() != 0) __fastfail(FAST_FAIL_FATAL_APP_EXIT);
-    int argc = *__p___argc();
+    int argc;
     char **argv = utf8_arguments(&argc);
     if (!argv) {
         argc = *__p___argc();

@@ -41,6 +41,14 @@ if [ -z "$CXX" ]; then
         exit 1
     fi
 fi
+# Rig's runtime is compiled by the pinned clang whatever CXX says (at the
+# end), so that clang is looked for now, with CXX set too, not after the
+# minutes of building Rig.
+RUNTIME_CC="$LLVM/bin/clang"
+if [ ! -x "$RUNTIME_CC" ]; then
+    echo "build.sh: clang not found in $LLVM; run scripts/get_llvm.sh again" >&2
+    exit 1
+fi
 # Which compiler made this build, first in its log: "clang version 23.1.5 ...",
 # the first line clang prints. A compiler that doesn't run stops here, with
 # what it said on stderr left in place, since that names the cause (a shared
@@ -123,10 +131,5 @@ cp "$LLVM/bin/lld" bin/ld.lld
 # freestanding: no header, no C library of its own (it is the C library's
 # static part), no builtin turned into a call of the C library's, and no
 # stack protector, which would need one more.
-RUNTIME_CC="$LLVM/bin/clang"
-if [ ! -x "$RUNTIME_CC" ]; then
-    echo "build.sh: clang not found in $LLVM; run scripts/get_llvm.sh again" >&2
-    exit 1
-fi
 "$RUNTIME_CC" --target=x86_64-linux-gnu -std=c17 -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -O2 \
     -Wall -Wextra -c runtime/linux.c -o bin/rig_runtime.o

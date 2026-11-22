@@ -51,8 +51,11 @@ goto have_cxx
 :pinned_cxx
 set "CXX=%LLVM%\bin\clang++.exe"
 set PINNED_CXX=1
-if not exist "%CXX%" goto no_clang
 :have_cxx
+rem The pinned clang++.exe is looked for here, with CXX set too: it
+rem compiles Rig's runtime whatever CXX says (at the end), so a missing one
+rem stops the build now, not after the minutes of building Rig.
+if not exist "%LLVM%\bin\clang++.exe" goto no_clang
 rem Which compiler made this build, first in its log: "clang version 23.1.5
 rem ...", the first line clang prints. A compiler that doesn't answer stops
 rem here, with what it said on stderr left in place (for /f takes only its
@@ -113,7 +116,6 @@ rem own (it is the C runtime's static part), no builtin turned into a call
 rem of the C library's, and no stack protector, which would need one more.
 rem lld-link /lib, LLVM's lib.exe, puts the two objects into a static
 rem library, whose members a link takes only when it needs them.
-if not exist "%LLVM%\bin\clang++.exe" goto no_clang
 if not exist .build\runtime mkdir .build\runtime
 set RUNTIME_FLAGS=-x c --target=x86_64-pc-windows-msvc -std=c17 -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -O2 -Wall -Wextra
 "%LLVM%\bin\clang++.exe" %RUNTIME_FLAGS% -c runtime\windows.c -o .build\runtime\windows.obj || exit /b 1

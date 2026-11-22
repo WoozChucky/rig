@@ -38,12 +38,14 @@ Array<String> linux_libc_candidates();
 
 // The files rig links with on Windows, which build.bat puts in
 // runtime_dir, rig.exe's directory: lld-link.exe, rig_runtime.lib,
-// ucrtbase.lib and kernel32.lib, lld-link.exe first, for check_rig_files.
+// ucrtbase.lib and kernel32.lib, for check_rig_files to check and then
+// link_command_windows, in its command line's order, the linker first.
 Array<String> windows_rig_files(Arena *a, String runtime_dir);
 
 // The files rig links with on Linux, which build.sh puts in runtime_dir,
-// rig's directory: ld.lld and rig_runtime.o, ld.lld first, for
-// check_rig_files.
+// rig's directory: ld.lld and rig_runtime.o, for check_rig_files to check
+// and then link_command_linux, in its command line's order, the linker
+// first.
 Array<String> linux_rig_files(Arena *a, String runtime_dir);
 
 // True when every one of `paths`, files rig links with, exists. False at
@@ -57,10 +59,11 @@ bool check_rig_files(Arena *a, Array<String> paths, const char *build_script, St
 //            /OUT:OUTPUT /DEBUG:FULL /PDB:OUTPUT_WITHOUT_EXE.pdb
 //            /NODEFAULTLIB /lldignoreenv /ENTRY:mainCRTStartup OBJECTS...
 //            DIR\rig_runtime.lib DIR\ucrtbase.lib DIR\kernel32.lib
-// DIR being the directory of Rig's runtime, rig.exe's. The PDB, the
-// program's debug information, is written beside it: hello.exe's is
-// hello.pdb.
-Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir, Array<String> objects, String output);
+// LLD_LINK and the three libraries being rig_files, windows_rig_files'
+// list, in its order, the paths check_rig_files checked; DIR is the
+// directory of Rig's runtime, rig.exe's. The PDB, the program's debug
+// information, is written beside it: hello.exe's is hello.pdb.
+Array<String> link_command_windows(Arena *a, Array<String> rig_files, Array<String> objects, String output);
 
 // ld.lld's arguments, argv[0] included:
 //   LD_LLD -o OUTPUT --eh-frame-hdr -m elf_x86_64
@@ -68,11 +71,12 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
 //          DIR/rig_runtime.o OBJECTS... LIBC/libc.so.6
 //          --as-needed /lib64/ld-linux-x86-64.so.2 --no-as-needed
 //          LIBC/libm.so.6
-// DIR being the directory of Rig's runtime, rig's, and LIBC glibc's
-// (find_libc_directory). The objects' DWARF (.debug_* sections) is kept in
-// the executable as it is: ld.lld drops it only when told to (-S,
-// --strip-debug).
-Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, String libc_dir, Array<String> objects,
+// LD_LLD and DIR/rig_runtime.o being rig_files, linux_rig_files' list, in
+// its order, the paths check_rig_files checked; DIR is the directory of
+// Rig's runtime, rig's, and LIBC glibc's (find_libc_directory). The
+// objects' DWARF (.debug_* sections) is kept in the executable as it is:
+// ld.lld drops it only when told to (-S, --strip-debug).
+Array<String> link_command_linux(Arena *a, Array<String> rig_files, String libc_dir, Array<String> objects,
                                  String output);
 
 // Links the objects into the executable `output` for target t, which must
