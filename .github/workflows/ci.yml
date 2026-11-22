@@ -51,6 +51,18 @@ jobs:
           RIG_DEBUGGER_TESTS: required
         run: bin/run-tests
 
+      # The same build's tests on a system with glibc's shared libraries
+      # alone: debian:stable-slim has no development files, no crt1.o and
+      # no libc.so (the test commands check), so every program they link
+      # shows that rig needs nothing installed besides itself (spec 10.6).
+      # Run as the runner's user, so what the tests write in the checkout
+      # stays the runner's. The image has no gdb, so the debugger tests
+      # skip there; they ran above.
+      - name: End-to-end tests without libc6-dev
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/rig" -w /rig debian:stable-slim
+          sh -c 'test ! -e /usr/lib/x86_64-linux-gnu/crt1.o && test ! -e /usr/lib/x86_64-linux-gnu/libc.so && bin/unit-tests && bin/run-tests'
+
       # The release compiler (-O2), as release.yml builds it, and the same
       # tests again: an optimiser's surprise shows in the pull request, not
       # when a release is made. It replaces the debug build's bin/.

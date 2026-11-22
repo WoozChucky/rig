@@ -10,8 +10,12 @@
 // imports the two DLLs, which every Windows 10 and later has, and nothing
 // else.
 //
-// Linux: ld.lld, copied beside rig by build.sh, with glibc's C runtime
-// files (crt1.o, crti.o, crtn.o), libc and libm, dynamically linked.
+// Linux: ld.lld, with Rig's runtime, rig_runtime.o (the start-up, _start,
+// and the three functions glibc keeps out of libc.so.6), both beside rig,
+// where build.sh puts them, against glibc's own shared libraries,
+// libc.so.6 and libm.so.6, by path: what every glibc system has, without
+// its development files (crt1.o, libc.so's linker script), which a program
+// linked with until issue #125.
 //
 // The command lines and the file checks (link.cpp) are compiled on both
 // hosts, so both are tested everywhere; link_executable (link_windows.cpp,
@@ -22,10 +26,11 @@
 #include "llvm_backend.h"
 #include "os.h"
 
-// The first candidate directory holding crt1.o, crti.o and crtn.o. False
-// with a sentence naming the candidates and what to install. Rig passes
-// /usr/lib/x86_64-linux-gnu, /usr/lib64 and /usr/lib.
-bool find_crt_directory(Arena *a, Array<String> candidates, String *dir, String *error);
+// The first candidate directory holding both libc.so.6 and libm.so.6,
+// glibc's shared libraries. False with a sentence naming the candidates.
+// Rig passes /usr/lib/x86_64-linux-gnu, /usr/lib64, /usr/lib,
+// /lib/x86_64-linux-gnu and /lib64 (link_linux.cpp).
+bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String *error);
 
 // True when every one of `paths`, files rig links with, exists. False at
 // the first that doesn't, with a sentence naming it and how to get it back:
@@ -46,10 +51,13 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
 // ld.lld's arguments, argv[0] included:
 //   LD_LLD -o OUTPUT --eh-frame-hdr -m elf_x86_64
 //          -dynamic-linker /lib64/ld-linux-x86-64.so.2
-//          CRT/crt1.o CRT/crti.o OBJECTS... -LCRT -lc -lm CRT/crtn.o
-// The objects' DWARF (.debug_* sections) is kept in the executable as it
-// is: ld.lld drops it only when told to (-S, --strip-debug).
-Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<String> objects, String output);
+//          DIR/rig_runtime.o OBJECTS... LIBC/libc.so.6 LIBC/libm.so.6
+// DIR being the directory of Rig's runtime, rig's, and LIBC glibc's
+// (find_libc_directory). The objects' DWARF (.debug_* sections) is kept in
+// the executable as it is: ld.lld drops it only when told to (-S,
+// --strip-debug).
+Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, String libc_dir, Array<String> objects,
+                                 String output);
 
 // Links the objects into the executable `output` for target t, which must
 // be the host's: checks rig's files and runs the linker. False with `error`

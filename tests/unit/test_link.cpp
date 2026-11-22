@@ -58,8 +58,8 @@ TEST(windows_link_command) {
 TEST(linux_link_command) {
     Arena a = arena_make();
     Array<String> objects = strings({".build/hello.o"});
-    Array<String> argv = link_command_linux(&a, str("/opt/rig/bin/ld.lld"), str("/usr/lib/x86_64-linux-gnu"), objects,
-                                            str("hello"));
+    Array<String> argv = link_command_linux(&a, str("/opt/rig/bin/ld.lld"), str("/opt/rig/bin"),
+                                            str("/usr/lib/x86_64-linux-gnu"), objects, str("hello"));
     Array<String> expected = strings({
         "/opt/rig/bin/ld.lld",
         "-o",
@@ -69,13 +69,10 @@ TEST(linux_link_command) {
         "elf_x86_64",
         "-dynamic-linker",
         "/lib64/ld-linux-x86-64.so.2",
-        "/usr/lib/x86_64-linux-gnu/crt1.o",
-        "/usr/lib/x86_64-linux-gnu/crti.o",
+        "/opt/rig/bin/rig_runtime.o",
         ".build/hello.o",
-        "-L/usr/lib/x86_64-linux-gnu",
-        "-lc",
-        "-lm",
-        "/usr/lib/x86_64-linux-gnu/crtn.o",
+        "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "/usr/lib/x86_64-linux-gnu/libm.so.6",
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));
     array_free(&objects);
@@ -84,46 +81,51 @@ TEST(linux_link_command) {
     arena_free(&a);
 }
 
-// A directory under .build/ holding, of the C runtime's three files, empty
-// ones with these names only.
+// A directory under .build/ holding, of glibc's two shared libraries,
+// libc.so.6 and libm.so.6, empty files with these names only (what an
+// earlier run left of the other is removed).
 template<s64 N>
 static String directory_with(Arena *a, const char *name, const char *const (&files)[N]) {
     os_make_directory(str(".build"));
     String dir = string_printf(a, ".build/%s", name);
     os_make_directory(dir);
-    const char *crt[] = {"crt1.o", "crti.o", "crtn.o"};
-    for (const char *file : crt) remove(string_cstr(a, string_printf(a, STR_FMT "/%s", STR_ARG(dir), file)));
+    const char *libraries[] = {"libc.so.6", "libm.so.6"};
+    for (const char *file : libraries) remove(string_cstr(a, string_printf(a, STR_FMT "/%s", STR_ARG(dir), file)));
     for (s64 i = 0; i < N; i++) os_write_file(string_printf(a, STR_FMT "/%s", STR_ARG(dir), files[i]), str(""));
     return dir;
 }
 
-TEST(missing_crt_files_say_what_to_install) {
+TEST(missing_libc_says_what_rig_needs) {
+    // Issue #125 (spec 10.6): a directory with libc.so.6 but no libm.so.6
+    // won't do, and the message names every directory looked in.
     Arena a = arena_make();
     Array<String> candidates = {};
-    array_add(&candidates, directory_with(&a, "crt-only-crt1", {"crt1.o"}));
+    array_add(&candidates, directory_with(&a, "libc-only-libc", {"libc.so.6"}));
     String dir = {}, error = {};
-    CHECK(!find_crt_directory(&a, candidates, &dir, &error));
-    CHECK_STR(error, "glibc's C runtime files (crt1.o, crti.o, crtn.o) weren't found in .build/crt-only-crt1; install "
-                     "your distribution's C library development package (libc6-dev on Debian and Ubuntu)");
+    CHECK(!find_libc_directory(&a, candidates, &dir, &error));
+    CHECK_STR(error, "glibc's libc.so.6 and libm.so.6 weren't found side by side in .build/libc-only-libc; Rig links "
+                     "programs against glibc, the C library of most Linux systems");
     array_add(&candidates, str("/nonexistent/lib64"));
     array_add(&candidates, str("/nonexistent/lib"));
-    CHECK(!find_crt_directory(&a, candidates, &dir, &error));
-    CHECK_STR(error, "glibc's C runtime files (crt1.o, crti.o, crtn.o) weren't found in .build/crt-only-crt1, "
-                     "/nonexistent/lib64 or /nonexistent/lib; install your distribution's C library development "
-                     "package (libc6-dev on Debian and Ubuntu)");
+    CHECK(!find_libc_directory(&a, candidates, &dir, &error));
+    CHECK_STR(error, "glibc's libc.so.6 and libm.so.6 weren't found side by side in .build/libc-only-libc, "
+                     "/nonexistent/lib64 or /nonexistent/lib; Rig links programs against glibc, the C library of "
+                     "most Linux systems");
     array_free(&candidates);
     arena_free(&a);
 }
 
-TEST(crt_directory_is_the_first_with_all_three) {
+TEST(libc_directory_is_the_first_with_both) {
+    // The candidates are tried in order, so a 64-bit directory listed first
+    // wins over /usr/lib, which may hold a 32-bit glibc (spec 10.6).
     Arena a = arena_make();
     Array<String> candidates = {};
-    array_add(&candidates, directory_with(&a, "crt-two", {"crt1.o", "crti.o"}));
-    array_add(&candidates, directory_with(&a, "crt-all", {"crt1.o", "crti.o", "crtn.o"}));
-    array_add(&candidates, directory_with(&a, "crt-all-too", {"crt1.o", "crti.o", "crtn.o"}));
+    array_add(&candidates, directory_with(&a, "libc-two-libm-only", {"libm.so.6"}));
+    array_add(&candidates, directory_with(&a, "libc-both", {"libc.so.6", "libm.so.6"}));
+    array_add(&candidates, directory_with(&a, "libc-both-too", {"libc.so.6", "libm.so.6"}));
     String dir = {}, error = {};
-    CHECK(find_crt_directory(&a, candidates, &dir, &error));
-    CHECK_STR(dir, ".build/crt-all");
+    CHECK(find_libc_directory(&a, candidates, &dir, &error));
+    CHECK_STR(dir, ".build/libc-both");
     array_free(&candidates);
     arena_free(&a);
 }
@@ -167,13 +169,22 @@ TEST(finds_this_machines_runtime) {
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     array_free(&paths);
 #else
-    (void)dir;
-    Array<String> candidates = strings({"/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib"});
-    String crt = {};
-    bool ok = find_crt_directory(&a, candidates, &crt, &error);
+    // And glibc's libraries are in one of the directories link_linux.cpp
+    // looks in.
+    Array<String> candidates =
+        strings({"/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib", "/lib/x86_64-linux-gnu", "/lib64"});
+    String libc = {};
+    bool found = find_libc_directory(&a, candidates, &libc, &error);
+    CHECK(found);
+    if (!found) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    array_free(&candidates);
+    Array<String> paths = {};
+    const char *files[] = {"ld.lld", "rig_runtime.o"};
+    for (const char *file : files) array_add(&paths, string_printf(&a, STR_FMT "/%s", STR_ARG(dir), file));
+    bool ok = check_rig_files(&a, paths, "build.sh", &error);
     CHECK(ok);
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    array_free(&candidates);
+    array_free(&paths);
 #endif
     arena_free(&a);
 }
@@ -1016,6 +1027,98 @@ TEST(linux_arguments_are_the_bytes_given) {
     CHECK_STR(result.err, "");
     CHECK_EQ(result.exit_code, 0);
     array_free(&words);
+    arena_free(&a);
+}
+
+// The little-endian u16, u32 or u64 at `at` in `bytes`, as an x86-64 ELF
+// file's fields are, or 0 past its end; read byte by byte, whatever the
+// host's order.
+static u64 elf_u16(String bytes, u64 at) {
+    if (at + 2 > (u64)bytes.count) return 0;
+    return (u64)bytes.data[at] | (u64)bytes.data[at + 1] << 8;
+}
+static u64 elf_u32(String bytes, u64 at) {
+    if (at + 4 > (u64)bytes.count) return 0;
+    return elf_u16(bytes, at) | elf_u16(bytes, at + 2) << 16;
+}
+static u64 elf_u64(String bytes, u64 at) {
+    if (at + 8 > (u64)bytes.count) return 0;
+    return elf_u32(bytes, at) | elf_u32(bytes, at + 4) << 32;
+}
+
+// The zero-ended string at `at` in `bytes`, without its zero, or an empty
+// one past its end.
+static String elf_string(String bytes, u64 at) {
+    if (at >= (u64)bytes.count) return {};
+    s64 count = 0;
+    while ((s64)at + count < bytes.count && bytes.data[at + count]) count++;
+    return {bytes.data + at, count};
+}
+
+// True when `bytes` is a 64-bit little-endian ELF file: "\x7F" "ELF", then
+// ELFCLASS64 (2) and ELFDATA2LSB (1).
+static bool is_elf64(String bytes) {
+    return bytes.count >= 64 && elf_u32(bytes, 0) == 0x464C457F && bytes.data[4] == 2 && bytes.data[5] == 1;
+}
+
+// The shared libraries an ELF64 program needs, in its dynamic section's
+// order, read from the file's bytes, as imported_dlls reads a PE on
+// Windows. The ELF header says where the section headers are (e_shoff, at
+// 0x28), how long each is (at 0x3A) and how many there are (at 0x3C). The
+// dynamic section is the one of type SHT_DYNAMIC (6, at 4 in its header):
+// 16-byte entries from its file offset (at 0x18), for its size (at 0x20),
+// up to DT_NULL (0), each a tag and a value; a DT_NEEDED (1) entry's value
+// is its library's name, as an offset into the string table section whose
+// index the dynamic section's sh_link (at 0x28) gives. None when the file
+// can't be read or isn't one.
+static Array<String> needed_libraries(Arena *a, String program) {
+    Array<String> names = {};
+    String bytes = {};
+    if (!os_read_file(a, program, &bytes) || !is_elf64(bytes)) return names;
+    u64 sections = elf_u64(bytes, 0x28), size = elf_u16(bytes, 0x3A), count = elf_u16(bytes, 0x3C);
+    for (u64 i = 0; i < count; i++) {
+        u64 header = sections + i * size;
+        if (elf_u32(bytes, header + 4) != 6) continue;  // SHT_DYNAMIC
+        u64 strings_header = sections + elf_u32(bytes, header + 0x28) * size;
+        u64 strings_at = elf_u64(bytes, strings_header + 0x18);
+        u64 at = elf_u64(bytes, header + 0x18), end = at + elf_u64(bytes, header + 0x20);
+        for (; at + 16 <= end && at + 16 <= (u64)bytes.count; at += 16) {
+            u64 tag = elf_u64(bytes, at);
+            if (tag == 0) break;  // DT_NULL
+            if (tag == 1) array_add(&names, elf_string(bytes, strings_at + elf_u64(bytes, at + 8)));  // DT_NEEDED
+        }
+        break;
+    }
+    return names;
+}
+
+// The dynamic loader an ELF64 program names, the contents of its PT_INTERP
+// segment (3), without their zero. The ELF header says where the program
+// headers are (e_phoff, at 0x20), how long each is (at 0x36) and how many
+// there are (at 0x38); a program header has its type at 0, its file offset
+// at 8 and its size in the file at 0x20. Empty when there is none.
+static String elf_interpreter(Arena *a, String program) {
+    String bytes = {};
+    if (!os_read_file(a, program, &bytes) || !is_elf64(bytes)) return {};
+    u64 headers = elf_u64(bytes, 0x20), size = elf_u16(bytes, 0x36), count = elf_u16(bytes, 0x38);
+    for (u64 i = 0; i < count; i++) {
+        u64 header = headers + i * size;
+        if (elf_u32(bytes, header) == 3) return elf_string(bytes, elf_u64(bytes, header + 8));  // PT_INTERP
+    }
+    return {};
+}
+
+TEST(linux_programs_need_only_libc_and_libm) {
+    // Issue #125 (spec 10.6): a program needs glibc's libc.so.6 and
+    // libm.so.6, in that order, the two libraries every glibc system has
+    // (libc6, not libc6-dev), and nothing else, and names glibc's dynamic
+    // loader to run it.
+    Arena a = arena_make();
+    String program = link_module(&a, lower_tokens(&a, HELLO), "needed-test");
+    Array<String> needed = needed_libraries(&a, program);
+    CHECK_STR(joined(&a, needed), "[libc.so.6][libm.so.6]");
+    CHECK_STR(elf_interpreter(&a, program), "/lib64/ld-linux-x86-64.so.2");
+    array_free(&needed);
     arena_free(&a);
 }
 #endif

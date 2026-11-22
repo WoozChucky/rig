@@ -3,8 +3,6 @@
 
 #include "link.h"
 
-static const char *INSTALL_GLIBC = "install your distribution's C library development package (libc6-dev on Debian and Ubuntu)";
-
 // "a", "a or b", "a, b or c".
 static String list_with_or(Arena *a, Array<String> items) {
     String all = string_printf(a, "");
@@ -15,8 +13,13 @@ static String list_with_or(Arena *a, Array<String> items) {
     return all;
 }
 
-bool find_crt_directory(Arena *a, Array<String> candidates, String *dir, String *error) {
-    const char *files[] = {"crt1.o", "crti.o", "crtn.o"};
+// Both libraries, side by side: libm.so.6 is glibc's own, installed with
+// libc.so.6, so the program gets the two of one glibc. The candidates'
+// order picks among directories that have both: a 64-bit one is listed
+// ahead of /usr/lib, which holds a 32-bit glibc on Fedora with glibc.i686
+// installed.
+bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String *error) {
+    const char *files[] = {"libc.so.6", "libm.so.6"};
     for (s64 i = 0; i < candidates.count; i++) {
         bool all_there = true;
         for (const char *file : files) {
@@ -27,8 +30,10 @@ bool find_crt_directory(Arena *a, Array<String> candidates, String *dir, String 
             return true;
         }
     }
-    *error = string_printf(a, "glibc's C runtime files (crt1.o, crti.o, crtn.o) weren't found in " STR_FMT "; %s",
-                           STR_ARG(list_with_or(a, candidates)), INSTALL_GLIBC);
+    *error = string_printf(a,
+                           "glibc's libc.so.6 and libm.so.6 weren't found side by side in " STR_FMT
+                           "; Rig links programs against glibc, the C library of most Linux systems",
+                           STR_ARG(list_with_or(a, candidates)));
     return false;
 }
 
@@ -100,7 +105,8 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
     return argv;
 }
 
-Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<String> objects, String output) {
+Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, String libc_dir, Array<String> objects,
+                                 String output) {
     Array<String> argv = {};
     array_add(&argv, ld_lld);
     array_add(&argv, str("-o"));
@@ -111,22 +117,25 @@ Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<
     // glibc's dynamic loader, which runs the program.
     array_add(&argv, str("-dynamic-linker"));
     array_add(&argv, str("/lib64/ld-linux-x86-64.so.2"));
-    // The C runtime's start (_start, which calls main) and the prologue and
-    // epilogue of .init and .fini, around the program's objects.
-    array_add(&argv, string_printf(a, STR_FMT "/crt1.o", STR_ARG(crt_dir)));
-    array_add(&argv, string_printf(a, STR_FMT "/crti.o", STR_ARG(crt_dir)));
+    // Rig's runtime (runtime/linux.c): the start-up, _start, which calls
+    // glibc's __libc_start_main with main, and atexit, at_quick_exit and
+    // pthread_atfork, which libc.so.6 doesn't export. In place of glibc's
+    // development files, crt1.o and the libc_nonshared.a that libc.so's
+    // linker script adds, which a system needn't have.
+    array_add(&argv, string_printf(a, STR_FMT "/rig_runtime.o", STR_ARG(runtime_dir)));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
-    array_add(&argv, string_printf(a, "-L" STR_FMT, STR_ARG(crt_dir)));
-    // The C library: libc itself, and libm, where glibc keeps most of C's
+    // The C library, its shared libraries by path, as the dynamic loader
+    // loads them: libc itself, and libm, where glibc keeps most of C's
     // <math.h> (sqrt, sin, pow), which libc doesn't export. Both are in
     // glibc's own package, so every program depends on libm.so.6 whether it
-    // calls a math function or not, with nothing more to install (spec 10.6).
-    // ld.lld takes shared libraries in any order, but the order is the one the
-    // dynamic loader searches them in at run time, so -lc goes first: a name
-    // both export (copysign, frexp, ldexp, modf, scalbn) is libc's.
-    array_add(&argv, str("-lc"));
-    array_add(&argv, str("-lm"));
-    array_add(&argv, string_printf(a, STR_FMT "/crtn.o", STR_ARG(crt_dir)));
+    // calls a math function or not, with nothing more to install (spec
+    // 10.6). Not -lc -lm, which find libc.so and libm.so, the development
+    // files' linker scripts. ld.lld takes shared libraries in any order, but
+    // the order is the one the dynamic loader searches them in at run time,
+    // so libc.so.6 goes first: a name both export (copysign, frexp, ldexp,
+    // modf, scalbn) is libc's.
+    array_add(&argv, string_printf(a, STR_FMT "/libc.so.6", STR_ARG(libc_dir)));
+    array_add(&argv, string_printf(a, STR_FMT "/libm.so.6", STR_ARG(libc_dir)));
     return argv;
 }
 

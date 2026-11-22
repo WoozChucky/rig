@@ -41,10 +41,11 @@
 // dynamically, so os_find_c_function finds its functions, the same the
 // compiler itself calls, but what libc_nonshared.a links in statically:
 // atexit, at_quick_exit and pthread_atfork. libc.so's linker script links
-// that archive into each program, so libc.so.6 doesn't export them and
-// dlsym can't find them. The table on Linux is those three, the compiler's
-// own copies, which taking their addresses here links in, as a compiled
-// program's -lc links its.
+// that archive into each program built with glibc's development files, the
+// compiler among them, so libc.so.6 doesn't export them and dlsym can't
+// find them. The table on Linux is those three, the compiler's own copies,
+// which taking their addresses here links in, as a compiled Rig program
+// links its from Rig's runtime (runtime/linux.c, spec 10.6).
 
 #include "interp.h"
 
