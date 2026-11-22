@@ -8,7 +8,7 @@ The compiler is written in C-style C++23 and built with clang, the pinned LLVM r
 
 ## Building
 
-**Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload, whose C and C++ runtime, Windows SDK and linker clang builds `rig.exe` with (`curl.exe` and `tar.exe`, which `get_llvm.bat` uses, ship with Windows 10 and later). The `rig.exe` it builds needs none of it: it links programs with its own linker and runtime (spec 10.6).
+**Windows** needs Visual Studio or its Build Tools with the "Desktop development with C++" workload, whose C and C++ runtime, Windows SDK and linker clang builds `rig.exe` with (`curl.exe` and `tar.exe`, which `get_llvm.bat` uses, ship with Windows 10 and later). The `rig.exe` it builds needs none of it: it links programs with the linker and runtime that ship with Rig, which `build.bat` puts beside it (spec 10.6).
 
 ```
 scripts\get_llvm.bat

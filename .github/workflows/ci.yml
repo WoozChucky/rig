@@ -17,9 +17,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # The LLVM archive is 2 GB; what get_llvm.sh keeps of it is cached:
-      # LLVM's headers, libraries and lld, and the clang that builds Rig
-      # (build.sh uses it, not a clang of the image). The key hashes the
-      # script, so a change to what it keeps fetches the archive again.
+      # LLVM's headers, libraries and lld, and the clang that builds Rig and
+      # its runtime (build.sh uses it, not a clang of the image). The key
+      # hashes the script, so a change to what it keeps fetches the archive
+      # again.
       - name: Cache LLVM
         id: llvm
         uses: actions/cache@v6

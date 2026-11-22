@@ -165,7 +165,7 @@ In a terminal:
    cd ~ && rm -rf "$download"
    ```
 
-4. Link `rig` into `~/.local/bin`, the folder for your own programs on the `PATH` (`rig` finds `ld.lld` and `modules` beside the file the link points to):
+4. Link `rig` into `~/.local/bin`, the folder for your own programs on the `PATH` (`rig` finds `ld.lld`, `rig_runtime.o` and `modules` beside the file the link points to):
 
    ```sh
    mkdir -p ~/.local/bin && ln -sf ~/.local/share/rig/rig ~/.local/bin/rig
@@ -203,7 +203,7 @@ From the release after 0.3.0 on, Rig needs nothing installed besides itself. `ri
 - **Windows** needs Visual Studio, or its free [Build Tools](https://visualstudio.microsoft.com/downloads/), with the **Desktop development with C++** workload: it brings the C runtime, the Windows SDK and Microsoft's linker, `link.exe`. Rig links with the newest installation's `link.exe`, or with the `lld-link.exe` beside `rig.exe` when the installation has none, against the same libraries.
 - **Linux** needs glibc's development files, among them its start files (`crt1.o`, `crti.o`, `crtn.o`), `libc.so` and `libm.so`: `sudo apt install libc6-dev` on Debian and Ubuntu, `sudo dnf install glibc-devel` on Fedora; Arch's `glibc` has them. Rig links with the `ld.lld` beside it.
 
-Then save hello world as `hello.rig`, in a folder of your own:
+To check that Rig works, whatever its release, save hello world as `hello.rig`, in a folder of your own:
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;

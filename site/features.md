@@ -18,6 +18,6 @@ What works today, as [the specification](/spec/) describes it. The specification
 - **C interop:** a C function declared once with `#foreign libc` is called like any procedure, with the platform's C calling convention.
 - **Diagnostics** that name the file, line and column and show the line.
 - **Debug information** in every build: a PDB on Windows, DWARF on Linux. gdb, cdb, WinDbg, Visual Studio and VS Code stop at a line of any of the program's `.rig` files or at a procedure by its Rig name, show the call stack, step a line at a time, and show the variables and the named constants with their values, in an unoptimised build.
-- **Windows x64 and Linux x86-64**, linked by Rig's own linker and runtime against the system's C runtime, `ucrtbase.dll` and `kernel32.dll` on Windows, glibc's `libc.so.6` and `libm.so.6` on Linux, with nothing else to install.
+- **Windows x64 and Linux x86-64**, linked by the linker and runtime that ship with Rig against the system's C runtime, `ucrtbase.dll` and `kernel32.dll` on Windows, glibc's `libc.so.6` and `libm.so.6` on Linux, with nothing else to install.
 
 Where each milestone stands is on [the roadmap](https://github.com/WoozChucky/rig/issues/85).

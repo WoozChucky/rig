@@ -4292,12 +4292,13 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
         if (!type_is_aggregate(t)) array_add(&p->results, {ir_type_of(t), ir_ext_of(t)});
     }
     // Rig's main is C's main, the program's entry point: exported, and
-    // returning C's int, 0 for success, which the C runtime that calls it
-    // hands to exit. (The checker made sure it takes and returns nothing in
-    // Rig; a Rig call of main ignores the int.) So a debugger's `break
-    // main` stops in the program's own main. With Preload it takes C's int
-    // argc and char **argv too (takes_command_line), which the C runtime
-    // always passes, an i32 as C's int is, with no extension, and a ptr.
+    // returning C's int, 0 for success, which the program's start-up code,
+    // its caller, hands to exit. (The checker made sure it takes and
+    // returns nothing in Rig; a Rig call of main ignores the int.) So a
+    // debugger's `break main` stops in the program's own main. With Preload
+    // it takes C's int argc and char **argv too (takes_command_line), which
+    // the program's start-up code always passes, an i32 as C's int is, with
+    // no extension, and a ptr.
     if (has_body && string_eq(source->name, str("main"))) {
         p->is_export = true;
         if (takes_command_line(l, source)) {

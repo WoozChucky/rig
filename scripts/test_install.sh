@@ -21,8 +21,8 @@
 #     builds but doesn't run gets another (two stand-in releases, whose rig
 #     is a script, say which).
 #   - An upgrade replaces the archive's modules/ whole: a file the old
-#     modules/ had and the new one hasn't doesn't stay behind (the stand-in
-#     release again).
+#     modules/ had and the new one hasn't doesn't stay behind (the first
+#     stand-in release, without Rig's runtime).
 #   - Installing the latest release: rig on the PATH's link, hello world
 #     built and run, the PATH line added to ~/.profile and ~/.bashrc, the
 #     extension installed.
@@ -33,7 +33,7 @@
 #     folder was already gone.
 #
 # The installs download releases from GitHub, so it needs the network; the
-# failures need none (a checksum mismatch and the stand-in release are
+# failures need none (a checksum mismatch and the stand-in releases are
 # served from file:// URLs, and the server's errors by python3 on this
 # computer). It needs curl, wget and python3. The real releases' hello
 # world needs glibc's development files (libc6-dev) only for a release up
@@ -302,7 +302,7 @@ EOF
     pass "$system is refused"
 done
 
-# --- The hello world check, with a stand-in release -------------------------
+# --- The hello world check, with stand-in releases --------------------------
 #
 # A release 9.0.0 served from a file:// URL, whose rig is a script: `rig
 # version` says what it is, and `rig build` does as FAKE_RIG (passed on
@@ -310,7 +310,9 @@ done
 # "Hello, World!"; with build-fails, the build fails as a missing C
 # library makes it; with run-fails, it writes a hello that can't run, as a
 # temporary folder mounted noexec makes it. Beside rig, as in a release's
-# archive, is modules/, with Basic's module.rig.
+# archive, is modules/, with Basic's module.rig, and no rig_runtime.o: it
+# stands for a release without Rig's runtime (0.3.0 and before), which
+# sets it apart from the second stand-in, below.
 fake="$work/fake/download/v9.0.0"
 mkdir -p "$fake" "$work/fakerig/modules/Basic"
 echo "// Basic, as a stand-in release ships it." > "$work/fakerig/modules/Basic/module.rig"

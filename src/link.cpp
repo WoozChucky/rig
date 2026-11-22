@@ -91,9 +91,9 @@ static String pdb_path(Arena *a, String output) {
     return string_printf(a, STR_FMT ".pdb", STR_ARG(stem));
 }
 
-Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir, Array<String> objects, String output) {
+Array<String> link_command_windows(Arena *a, Array<String> rig_files, Array<String> objects, String output) {
     Array<String> argv = {};
-    array_add(&argv, lld_link);
+    array_add(&argv, rig_files[0]);
     array_add(&argv, str("/NOLOGO"));
     array_add(&argv, str("/INCREMENTAL:NO"));
     array_add(&argv, str("/SUBSYSTEM:CONSOLE"));
@@ -109,11 +109,11 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
     array_add(&argv, string_printf(a, "/PDB:" STR_FMT, STR_ARG(pdb_path(a, output))));
     // No library but the three given by path below. lld-link, like
     // Microsoft's link.exe, also reads the libraries an object names as its
-    // defaults, and finds a library named without a path in Visual
-    // Studio's and the Windows SDK's directories when they're installed,
-    // even with no LIB variable set: /NODEFAULTLIB, and every library by
-    // path, keep it from reading anything of theirs, so a program links the
-    // same with them or without.
+    // defaults; and lld-link, unlike link.exe, finds a library named
+    // without a path in Visual Studio's and the Windows SDK's directories
+    // when they're installed, even with no LIB variable set. /NODEFAULTLIB,
+    // and every library by path, keep it from reading anything of theirs,
+    // so a program links the same with them or without.
     array_add(&argv, str("/NODEFAULTLIB"));
     // Nothing from the environment either: without /lldignoreenv, lld-link
     // adds the options in LINK before its command line's and those in
@@ -121,10 +121,12 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
     // directories, so a user with one of them set would get another
     // program, or none.
     array_add(&argv, str("/lldignoreenv"));
-    // The start-up, Rig's runtime's (runtime/windows.c). Named, as the
-    // linker would take mainCRTStartup by default for a console program
-    // anyway, so that the object defining it is always linked, and with it
-    // its directives, msvcrt.lib's aliases.
+    // The start-up, Rig's runtime's (runtime/windows.c). Named so that the
+    // command line says where the program starts, whatever the linker's
+    // default; lld-link would infer mainCRTStartup anyway for a console
+    // program that defines main, as every Rig program does, so the object
+    // defining it, and with it its directives, msvcrt.lib's aliases, is
+    // linked either way.
     array_add(&argv, str("/ENTRY:mainCRTStartup"));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
     // Rig's runtime: the start-up, the stack probe, the printf family as
@@ -136,16 +138,14 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
     // doesn't matter to lld-link, which searches them all until nothing
     // more resolves; the runtime goes first only so that what it calls
     // follows it.
-    array_add(&argv, string_printf(a, STR_FMT "\\rig_runtime.lib", STR_ARG(runtime_dir)));
-    array_add(&argv, string_printf(a, STR_FMT "\\ucrtbase.lib", STR_ARG(runtime_dir)));
-    array_add(&argv, string_printf(a, STR_FMT "\\kernel32.lib", STR_ARG(runtime_dir)));
+    for (s64 i = 1; i < rig_files.count; i++) array_add(&argv, rig_files[i]);
     return argv;
 }
 
-Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, String libc_dir, Array<String> objects,
+Array<String> link_command_linux(Arena *a, Array<String> rig_files, String libc_dir, Array<String> objects,
                                  String output) {
     Array<String> argv = {};
-    array_add(&argv, ld_lld);
+    array_add(&argv, rig_files[0]);
     array_add(&argv, str("-o"));
     array_add(&argv, output);
     array_add(&argv, str("--eh-frame-hdr"));
@@ -159,7 +159,7 @@ Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, St
     // pthread_atfork, which libc.so.6 doesn't export. In place of glibc's
     // development files, crt1.o and the libc_nonshared.a that libc.so's
     // linker script adds, which a system needn't have.
-    array_add(&argv, string_printf(a, STR_FMT "/rig_runtime.o", STR_ARG(runtime_dir)));
+    for (s64 i = 1; i < rig_files.count; i++) array_add(&argv, rig_files[i]);
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
     // The C library, its shared libraries by path, as the dynamic loader
     // loads them: libc itself, and libm, where glibc keeps most of C's

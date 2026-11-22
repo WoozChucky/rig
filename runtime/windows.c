@@ -129,12 +129,12 @@ static char **utf8_arguments(int *count) {
 // reads the environment wide, through GetEnvironmentVariableW). The narrow
 // argv failing (memory) ends the program at once, as there; so does the
 // narrow environment failing, which is Rig's own choice: Visual Studio's
-// start-up ignores that result and goes on without it. Then
-// main, with the arguments in UTF-8 when they can be had, and the narrow
-// ones as given when they can't; and exit with main's result, which runs
-// the exit handlers and flushes C's streams. A program's own procedure
-// named mainCRTStartup is the program's alone (tests/run/own_start_names):
-// Rig's procedures aren't visible to the linker by their names.
+// start-up ignores that result and goes on without it. Then main, with the
+// arguments in UTF-8 when they can be had, and the narrow ones as given
+// when they can't; and exit with main's result, which runs the exit
+// handlers and flushes C's streams. A program's own procedure named
+// mainCRTStartup is the program's alone (tests/run/own_start_names): Rig's
+// procedures aren't visible to the linker by their names.
 //
 // main and exit run inside the C runtime's exception filter,
 // _seh_filter_exe, as there: a hardware exception, an access violation,
@@ -149,7 +149,7 @@ void mainCRTStartup(void) {
     _set_app_type(CONSOLE_APP);
     if (_configure_narrow_argv(UNEXPANDED_ARGUMENTS) != 0) __fastfail(FAST_FAIL_FATAL_APP_EXIT);
     if (_initialize_narrow_environment() != 0) __fastfail(FAST_FAIL_FATAL_APP_EXIT);
-    int argc = *__p___argc();
+    int argc;
     char **argv = utf8_arguments(&argc);
     if (!argv) {
         argc = *__p___argc();

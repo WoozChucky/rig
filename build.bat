@@ -39,11 +39,10 @@ rem (A goto, not a ( ) block: %LLVM% may hold a parenthesis, as in
 rem "Program Files (x86)", which would end the block early.)
 if not exist "%LLVM%\bin\llvm-config.exe" goto no_llvm
 
-rem The compiler: CXX if set, else the pinned clang++.exe. A
-rem deps\llvm-windows made before get_llvm.bat kept clang has LLVM but no
-rem compiler. CXX may be given with quotes around it or without: they're
-rem taken off, and "%CXX%" below puts them back. (That line is reached
-rem only when CXX is set: %CXX:"=% of an unset CXX isn't empty.)
+rem The compiler: CXX if set, else the pinned clang++.exe. CXX may be
+rem given with quotes around it or without: they're taken off, and
+rem "%CXX%" below puts them back. (That line is reached only when CXX is
+rem set: %CXX:"=% of an unset CXX isn't empty.)
 set PINNED_CXX=
 if not defined CXX goto pinned_cxx
 set "CXX=%CXX:"=%"
@@ -51,8 +50,13 @@ goto have_cxx
 :pinned_cxx
 set "CXX=%LLVM%\bin\clang++.exe"
 set PINNED_CXX=1
-if not exist "%CXX%" goto no_clang
 :have_cxx
+rem The pinned clang++.exe is looked for here, with CXX set too: it
+rem compiles Rig's runtime whatever CXX says (at the end), so a missing one
+rem stops the build now, not after the minutes of building Rig. A
+rem deps\llvm-windows made before get_llvm.bat kept clang has LLVM but no
+rem compiler.
+if not exist "%LLVM%\bin\clang++.exe" goto no_clang
 rem Which compiler made this build, first in its log: "clang version 23.1.5
 rem ...", the first line clang prints. A compiler that doesn't answer stops
 rem here, with what it said on stderr left in place (for /f takes only its
@@ -113,7 +117,6 @@ rem own (it is the C runtime's static part), no builtin turned into a call
 rem of the C library's, and no stack protector, which would need one more.
 rem lld-link /lib, LLVM's lib.exe, puts the two objects into a static
 rem library, whose members a link takes only when it needs them.
-if not exist "%LLVM%\bin\clang++.exe" goto no_clang
 if not exist .build\runtime mkdir .build\runtime
 set RUNTIME_FLAGS=-x c --target=x86_64-pc-windows-msvc -std=c17 -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -O2 -Wall -Wextra
 "%LLVM%\bin\clang++.exe" %RUNTIME_FLAGS% -c runtime\windows.c -o .build\runtime\windows.obj || exit /b 1

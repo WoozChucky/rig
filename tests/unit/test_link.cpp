@@ -26,7 +26,8 @@ static String joined(Arena *a, Array<String> argv) {
 TEST(windows_link_command) {
     Arena a = arena_make();
     Array<String> objects = strings({".build\\hello world.obj", "extra.obj"});
-    Array<String> argv = link_command_windows(&a, str("C:\\Rig\\lld-link.exe"), str("C:\\Rig"), objects, str("my hello.exe"));
+    Array<String> files = windows_rig_files(&a, str("C:\\Rig"));
+    Array<String> argv = link_command_windows(&a, files, objects, str("my hello.exe"));
     Array<String> expected = strings({
         "C:\\Rig\\lld-link.exe",
         "/NOLOGO",
@@ -49,12 +50,13 @@ TEST(windows_link_command) {
     array_free(&argv);
     // The PDB is the program's name with .pdb for its .exe (in any case),
     // or added to a name with another extension.
-    argv = link_command_windows(&a, str("C:\\Rig\\lld-link.exe"), str("C:\\Rig"), objects, str(".build\\tests\\lines.EXE"));
+    argv = link_command_windows(&a, files, objects, str(".build\\tests\\lines.EXE"));
     CHECK(contains(joined(&a, argv), "[/PDB:.build\\tests\\lines.pdb]"));
     array_free(&argv);
-    argv = link_command_windows(&a, str("C:\\Rig\\lld-link.exe"), str("C:\\Rig"), objects, str("lines.bin"));
+    argv = link_command_windows(&a, files, objects, str("lines.bin"));
     CHECK(contains(joined(&a, argv), "[/PDB:lines.bin.pdb]"));
     array_free(&objects);
+    array_free(&files);
     array_free(&expected);
     array_free(&argv);
     arena_free(&a);
@@ -63,8 +65,8 @@ TEST(windows_link_command) {
 TEST(linux_link_command) {
     Arena a = arena_make();
     Array<String> objects = strings({".build/hello.o"});
-    Array<String> argv = link_command_linux(&a, str("/opt/rig/bin/ld.lld"), str("/opt/rig/bin"),
-                                            str("/usr/lib/x86_64-linux-gnu"), objects, str("hello"));
+    Array<String> files = linux_rig_files(&a, str("/opt/rig/bin"));
+    Array<String> argv = link_command_linux(&a, files, str("/usr/lib/x86_64-linux-gnu"), objects, str("hello"));
     Array<String> expected = strings({
         "/opt/rig/bin/ld.lld",
         "-o",
@@ -84,6 +86,7 @@ TEST(linux_link_command) {
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));
     array_free(&objects);
+    array_free(&files);
     array_free(&expected);
     array_free(&argv);
     arena_free(&a);
@@ -391,6 +394,31 @@ TEST(atexit_and_at_quick_exit_handlers_run) {
     arena_free(&a);
 }
 
+// The little-endian u16, u32 or u64 at `at` in `bytes`, as a PE file's
+// and an x86-64 ELF file's fields are, or 0 past its end; read byte by
+// byte, whatever the host's order. Windows' checks read no u64.
+static u64 le_u16(String bytes, u64 at) {
+    if (at + 2 > (u64)bytes.count) return 0;
+    return (u64)bytes.data[at] | (u64)bytes.data[at + 1] << 8;
+}
+static u64 le_u32(String bytes, u64 at) {
+    if (at + 4 > (u64)bytes.count) return 0;
+    return le_u16(bytes, at) | le_u16(bytes, at + 2) << 16;
+}
+[[maybe_unused]] static u64 le_u64(String bytes, u64 at) {
+    if (at + 8 > (u64)bytes.count) return 0;
+    return le_u32(bytes, at) | le_u32(bytes, at + 4) << 32;
+}
+
+// The zero-ended string at `at` in `bytes`, without its zero, or an empty
+// one past its end: a DLL's name in a PE file, a library's in an ELF one.
+static String zero_ended_string(String bytes, u64 at) {
+    if (at >= (u64)bytes.count) return {};
+    s64 count = 0;
+    while ((s64)at + count < bytes.count && bytes.data[at + count]) count++;
+    return {bytes.data + at, count};
+}
+
 #ifdef _WIN32
 TEST(windows_time_functions_link_and_run_as_the_64_bit_ones) {
     // Issue #161: Microsoft's time functions, and C11's bounds-checked ones,
@@ -523,7 +551,7 @@ TEST(windows_c_runtime_extras_link_and_run) {
     CHECK(os_write_file(str(".build/stat-test-file"), str("hello")));
     Ir_Module *m = lower_source(&a,
                                 "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
-                                "_snprintf ::(buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
+                                "_snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
                                 "snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
                                 "sprintf_s :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
                                 "_scprintf :: (format: *u8, ..) -> s32 #foreign libc;\n"
@@ -1295,17 +1323,6 @@ static s32 run_wide(const wchar_t *command_line) {
     return status;
 }
 
-// The little-endian u16 or u32 at `at` in `bytes`, as a PE file's fields
-// are, or 0 past its end; read byte by byte, whatever the host's order.
-static u32 pe_u16(String bytes, u64 at) {
-    if (at + 2 > (u64)bytes.count) return 0;
-    return (u32)bytes.data[at] | (u32)bytes.data[at + 1] << 8;
-}
-static u32 pe_u32(String bytes, u64 at) {
-    if (at + 4 > (u64)bytes.count) return 0;
-    return pe_u16(bytes, at) | pe_u16(bytes, at + 2) << 16;
-}
-
 // The file offset of `rva` in a PE file whose section table, of `sections`
 // 40-byte entries, is at `table`, or 0 when no section holds it: the
 // section's file offset (at 20) plus how far past its virtual address (at
@@ -1314,10 +1331,10 @@ static u32 pe_u32(String bytes, u64 at) {
 static u64 pe_offset_of(String bytes, u64 table, u32 sections, u32 rva) {
     for (u32 i = 0; i < sections; i++) {
         u64 section = table + 40 * (u64)i;
-        u32 address = pe_u32(bytes, section + 12);
-        u32 size = pe_u32(bytes, section + 8);
-        if (size < pe_u32(bytes, section + 16)) size = pe_u32(bytes, section + 16);
-        if (rva >= address && rva - address < size) return rva - address + pe_u32(bytes, section + 20);
+        u32 address = le_u32(bytes, section + 12);
+        u32 size = le_u32(bytes, section + 8);
+        if (size < le_u32(bytes, section + 16)) size = le_u32(bytes, section + 16);
+        if (rva >= address && rva - address < size) return rva - address + le_u32(bytes, section + 20);
     }
     return 0;
 }
@@ -1336,22 +1353,20 @@ static Array<String> imported_dlls(Arena *a, String program) {
     Array<String> names = {};
     String bytes = {};
     if (!os_read_file(a, program, &bytes)) return names;
-    u64 pe = pe_u32(bytes, 0x3C);
-    if (pe_u32(bytes, pe) != 0x00004550) return names;  // "PE\0\0"
-    u32 sections = pe_u16(bytes, pe + 6);
+    u64 pe = le_u32(bytes, 0x3C);
+    if (le_u32(bytes, pe) != 0x00004550) return names;  // "PE\0\0"
+    u32 sections = le_u16(bytes, pe + 6);
     u64 optional = pe + 24;
-    if (pe_u16(bytes, optional) != 0x20B) return names;  // PE32+
-    u32 imports = pe_u32(bytes, optional + 120);
-    u64 table = optional + pe_u16(bytes, pe + 20);
+    if (le_u16(bytes, optional) != 0x20B) return names;  // PE32+
+    u32 imports = le_u32(bytes, optional + 120);
+    u64 table = optional + le_u16(bytes, pe + 20);
     u64 descriptor = imports ? pe_offset_of(bytes, table, sections, imports) : 0;
     while (descriptor && descriptor + 20 <= (u64)bytes.count) {
-        u32 name = pe_u32(bytes, descriptor + 12);
+        u32 name = le_u32(bytes, descriptor + 12);
         if (!name) break;
         u64 at = pe_offset_of(bytes, table, sections, name);
         if (!at) break;
-        s64 count = 0;
-        while ((s64)at + count < bytes.count && bytes.data[at + count]) count++;
-        array_add(&names, String{bytes.data + at, count});
+        array_add(&names, zero_ended_string(bytes, at));
         descriptor += 20;
     }
     return names;
@@ -1458,7 +1473,7 @@ TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
     // the wide ones, its name, a＂ in UTF-8 and b. __argv stays the narrow
     // array, as a C program has it: the program exits with 14 if __argv's
     // first string is main's, the start-up's UTF-8 copy, and, in code page
-    // 1252, with 15 unless __argv holds the two narrow arguments.
+    // 1252, with 15 unless __argv holds the name and one narrow argument.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a,
                                       "exit :: (status: s32) #foreign libc;\n"
@@ -1569,8 +1584,8 @@ TEST(windows_links_with_rigs_files_alone) {
     String dir = os_executable_directory(&a);
     Array<String> objects = {};
     array_add(&objects, object);
-    Array<String> argv = link_command_windows(&a, string_printf(&a, STR_FMT "\\lld-link.exe", STR_ARG(dir)), dir,
-                                              objects, str(".build/verbose-link-test.exe"));
+    Array<String> files = windows_rig_files(&a, dir);
+    Array<String> argv = link_command_windows(&a, files, objects, str(".build/verbose-link-test.exe"));
     array_add(&argv, str("/VERBOSE"));
     Process_Result result = {};
     bool ran = emitted && os_run(&a, argv, &result);
@@ -1602,6 +1617,7 @@ TEST(windows_links_with_rigs_files_alone) {
     CHECK(ran == (reads > 0));
     for (const char *path : made) remove(path);
     array_free(&argv);
+    array_free(&files);
     array_free(&objects);
     arena_free(&a);
 }
@@ -1632,35 +1648,10 @@ TEST(linux_arguments_are_the_bytes_given) {
     arena_free(&a);
 }
 
-// The little-endian u16, u32 or u64 at `at` in `bytes`, as an x86-64 ELF
-// file's fields are, or 0 past its end; read byte by byte, whatever the
-// host's order.
-static u64 elf_u16(String bytes, u64 at) {
-    if (at + 2 > (u64)bytes.count) return 0;
-    return (u64)bytes.data[at] | (u64)bytes.data[at + 1] << 8;
-}
-static u64 elf_u32(String bytes, u64 at) {
-    if (at + 4 > (u64)bytes.count) return 0;
-    return elf_u16(bytes, at) | elf_u16(bytes, at + 2) << 16;
-}
-static u64 elf_u64(String bytes, u64 at) {
-    if (at + 8 > (u64)bytes.count) return 0;
-    return elf_u32(bytes, at) | elf_u32(bytes, at + 4) << 32;
-}
-
-// The zero-ended string at `at` in `bytes`, without its zero, or an empty
-// one past its end.
-static String elf_string(String bytes, u64 at) {
-    if (at >= (u64)bytes.count) return {};
-    s64 count = 0;
-    while ((s64)at + count < bytes.count && bytes.data[at + count]) count++;
-    return {bytes.data + at, count};
-}
-
 // True when `bytes` is a 64-bit little-endian ELF file: "\x7F" "ELF", then
 // ELFCLASS64 (2) and ELFDATA2LSB (1).
 static bool is_elf64(String bytes) {
-    return bytes.count >= 64 && elf_u32(bytes, 0) == 0x464C457F && bytes.data[4] == 2 && bytes.data[5] == 1;
+    return bytes.count >= 64 && le_u32(bytes, 0) == 0x464C457F && bytes.data[4] == 2 && bytes.data[5] == 1;
 }
 
 // The shared libraries an ELF64 program needs, in its dynamic section's
@@ -1677,17 +1668,17 @@ static Array<String> needed_libraries(Arena *a, String program) {
     Array<String> names = {};
     String bytes = {};
     if (!os_read_file(a, program, &bytes) || !is_elf64(bytes)) return names;
-    u64 sections = elf_u64(bytes, 0x28), size = elf_u16(bytes, 0x3A), count = elf_u16(bytes, 0x3C);
+    u64 sections = le_u64(bytes, 0x28), size = le_u16(bytes, 0x3A), count = le_u16(bytes, 0x3C);
     for (u64 i = 0; i < count; i++) {
         u64 header = sections + i * size;
-        if (elf_u32(bytes, header + 4) != 6) continue;  // SHT_DYNAMIC
-        u64 strings_header = sections + elf_u32(bytes, header + 0x28) * size;
-        u64 strings_at = elf_u64(bytes, strings_header + 0x18);
-        u64 at = elf_u64(bytes, header + 0x18), end = at + elf_u64(bytes, header + 0x20);
+        if (le_u32(bytes, header + 4) != 6) continue;  // SHT_DYNAMIC
+        u64 strings_header = sections + le_u32(bytes, header + 0x28) * size;
+        u64 strings_at = le_u64(bytes, strings_header + 0x18);
+        u64 at = le_u64(bytes, header + 0x18), end = at + le_u64(bytes, header + 0x20);
         for (; at + 16 <= end && at + 16 <= (u64)bytes.count; at += 16) {
-            u64 tag = elf_u64(bytes, at);
+            u64 tag = le_u64(bytes, at);
             if (tag == 0) break;  // DT_NULL
-            if (tag == 1) array_add(&names, elf_string(bytes, strings_at + elf_u64(bytes, at + 8)));  // DT_NEEDED
+            if (tag == 1) array_add(&names, zero_ended_string(bytes, strings_at + le_u64(bytes, at + 8)));  // DT_NEEDED
         }
         break;
     }
@@ -1702,10 +1693,10 @@ static Array<String> needed_libraries(Arena *a, String program) {
 static String elf_interpreter(Arena *a, String program) {
     String bytes = {};
     if (!os_read_file(a, program, &bytes) || !is_elf64(bytes)) return {};
-    u64 headers = elf_u64(bytes, 0x20), size = elf_u16(bytes, 0x36), count = elf_u16(bytes, 0x38);
+    u64 headers = le_u64(bytes, 0x20), size = le_u16(bytes, 0x36), count = le_u16(bytes, 0x38);
     for (u64 i = 0; i < count; i++) {
         u64 header = headers + i * size;
-        if (elf_u32(bytes, header) == 3) return elf_string(bytes, elf_u64(bytes, header + 8));  // PT_INTERP
+        if (le_u32(bytes, header) == 3) return zero_ended_string(bytes, le_u64(bytes, header + 8));  // PT_INTERP
     }
     return {};
 }

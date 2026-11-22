@@ -7,14 +7,13 @@
 
 bool link_executable(Arena *a, Target t, Array<String> objects, String output, String *error) {
     RIG_ASSERT(t == TARGET_WINDOWS_X64);  // no cross-linking yet
-    String dir = os_executable_directory(a);
-    Array<String> files = windows_rig_files(a, dir);
-    String lld_link = files[0];
-    bool found = check_rig_files(a, files, "build.bat", error);
+    Array<String> files = windows_rig_files(a, os_executable_directory(a));
+    if (!check_rig_files(a, files, "build.bat", error)) {
+        array_free(&files);
+        return false;
+    }
+    Array<String> argv = link_command_windows(a, files, objects, output);
     array_free(&files);
-    if (!found) return false;
-
-    Array<String> argv = link_command_windows(a, lld_link, dir, objects, output);
     bool ok = run_linker(a, argv, error);
     array_free(&argv);
     return ok;

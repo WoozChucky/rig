@@ -46,8 +46,8 @@ typedef struct __crt_locale_pointers *_locale_t;
 // their PRINTF_, and three shortened further: LEGACY_TERMINATION is the
 // SDK's LEGACY_VSPRINTF_NULL_TERMINATION, STANDARD_SNPRINTF its
 // STANDARD_SNPRINTF_BEHAVIOR and SCANF_SECURE its SCANF_SECURECRT).
-// Visual Studio's start-up code (msvcrt.lib's) sets
-// printf's to LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING and scanf's to
+// Visual Studio's start-up code (msvcrt.lib's) sets printf's to
+// LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING and scanf's to
 // SCANF_LEGACY_WIDE_SPECIFIERS, so these start so: a %s in a wide format,
 // wprintf's or swscanf's, is a UTF-16 string, as Microsoft's C has always
 // read it, and %.0f of 2.5 is 2, rounded to even as C says. The others are

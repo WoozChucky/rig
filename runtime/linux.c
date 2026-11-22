@@ -13,10 +13,14 @@
 // libm.so.6 themselves, which every glibc system has (the libc6 package).
 // So a user of rig needs nothing installed besides Rig.
 //
-// Nothing of crt1.o's else is needed: crti.o and crtn.o, the prologue and
-// epilogue of the .init and .fini sections, frame what nothing of Rig's
-// uses (glibc runs a program's .init_array and .fini_array itself), and
-// crt1.o's _IO_stdin_used is read only by i386's old libio.
+// Of crt1.o only _start is needed, and it is replaced here; the rest of it
+// matters to no Rig program: _IO_stdin_used, read only by i386's old
+// libio, __data_start and its weak data_start, which neither libc.so.6 nor
+// the dynamic loader reads, _dl_relocate_static_pie, which only a static
+// link calls, and crt1.o's notes, .note.ABI-tag and .note.gnu.property.
+// Nor are crti.o and crtn.o needed, glibc's start files for the prologue
+// and epilogue of the .init and .fini sections: they frame what nothing of
+// Rig's uses (glibc runs a program's .init_array and .fini_array itself).
 //
 // Compiled freestanding, with no header and no C library of its own
 // (build.sh): this is the C library's static part. The functions it calls
