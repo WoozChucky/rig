@@ -25,7 +25,7 @@ hero:
 
 features:
   - title: Native executables
-    details: Compiled ahead of time through LLVM to x86-64 executables for Windows and Linux, linked with the platform's own tools and C runtime. No garbage collector, no virtual machine.
+    details: Compiled ahead of time through LLVM to x86-64 executables for Windows and Linux, linked by Rig's own linker and runtime against the system's C runtime, with nothing else to install. No garbage collector, no virtual machine.
     link: /spec/implementation
     linkText: How it is compiled
   - title: C layout, C calls

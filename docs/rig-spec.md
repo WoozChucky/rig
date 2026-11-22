@@ -27,7 +27,7 @@ The language is small and explicit. It has integers of every common width, IEEE 
 
 ### 1.2 Goals
 
-- **Native programs.** Executables for Windows x64 and Linux x86-64, linked with the platform's own tools and C runtime.
+- **Native programs.** Executables for Windows x64 and Linux x86-64, linked by the linker and runtime that ship with Rig against the system's C runtime, with nothing else to install (section 10.6).
 - **No undefined behaviour in what the language defines.** Integer arithmetic wraps, a shift amount wraps to the width of its type, a float converted to an integer saturates, and variables start zeroed. What the hardware or LLVM would leave undefined is either defined or checked: an integer division by zero, a cast that would change a number, a null pointer dereference and an index out of bounds stop the program with a message (section 8). Memory errors that no check catches (a dangling pointer, a write to read-only memory) are the program's responsibility, as in C.
 - **Direct use of C.** A C function is declared once and called like any procedure, with the platform's C calling convention (section 7.6).
 - **Precise diagnostics.** Every compile-time error names the file, line and column of its cause and shows the line (section 9).

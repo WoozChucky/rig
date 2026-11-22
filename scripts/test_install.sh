@@ -344,6 +344,7 @@ FAKE_RIG=build-fails fake_installer --no-modify-path || fail "a failing hello wo
 says "Rig is installed, but it couldn't build hello world" || fail "a failing build's message"
 says "unable to find library -lc" || fail "a failing build's message doesn't show the build's output"
 says "glibc's development files" || fail "a failing build doesn't get the requirements message"
+! says "please report it" || fail "a failing build of a release without Rig's runtime got the bug message"
 pass "a hello world that doesn't build gets the requirements message, and the build's output"
 
 # A second stand-in release 9.0.0, served from its own file:// URL, whose
@@ -359,9 +360,21 @@ tar -czf "$fake_runtime/rig-linux-x64.tar.gz" -C "$work/fakerig" rig modules rig
 fresh_home
 FAKE_RIG=build-fails RIG_INSTALL_BASE_URL="file://$work/fake-runtime" installer --version 9.0.0 --no-vscode --no-modify-path || fail "a failing hello world build of a release with Rig's runtime failed the install"
 says "please report it" || fail "a failing build of a release with Rig's runtime doesn't get the bug message"
+says "https://github.com/WoozChucky/rig/issues" || fail "a failing build of a release with Rig's runtime: the bug message doesn't say where to report it"
 ! says "glibc's development files" || fail "a failing build of a release with Rig's runtime got the requirements message"
 says "unable to find library -lc" || fail "a failing build of a release with Rig's runtime: the message doesn't show the build's output"
 pass "a release with Rig's runtime whose hello world doesn't build gets the bug message, and the build's output"
+
+# The release without the runtime installed over the one with it, as
+# `--version 0.3.0` over a newer release: the installer moves the archive's
+# files over the old ones and leaves the rest, so the newer rig_runtime.o
+# stays in the folder, and whether the release has the runtime must be read
+# from its archive, not from the folder.
+FAKE_RIG=build-fails fake_installer --no-modify-path || fail "a failing hello world build of an older release over a newer one failed the install"
+[ -e "$HOME/.local/share/rig/rig_runtime.o" ] || fail "installing an older release over a newer one didn't leave the newer rig_runtime.o behind"
+says "glibc's development files" || fail "a failing build of an older release over a newer one doesn't get the requirements message"
+! says "please report it" || fail "a failing build of an older release over a newer one got the bug message"
+pass "an older release without Rig's runtime, over a newer one with it, gets the requirements message"
 
 fresh_home
 FAKE_RIG=run-fails fake_installer --no-modify-path || fail "a hello world that doesn't run failed the install"
