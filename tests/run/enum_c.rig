@@ -1,0 +1,15 @@
+// Enums crossing into C (issue #221, spec 7.6): as their integer types, a
+// foreign procedure's parameter and result, and values through C's '...'
+// widened as C widens an integer of their size.
+Letter :: enum s32 { A :: 65; B; NEWLINE :: 10; }
+Tiny :: enum s8 { MINUS_ONE :: -1; }
+Byte :: enum u8 { HIGH :: 200; }
+
+putchar :: (c: Letter) -> Letter #foreign libc;
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    putchar(.B);
+    back := putchar(Letter.NEWLINE);
+    printf("%d %d %d %d\n", Tiny.MINUS_ONE, Byte.HIGH, back == .NEWLINE, Letter.A);
+}

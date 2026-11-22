@@ -115,9 +115,11 @@ bool type_has_view_fields(Type *t) {
 }
 
 Type *type_c_promoted(Type *t) {
-    // C's int, which every narrower integer and _Bool becomes: s32.
+    // C's int, which every narrower integer and _Bool becomes: s32. An enum
+    // is promoted as its integer type is.
     Type *c_int = &integer_types[2];
-    if (t == &type_bool || (t->kind == TYPE_INTEGER && t->size < c_int->size)) return c_int;
+    Type *integer = type_integer_of(t);
+    if (t == &type_bool || (integer && integer->size < c_int->size)) return c_int;
     if (t == &type_float32) return &type_float64;
     return t;
 }

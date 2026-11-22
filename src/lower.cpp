@@ -531,7 +531,8 @@ static void place(Lowering *l, Position pos, s32 scope) {
 }
 
 // The IR type of a checked type. An aggregate's value (a string's too) is
-// the address of its bytes, a ptr.
+// the address of its bytes, a ptr. An enum is its integer type's (spec
+// 3.18).
 static Ir_Type ir_type_of(Type *t) {
     if (!t || t->kind == TYPE_VOID) return IR_VOID;
     if (t->kind == TYPE_BOOL) return IR_I1;
@@ -542,7 +543,8 @@ static Ir_Type ir_type_of(Type *t) {
     if (t->kind == TYPE_PROC) return IR_PTR;
     if (type_is_aggregate(t)) return IR_PTR;
     if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
-    RIG_ASSERT(t->kind == TYPE_INTEGER);
+    t = type_integer_of(t);
+    RIG_ASSERT(t);
     switch (t->size) {
     case 1: return IR_I8;
     case 2: return IR_I16;
@@ -564,10 +566,12 @@ static s32 ir_bits(Ir_Type t) {
 }
 
 // How a parameter or result of type t widens (Ir_Ext): only s8, s16, u8 and
-// u16 are narrower than the 32 bits the calling convention widens to.
+// u16 are narrower than the 32 bits the calling convention widens to, and
+// an enum over one of them widens as it does (spec 7.6).
 static Ir_Ext ir_ext_of(Type *t) {
-    if (!t || t->kind != TYPE_INTEGER || t->size > 2) return IR_EXT_NONE;
-    return t->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
+    Type *integer = t ? type_integer_of(t) : nullptr;
+    if (!integer || integer->size > 2) return IR_EXT_NONE;
+    return integer->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
 }
 
 // The position the next instruction gets: the current one, l->pos, except
@@ -1565,7 +1569,10 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
     if (type_is_pointer(to) && from->kind == TYPE_INTEGER) return emit_convert(l, IR_INTTOPTR, IR_I64, v, IR_PTR);
     if (from->kind == TYPE_FLOAT || to->kind == TYPE_FLOAT) return lower_float_cast(l, v, from, to);
-    if (cast->is_trunc || from->kind != TYPE_INTEGER || to->kind != TYPE_INTEGER) return resize(l, v, from, want);
+    // An enum converts as its integer type (spec 3.18): Type has its size
+    // and sign, which is all that's read below, and the message names the
+    // enum, T.
+    if (cast->is_trunc || !type_integer_of(from) || !type_integer_of(to)) return resize(l, v, from, want);
     if (ir_bits(want) < ir_bits(have)) {
         s32 narrow = resize(l, v, from, want);
         s32 back = resize(l, narrow, to, have);

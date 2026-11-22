@@ -1502,7 +1502,13 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Node :: struct { value: int; next: *Node; }\n"
                                 "Tree :: struct { children: []Tree; }\n"
                                 "Empty :: struct {}\n"
+                                "Mode :: enum { A; B :: 5; }\n"
+                                "Small :: enum u8 { X :: 200; }\n"
+                                "Huge :: enum u64 { TOP :: 18446744073709551615; }\n"
                                 "main :: () {\n"
+                                "    mode: Mode;\n"
+                                "    tiny: Small;\n"
+                                "    huge: Huge;\n"
                                 "    n: Node;\n"
                                 "    t: Tree;\n"
                                 "    e: Empty;\n"
@@ -1554,6 +1560,26 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(text, "!DISubrange(count: 65536, lowerBound: 0)"));
         // *void points at no type, as C's void * does.
         CHECK(contains(text, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64, "));
+        // An enum is an enumeration of its members, in order, over its
+        // integer type (spec 10.7): an unsigned one's values are unsigned,
+        // u64's largest included.
+        String mode = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Mode\"");
+        CHECK(contains(mode, "size: 64"));
+        CHECK(contains(node_line(&a, text, attached(&a, mode, "baseType:")), "!DIBasicType(name: \"int\""));
+        String mode_members = node_line(&a, text, attached(&a, mode, "elements:"));
+        String a_member = defined_node(line_with(text, "!DIEnumerator(name: \"A\", value: 0)"));
+        String b_member = defined_node(line_with(text, "!DIEnumerator(name: \"B\", value: 5)"));
+        CHECK(a_member.count > 0 && b_member.count > 0);
+        CHECK(contains(mode_members,
+                       string_cstr(&a, string_printf(&a, "!{" STR_FMT ", " STR_FMT "}", STR_ARG(a_member),
+                                                     STR_ARG(b_member)))));
+        String small = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Small\"");
+        CHECK(contains(small, "size: 8"));
+        CHECK(contains(node_line(&a, text, attached(&a, small, "baseType:")), "!DIBasicType(name: \"u8\""));
+        CHECK(contains(text, "!DIEnumerator(name: \"X\", value: 200, isUnsigned: true)"));
+        CHECK(contains(line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Huge\""),
+                       "size: 64"));
+        CHECK(contains(text, "!DIEnumerator(name: \"TOP\", value: 18446744073709551615, isUnsigned: true)"));
     }
     arena_free(&a);
 }

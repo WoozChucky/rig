@@ -904,10 +904,24 @@ An enum is a type of its own over an integer type, whose values are named by its
 EnumDecl = identifier "::" ( "enum" | "enum_flags" ) [ identifier ] "{" { identifier [ "::" Expression ] ";" } "}" .
 ```
 
-```rig fragment
+```rig
+#import "Basic";
+
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Small :: enum u8 { A; B :: 5; C; LAST :: C + 3; }
 Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING :: 16; FADING; ALL :: VISIBLE | SOLID | GLOWING | FADING; }
+
+main :: () {
+    print("{} {} {}\n", cast(int) Mode.FREE_ALL, cast(int) Small.LAST, cast(int) Look.ALL);
+    print("{} {}\n", size_of(Mode), size_of(Small));
+}
+```
+
+The program prints:
+
+```text
+3 9 51
+8 1
 ```
 
 **Declaration.** An enum is declared at the top level only, for now, as a struct is (section 4.1), and is usable anywhere, before its declaration too; inside a body, `E :: enum` is `enums can only be declared at the top level, for now`, at the name. The name after `enum` or `enum_flags` is its integer type, one of the integer types of section 3.2; without one it is `int`. A C binding writes `enum s32`. Any other type there is `an enum's type must be an integer type, not 'float32'`, at it, and the enum is then over `int`. An enum's size and alignment are its integer type's (section 3.11). An enum may have no members. Each declaration is a type of its own: two enums declared alike are two types (section 3.1). An `#if` among the members is `#if can't be among an enum's members, for now`; anything but a name where a member starts is `expected a member's name, found integer literal`.
@@ -923,7 +937,9 @@ A value past the integer type's range is an error at the member's name: in `Full
 
 **Naming a member.** `Mode.FREE`, an enum's name, a `.` and a member's name, is the member, a constant of the enum type (section 5.12). `.FREE`, a `.` and a member's name with no enum before it, is a member written without its enum, which takes the enum type it meets, as `.{...}` takes the struct type it meets (section 3.12): in a declaration with a type, an assignment, an argument (a default value's too), a return, a field or element of a compound literal, and a cast around it. It also takes the type of the other side of `==` or `!=` from an enum value, and the type of the other operand of `| & ^` from a flags value. `.A | .B`, `.A | 0` and `~.A` wait for their type together, as `1 | 2` stays untyped, so `f = .A | .B;` takes `f`'s type. `.A | 1` waits too, and the flags type it meets refuses the `1` as `f | 1` does: `mismatched types 'Look' and 'int' for '|'; cast one of them`.
 
-```rig fragment
+```rig
+#import "Basic";
+
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Look :: enum_flags { VISIBLE; SOLID; GLOWING; }
 Request :: struct { mode: Mode; look: Look; }
@@ -933,7 +949,7 @@ next :: (m: Mode) -> Mode {
     return cast(Mode) (cast(int) m + 1);
 }
 
-example :: () {
+main :: () {
     m : Mode = .RESIZE;
     m = next(.FREE);
     r := Request.{.FREE, .VISIBLE | .GLOWING};
@@ -942,8 +958,17 @@ example :: () {
     f &= ~.SOLID;
     seen := (f & .GLOWING) != 0;
     same := r.look == .VISIBLE | .GLOWING;
+    print("{} {} {} {}\n", cast(int) m, cast(int) f, seen, same);
 }
 ```
+
+The program prints:
+
+```text
+3 4 true true
+```
+
+`m` is `FREE_ALL`, 3; `f` is `GLOWING` alone, 4, once `SOLID` is set and cleared; and `r.look`, `VISIBLE | GLOWING`, is 5.
 
 A member meeting a type that isn't an enum is `'.FREE' needs an enum type, not 'int'`, at the `.`; an enum without the member is `'Mode' has no member 'FRE'`, at the member's name, whether written `Mode.FRE` or `.FRE`. Where nothing gives it a type, as in `x := .FREE;`, `.A | .B` alone, `.FREE == .RESIZE`, an operand of any other operator, `Any` and C's `...`:
 
@@ -959,11 +984,26 @@ example.rig:2:10: error: this member's enum isn't known; write it with its enum,
              ^
 ```
 
-**Conversions.** Nothing converts to or from an enum implicitly (`a value of type 'Mode' doesn't convert to 'int' implicitly`), except the untyped constant `0` to an `enum_flags` type, its empty set: a condition must be a `bool` (section 6.5), so `(f & .GLOWING) != 0` needs it. `cast(T) e` casts between an enum and any integer type, either way, as the integer cast between their integer types does (section 3.14): a constant must fit (`cast(Small) 300` is `300 doesn't fit in 'Small'`), any other value is checked at run time (section 8.3), and `cast,trunc` takes an enum as it takes its integer type. A value no member has is allowed, as in C: `cast(Mode) 7` is a `Mode`. Between two enum types there is no cast (`can't cast 'Small' to 'Mode'`): `cast(Mode) cast(int) s` says what is meant.
+**Conversions.** Nothing converts to or from an enum implicitly (`a value of type 'Mode' doesn't convert to 'int' implicitly`), except the untyped constant `0` to an `enum_flags` type, its empty set: a condition must be a `bool` (section 6.5), so `(f & .GLOWING) != 0` needs it. `cast(T) e` casts between an enum and any integer type, either way, as the integer cast between their integer types does (section 3.14): a constant must fit (`cast(Small) 300` is `300 doesn't fit in 'Small'`), any other value is checked at run time (section 8.3), and `cast,trunc` takes an enum as it takes its integer type. A value no member has is allowed, as in C: `cast(Mode) 7` is a `Mode`. Between two enum types there is no cast (`can't cast 'Small' to 'Mode'`): `cast(Mode) cast(int) s` says what is meant. A value that doesn't fit stops the program at the cast, the message naming the enum:
+
+```rig runtime-error
+Small :: enum u8 { A; B; }
+
+main :: () {
+    n := 300;
+    s := cast(Small) n;
+}
+```
+
+```text
+example.rig:5:10: runtime error: the value doesn't fit in 'Small'
+```
 
 **Operators.** `== != < <= > >=` compare two values of the same enum type, as numbers of its integer type, by its sign (section 5.6); a flags value also compares with `0`. `| & ^` take two values of the same `enum_flags` type, or one and `0`, and give that type, and `~` takes one (sections 5.5, 5.8), each wrapping as its integer type does: in `Look` above, `~Look.ALL` is 204. So do `|=`, `&=` and `^=` (section 6.4). No other operator takes an enum: `'+' needs numbers, not 'Mode'`, `'|' needs integers, not 'Mode'` for an enum that isn't flags, `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Nor does a condition (`the condition of 'if' must be a bool, not 'Mode'`), nor an array's count: `[Mode.FREE]int` is `an array's count must be an integer, not 'Mode'`, and `[cast(int) Mode.FREE_ALL + 1]int` is how.
 
-**Constants.** A member, a cast of a constant to an enum and the flags operators on constants are constants of the enum type (section 5.9): they fold, and work in `#if` (`#if DEFAULT == .FREE`), in constants (`DEFAULT :: Mode.FREE;`) and as a global's value. A member is no place: `can't assign to 'Mode.FREE': it's an enum's member`, and `can't take the address of 'Mode.FREE': it's an enum's member`.
+**Constants.** A member, a cast of a constant to an enum and the flags operators on constants are constants of the enum type (section 5.9): they fold, and work in `#if` (`#if DEFAULT == .FREE`), in constants (`DEFAULT :: Mode.FREE;`), as a global's value and in a `#run`'s code. A member is no place: `can't assign to 'Mode.FREE': it's an enum's member`, and `can't take the address of 'Mode.FREE': it's an enum's member`.
+
+**How it's compiled.** Below the checker an enum is its integer type: stored as it is (section 10.3), passed to and from C as it is (section 7.6), baked from a `#run` as it is, a constant of the enum (section 7.8), and described to a debugger as an enumeration of its members (section 10.7).
 
 ## 4. Declarations and scope
 
@@ -2226,7 +2266,7 @@ hi
 
 A procedure declared with `#foreign` and a library name in place of a body is implemented outside the program, in C. The only library is `libc`, the platform's C runtime, which every program links (section 10.6): on Linux glibc's `libc` and `libm`, on Windows the Universal C Runtime, `ucrtbase.dll`, and `kernel32`. Another name is `unknown library 'm'; the only one so far is 'libc'`. The procedure's name is the C function's name, unless a string after the library names the C function (below), and calls to it follow the platform's C calling convention (section 10.4).
 
-A foreign procedure's parameters and result are numbers, bools, pointers and `#c_call` procedure values (below), which C receives as these types:
+A foreign procedure's parameters and result are numbers, enums, bools, pointers and `#c_call` procedure values (below), which C receives as these types:
 
 | Rig | C |
 |---|---|
@@ -2235,6 +2275,7 @@ A foreign procedure's parameters and result are numbers, bools, pointers and `#c
 | `s32`, `u32` | `int`, `unsigned int` |
 | `s64` or `int`, `u64` | `int64_t`, `uint64_t` (`long long`, `unsigned long long`) |
 | `float32`, `float64` | `float`, `double` |
+| an enum, `enum s32 { ... }` | its integer type's C type, `int` here, as a C `enum` is passed (section 3.18) |
 | `bool` | `_Bool` |
 | `*T`, `*void` | a pointer, `void *` |
 | a `#c_call` procedure type, `(*void, *void) -> s32 #c_call` | a pointer to a function, `int (*)(void *, void *)` |
@@ -2259,6 +2300,25 @@ from the heap
 ```
 
 `malloc`'s `*void` converts to `*int` without a cast, and `free` takes the `*int` back as a `*void` (section 3.5).
+
+An enum is passed and returned exactly as its integer type is, an `enum u8`'s value widened as a `u8`'s is (section 10.4). So a C `enum`, an `int` in C, is bound as an `enum s32` whose members have C's values:
+
+```rig
+Letter :: enum s32 { A :: 65; B; NEWLINE :: 10; }
+
+putchar :: (c: Letter) -> Letter #foreign libc;
+
+main :: () {
+    putchar(.B);
+    if putchar(.NEWLINE) == .NEWLINE { putchar(Letter.A); }
+    putchar(.NEWLINE);
+}
+```
+
+```text
+B
+A
+```
 
 **A C name of its own.** A string literal after the library is the C function's name, and the procedure's own name is its name in Rig: `c_free :: (p: *void) #foreign libc "free";` declares C's `free` as `c_free`. So a program can have a procedure of its own with a C function's name, and still call the C function:
 
@@ -2349,7 +2409,7 @@ main :: () {
 pi is 3.1 (9 bytes)
 ```
 
-Only a foreign procedure may take C's `..`: on a procedure with a body it is `only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in (values: ..int)`, the one message for the mistake: its calls' extra arguments, which no C function receives, are not reported. A foreign procedure, for its part, can't take a `..T` parameter, which passes a view (section 7.2): `a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)`, at the `..`. A call passes C's other arguments one by one: a view can't be spread into them (`only the arguments of a '..' parameter can be spread, as in f(..values)`, section 5.10). A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, a `bool` or a pointer (or a string literal, below). C receives each after its *default argument promotions*, which the caller applies:
+Only a foreign procedure may take C's `..`: on a procedure with a body it is `only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in (values: ..int)`, the one message for the mistake: its calls' extra arguments, which no C function receives, are not reported. A foreign procedure, for its part, can't take a `..T` parameter, which passes a view (section 7.2): `a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)`, at the `..`. A call passes C's other arguments one by one: a view can't be spread into them (`only the arguments of a '..' parameter can be spread, as in f(..values)`, section 5.10). A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, an enum, a `bool` or a pointer (or a string literal, below). C receives each after its *default argument promotions*, which the caller applies:
 
 | Rig | C receives |
 |---|---|
@@ -2359,6 +2419,7 @@ Only a foreign procedure may take C's `..`: on a procedure with a body it is `on
 | `s64` or `int`, `u64` | `long long`, `unsigned long long` |
 | `float32` | `double`, of the same value |
 | `float64` | `double` |
+| an enum | what its integer type is passed as: an `enum s8`'s -1 is an `int`'s -1, an `enum u8`'s 200 an `int`'s 200 |
 | `*T`, `*void` | a pointer |
 
 So `%d` prints an `s8`, `u8`, `s16`, `u16`, `bool` or `s32`, `%u` a `u32`, `%lld` an `int` or `s64`, `%llu` a `u64`, and `%f` either float type. What the format says must match what is passed, as in C: the compiler does not read the format, and a mismatch is undefined behaviour in C.
@@ -2473,6 +2534,7 @@ main :: () {
 **Results.** The value of an expression's `#run` is baked into the program: made into the value it would be if it had been written in the source, which the program has as it has a constant's (section 4.2). It may be:
 
 - a number or a `bool`;
+- an enum's value, baked as its integer type's and a constant of the enum, as its members are (section 3.18), whether or not a member has it;
 - a procedure value, which is the procedure it names, a foreign one included, or `null`;
 - a pointer that is `null`;
 - a string, an array or a struct of these, nested to any depth, and a view of any of them.
@@ -2484,7 +2546,7 @@ Strings and views are baked deeply: the bytes or elements they point at are copi
 - A view or a string whose count is below zero has no elements to copy: `#run failed: its result holds a view with a negative count` (`a string with a negative count` for a string).
 - A view is baked as the array of its elements, `[N]T` for a count of `N`: one whose elements would make that array larger than any type may be (section 3.11) is `'[N]T' is too big`, as `'[1152921504606846976]int' is too big` for a `[]int` counting 2^60.
 
-A baked value is a constant, or constant data, as a written one is (section 5.9). A number or a `bool` folds, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count); an integer sizes arrays. A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
+A baked value is a constant, or constant data, as a written one is (section 5.9). A number, an enum's value or a `bool` folds, and an `#if` may decide on one, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count); an integer sizes arrays. A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
 
 **Where baked data lives.** A `#run`'s value used in a constant, a local's value or anywhere else in a body is read-only data, as constant data is (section 4.2), the bytes of its strings and the elements of its views included: writing them, through the view or a pointer, is a memory error that no check catches (section 8.6). A `#run`'s value used as a global's, directly or through a constant holding it, is the global's own copy, writable, the bytes of its strings and the elements of its views included, each copied into data of the global's own (section 4.3). So after `numbers : []int = #run make();` and `text := #run name();`, the program may write `numbers[0] = 10;` and `text[0] = 82;`.
 
@@ -3255,6 +3317,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 ### 10.3 Data representation
 
 - **Integers and floats** are stored in their natural sizes and alignments (section 3.11), little-endian.
+- **Enums** are stored, passed and compared as their integer types (section 3.18): an `enum u8` is one byte, an `enum` with no type written eight. Nothing in memory says which enum a value is of, nor checks that a member has it.
 - **bool** is one byte in memory, stored as 0 or 1 and read as "not 0".
 - **Pointers** are 64-bit addresses; `null` is 0.
 - **Structs** are laid out as C lays them out (section 3.9). A struct literal is built in zeroed memory, padding included.
@@ -3384,7 +3447,7 @@ The debug information holds:
 
 - **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a name a debugger shows (a variable, a procedure, or a constant below), in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view, resizable array or string, a `..T` parameter's view included: a `..T` parameter is shown as the `[]T` it is, section 7.2) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. The context a procedure is given (sections 7.10, 10.4) is a parameter after them, before the visible ones, named `context`, a `*Context` marked artificial, as clang marks C++'s `this`: so gdb's `print context->allocator` and cdb's `?? context->allocator` show the current allocator, and a frame line shows it (`twice (context=0x..., n=4)`). `main`'s is a local `context`, holding `default_context`'s address, set before its first line, so `break main` already shows it. A `push_context` block's is a local `context` in the block's lexical block, the address of what it pushed, hiding the one around it. A `#c_call` procedure has one only in its `push_context` blocks: outside them, gdb's `print context` is `No symbol "context" in current context.`, and cdb's `dx context` can't bind the name.
 - **Constants:** every constant the program declares (section 4.2), at the top level or in a body, used or not, by its Rig name and with its type, but one naming a procedure (`OP :: add;`: a debugger knows the procedure by its own name) unless it hides a name a debugger shows, the predeclared `OS`, `OS_WINDOWS` and `OS_LINUX` (section 4.9), which the program doesn't declare, one in a nested block that can't run, after code that can't go on in the block around it (as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one: section 4.2), which has no code for a debugger to stop in, and one that hides a name, after such code in its own block, which would hide it only where there is no code. An untyped integer constant is shown as an `int`, an untyped float as a `float64`, so its value shows whole (section 3.12), and `N :: null;` as a `*void`. A number, a `bool` or `null` is a constant value with no storage (CodeView's `S_CONSTANT`, DWARF's `DW_AT_const_value`); a constant holding data (a string, a struct, an array, a `#run`'s view) is a variable at its read-only data (section 10.3), and so is a pointer to a string literal (`GREETING :: cast(*u8) "hi";`), at the 8 bytes holding its address there, since CodeView can't give an address as a value, and so is a body's constant naming a procedure that hides a name a debugger shows, at 8 bytes holding the procedure's address, so a debugger shows the procedure where the constant hides the name (under a top-level `OP :: 5;`, cdb's `?? OP` after `OP :: add;` is `add`'s address, not `0n5`). A body's constant that hides nothing is in the lexical block that declares it, even after a declaration that started one inside it: it needs no code where it is declared, and a debugger shows it wherever its block has code. One that hides a name a debugger shows is in the block its declaration starts, as a local is, and so is shown only where code follows it in its block: so in `{ y := x + STEP; LIMIT :: 99; z := LIMIT + y; }` under a top-level `LIMIT :: 12;`, a debugger shows `LIMIT` as 12 at `y`'s line, 99 at `z`'s, and 12 again after the block (on Windows, not when a `return`, `break` or `continue` leaves the block through deferred code: see below). A copy of deferred code (section 6.12) declares its constants anew, as it does its variables. gdb's `print` and `info locals`, cdb's `??` and `dv /t`, and VS Code's Watch, hover and Debug Console show them, on both systems (gdb's `print LIMIT` is `12`, and for `RATIO :: 0.1;`, an untyped float shown as a `float64`, `print RATIO` is `0.10000000000000001`; cdb's `?? LIMIT` is `int64 0n12`). cdb's `dx` doesn't find a top-level number constant, where `??` does; and VS Code's Variables view lists only what has storage: a body's constants holding data, its pointers to a string literal and its procedure constants that hide a name, not its numbers, `bool`s and `null`s.
-- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; enums (section 3.18) as enumeration types, as a C `enum` with a fixed type is described: named as the enum, at its declaration, over its integer type, with an enumerator for each member, in order, of the member's value (read as unsigned for an unsigned integer type, so an `enum u64`'s largest member is 18446744073709551615), so a debugger shows a value by its member's name and one that no member has as its number, and an `enum_flags` value as it shows a C `enum` of flags (gdb's `(VISIBLE | GLOWING)`, when each member is a bit of its own); `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A line of deferred code that runs at more than one way out of its block has its code in several places, one per copy, and the debuggers treat a breakpoint on it by their own rules and LLVM's, not Rig's. cdb takes a breakpoint on a line only when the line's code is in one piece, as it refuses one on a `for` line, so it refuses one on such a line (`Ambiguous symbol error`). gdb keeps one place of a line per lexical block, and LLVM writes a lexical block only for a scope that declares a variable itself (a scope that holds only other scopes is folded into the one around it too): so the copies of a deferred line are one place, the first copy in the code, where a breakpoint stops only when that copy runs, unless the line is in a block of the deferred code that declares a variable itself. Both statements of `defer { t := f(); g(t); }` have a place per copy, but the `if` line of `defer if c { t := f(); g(t); }` one, since `t` is in a block inside it. Stepping goes through every copy that runs, in both debuggers.
 

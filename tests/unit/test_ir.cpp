@@ -7124,3 +7124,49 @@ TEST(a_builtin_passes_its_place) {
     CHECK(contains(main, "  call @__array_pop(%79, %4, %80, %81)\n"));
     arena_free(&a);
 }
+
+// Issue #221: enums (spec 3.18), their integer types below the checker.
+
+TEST(an_enum_lowers_as_its_integer_type) {
+    // An enum over u8 is a u8 to lowering: its slot is an i8's, a member is
+    // the constant 200 stored there, a cast to int zero-extends it, and a
+    // cast from int checks the range a u8 has. The same program over u8
+    // itself lowers to the same IR, instruction for instruction.
+    Arena a = arena_make();
+    String with_enum = proc_ir(ir_print(&a, lower_source(&a,
+                                                         "Small :: enum u8 { A; B :: 200; }\n"
+                                                         "main :: () {\n"
+                                                         "    s := Small.B;\n"
+                                                         "    n := cast(int) s;\n"
+                                                         "    t := cast(Small) n;\n"
+                                                         "}\n")),
+                               "main");
+    String with_u8 = proc_ir(ir_print(&a, lower_source(&a,
+                                                       "main :: () {\n"
+                                                       "    s : u8 = 200;\n"
+                                                       "    n := cast(int) s;\n"
+                                                       "    t := cast(u8) n;\n"
+                                                       "}\n")),
+                             "main");
+    CHECK(contains(with_enum, "= local i8\n"));
+    CHECK(contains(with_enum, "= const i8 200\n"));
+    CHECK(contains(with_enum, "= zext i8 "));
+    CHECK(contains(with_enum, "panic @str."));
+    CHECK_STR(with_enum, string_cstr(&a, with_u8));
+    arena_free(&a);
+}
+
+TEST(an_enums_c_parameters_extend_as_its_integer_type) {
+    // C widens a narrow integer at a call as its sign says (spec 7.6): an
+    // enum over u8 is zero-extended, one over s8 or s16 sign-extended, as
+    // those types are, its parameters and its result alike.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "B :: enum u8 { X; }\n"
+                                          "S :: enum s8 { Y; }\n"
+                                          "W :: enum s16 { Z; }\n"
+                                          "f :: (b: B, s: S) -> W #foreign libc;\n"
+                                          "main :: () { f(.X, .Y); }\n"));
+    CHECK(contains(ir, "foreign proc @f(i8 zeroext, i8 signext) -> i16 signext\n"));
+    arena_free(&a);
+}

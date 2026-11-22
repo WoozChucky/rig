@@ -1,0 +1,21 @@
+// Enums while compiling (issue #221, spec 3.18, 7.8): a #run's enum
+// result baked as a constant of its enum, one inside a struct, enums
+// declared after the #runs that use them, and a body's #if on a baked
+// member.
+#import "Basic";
+
+PICKED :: #run pick(3);
+HELD :: #run hold();
+
+pick :: (n: int) -> Level { if n > 2 { return .HIGH; } return .LOW; }
+hold :: () -> Holder { return .{level = .MIDDLE, count = 2}; }
+
+Holder :: struct { level: Level; count: int; }
+Level :: enum u16 { LOW :: 10; MIDDLE; HIGH :: 300; }
+
+main :: () {
+    #if PICKED == .HIGH { print("high\n"); } else { print("not high\n"); }
+    print("{} {} {}\n", cast(int) PICKED, cast(int) HELD.level, HELD.count);
+    counts : [cast(int) Level.LOW]u8;
+    print("{}\n", counts.count);
+}

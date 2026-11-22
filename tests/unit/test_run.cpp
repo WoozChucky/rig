@@ -1059,3 +1059,32 @@ TEST(world_counts_its_runs_time) {
     token_list_free(other_list);
     arena_free(&a);
 }
+
+// Issue #221: enums (spec 3.18).
+
+TEST(a_runs_enum_is_baked) {
+    // A #run's enum result is baked as its integer type is, read at that
+    // type's width (u16 here), and is a constant of the enum, alone or as a
+    // struct's field: so it compares with the enum's members, folding. The
+    // enum is declared after the #runs that give it.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "P :: #run pick();\n"
+                          "H :: #run hold();\n"
+                          "pick :: () -> Level { return Level.HIGH; }\n"
+                          "hold :: () -> Holder { return .{.HIGH, 2}; }\n"
+                          "Holder :: struct { level: Level; count: int; }\n"
+                          "Level :: enum u16 { LOW; HIGH :: 300; }\n"
+                          "main :: () { same := P == .HIGH; }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    CHECK(is_number(&a, global_named(&c, "P"), 300, "Level"));
+    Ast_Literal *fields = literal_data(&a, &c, "H", "Holder");
+    CHECK_EQ(fields ? fields->values.count : 0, 2);
+    if (fields && fields->values.count == 2) {
+        CHECK(is_number(&a, fields->values[0], 300, "Level"));
+        CHECK(is_number(&a, fields->values[1], 2, "int"));
+    }
+    CHECK(is_number(&a, value_of(&c, "same"), 1, "bool"));
+    token_list_free(c.list);
+    arena_free(&a);
+}

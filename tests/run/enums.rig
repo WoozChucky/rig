@@ -1,0 +1,40 @@
+// Enums compiled and interpreted (issue #221, spec 3.18): values counting
+// up and set, a chosen integer type, members named with their enum and
+// without, comparisons, casts both ways, a value with no member, fields,
+// elements, parameters, results, a global, a constant and #if.
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Small :: enum u8 { A; B :: 5; C; LAST :: C + 3; }
+Signed :: enum s8 { LOW :: -2; NEXT; }
+Request :: struct { mode: Mode; size: int; }
+
+DEFAULT :: Mode.FREE;
+current := Mode.RESIZE;
+
+next :: (m: Mode) -> Mode {
+    if m == .FREE_ALL { return .ALLOCATE; }
+    return cast(Mode) (cast(int) m + 1);
+}
+
+main :: () {
+    print("{} {} {} {}\n", cast(int) Mode.ALLOCATE, cast(int) Mode.FREE_ALL, cast(int) Small.C, cast(int) Small.LAST);
+    print("{} {} {}\n", size_of(Mode), size_of(Small), cast(int) Signed.NEXT);
+    m : Mode = .RESIZE;
+    print("{} {} {}\n", m == .RESIZE, m != Mode.RESIZE, m < Mode.FREE);
+    m = next(next(m));
+    print("{} {}\n", cast(int) m, cast(int) next(m));
+    r := Request.{.FREE, 16};
+    r.mode = DEFAULT;
+    rs := Request.[.{mode = .ALLOCATE}, .{.RESIZE, 8}];
+    print("{} {} {}\n", r.mode == .FREE, cast(int) rs[1].mode, rs[0].size);
+    odd := cast(Mode) 7;
+    print("{} {} {}\n", cast(int) odd, odd == .FREE, odd > Mode.FREE_ALL);
+    n := 300;
+    small := cast,trunc(Small) n;
+    print("{} {}\n", cast(int) small, small == .A);
+    current = .FREE_ALL;
+    zero : Mode;
+    #if DEFAULT == .FREE { picked := 1; } else { picked := 2; }
+    print("{} {} {}\n", cast(int) current, zero == .ALLOCATE, picked);
+}

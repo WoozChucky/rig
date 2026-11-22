@@ -245,8 +245,10 @@ bool type_has_view_fields(Type *t);
 // C's int and float. s8, s16, u8, u16 and bool become an s32, C's int, every
 // value kept (a signed one sign-extended, the others zero-extended), and a
 // float32 a float64, C's double. s32, u32, s64, u64, int, float64 and
-// pointers stay as they are. For the numbers, bools and pointers the
-// checker lets a variadic call pass (checker.h).
+// pointers stay as they are. An enum is promoted as its integer type is
+// (spec 7.6): an enum s8's value becomes an s32, one over s32 or wider
+// stays as it is. For the numbers, enums, bools and pointers the checker
+// lets a variadic call pass (checker.h).
 Type *type_c_promoted(Type *t);
 
 // The index in struct type t's fields of the one called `name`, or -1.

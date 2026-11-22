@@ -74,7 +74,9 @@ static void reach_described(Reach *r, Type *t) {
 // operands (a spread's too), a cast's value, a field's struct, an element's
 // array and index, a literal's values. Nothing for a name, a number, a
 // string, a bool, null, size_of, type_info, context, a default
-// #caller_location or a #run, whose operand was checked as it was.
+// #caller_location, a #run, whose operand was checked as it was, or an
+// enum's member, Mode.FREE or .FREE: a constant, whose enum's name (no
+// value, so no type) is nothing to walk.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -91,7 +93,9 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
         break;
     case AST_CAST: array_add(list, ((Ast_Cast *)e)->value); break;
     case AST_DEREF: array_add(list, ((Ast_Deref *)e)->operand); break;
-    case AST_MEMBER: array_add(list, ((Ast_Member *)e)->operand); break;
+    case AST_MEMBER:
+        if (!((Ast_Member *)e)->of_enum) array_add(list, ((Ast_Member *)e)->operand);
+        break;
     case AST_INDEX:
         array_add(list, ((Ast_Index *)e)->index);
         array_add(list, ((Ast_Index *)e)->operand);
@@ -385,10 +389,14 @@ static bool walk_struct(Reach *r, Type *t, void (*reach)(Reach *r, Type *t)) {
 // Resizable_Array too, its layout, whose last field is its allocator's
 // type. A pointer's target isn't looked behind: holding one needs no more
 // than its address (code that moves it reaches its target where it does,
-// walk_expression). False when a struct has no layout (a circle, too big,
-// too deep), or is still being laid out (a circle through this #run,
-// check_finished_layout), or a field has no type: errors, said.
+// walk_expression). An enum (spec 3.18) has its members' values worked out
+// now (check_enum_values), for one declared after the #run, which lowering
+// and baking read as constants. False when a struct has no layout (a
+// circle, too big, too deep), or is still being laid out (a circle through
+// this #run, check_finished_layout), or a field has no type, or an enum's
+// values need the #run itself (a circle): errors, said.
 static bool walk_type(Reach *r, Type *t) {
+    if (t->kind == TYPE_ENUM) return check_enum_values(r->c, t);
     if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) {
         reach_type(r, t->element);
         if (t->kind == TYPE_RESIZABLE) reach_type(r, r->c->file->resizable_array_type);
