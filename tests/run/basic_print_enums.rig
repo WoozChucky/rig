@@ -1,18 +1,21 @@
 // Basic's print of enums (issue #221, spec 3.18): a member by its name,
 // the first of two sharing a value, a value with no member by its
-// number, read at each width and sign, flags by their names joined by
-// " | " with leftover bits last, skipping a member of 0 and one whose bits
-// are already written, and enums in structs and arrays.
+// number, read at each width and sign (values that need all of their
+// type's bytes), flags by their names joined by " | " with leftover bits
+// last, skipping a member of 0 and one whose bits aren't all among those
+// not yet written (written already, or only some in the value), and enums
+// in structs and arrays.
 #import "Basic";
 
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
 Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING; ALL :: VISIBLE | SOLID | GLOWING; }
 Quiet :: enum_flags { NONE :: 0; LOUD; SOFT; }
+Pair :: enum_flags u8 { BOTH :: 3; ONE :: 1; }
 Huge :: enum u64 { TOP :: 18446744073709551615; }
 Signed :: enum s8 { LOW :: -2; }
-Level :: enum u16 { LOW :: 1; }
-Shift :: enum s16 { BACK :: -5; }
+Level :: enum u16 { LOW :: 1; HIGH :: 60000; }
+Shift :: enum s16 { BACK :: -500; }
 Depth :: enum s32 { DOWN :: -100000; }
 Wide :: enum u32 { HIGH :: 4000000000; }
 Request :: struct { mode: Mode; look: Look; }
@@ -23,11 +26,13 @@ main :: () {
     print("{} {} {}\n", Look.VISIBLE | .GLOWING, Look.ALL, cast(Look) 0);
     print("{} {} {}\n", cast(Look) 9, cast(Quiet) 0, cast(Look) 128);
     print("{} {} {}\n", cast(Look) 15, cast(Quiet) 3, cast(Quiet) 2);
+    print("{} {}\n", cast(Pair) 5, cast(Pair) 7);
     print("{} {} {} {}\n", Huge.TOP, cast(Huge) 5, Signed.LOW, cast(Signed) -3);
     print("{}\n", cast(Huge) 18446744073709551614);
-    print("{} {} {} {}\n", Level.LOW, cast(Level) 7, Shift.BACK, cast(Shift) -9);
+    print("{} {} {}\n", Level.LOW, Level.HIGH, cast(Level) 300);
+    print("{} {}\n", Shift.BACK, cast(Shift) -300);
     print("{} {} {} {}\n", Depth.DOWN, cast(Depth) -7, Wide.HIGH, cast(Wide) 4000000001);
     print("{}\n", Request.{.RESIZE, .SOLID | .GLOWING});
-    print("{}\n", Packet.{cast(Level) 7, 65535});
+    print("{}\n", Packet.{cast(Level) 300, 65535});
     print("{}\n", Mode.[.ALLOCATE, .FREE_ALL]);
 }
