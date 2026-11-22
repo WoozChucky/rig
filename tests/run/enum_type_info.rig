@@ -1,0 +1,19 @@
+// An enum's description (issue #221, spec 3.16, 3.18): a Type_Info_Enum,
+// tag .ENUM (11), its name, integer type and members in order; and the
+// tags and array kinds, now enums.
+#import "Basic";
+
+Small :: enum u8 { A; B :: 5; C; }
+Look :: enum_flags { VISIBLE; SOLID; }
+
+main :: () {
+    t := cast(*Type_Info_Enum) type_info(Small);
+    print("{} {} {} {} {}\n", t.info.tag, cast(int) t.info.tag, t.name, t.info.size, t.is_flags);
+    print("{} {}\n", t.underlying == type_info(u8), t.underlying.tag);
+    for t.names { print("{}={} ", it, t.values[it_index]); }
+    print("\n");
+    l := cast(*Type_Info_Enum) type_info(Look);
+    print("{} {} {}\n", l.is_flags, l.values, type_info(Look).tag == .ENUM);
+    a := cast(*Type_Info_Array) type_info([]int);
+    print("{} {} {}\n", a.array_kind, a.array_kind == .VIEW, type_info(Type_Info_Tag).size);
+}

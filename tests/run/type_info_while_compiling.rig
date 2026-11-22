@@ -35,7 +35,7 @@ pointee_size :: (t: *Type_Info, index: int) -> int {
 // The same, of the struct an Any holds.
 any_pointee_size :: (a: Any, index: int) -> int { return pointee_size(a.type, index); }
 
-tag_of :: (a: Any) -> int { return a.type.tag; }
+tag_of :: (a: Any) -> Type_Info_Tag { return a.type.tag; }
 
 // The same, worked out in a run of its own and printed while compiling.
 #run {

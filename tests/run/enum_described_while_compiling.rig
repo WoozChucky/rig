@@ -1,0 +1,15 @@
+// Enums described while compiling (issue #221, spec 3.16, 7.8): a #run
+// prints members and flags with Basic's print and reads a description,
+// of enums declared after it, whose values are worked out first.
+#import "Basic";
+
+#run show();
+
+show :: () {
+    print("{} {} {}\n", Later.SECOND, Bits.ONE | .FOUR, (cast(*Type_Info_Enum) type_info(Later)).values);
+}
+
+Later :: enum { FIRST :: 3; SECOND; }
+Bits :: enum_flags { ONE; TWO; FOUR; }
+
+main :: () { show(); }

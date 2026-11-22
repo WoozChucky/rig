@@ -5748,6 +5748,48 @@ TEST(arrays_and_views_are_described) {
     arena_free(&a);
 }
 
+TEST(an_enums_description) {
+    // An enum's is a Type_Info_Enum (issue #221, spec 3.16, 3.18): the tag
+    // TYPE_INFO_ENUM (11), the enum's size and alignment, its integer
+    // type's (u8: 1 and 1), its name, its integer type's description,
+    // is_flags (false), then its members, two read-only arrays of their
+    // own: type_info.0.names, a string per member, each its str.N, and
+    // type_info.0.values, each member's value as 8 bytes.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Small :: enum u8 { A; B :: 5; }\n"
+                                                    "main :: () { t := type_info(Small); }\n"));
+    CHECK(contains(ir, "const @type_info.0: 88 align 8 = \""
+                       "\\0B\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, " reloc 40 @type_info.1 reloc 64 @type_info.0.names reloc 80 @type_info.0.values\n"));
+    CHECK(contains(ir, "const @type_info.1: 32 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "const @type_info.0.names: 32 align 8 = \""
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str."));
+    CHECK(contains(ir, "const @type_info.0.values: 16 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    CHECK(contains(ir, "= \"Small\\00\"\n"));
+    CHECK(contains(ir, "= \"A\\00\"\n"));
+    CHECK(contains(ir, "= \"B\\00\"\n"));
+    arena_free(&a);
+}
+
 TEST(a_global_holds_a_descriptions_address) {
     // A global holding a description's address is 8 bytes of its own, the
     // address a relocation the linker writes, as a string literal's is: as

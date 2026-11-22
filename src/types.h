@@ -130,13 +130,18 @@ const s64 RESIZABLE_ALLOCATED_OFFSET = 16, RESIZABLE_ALLOCATOR_OFFSET = 24, RESI
 // which each kind's struct holds as its first field, info, so a *Type_Info
 // is cast to the struct its tag names. Floats, bool, string and void have
 // the plain Type_Info.
+//
+// The tags are the members of Preload's enum Type_Info_Tag, numbered as
+// Jai's tags are: ENUM is Jai's 11, the numbers between being kinds of
+// Jai's that Rig doesn't have.
 enum Type_Info_Tag : s64 {
     TYPE_INFO_INTEGER = 0, TYPE_INFO_FLOAT = 1, TYPE_INFO_BOOL = 2, TYPE_INFO_STRING = 3,
     TYPE_INFO_POINTER = 4, TYPE_INFO_PROCEDURE = 5, TYPE_INFO_VOID = 6, TYPE_INFO_STRUCT = 7,
-    TYPE_INFO_ARRAY = 8,
+    TYPE_INFO_ARRAY = 8, TYPE_INFO_ENUM = 11,
 };
-// Type_Info_Array's array_kind: an array, [N]T, a view, []T, or a resizable
-// array, [..]T (spec 3.17), in Jai's order.
+// Type_Info_Array's array_kind, the members of Preload's enum Array_Kind:
+// an array, [N]T, a view, []T, or a resizable array, [..]T (spec 3.17), in
+// Jai's order.
 const s64 ARRAY_FIXED = 0, ARRAY_VIEW = 1, ARRAY_RESIZABLE = 2;
 // Type_Info: tag, size and alignment, each an int.
 const s64 TYPE_INFO_TAG_OFFSET = 0, TYPE_INFO_SIZE_OFFSET = 8, TYPE_INFO_ALIGNMENT_OFFSET = 16;
@@ -159,6 +164,14 @@ const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, T
 // array_kind and count (N, or -1 for a view or a resizable array).
 const s64 TYPE_INFO_ELEMENT_OFFSET = 24, TYPE_INFO_ARRAY_KIND_OFFSET = 32, TYPE_INFO_COUNT_OFFSET = 40,
           TYPE_INFO_ARRAY_SIZE = 48;
+// Type_Info_Enum (spec 3.18): info, name, a string, underlying, the
+// *Type_Info of its integer type, is_flags, a bool, then its members, the
+// views names, of string, and values, of s64, each a member's value as 64
+// bits (sign-extended from a signed integer type, zero-extended from an
+// unsigned one, as Ast.constant holds it).
+const s64 TYPE_INFO_ENUM_NAME_OFFSET = 24, TYPE_INFO_ENUM_UNDERLYING_OFFSET = 40,
+          TYPE_INFO_ENUM_IS_FLAGS_OFFSET = 48, TYPE_INFO_ENUM_NAMES_OFFSET = 56,
+          TYPE_INFO_ENUM_VALUES_OFFSET = 72, TYPE_INFO_ENUM_SIZE = 88;
 // Any: type, the value's *Type_Info, then value_pointer, its address.
 const s64 ANY_TYPE_OFFSET = 0, ANY_VALUE_OFFSET = 8, ANY_SIZE = 16;
 // Every description, member and Any is aligned to 8.

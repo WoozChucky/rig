@@ -416,10 +416,14 @@ static bool walk_type(Reach *r, Type *t) {
 // laid out (check_finished_layout) and has its late fields made
 // (check_late_field), as walk_type does for a struct held by value: a #run
 // may describe a struct declared after it, reached only through another's
-// pointer, before resolve_late_fields. Each type is walked once, so a
-// struct that points at itself ends. False when a struct has no layout, or
-// is still being laid out (describing *S in one of S's counts is a circle,
-// as reaching S by value is), or a field has no type: errors, said.
+// pointer, before resolve_late_fields. An enum (spec 3.18) has its
+// members' values worked out now (check_enum_values), as walk_type does,
+// since its description holds them, and its integer type is described
+// too. Each type is walked once, so a struct that points at itself ends.
+// False when a struct has no layout, or is still being laid out
+// (describing *S in one of S's counts is a circle, as reaching S by value
+// is), or a field has no type, or an enum's values need the #run itself (a
+// circle): errors, said.
 static bool walk_described(Reach *r, Type *t) {
     switch (t->kind) {
     case TYPE_POINTER: reach_described(r, t->pointee); return true;
@@ -434,6 +438,9 @@ static bool walk_described(Reach *r, Type *t) {
         for (s64 i = 0; i < t->result_count; i++) reach_described(r, t->results[i]);
         return true;
     case TYPE_STRUCT: return walk_struct(r, t, reach_described);
+    case TYPE_ENUM:
+        reach_described(r, t->underlying);
+        return check_enum_values(r->c, t);
     default: return true;  // an integer, a float, a bool, a string or void: nothing more
     }
 }

@@ -98,35 +98,39 @@ HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
 // Every description starts with a Type_Info, whose tag says its kind. Each
 // kind's struct holds that Type_Info as its first field, info (Rig has no
 // using), so a *Type_Info whose tag says the kind is cast to the kind's
-// struct: cast(*Type_Info_Struct) t when t.tag == TYPE_INFO_STRUCT.
+// struct: cast(*Type_Info_Struct) t when t.tag == .STRUCT.
 
-// The kinds, a Type_Info's tag (constants until enums), numbered as Jai's
-// tags are.
-TYPE_INFO_INTEGER :: 0;
-TYPE_INFO_FLOAT :: 1;
-TYPE_INFO_BOOL :: 2;
-TYPE_INFO_STRING :: 3;
-TYPE_INFO_POINTER :: 4;
-TYPE_INFO_PROCEDURE :: 5;
-TYPE_INFO_VOID :: 6;
-TYPE_INFO_STRUCT :: 7;
-TYPE_INFO_ARRAY :: 8;
+// The kinds, a Type_Info's tag, numbered as Jai's tags are: ENUM is Jai's
+// 11, the numbers between being kinds of Jai's that Rig doesn't have. Over
+// int, so a tag is 8 bytes, as types.h writes it.
+Type_Info_Tag :: enum {
+    INTEGER;
+    FLOAT;
+    BOOL;
+    STRING;
+    POINTER;
+    PROCEDURE;
+    VOID;
+    STRUCT;
+    ARRAY;
+    ENUM :: 11;
+}
 
 // What every description starts with: its kind, then the type's size and
 // alignment in bytes (spec 3.11; void's are 0 and 1). A float, bool,
-// string or void (TYPE_INFO_FLOAT, _BOOL, _STRING, _VOID) is described by
-// this alone: a float's size says which it is.
-Type_Info :: struct { tag: int; size: int; alignment: int; }
+// string or void (.FLOAT, .BOOL, .STRING, .VOID) is described by this
+// alone: a float's size says which it is.
+Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
-// TYPE_INFO_INTEGER: s8 to u64, and int. int and s64 are two types with
+// .INTEGER: s8 to u64, and int. int and s64 are two types with
 // two descriptions, the same in all but their addresses.
 Type_Info_Integer :: struct { info: Type_Info; signed: bool; }
 
-// TYPE_INFO_POINTER: *T, and the description of the T it points at
+// .POINTER: *T, and the description of the T it points at
 // (void's for a *void).
 Type_Info_Pointer :: struct { info: Type_Info; pointer_to: *Type_Info; }
 
-// TYPE_INFO_PROCEDURE: a procedure type, its parameters' types and its
+// .PROCEDURE: a procedure type, its parameters' types and its
 // results', in order, whether it's called as C calls (#c_call), and whether
 // its last parameter is a ..T, whose type is then described as []T.
 Type_Info_Procedure :: struct {
@@ -137,7 +141,7 @@ Type_Info_Procedure :: struct {
     is_variadic: bool;
 }
 
-// TYPE_INFO_STRUCT: a struct, by its declared name, and its fields in
+// .STRUCT: a struct, by its declared name, and its fields in
 // order, none for a struct with none. A struct that holds a pointer to
 // itself is described by pointing back at its own description: the data is
 // cyclic, not infinite.
@@ -147,16 +151,32 @@ Type_Info_Struct :: struct { info: Type_Info; name: string; members: []Type_Info
 // in the struct, in bytes from its start (spec 3.9).
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 
-// TYPE_INFO_ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T,
-// which array_kind tells apart (ARRAY_FIXED, ARRAY_VIEW or ARRAY_RESIZABLE);
-// the description of T; and N, or -1 for a view or a resizable array. A
-// string is no view here: it has its own tag, TYPE_INFO_STRING.
-Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: int; count: int; }
+// .ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T, which
+// array_kind tells apart (.FIXED, .VIEW or .RESIZABLE); the description of
+// T; and N, or -1 for a view or a resizable array. A string is no view
+// here: it has its own tag, .STRING.
+Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
 
-// A Type_Info_Array's array_kind, in Jai's order.
-ARRAY_FIXED :: 0;
-ARRAY_VIEW :: 1;
-ARRAY_RESIZABLE :: 2;
+// A Type_Info_Array's array_kind, in Jai's order. Over int, so it is 8
+// bytes, as types.h writes it.
+Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
+
+// .ENUM: an enum or enum_flags type (spec 3.18), by its declared name; the
+// description of its integer type, whose size, alignment and sign it has;
+// whether it is an enum_flags; and its members, in order, none for an enum
+// with none: names[i] is a member's name and values[i] its value, as 64
+// bits, sign-extended from a signed integer type and zero-extended from an
+// unsigned one, so a u64 member above s64's largest reads negative. Its
+// Type_Info is its first field, info, as every kind's is until Rig has
+// using.
+Type_Info_Enum :: struct {
+    info: Type_Info;
+    name: string;
+    underlying: *Type_Info;
+    is_flags: bool;
+    names: []string;
+    values: []s64;
+}
 
 // A value of any type: its type's description and its address. Every value
 // converts to an Any implicitly (spec 3.16), a place by its own address, any

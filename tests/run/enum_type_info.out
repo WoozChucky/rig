@@ -1,0 +1,5 @@
+ENUM 11 Small 1 false
+true INTEGER
+A=0 B=5 C=6 
+true [1, 2] true
+VIEW true 8

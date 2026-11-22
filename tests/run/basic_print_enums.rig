@@ -1,0 +1,22 @@
+// Basic's print of enums (issue #221, spec 3.18): a member by its name,
+// the first of two sharing a value, a value with no member by its
+// number, flags by their names joined by " | " with leftover bits last,
+// and enums in structs and arrays.
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
+Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING; ALL :: VISIBLE | SOLID | GLOWING; }
+Quiet :: enum_flags { NONE :: 0; LOUD; }
+Huge :: enum u64 { TOP :: 18446744073709551615; }
+Signed :: enum s8 { LOW :: -2; }
+Request :: struct { mode: Mode; look: Look; }
+
+main :: () {
+    print("{} {} {}\n", Mode.FREE, Shared.ALSO_FIRST, cast(Mode) 7);
+    print("{} {} {}\n", Look.VISIBLE | .GLOWING, Look.ALL, cast(Look) 0);
+    print("{} {} {}\n", cast(Look) 9, cast(Quiet) 0, cast(Look) 128);
+    print("{} {} {} {}\n", Huge.TOP, cast(Huge) 5, Signed.LOW, cast(Signed) -3);
+    print("{}\n", Request.{.RESIZE, .SOLID | .GLOWING});
+    print("{}\n", Mode.[.ALLOCATE, .FREE_ALL]);
+}

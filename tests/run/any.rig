@@ -32,7 +32,7 @@ show :: (a: Any) {
     } else if t == type_info(Vec2) {
         v := (cast(*Vec2) a.value_pointer).*;
         printf("Vec2 %lld %lld\n", v.x, v.y);
-    } else if t.tag == TYPE_INFO_PROCEDURE {
+    } else if t.tag == .PROCEDURE {
         printf("a procedure\n");
     } else {
         printf("tag %lld\n", t.tag);

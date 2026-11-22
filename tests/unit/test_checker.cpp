@@ -7320,7 +7320,7 @@ struct Preload_Struct {
     const char *name;
     s64 size;
     s32 align;
-    Preload_Field fields[5];
+    Preload_Field fields[6];
     s64 field_count;
 };
 
@@ -7341,7 +7341,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         {"Type_Info",
          TYPE_INFO_SIZE,
          TYPE_INFO_ALIGN,
-         {{"tag", TYPE_INFO_TAG_OFFSET, "int"},
+         {{"tag", TYPE_INFO_TAG_OFFSET, "Type_Info_Tag"},
           {"size", TYPE_INFO_SIZE_OFFSET, "int"},
           {"alignment", TYPE_INFO_ALIGNMENT_OFFSET, "int"}},
          3},
@@ -7383,9 +7383,19 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
          TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"},
           {"element_type", TYPE_INFO_ELEMENT_OFFSET, "*Type_Info"},
-          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "int"},
+          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "Array_Kind"},
           {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
          4},
+        {"Type_Info_Enum",
+         TYPE_INFO_ENUM_SIZE,
+         TYPE_INFO_ALIGN,
+         {{"info", 0, "Type_Info"},
+          {"name", TYPE_INFO_ENUM_NAME_OFFSET, "string"},
+          {"underlying", TYPE_INFO_ENUM_UNDERLYING_OFFSET, "*Type_Info"},
+          {"is_flags", TYPE_INFO_ENUM_IS_FLAGS_OFFSET, "bool"},
+          {"names", TYPE_INFO_ENUM_NAMES_OFFSET, "[]string"},
+          {"values", TYPE_INFO_ENUM_VALUES_OFFSET, "[]s64"}},
+         6},
         {"Any",
          ANY_SIZE,
          TYPE_INFO_ALIGN,
@@ -7417,31 +7427,46 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
             CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
         }
     }
-    // The tags, numbered as Jai's, and the array kinds: constants until
-    // enums.
+    // The tags, numbered as Jai's (ENUM is Jai's 11), and the array kinds:
+    // the members of Preload's enums Type_Info_Tag and Array_Kind, each
+    // over int, so a Type_Info's tag and a Type_Info_Array's array_kind
+    // are ints in memory, as lowering writes them.
     struct {
+        const char *enum_name;
         const char *name;
         s64 value;
-    } constants[] = {
-        {"TYPE_INFO_INTEGER", TYPE_INFO_INTEGER},
-        {"TYPE_INFO_FLOAT", TYPE_INFO_FLOAT},
-        {"TYPE_INFO_BOOL", TYPE_INFO_BOOL},
-        {"TYPE_INFO_STRING", TYPE_INFO_STRING},
-        {"TYPE_INFO_POINTER", TYPE_INFO_POINTER},
-        {"TYPE_INFO_PROCEDURE", TYPE_INFO_PROCEDURE},
-        {"TYPE_INFO_VOID", TYPE_INFO_VOID},
-        {"TYPE_INFO_STRUCT", TYPE_INFO_STRUCT},
-        {"TYPE_INFO_ARRAY", TYPE_INFO_ARRAY},
-        {"ARRAY_FIXED", ARRAY_FIXED},
-        {"ARRAY_VIEW", ARRAY_VIEW},
-        {"ARRAY_RESIZABLE", ARRAY_RESIZABLE},
+    } members[] = {
+        {"Type_Info_Tag", "INTEGER", TYPE_INFO_INTEGER},
+        {"Type_Info_Tag", "FLOAT", TYPE_INFO_FLOAT},
+        {"Type_Info_Tag", "BOOL", TYPE_INFO_BOOL},
+        {"Type_Info_Tag", "STRING", TYPE_INFO_STRING},
+        {"Type_Info_Tag", "POINTER", TYPE_INFO_POINTER},
+        {"Type_Info_Tag", "PROCEDURE", TYPE_INFO_PROCEDURE},
+        {"Type_Info_Tag", "VOID", TYPE_INFO_VOID},
+        {"Type_Info_Tag", "STRUCT", TYPE_INFO_STRUCT},
+        {"Type_Info_Tag", "ARRAY", TYPE_INFO_ARRAY},
+        {"Type_Info_Tag", "ENUM", TYPE_INFO_ENUM},
+        {"Array_Kind", "FIXED", ARRAY_FIXED},
+        {"Array_Kind", "VIEW", ARRAY_VIEW},
+        {"Array_Kind", "RESIZABLE", ARRAY_RESIZABLE},
     };
-    for (s64 i = 0; i < (s64)(sizeof constants / sizeof constants[0]); i++) {
-        Ast *k = top_level_named(tree, constants[i].name);
-        CHECK_EQ(k->kind, AST_CONST);
-        CHECK(k->is_constant);
-        CHECK_EQ(k->constant, constants[i].value);
+    for (s64 i = 0; i < (s64)(sizeof members / sizeof members[0]); i++) {
+        Ast *decl = top_level_named(tree, members[i].enum_name);
+        CHECK_EQ(decl->kind, AST_ENUM);
+        if (decl->kind != AST_ENUM) continue;
+        Ast_Enum *e = (Ast_Enum *)decl;
+        CHECK_EQ(e->declared->underlying, &type_int);
+        s32 index = enum_member_index(e, str(members[i].name));
+        CHECK(index >= 0);
+        if (index < 0) continue;
+        Ast_Const *member = e->members[index];
+        CHECK(member->is_constant);
+        CHECK_EQ((s64)member->constant, members[i].value);
     }
+    // Every member is one the list names: no tag or kind types.h doesn't
+    // know.
+    CHECK_EQ(((Ast_Enum *)top_level_named(tree, "Type_Info_Tag"))->members.count, 10);
+    CHECK_EQ(((Ast_Enum *)top_level_named(tree, "Array_Kind"))->members.count, 3);
     // Declaring them describes nothing: a program that uses no type
     // information lowers as it did, with no description in its data.
     CHECK(!contains(ir_print(&a, lower_with_preload(&a, "main :: () { }\n")), "type_info"));
@@ -7786,6 +7811,43 @@ TEST(a_run_describes_types_declared_after_it) {
         CHECK(k->is_constant);
         CHECK_EQ(k->constant, values[i]);
     }
+    arena_free(&a);
+}
+
+TEST(a_run_describes_an_enum_declared_after_it) {
+    // Issue #221: a #run that describes an enum declared after it, reached
+    // only through a pointer's description and never by a member, has the
+    // enum's values worked out by its walk (walk_described), before the
+    // enum's own turn, so the interpreter's description holds them, and
+    // its integer type's description too. A member's value that describes
+    // its own enum is a circle, said once at the enum's name.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "SECOND :: #run second(type_info(*Later));\n"
+                                 "SIZE :: #run underlying_size(type_info(*Later));\n"
+                                 "enum_of :: (t: *Type_Info) -> *Type_Info_Enum {\n"
+                                 "    return cast(*Type_Info_Enum) (cast(*Type_Info_Pointer) t).pointer_to;\n"
+                                 "}\n"
+                                 "second :: (t: *Type_Info) -> s64 { return enum_of(t).values[1]; }\n"
+                                 "underlying_size :: (t: *Type_Info) -> int { return enum_of(t).underlying.size; }\n"
+                                 "Later :: enum u16 { FIRST :: 3; SECOND; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"SECOND", "SIZE"};
+    s64 values[] = {4, 2};
+    for (s64 i = 0; i < 2; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    CHECK_STR(check_with_preload(&a,
+                                 "Self :: enum { A :: #run f(); }\n"
+                                 "f :: () -> int { t := type_info(*Self); return 1; }\n"
+                                 "main :: () { }\n"),
+              "1:1: 'Self' is defined in terms of itself\n");
     arena_free(&a);
 }
 
