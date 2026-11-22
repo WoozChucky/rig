@@ -2643,7 +2643,8 @@ static_assert(sizeof PREDECLARED_CONSTANTS / sizeof PREDECLARED_CONSTANTS[0] == 
               "declare_predeclared declares OS alone, the table's one entry");
 
 // The predeclared enum (spec 2.5, 3.18), OS's type: the systems a program can
-// be built for, each member numbered as System is.
+/// be built for, each member numbered as System is. The VS Code grammar
+// names it too (tests/unit/test_grammar.cpp).
 static const char *const OPERATING_SYSTEM = "Operating_System";
 static const char *const OPERATING_SYSTEM_MEANING = "the systems a program can be built for";
 

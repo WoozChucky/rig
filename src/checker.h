@@ -940,7 +940,7 @@
 //   be an int. So the checker types each call. Each is predeclared
 //   (checker.cpp's BUILTIN_PROCEDURES, declare_predeclared), an Ast_Builtin
 //   at 0:0 in the top level, refused as a top-level declaration's name, as
-//   the predeclared constants are; a local may hide one. It's no value:
+//   OS and Operating_System are; a local may hide one. It's no value:
 //   "'array_add' can't be a value: it's built into the language". Its name
 //   is a procedure's where a place is wanted: "can't assign to
 //   'array_reset': it's a procedure".

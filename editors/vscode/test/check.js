@@ -1098,6 +1098,12 @@ check('the grammar\'s other rules still colour as they did', () => {
         WINDOWS: null,
     });
     assertScopes('MY_OS := OS;', { MY_OS: null, OS: 'support.constant.rig' });
+    // The predeclared enum, OS's type (spec 2.5), from the checker's name
+    // for it, the same where a value and where a type is written; a name
+    // that only ends in it is the program's own.
+    assertScopes('#if OS == Operating_System.LINUX {', { Operating_System: 'support.type.rig', LINUX: null });
+    assertScopes('system : Operating_System = OS;', { Operating_System: 'support.type.rig', OS: 'support.constant.rig' });
+    assertScopes('My_Operating_System :: struct {}', { My_Operating_System: TYPE });
 });
 
 // An enum's name is a type's, as a struct's is, after either keyword
@@ -1127,9 +1133,10 @@ check('the grammar colours the types in every program of tests/run and tests/bui
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
     // The structs and enums a program may name: its own, Preload's, which
-    // every program imports (modules/Preload's Allocator, say), those of
-    // the modules a program #imports or #loads, and the predeclared enum
-    // Operating_System, which no file declares (spec 2.5).
+    // every program imports (modules/Preload's Allocator, say), and those
+    // of the modules a program #imports or #loads. The predeclared enum
+    // Operating_System, which no file declares (spec 2.5), has a scope of
+    // its own, support.type.rig.
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;
@@ -1140,13 +1147,13 @@ check('the grammar colours the types in every program of tests/run and tests/bui
         }
     };
     walkModules(path.join(root, 'modules'));
-    const structs = new Set(['Operating_System']);
+    const typeNames = new Set();
     for (const source of [...sources.values(), ...modules]) {
-        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|enum|enum_flags)\b/g)) structs.add(m[1]);
+        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|enum|enum_flags)\b/g)) typeNames.add(m[1]);
     }
-    assert.ok(structs.has('Vec2') && structs.has('Node'));
+    assert.ok(typeNames.has('Vec2') && typeNames.has('Node') && typeNames.has('Mode'));
 
-    const typeScopes = new Set([TYPE, PRIMITIVE]);
+    const typeScopes = new Set([TYPE, PRIMITIVE, 'support.type.rig']);
     const checked = {};   // file -> procedure -> the parameters and results checked
     for (const [file, source] of sources) {
         const name = path.relative(root, file).replace(/\\/g, '/');
@@ -1155,13 +1162,13 @@ check('the grammar colours the types in every program of tests/run and tests/bui
         lines.forEach((tokenized, n) => {
             const where = `${name}:${n + 1}: ${tokenized.text}`;
             const text = tokenized.text;
-            // Each name coloured as a type is a struct's.
+            // Each name coloured as a type is a struct's or an enum's.
             // (A word in a string may be split by an escape: \there.)
             for (const m of text.matchAll(/\b[A-Za-z_]\w*\b/g)) {
                 const scopes = tokenized.scopes[m.index];
                 if (scopes[scopes.length - 1] !== TYPE) continue;
                 assert.strictEqual(scopeAt(tokenized, m.index, m[0].length), TYPE, where);
-                assert.ok(structs.has(m[0]), `${where}: ${m[0]} is coloured as a type`);
+                assert.ok(typeNames.has(m[0]), `${where}: ${m[0]} is coloured as a type`);
             }
             const procedure = /^\s*([A-Za-z_]\w*)\s*::\s*\(/.exec(text);
             const count = (what) => {

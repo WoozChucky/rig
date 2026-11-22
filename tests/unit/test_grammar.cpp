@@ -10,7 +10,7 @@
 // - Shapes: numbers, strings, comments, `name :: (`. They follow the lexer's
 //   rules (src/lexer.h, the comment above lex()), change rarely, and are
 //   written by hand in rig.tmLanguage.template.json.
-// - Word lists: the keywords, the type names, the predeclared constants, the
+// - Word lists: the keywords, the type names, the predeclared names, the
 //   operators. They change whenever the language grows, so nobody writes
 //   them by hand: where the template says @NAME@, this file fills in the
 //   words from the tables the lexer and the checker themselves use. The
@@ -21,6 +21,7 @@
 //                            KEYWORD_SCOPES below gives it
 //   @TYPES@                  the checker's NAMED_TYPES, then RESERVED_TYPES
 //   @PREDECLARED_CONSTANTS@  the checker's PREDECLARED_CONSTANTS (OS ...)
+//   @PREDECLARED_ENUM@       the checker's OPERATING_SYSTEM
 //   @OPERATORS@              the lexer's PUNCTUATION, one regex
 //   "@OPERATOR_CAPTURES@"    the scope of each operator in that regex
 //
@@ -543,6 +544,11 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
         } else if (string_eq(name, str("PREDECLARED_CONSTANTS"))) {
             known = predeclared_used = true;
             grammar_out_predeclared(&out, t);
+        } else if (string_eq(name, str("PREDECLARED_ENUM"))) {
+            // One name, so not a table of Grammar_Tables: the tests'
+            // templates leave it out.
+            known = true;
+            grammar_out(&out, OPERATING_SYSTEM);
         } else if (string_eq(name, str("OPERATORS"))) {
             known = operators_used = true;
             grammar_out_operators(&out, t);
