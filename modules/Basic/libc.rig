@@ -270,6 +270,10 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // Basic's files (file.rig) and directories (directory.rig) go through
     // kernel32's wide calls, which take a path as UTF-16, converted from
     // UTF-8 by wide.rig, so a name outside the ANSI code page is reached.
+    // The converters among them, C_CP_UTF8, C_MB_ERR_INVALID_CHARS,
+    // c_multi_byte_to_wide_char and c_wide_char_to_multi_byte, are
+    // wide.rig's for get_environment and the commands too (below), which
+    // convert a variable's name and value and a command line with them.
     // Like Sleep, each is kernel32's, which every program links and the
     // interpreter looks up in kernel32.dll (spec 10.6, 10.8), so compiled
     // and interpreted programs call the same functions.
@@ -380,11 +384,14 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // FILE_FLAG_BACKUP_SEMANTICS, which Basic doesn't pass.
     c_create_file_w :: (path: *u16, access: u32, share: u32, security: *void, disposition: u32, flags: u32, template: *void) -> *void #foreign libc "CreateFileW";
 
-    // Reads up to count bytes from the file into buffer, from where it is,
-    // and writes how many it read, which may be fewer, to read: 0 at the
-    // end. Not 0 when it could, and 0 when it couldn't, as for a handle
-    // opened only to write. Basic passes null for overlapped, a read that
-    // waits for its bytes.
+    // Reads up to count bytes from the file or pipe into buffer, from where
+    // it is, and writes how many it read, which may be fewer, to read: 0 at
+    // a file's end. Not 0 when it could, and 0 when it couldn't, as for a
+    // handle opened only to write. On a pipe the end is a failure instead,
+    // once every write end is closed and the pipe is empty (GetLastError
+    // 109, ERROR_BROKEN_PIPE), so a reader stops at either, as
+    // run_through_shell (environment.rig) does. Basic passes null for
+    // overlapped, a read that waits for its bytes.
     c_read_file :: (handle: *void, buffer: *void, count: u32, read: *u32, overlapped: *void) -> s32 #foreign libc "ReadFile";
 
     // Writes count bytes of data to the file, from where it is, or at its

@@ -1,13 +1,13 @@
 // Basic's environment (issues #145 and #209): four variables bin/run-tests
-// sets for every program it runs, RIG_BASIC_TEST, RIG_BASIC_TEST_EMPTY,
-// which is set to "", RIG_BASIC_TEST_UTF8, whose value is outside ASCII,
-// and RIG_BASIC_TEST_日本, whose name is, read as the same UTF-8 on both
-// systems, so this test passes only under the runner; PATH, which every
-// system sets, read without printing it; names Basic refuses, and one that
-// isn't valid UTF-8; allocators that count what they give and get back,
-// one with no memory and one with memory for only the name's copy; and
-// commands, whose output comes in order with the program's, and their
-// status.
+// sets for every program it runs (so this test passes only under the
+// runner): RIG_BASIC_TEST, RIG_BASIC_TEST_EMPTY, which is set to "",
+// RIG_BASIC_TEST_UTF8, whose value is outside ASCII, and
+// RIG_BASIC_TEST_日本, whose name is, all four read as the same UTF-8 on
+// both systems; PATH, which every system sets, read without printing it;
+// names Basic refuses, and one that isn't valid UTF-8; allocators that
+// count what they give and get back, one with no memory and one with
+// memory for only the name's copy; and commands, whose output comes in
+// order with the program's, and their status.
 #import "Basic";
 
 // Prints s between brackets, so an empty string shows as [].

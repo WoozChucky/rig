@@ -282,7 +282,7 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     // It is null, with nothing allocated, when the command line isn't valid
     // UTF-8 or allocator has no memory for it. The line is built in a
     // builder on the heap, and %COMSPEC% looked up on the heap (its name's
-    // UTF-16 copy, get_environment's buffer and its value), all given back
+    // UTF-16 copy, get_environment's buffer and the value), all given back
     // before it returns.
     shell_command_line :: (command: string, allocator: Allocator, loc: Source_Code_Location) -> *u16 {
         shell, found := get_environment("COMSPEC", HEAP_ALLOCATOR);
