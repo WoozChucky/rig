@@ -1,0 +1,14 @@
+// An enum's declaration's mistakes (issue #221, spec 3.18), one a line: an
+// integer type that isn't one, or isn't known; a member twice; a value
+// past the integer type's range, counted up to or set; a value not known
+// while compiling; and an enum's name used as a value.
+Bad :: enum float32 { A; }
+Unknown :: enum Nope { A; }
+Twice :: enum { A; A; }
+Full :: enum u8 { A :: 255; B; }
+Bits :: enum_flags u8 { A :: 128; B; }
+Over :: enum s8 { A :: 300; }
+counter := 1;
+Late :: enum { X :: counter; }
+Mode :: enum { A; }
+main :: () { m := Mode; }

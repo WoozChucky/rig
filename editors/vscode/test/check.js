@@ -1099,11 +1099,18 @@ check('the grammar\'s other rules still colour as they did', () => {
     assertScopes('MY_OS := OS_LINUX;', { MY_OS: null, OS_LINUX: 'support.constant.rig' });
 });
 
+// An enum's name is a type's, as a struct's is, after either keyword
+// (issue #221), and its integer type a built-in type.
+check('the grammar colours enum declarations', () => {
+    assertScopes('Look :: enum_flags u8 {', { Look: TYPE, enum_flags: 'storage.type.rig', u8: PRIMITIVE });
+    assertScopes('Mode :: enum {', { Mode: TYPE, enum: 'storage.type.rig' });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and
 // struct get their type coloured, and nothing is coloured as a type but the
-// names its structs are declared with.
+// names its structs and enums are declared with.
 check('the grammar colours the types in every program of tests/run and tests/build', () => {
     const files = [];
     const walk = (dir) => {
@@ -1118,9 +1125,9 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     assert.ok(files.length > 50, `only ${files.length} programs`);
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
-    // The structs a program may name: its own, Preload's, which every
-    // program imports (modules/Preload's Allocator, say), and those of the
-    // modules a program #imports or #loads.
+    // The structs and enums a program may name: its own, Preload's, which
+    // every program imports (modules/Preload's Allocator, say), and those of
+    // the modules a program #imports or #loads.
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;
@@ -1133,7 +1140,7 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     walkModules(path.join(root, 'modules'));
     const structs = new Set();
     for (const source of [...sources.values(), ...modules]) {
-        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*struct\b/g)) structs.add(m[1]);
+        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|enum|enum_flags)\b/g)) structs.add(m[1]);
     }
     assert.ok(structs.has('Vec2') && structs.has('Node'));
 

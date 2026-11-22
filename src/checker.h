@@ -16,15 +16,16 @@
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
 // Names.
-// - The program's procedures, global variables, top-level constants and
-//   structs are visible everywhere, in any order. They share one set of
+// - The program's procedures, global variables, top-level constants,
+//   structs and enums are visible everywhere, in any order. They share one set of
 //   names: a global can't take a procedure's ("'x' is already declared at
 //   PATH:L:C").
-// - A struct's name is a type: used as a value, it's "'Vec2' is a type, not
-//   a value". A name declared as anything else, written where a type goes,
-//   is "'foo' is not a type"; a name declared nowhere, "unknown type
-//   'foo'". A built-in type's name always means the built-in type, so a
-//   struct can't take one: "'u8' is a built-in type", at its name.
+// - A struct's name is a type, and so is an enum's: used as a value, it's
+//   "'Vec2' is a type, not a value". A name declared as anything else,
+//   written where a type goes, is "'foo' is not a type"; a name declared
+//   nowhere, "unknown type 'foo'". A built-in type's name always means the
+//   built-in type, so a struct or an enum can't take one: "'u8' is a
+//   built-in type", at its name.
 // - Three constants are predeclared (spec 2.5), untyped integers visible
 //   everywhere: OS_WINDOWS (1), OS_LINUX (2), and OS, the system the
 //   program is built for (Ast_File.system, else the host's), so
@@ -956,6 +957,61 @@
 //   value"). Each calls the helper of Preload's that does the work, in Rig
 //   (__array_add, ...), which the checker keeps on the tree
 //   (Ast_File.array_procs), and a #run's walk reaches.
+//
+// Enums (issue #221, spec 3.18).
+// - `Mode :: enum { ALLOCATE; RESIZE; }` and `Look :: enum_flags u8 {
+//   VISIBLE; SOLID; }` declare a type each, at the top level, usable
+//   anywhere, before its declaration too: its own (two declarations are two
+//   types), over an integer type, int when none is written, whose size,
+//   alignment and sign it has (declare_top_level makes it so). That type
+//   is a built-in integer type's name, or else "an enum's type must be an
+//   integer type, not 'float32'" (an unknown name: "unknown type 'Nope'"),
+//   and the enum is then over int.
+// - Its members are constants of the integer type, worked out where first
+//   needed, as a global's value (checker.cpp's resolve_enum): a value
+//   written must be known while compiling and fit ("300 doesn't fit in
+//   's8'"); without one, an enum's member is the one before's plus one, the
+//   first 0, and an enum_flags' the lowest power of two above every value
+//   before it, read as unsigned, the first 1; one past the type is "256
+//   doesn't fit in 'u8'", at its name. Two members may share a value, not a
+//   name ("'A' is already declared at PATH:L:C"). In the body, an earlier
+//   member is a plain constant by its name (LAST :: C + 3, ALL :: A | B),
+//   hiding an outer one; outside it, no scope holds the members. A value
+//   needing its own enum (through another enum or a #run) is "'E' is
+//   defined in terms of itself", at the enum, every member then unknown.
+// - Mode.FREE, a name declaring an enum then a member's name, is the
+//   member, a constant of the enum ("'Mode' has no member 'FRE'", at the
+//   name): Ast_Member.of_enum. It's no place: "can't assign to 'Mode.FREE':
+//   it's an enum's member" ("can't take the address of ...").
+// - .FREE alone (Ast_Dot_Name) has type_untyped_member until it meets a
+//   type, as .{...} does (check_convert): a declaration's type, an
+//   assignment's target, an argument and a default, a return, a field or an
+//   element of a literal, a cast; and the other side of == or != from an
+//   enum value, the other operand of | & ^ from a flags value. .A | .B
+//   and ~.A wait together for a flags type. Meeting an enum, it's the
+//   member; meeting another type, "'.FREE' needs an enum type, not 'int'";
+//   meeting none (x := .FREE;, .A == .B, an operand of anything else, an
+//   Any, C's '...'), "this member's enum isn't known; write it with its
+//   enum, as in Mode.FREE", at the '.'.
+// - Nothing converts to or from an enum implicitly ("a value of type 'Mode'
+//   doesn't convert to 'int' implicitly") but the untyped 0 to a flags
+//   type, the empty set. cast(T) e between an enum and an integer type is
+//   the integer cast between their integer types: a constant must fit
+//   ("300 doesn't fit in 'Small'"), anything else is checked at run time,
+//   and cast,trunc takes them; a value with no member is fine. Between two
+//   enum types: "can't cast 'Small' to 'Mode'".
+// - == != < <= > >= compare two values of one enum type (or a flags value
+//   and 0) as its integer type does ("mismatched types 'Mode' and 'int' for
+//   '=='; cast one of them" otherwise). | & ^ ~ and |= &= ^= take a flags
+//   type's values and give one, folding for constants with its integer's
+//   wrapping. No other operator takes an enum, as for any type that isn't
+//   its operands' ("'+' needs numbers, not 'Mode'", "'|' needs integers,
+//   not 'Mode'" for one that isn't flags); nor does a condition, nor an
+//   array's count ("an array's count must be an integer, not 'Mode'").
+// - What lowering may rely on: an enum is its integer type below the
+//   checker (type_integer_of), laid out, passed and compared as it; Mode.FREE
+//   and every .NAME that reaches lowering are constants, their values in
+//   Ast.constant; no type_untyped_member survives a program that checks.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

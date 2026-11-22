@@ -14,9 +14,9 @@ struct Checker {
     Diagnostics *diag;
     Compile_Time *world;         // where expression #runs run (run.h): check()'s caller's, or one of
                                  // check()'s own
-    Table<Ast *> top_level;      // every procedure, global variable, top-level constant and
-                                 // struct, by name: visible everywhere (Ast_Proc, Ast_Var,
-                                 // Ast_Const, Ast_Struct); and the predeclared names, put first
+    Table<Ast *> top_level;      // every procedure, global variable, top-level constant, struct
+                                 // and enum, by name: visible everywhere (Ast_Proc, Ast_Var,
+                                 // Ast_Const, Ast_Struct, Ast_Enum); and the predeclared names, put first
                                  // (checker.cpp's declare_predeclared): the constants OS,
                                  // OS_WINDOWS and OS_LINUX (spec 2.5), each an Ast_Const, and
                                  // the resizable arrays' procedures (spec 3.17), each an
@@ -34,11 +34,11 @@ struct Checker {
                                  // aside (check_body)
     s64 defer_loops;             // c->loops.count at `deferring`: a break or continue whose loop is
                                  // among the first defer_loops would leave the deferred statement
-    Array<Ast *> resolving;      // the globals, constants, structs' layouts, late fields' types,
-                                 // signatures and bodies under way, each needed by the one before it
-                                 // (resolve_global, resolve_struct, make_late_field,
-                                 // resolve_signature, check_body: a body by its Ast_Block): a circle is
-                                 // the end of this list
+    Array<Ast *> resolving;      // the globals, constants, structs' layouts, enums' values, late
+                                 // fields' types, signatures and bodies under way, each needed by the
+                                 // one before it (resolve_global, resolve_struct, resolve_enum,
+                                 // make_late_field, resolve_signature, check_body: a body by its
+                                 // Ast_Block): a circle is the end of this list
     s32 levels;                  // where a declaration worked out now starts (MAX_DEPTH): a level
                                  // below the levels of the type or value that needs it, 0 in a
                                  // declaration's own turn (checker.cpp's open_declaration)
@@ -161,6 +161,17 @@ bool check_reached_body(Checker *c, Ast_Proc *proc, Position at);
 // means the built-in type).
 bool check_in_a_branch(Checker *c, String name, Position at);
 
+// The members' values of enum type t (spec 3.18), worked out now if they
+// aren't yet (checker.cpp's resolve_enum): true once they are, each member
+// then known (Ast_Const.is_constant, of the enum's integer type) or not
+// (no type: its mistake said); false when they can't be, the enum in a
+// circle or nested too deeply, said already. Mode.FREE, a .FREE meeting
+// the enum and a #run's walk call it.
+bool check_enum_values(Checker *c, Type *t);
+
+// The index of member `name` of enum `e` (its first of that name), or -1.
+s32 enum_member_index(Ast_Enum *e, String name);
+
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as
 // unsigned. For a written [N]T and for a literal's array.
@@ -177,9 +188,9 @@ Type *check_expression(Checker *c, Ast *e);
 // check_expression for an expression whose value is used: a call returning
 // nothing is reported ("'greet' returns nothing, so it has no value"), and
 // gives null. A literal without its type written, .{...} or .[...], has type
-// type_untyped_literal, its values not yet checked: where it meets a type,
-// check_convert completes it, and where it meets none, check_default_type
-// reports it.
+// type_untyped_literal, its values not yet checked, and a member without its
+// enum, .FREE, type_untyped_member: where it meets a type, check_convert
+// completes it, and where it meets none, check_default_type reports it.
 Type *check_value(Checker *c, Ast *e);
 
 // What a call calls, as its messages name it: the procedure's name, the
@@ -189,8 +200,8 @@ Type *check_value(Checker *c, Ast *e);
 String callee_name(Checker *c, Ast_Call *call);
 
 // check_value for an operand of an operator, a condition, a loop's range, a
-// dereference or a field: where no type is met, so .{...} is reported
-// (check_default_type) and gives null.
+// dereference or a field: where no type is met, so .{...} and .FREE are
+// reported (check_default_type) and give null.
 Type *check_operand(Checker *c, Ast *e);
 
 // Whether e's value converts implicitly to `to`, where a declaration, an
@@ -202,7 +213,9 @@ Type *check_operand(Checker *c, Ast *e);
 // doesn't report it again. .{...} takes the struct type `to`, its values
 // checked against its fields here ("a '.{' literal needs a struct type, not
 // 'int'" for any other, also counted as converting); .[...] an array type,
-// or a view type, becoming then an array of its own count. Any value
+// or a view type, becoming then an array of its own count; .FREE the enum
+// type `to`, as its member ("'.FREE' needs an enum type, not 'int'" for any
+// other, counted as converting too), and the untyped 0 a flags type. Any value
 // converts to Preload's Any (spec 3.16), keeping its own type: Ast.to_any
 // says whether the Any holds the value's own address or a copy's, and a
 // literal without its type is reported, as check_default_type reports it.
@@ -223,7 +236,9 @@ bool type_converts(Type *from, Type *to);
 // An untyped constant that meets no type becomes an int (x := 5;), or a
 // float32 (x := 0.5;), which it must fit. A literal that meets none,
 // .{...} or .[...], is "this literal's type isn't known; write it before the
-// '.', as in Vec2.{1, 2}" (int.[1, 2]), and its type becomes unknown (null).
+// '.', as in Vec2.{1, 2}" (int.[1, 2]), and a member without its enum
+// "this member's enum isn't known; write it with its enum, as in
+// Mode.FREE", at its '.'; either's type becomes unknown (null).
 void check_default_type(Checker *c, Ast *e);
 
 // "null needs a pointer type, as in p : *int = null;", at e, a null that

@@ -9,7 +9,7 @@
     {kind,    size,    align,   is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
      nullptr, {},      nullptr, nullptr,   nullptr, 0,                                    nullptr, \
      nullptr, nullptr, nullptr, nullptr,   0,       nullptr,                              0,       \
-     false,   false,   nullptr, nullptr}
+     false,   false,   nullptr, nullptr,   nullptr, false,                                nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -28,6 +28,7 @@ static Type integer_types[] = {
 Type type_string = {
     TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
     &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
+    nullptr, false, nullptr,
 };
 
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
@@ -47,6 +48,10 @@ Type type_null = BUILT_IN(TYPE_NULL, "null", 8, 8, false);
 // .[...]. Its name is only a fallback; the checker reports such a literal
 // before any message would name its type.
 Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false);
+// .FREE before it meets an enum, whose size it then takes. Its name is only
+// a fallback too: such a member meeting no enum is reported before any
+// message would name its type.
+Type type_untyped_member = BUILT_IN(TYPE_UNTYPED_MEMBER, ".NAME", 0, 1, false);
 
 // float, a name only: type_from_name gives float32 for it. It's an entry of
 // its own so NAMED_TYPES, and the editor's grammar made from it, list the
@@ -54,6 +59,7 @@ Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false
 static Type float_name = {
     TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
     nullptr,    0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
+    nullptr,    false, nullptr,
 };
 
 // Every type a program can name, by its built-in name: the one list
@@ -76,6 +82,15 @@ Type *type_from_name(String name) {
 
 bool type_is_untyped(Type *t) {
     return t == &type_untyped_int || t == &type_untyped_float;
+}
+
+bool type_waits_for_one(Type *t) {
+    return t == &type_untyped_literal || t == &type_untyped_member;
+}
+
+Type *type_integer_of(Type *t) {
+    if (t->kind == TYPE_INTEGER) return t;
+    return t->kind == TYPE_ENUM ? t->underlying : nullptr;
 }
 
 bool type_is_number(Type *t) {

@@ -71,12 +71,13 @@ struct Keyword_Scope {
 // nothing else. How a new keyword is highlighted is a choice, so it isn't
 // guessed: until it has a line here, vscode_grammar_is_current fails.
 static const Keyword_Scope KEYWORD_SCOPES[] = {
-    {"if", KEYWORDS_CONTROL},     {"else", KEYWORDS_CONTROL},     {"while", KEYWORDS_CONTROL},
-    {"for", KEYWORDS_CONTROL},    {"break", KEYWORDS_CONTROL},    {"continue", KEYWORDS_CONTROL},
-    {"return", KEYWORDS_CONTROL}, {"defer", KEYWORDS_CONTROL},    {"struct", KEYWORDS_STORAGE},
-    {"enum", KEYWORDS_STORAGE},   {"union", KEYWORDS_STORAGE},    {"cast", KEYWORDS_CAST},
-    {"using", KEYWORDS_OTHER},    {"true", KEYWORDS_CONSTANT},    {"false", KEYWORDS_CONSTANT},
-    {"null", KEYWORDS_CONSTANT},  {"context", KEYWORDS_VARIABLE}, {"push_context", KEYWORDS_CONTROL},
+    {"if", KEYWORDS_CONTROL},     {"else", KEYWORDS_CONTROL},       {"while", KEYWORDS_CONTROL},
+    {"for", KEYWORDS_CONTROL},    {"break", KEYWORDS_CONTROL},      {"continue", KEYWORDS_CONTROL},
+    {"return", KEYWORDS_CONTROL}, {"defer", KEYWORDS_CONTROL},      {"struct", KEYWORDS_STORAGE},
+    {"enum", KEYWORDS_STORAGE},   {"enum_flags", KEYWORDS_STORAGE}, {"union", KEYWORDS_STORAGE},
+    {"cast", KEYWORDS_CAST},      {"using", KEYWORDS_OTHER},        {"true", KEYWORDS_CONSTANT},
+    {"false", KEYWORDS_CONSTANT}, {"null", KEYWORDS_CONSTANT},      {"context", KEYWORDS_VARIABLE},
+    {"push_context", KEYWORDS_CONTROL},
 };
 
 // ---------------------------------------------------------------------------

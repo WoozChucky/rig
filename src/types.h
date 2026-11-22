@@ -1,13 +1,15 @@
 // types.h: Rig's types, as the checker sees them.
 //
-// The integer types, the float types, bool, pointers, structs, arrays,
-// views, resizable arrays, procedure types, string and void, and the types
-// of untyped integer and float constants, of null and of a literal without
-// its type written (.{1, 2}, .[1, 2]). Each type exists once, so two types
-// are the same exactly when their pointers are equal (type_pointer_to keeps
-// one *T per T, type_array_of, type_view_of and type_resizable_of one [N]T,
-// one []T and one [..]T, and type_proc_of one procedure type per signature;
-// a struct's type is its declaration's, Ast_Struct.declared).
+// The integer types, the float types, bool, pointers, structs, enums,
+// arrays, views, resizable arrays, procedure types, string and void, and
+// the types of untyped integer and float constants, of null, of a literal
+// without its type written (.{1, 2}, .[1, 2]) and of a member without its
+// enum (.FREE). Each type exists once, so two types are the same exactly
+// when their pointers are equal (type_pointer_to keeps one *T per T,
+// type_array_of, type_view_of and type_resizable_of one [N]T, one []T and
+// one [..]T, and type_proc_of one procedure type per signature; a struct's
+// type is its declaration's, Ast_Struct.declared, and an enum's its
+// declaration's, Ast_Enum.declared).
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
 // u16 2, s32 u32 float32 4, s64 u64 int float64, pointers and procedure
@@ -44,9 +46,12 @@ enum Type_Kind : u8 {
     TYPE_RESIZABLE,  // [..]T: a view's count and data, then allocated and allocator (spec 3.17)
     TYPE_PROC,     // (params) -> results: a procedure's type; a value of it is the address of a
                    // procedure's code, or null (spec 3's "Procedure types")
+    TYPE_ENUM,     // an enum or enum_flags a program declares: its integer type and members (spec 3.18)
+    TYPE_UNTYPED_MEMBER,  // a member without its enum, .FREE, until it meets one (type_untyped_member)
 };
 
 struct Ast_Struct;  // ast.h: a struct's declaration
+struct Ast_Enum;    // ast.h: an enum's declaration
 
 // A field of a struct type: its name, its type and where it is.
 struct Type_Field {
@@ -86,6 +91,9 @@ struct Type {
     Type *procs;         // the procedure types this type anchors (type_proc_of), linked through
                          // next_proc: each signature made once
     Type *next_proc;
+    Type *underlying;     // TYPE_ENUM: its integer type, whose size, alignment and sign it has
+    bool is_flags;        // TYPE_ENUM: enum_flags
+    Ast_Enum *enum_decl;  // TYPE_ENUM: its declaration, its members' names and values
 };
 
 // The largest size a type may have, 2^40 bytes (a terabyte): an array over
@@ -303,8 +311,25 @@ extern Type type_untyped_float;
 // (check_default_type).
 extern Type type_untyped_literal;
 
+// The type of a member written without its enum, `.FREE`, until it meets
+// one (spec 3.18): as a literal without its type takes the struct it meets,
+// the member takes the enum of what it's given to, or of the other side of
+// == or != from an enum value, or of the other operand of | & ^ from a
+// flags value, and is that enum's member then (check_convert). `.A | .B`
+// and `~.A` have this type too, waiting for one together. Meeting none,
+// it's an error (check_default_type), so messages never name it.
+extern Type type_untyped_member;
+
 // Whether t is the type of an untyped constant, integer or float.
 bool type_is_untyped(Type *t);
+
+// Whether a value of type t takes its type from where it goes: .{...},
+// .[...] (type_untyped_literal) or .NAME (type_untyped_member).
+bool type_waits_for_one(Type *t);
+
+// An integer type, or an enum's integer type (Type.underlying): what
+// lowering, casts and C see of a value of type t; null for any other type.
+Type *type_integer_of(Type *t);
 
 // Whether t is a number: an integer or a float, what + - * / take.
 bool type_is_number(Type *t);

@@ -1,0 +1,54 @@
+tests/errors/enum_uses.rig:15:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        x := .FREE;
+             ^
+tests/errors/enum_uses.rig:16:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        y := .A | .B;
+             ^
+tests/errors/enum_uses.rig:17:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        z := .FREE == .RESIZE;
+             ^
+tests/errors/enum_uses.rig:18:15: error: '.FREE' needs an enum type, not 'int'
+        i : int = .FREE;
+                  ^
+tests/errors/enum_uses.rig:19:10: error: 'Mode' has no member 'FRE'
+        m = .FRE;
+             ^
+tests/errors/enum_uses.rig:20:15: error: 'Mode' has no member 'FRE'
+        k := Mode.FRE;
+                  ^
+tests/errors/enum_uses.rig:21:14: error: '+' needs numbers, not 'Mode'
+        sum := m + 1;
+                 ^
+tests/errors/enum_uses.rig:22:12: error: '|' needs integers, not 'Mode'
+        b := m | m;
+               ^
+tests/errors/enum_uses.rig:23:12: error: mismatched types 'Mode' and 'int' for '=='; cast one of them
+        c := m == 1;
+               ^
+tests/errors/enum_uses.rig:24:12: error: mismatched types 'Look' and 'int' for '|'; cast one of them
+        d := f | 1;
+               ^
+tests/errors/enum_uses.rig:25:14: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        e := m < .FREE;
+                 ^
+tests/errors/enum_uses.rig:26:15: error: a value of type 'Mode' doesn't convert to 'int' implicitly
+        j : int = m;
+                  ^
+tests/errors/enum_uses.rig:27:5: error: can't assign to 'Mode.FREE': it's an enum's member
+        Mode.FREE = m;
+        ^
+tests/errors/enum_uses.rig:28:11: error: can't take the address of 'Mode.FREE': it's an enum's member
+        p := *Mode.FREE;
+              ^
+tests/errors/enum_uses.rig:29:10: error: can't cast 'Small' to 'Mode'
+        s := cast(Mode) Small.X;
+             ^
+tests/errors/enum_uses.rig:30:20: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        printf("%d\n", .FREE);
+                       ^
+tests/errors/enum_uses.rig:31:8: error: the condition of 'if' must be a bool, not 'Mode'
+        if m { }
+           ^
+tests/errors/enum_uses.rig:32:10: error: an array's count must be an integer, not 'Mode'
+        a : [Mode.FREE]int;
+             ^

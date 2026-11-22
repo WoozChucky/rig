@@ -5,6 +5,7 @@
 
 static Ast *find_name(Checker *c, String name);
 static Type *resolve_struct(Checker *c, Ast_Struct *s);
+static bool resolve_enum(Checker *c, Ast_Enum *e);
 
 Type *check_array_type(Checker *c, Type *element, u64 count, Position at) {
     // An array's size is its element's times its count, so a struct's
@@ -193,15 +194,18 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 }
 
 // A written type. A name is a built-in type, or a struct's, whose layout is
-// worked out here if it isn't yet (resolve_struct). Any other name declared
-// where the type is written isn't a type ("'foo' is not a type"), and a name
-// declared nowhere is "unknown type 'foo'", unless a #load or a top-level
-// #if's condition failed: the missing file, or the branches never decided,
-// may declare it (Checker.lost_a_file). A decider says instead, of a name a
-// top-level #if's branch declares, "'foo' is declared in a top-level #if,
-// so it can't decide another top-level #if" (check_in_a_branch). A broken
-// entry's name may have been anything, so nothing is said about it. A
-// struct found to contain itself has no type: its uses say nothing more.
+// worked out here if it isn't yet (resolve_struct), or an enum's, whose
+// Type has its size from the start (declare_top_level), its members' values
+// worked out only where they're needed (resolve_enum). Any other name
+// declared where the type is written isn't a type ("'foo' is not a type"),
+// and a name declared nowhere is "unknown type 'foo'", unless a #load or a
+// top-level #if's condition failed: the missing file, or the branches never
+// decided, may declare it (Checker.lost_a_file). A decider says instead, of
+// a name a top-level #if's branch declares, "'foo' is declared in a
+// top-level #if, so it can't decide another top-level #if"
+// (check_in_a_branch). A broken entry's name may have been anything, so
+// nothing is said about it. A struct found to contain itself has no type:
+// its uses say nothing more.
 //
 // behind_pointer: the type is what a pointer points at, or a view's or a
 // resizable array's elements, which lie elsewhere: a struct named right
@@ -257,6 +261,8 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         Ast_Struct *s = (Ast_Struct *)decl;
         if (behind_pointer && s->resolve != RESOLVE_DONE) return s->declared;
         return resolve_struct(c, s);
+    } else if (decl->kind == AST_ENUM) {
+        return ((Ast_Enum *)decl)->declared;
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
@@ -701,7 +707,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
 // N :: e; the value must be known while compiling (spec 4.2), and the
 // constant keeps it, with its type: untyped when e is, so N meets types as
 // a literal does. A struct literal's type must be written: .{1, 2} meets
-// none here.
+// none here, nor does .FREE meet an enum.
 //
 // A number, a bool or null folds into the constant's own is_constant and
 // constant. A constant may also name a procedure (OP :: add;,
@@ -721,7 +727,7 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Ast *value = constant->value;
     Type *t = check_value(c, value);
-    if (t == &type_untyped_literal) {
+    if (t && type_waits_for_one(t)) {
         check_default_type(c, value);
         t = nullptr;
     }
@@ -778,6 +784,7 @@ static Ast_Resolve *resolve_state(Ast *decl) {
     case AST_VAR: return &((Ast_Var *)decl)->resolve;
     case AST_CONST: return &((Ast_Const *)decl)->resolve;
     case AST_STRUCT: return &((Ast_Struct *)decl)->resolve;
+    case AST_ENUM: return &((Ast_Enum *)decl)->resolve;
     case AST_FIELD: return &((Ast_Field *)decl)->resolve;
     case AST_PROC: return &((Ast_Proc *)decl)->resolve;
     case AST_BLOCK: return &((Ast_Block *)decl)->proc->body_resolve;
@@ -935,6 +942,174 @@ static void resolve_global(Checker *c, Ast *decl) {
         }
     }
     *state = RESOLVE_DONE;
+}
+
+// Enums (spec 3.18). Each has its Type from the start (declare_top_level
+// makes it with the top level's names), its integer type's size, alignment
+// and sign already its own, so a struct holding one, or a pointer to one,
+// needs nothing more of it. Its members' values are worked out where first
+// needed, as a global's value is (resolve_global): by its own turn in
+// check()'s pass, or earlier, by Mode.FREE or a .FREE meeting it in a value
+// checked before then, or by a #run's walk (check_enum_values). A value
+// that needs its own enum, through another enum's or a #run's, finds it
+// under way: "'E' is defined in terms of itself", at the enum's name, once,
+// and every member of every enum in the circle is then unknown, so nothing
+// more is said about it or its uses.
+
+s32 enum_member_index(Ast_Enum *e, String name) {
+    for (s64 i = 0; i < e->members.count; i++) {
+        if (string_eq(e->members[i]->name, name)) return (s32)i;
+    }
+    return -1;
+}
+
+// "N doesn't fit in 'u8'", at `at`, for the number one past integer type
+// t's largest value, `largest`, which an enum's next member would have:
+// past every 64-bit number for a u64's.
+static void report_past_the_range(Checker *c, Position at, u64 largest, Type *t) {
+    String number = largest == UINT64_MAX ? str("18446744073709551616")
+                                          : string_printf(c->arena, "%llu", (unsigned long long)(largest + 1));
+    diag_error(c->diag, at, STR_FMT " doesn't fit in '" STR_FMT "'", STR_ARG(number), STR_ARG(type_name(c->arena, t)));
+}
+
+// The members of enum e, in order, each a constant of its integer type
+// (Type.underlying) once known, in a scope of the enum's own that each joins
+// after its value is checked (declare: "'A' is already declared at
+// PATH:L:C" for a second of a name), so a later value may name an earlier
+// member as a plain constant (LAST :: C + 3, ALL :: A | B), and an outer
+// name of the same is hidden from there on. Outside the body no scope
+// holds them: Mode.FREE and .FREE reach them.
+// - A value written is a constant expression that converts to the integer
+//   type, as a typed constant's does ("300 doesn't fit in 's8'", at it; "a
+//   value of type 'string' doesn't convert to 'u8' implicitly"); one not
+//   known while compiling is "the value of constant 'X' isn't known while
+//   compiling", at it.
+// - An enum's member without one is the one before's plus one, the first 0;
+//   an enum_flags', the lowest power of two above every value before it,
+//   each read as unsigned at the type's width, the first 1. One past the
+//   type's range is "256 doesn't fit in 'u8'", at the member's name. It's
+//   given an Ast_Int of its number as its value, as declare_predeclared
+//   gives OS one, so whatever reaches a constant's value finds one.
+// A member whose value had a mistake is unknown (no type), and so is a
+// member without a value after it whose number depends on it; neither says
+// more. The type written after the keyword is resolved first, for its own
+// mistakes: anything but an integer type is "an enum's type must be an
+// integer type, not 'float32'", at it, and the enum is then over int, as
+// declare_top_level made it. It's resolved as a pointer's target is
+// (behind_pointer): a struct named there isn't laid out, it's only named.
+static void check_enum_members(Checker *c, Ast_Enum *e) {
+    Type *integer = e->declared->underlying;
+    if (e->type_expr) {
+        Type *written = resolve_written(c, e->type_expr, true);
+        if (written && written->kind != TYPE_INTEGER) {
+            diag_error(c->diag, e->type_expr->pos, "an enum's type must be an integer type, not '" STR_FMT "'",
+                       STR_ARG(type_name(c->arena, written)));
+        }
+    }
+    s32 width = (s32)integer->size * 8;
+    u64 mask = width == 64 ? UINT64_MAX : ((u64)1 << width) - 1;
+    u64 largest = integer->is_signed ? mask >> 1 : mask;  // the type's largest value
+    bool next_known = true;  // the next member without a value can be worked out
+    u64 previous = 0;        // the last member's value (an enum's)
+    u64 highest = 0;         // the highest value so far, read as unsigned at the width (an enum_flags')
+    push_scope(c);
+    for (s64 i = 0; i < e->members.count; i++) {
+        Ast_Const *member = e->members[i];
+        s64 errors = c->diag->error_count;
+        bool known = false;
+        u64 value = 0;
+        if (member->value) {
+            Type *t = check_value(c, member->value);
+            if (t && type_waits_for_one(t)) {
+                check_default_type(c, member->value);  // .FREE or .{...} meet no type here
+            } else if (t && !check_convert(c, member->value, integer)) {
+                report_no_conversion(c, member->value, integer);
+            } else if (t && !member->value->is_constant) {
+                report_unknown_constant(c, member, member->value);
+            }
+            known = member->value->type && member->value->is_constant && c->diag->error_count == errors;
+            value = member->value->constant;
+        } else if (next_known) {
+            known = true;
+            if (e->is_flags) {
+                // The lowest power of two above `highest`: the bit above its top one.
+                s32 bit = 0;
+                while (bit < 64 && (highest >> bit) != 0) bit++;
+                value = bit < 64 ? (u64)1 << bit : 0;
+                if (bit == 64 || value > largest) {
+                    report_past_the_range(c, member->pos, bit == 64 ? UINT64_MAX : value - 1, integer);
+                    known = false;
+                }
+            } else if (i == 0) {
+                value = 0;
+            } else if ((previous & mask) == largest) {
+                report_past_the_range(c, member->pos, largest, integer);
+                known = false;
+            } else {
+                value = previous + 1;  // within the type's range, so already its constant's form
+            }
+            if (known) {
+                Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, member->pos);
+                number->value = value;
+                number->type = integer;
+                number->is_constant = true;
+                number->constant = value;
+                member->value = number;
+            }
+        }
+        member->resolve = RESOLVE_DONE;
+        member->type = known ? integer : nullptr;
+        member->is_constant = known;
+        member->constant = known ? value : 0;
+        next_known = known && (next_known || !e->is_flags);
+        if (known) {
+            previous = value;
+            if ((value & mask) > highest) highest = value & mask;
+        }
+        declare(c, member->name, member);
+    }
+    pop_scope(c);
+}
+
+// The members' values of enum e, worked out the first time they're needed
+// (above), with no scopes open but the enum's own (leave_scopes), as a
+// global's value is. True once they are, each member known or not; false
+// when e is under way, a circle, said here (as resolve_global says one),
+// or nested too deeply to work out here (open_declaration, said).
+static bool resolve_enum(Checker *c, Ast_Enum *e) {
+    if (e->resolve == RESOLVE_DONE) return true;
+    if (e->resolve == RESOLVE_UNDER_WAY || e->resolve == RESOLVE_CYCLE) {
+        if (e->resolve == RESOLVE_UNDER_WAY) {
+            diag_error(c->diag, e->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(e->name));
+        }
+        mark_circle(c, e);
+        return false;
+    }
+    s32 levels = 0, outer;
+    for (s64 i = 0; i < e->members.count; i++) {
+        if (e->members[i]->levels > levels) levels = e->members[i]->levels;
+    }
+    if (!open_declaration(c, e, e->name, levels, &outer)) return false;
+    Outer_Scopes scopes = leave_scopes(c);
+    e->resolve = RESOLVE_UNDER_WAY;
+    array_add(&c->resolving, (Ast *)e);
+    check_enum_members(c, e);
+    c->resolving.count--;
+    c->levels = outer;
+    return_to_scopes(c, scopes);
+    // In a circle, what was worked out came from values that aren't any.
+    if (e->resolve == RESOLVE_CYCLE) {
+        for (s64 i = 0; i < e->members.count; i++) {
+            e->members[i]->type = nullptr;
+            e->members[i]->is_constant = false;
+        }
+    }
+    e->resolve = RESOLVE_DONE;
+    return true;
+}
+
+bool check_enum_values(Checker *c, Type *t) {
+    return resolve_enum(c, t->enum_decl);
 }
 
 // Structs. Each has its Type from the start (check() makes it with the
@@ -1381,7 +1556,11 @@ static void check_multi_assign(Checker *c, Ast_Assign *assign) {
 // float32 into a float64 does (a shift's amount: any integer). For an
 // integer x, x /= 0 and x %= 0 are "division by zero", as x / 0 is, at the
 // operator. A pointer x takes += and -= by an integer, which move it, and
-// none of the others (check_pointer_move).
+// none of the others (check_pointer_move). A flags value takes |= &= ^= of
+// its own type (spec 3.18), e converting to it as it would for x = e (.A
+// and ~.B take it, 0 is the empty set); no other compound assignment takes
+// an enum, which the operator says of x ("'+=' needs numbers, not 'Mode'"),
+// a .NAME e having taken x's type first.
 static void check_assign(Checker *c, Ast_Assign *assign) {
     if (assign->targets.count > 1) {
         check_multi_assign(c, assign);
@@ -1400,6 +1579,16 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         return;
     }
     Token_Kind op = compound_operator(assign->op);
+    bool bitwise = op == TOKEN_PIPE || op == TOKEN_AMP || op == TOKEN_CARET;
+    if (bitwise && to->kind == TYPE_ENUM && to->is_flags) {
+        if (!check_convert(c, assign->value, to)) report_no_conversion(c, assign->value, to);
+        return;
+    }
+    if (value == &type_untyped_member) {
+        check_convert(c, assign->value, to);  // "'.A' needs an enum type, not 'int'" when x isn't one
+        value = assign->value->type;
+        if (!value) return;
+    }
     if (type_is_pointer(to) && (op == TOKEN_PLUS || op == TOKEN_MINUS)) {
         if (op == TOKEN_PLUS && type_is_pointer(value)) {
             diag_error(c->diag, assign->pos, "can't add two pointers");
@@ -2528,12 +2717,13 @@ static String declared_name(Ast *decl) {
     case AST_VAR: return ((Ast_Var *)decl)->name;
     case AST_CONST: return ((Ast_Const *)decl)->name;
     case AST_STRUCT: return ((Ast_Struct *)decl)->name;
+    case AST_ENUM: return ((Ast_Enum *)decl)->name;
     default: RIG_ASSERT(!"not a top-level declaration"); return {};
     }
 }
 
-// The top level's names, so procedures, globals, constants and structs can
-// be used before they're declared. They share one table: a global can't
+// The top level's names, so procedures, globals, constants, structs and
+// enums can be used before they're declared. They share one table: a global can't
 // have a procedure's name. The predeclared names, the constants and the
 // built-in procedures, come first (declare_predeclared): a top-level
 // declaration of one of their names is refused, at its name, and isn't
@@ -2543,8 +2733,9 @@ static String declared_name(Ast *decl) {
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
 // without its layout, so a pointer can name it from anywhere; one a decider
-// found in a circle, or too big, is done, and keeps having none. Then the
-// broken entries' names. With report, check()'s, the mistakes are said
+// found in a circle, or too big, is done, and keeps having none. So does
+// each enum, once, its size known from the start. Then the broken entries'
+// names. With report, check()'s, the mistakes are said
 // (a built-in type's name, a predeclared name, a name already declared);
 // without, a decider's, the first of a name wins, silently: check() says
 // them once, later. Returns whether a broken entry lost its name (check()'s
@@ -2565,17 +2756,42 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
                 t->arena = c->arena;  // so its pointer types are freed with it (type_pointer_to)
                 s->declared = t;
             }
-            // A built-in type's name always means the built-in type
-            // (resolve_type_or_void looks there first), so a struct of that
-            // name could never be named: "'u8' is a built-in type", and it
-            // isn't declared. Its fields are still checked, for their own
-            // mistakes.
-            if (type_from_name(s->name)) {
-                if (report) diag_error(c->diag, s->pos, "'" STR_FMT "' is a built-in type", STR_ARG(s->name));
-                continue;
+        }
+        if (decl->kind == AST_ENUM) {
+            // An enum's Type (spec 3.18), made once, as a struct's, with its
+            // integer type's size, alignment and sign from the start, so a
+            // struct holding one is laid out whatever their order. The type
+            // after the keyword can only be a built-in integer type, which
+            // type_from_name gives without resolving anything; any other
+            // name gives int here, and resolve_enum says what's wrong with
+            // it.
+            Ast_Enum *e = (Ast_Enum *)decl;
+            if (!e->declared) {
+                Type *integer = e->type_expr ? type_from_name(e->type_expr->name) : &type_int;
+                if (!integer || integer->kind != TYPE_INTEGER) integer = &type_int;
+                Type *t = arena_new<Type>(c->arena);
+                t->kind = TYPE_ENUM;
+                t->name = e->name;
+                t->size = integer->size;
+                t->align = integer->align;
+                t->is_signed = integer->is_signed;
+                t->underlying = integer;
+                t->is_flags = e->is_flags;
+                t->enum_decl = e;
+                t->arena = c->arena;  // as a struct's
+                e->declared = t;
             }
         }
+        // A built-in type's name always means the built-in type
+        // (resolve_type_or_void looks there first), so a struct or an enum
+        // of that name could never be named: "'u8' is a built-in type", and
+        // it isn't declared. Its fields or members are still checked, for
+        // their own mistakes.
         String name = declared_name(decl);
+        if ((decl->kind == AST_STRUCT || decl->kind == AST_ENUM) && type_from_name(name)) {
+            if (report) diag_error(c->diag, decl->pos, "'" STR_FMT "' is a built-in type", STR_ARG(name));
+            continue;
+        }
         const char *meaning = predeclared_meaning(name);
         if (meaning) {
             if (report) diag_error(c->diag, decl->pos, "'" STR_FMT "' is predeclared: it's %s", STR_ARG(name), meaning);
@@ -2732,6 +2948,7 @@ static bool branch_declares(Ast_Block *block, String name, Array<Ast_If_Directiv
         case AST_VAR:
         case AST_CONST:
         case AST_STRUCT:
+        case AST_ENUM:
             if (string_eq(declared_name(s), name)) return true;
             break;
         case AST_IF_DIRECTIVE: array_add(nested, (Ast_If_Directive *)s); break;
@@ -2786,22 +3003,24 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     Array<Ast *> declarations = ast_declarations(file);
     bool lost_a_name = declare_top_level(&c, declarations, true);
     // Then every declaration in its turn, in source order: the structs'
-    // layouts, the signatures, the globals and the constants, each one that
-    // isn't done yet (one needed earlier was worked out there:
-    // resolve_struct, resolve_signature, resolve_global). One pass, so a
-    // chain of declarations each needing the one before it never nests
-    // (open_declaration), whatever kind each is. Then the types of the
-    // structs' fields that wait for every layout (resolve_late_fields), and
-    // the types made before every layout was done, made again (made_again).
-    // All are done before the bodies, which only find them finished: a
-    // body may need a struct's size and fields, a call its procedure's
-    // parameters and results. All but the bodies a #run in the pass
-    // reaches, which are checked there (check_reached_body), and work out
-    // what they need there too.
+    // layouts, the enums' values, the signatures, the globals and the
+    // constants, each one that isn't done yet (one needed earlier was worked
+    // out there: resolve_struct, resolve_enum, resolve_signature,
+    // resolve_global). One pass, so a chain of declarations each needing
+    // the one before it never nests (open_declaration), whatever kind each
+    // is. Then the types of the structs' fields that wait for every layout
+    // (resolve_late_fields), and the types made before every layout was
+    // done, made again (made_again). All are done before the bodies, which
+    // only find them finished: a body may need a struct's size and fields,
+    // a call its procedure's parameters and results. All but the bodies a
+    // #run in the pass reaches, which are checked there
+    // (check_reached_body), and work out what they need there too.
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
         if (decl->kind == AST_STRUCT) {
             resolve_struct(&c, (Ast_Struct *)decl);
+        } else if (decl->kind == AST_ENUM) {
+            resolve_enum(&c, (Ast_Enum *)decl);
         } else if (decl->kind == AST_PROC) {
             resolve_signature(&c, (Ast_Proc *)decl);
         } else {

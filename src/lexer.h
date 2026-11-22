@@ -30,6 +30,7 @@ enum Token_Kind : u8 {
     TOKEN_RETURN,
     TOKEN_STRUCT,
     TOKEN_ENUM,
+    TOKEN_ENUM_FLAGS,  // enum_flags: an enum whose values are flags (spec 3.18)
     TOKEN_UNION,
     TOKEN_CAST,
     TOKEN_DEFER,

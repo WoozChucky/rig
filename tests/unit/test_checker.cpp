@@ -9362,3 +9362,185 @@ TEST(a_default_after_the_dots_counts_its_depth) {
     token_list_free(c.list);
     arena_free(&a);
 }
+
+// Issue #221: enums and enum_flags (spec 3.18).
+
+// Whether `decl` is an enum whose type is over the integer type `integer`
+// (as messages name it), flags or not, its members' values `values` in
+// order, each member a constant of the integer type with a value node.
+static void check_enum_values_are(Arena *a, Ast *decl, const char *integer, bool is_flags, const u64 *values,
+                                  s64 count) {
+    CHECK(decl->kind == AST_ENUM);
+    if (decl->kind != AST_ENUM) return;
+    Ast_Enum *e = (Ast_Enum *)decl;
+    Type *t = e->declared;
+    CHECK(t && t->kind == TYPE_ENUM);
+    if (!t) return;
+    CHECK(string_eq(type_name(a, t), e->name));
+    CHECK_STR(type_name(a, t->underlying), integer);
+    CHECK_EQ(t->size, t->underlying->size);
+    CHECK_EQ(t->align, t->underlying->align);
+    CHECK_EQ(t->is_signed, t->underlying->is_signed);
+    CHECK_EQ(t->is_flags, is_flags);
+    CHECK(t->enum_decl == e);
+    CHECK_EQ(e->members.count, count);
+    for (s64 i = 0; i < e->members.count && i < count; i++) {
+        Ast_Const *member = e->members[i];
+        CHECK(member->type == t->underlying);
+        CHECK(member->is_constant);
+        CHECK_EQ(member->constant, values[i]);
+        CHECK(member->value != nullptr);
+    }
+}
+
+TEST(enum_values_count_up) {
+    // An enum's values start at 0 and go up by one, from a value set too;
+    // a flags type's are the lowest power of two above every value before,
+    // from 1. Earlier members are plain constants of the integer type in
+    // the body (LAST, ALL).
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { A; B; C :: 10; D; }\n"
+                              "Small :: enum u8 { X :: 250; Y; LAST :: Y + 3; }\n"
+                              "Look :: enum_flags u8 { P; Q; R :: 16; S; ALL :: P | Q | R | S; T; }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const u64 mode[] = {0, 1, 10, 11};
+    check_enum_values_are(&a, top_level_named(c.file, "Mode"), "int", false, mode, 4);
+    const u64 small[] = {250, 251, 254};
+    check_enum_values_are(&a, top_level_named(c.file, "Small"), "u8", false, small, 3);
+    const u64 look[] = {1, 2, 16, 32, 51, 64};
+    check_enum_values_are(&a, top_level_named(c.file, "Look"), "u8", true, look, 6);
+    Type *mode_type = ((Ast_Enum *)top_level_named(c.file, "Mode"))->declared;
+    CHECK_EQ(mode_type->size, 8);
+    CHECK(mode_type->is_signed);
+    Type *small_type = ((Ast_Enum *)top_level_named(c.file, "Small"))->declared;
+    CHECK_EQ(small_type->size, 1);
+    CHECK(!small_type->is_signed);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(an_enums_value_may_not_need_its_enum) {
+    // A's value needs B's, which needs A's: a circle, said once, at the
+    // enum whose values were under way when it closed; every member in it
+    // is then unknown, and says nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "A :: enum { X :: cast(int) B.Y; }\n"
+                               "B :: enum { Y :: cast(int) A.X; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'A' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(members_without_their_enum_take_the_type_they_meet) {
+    // .NAME takes the enum it meets, where .{...} would take a struct: a
+    // typed declaration, an assignment, an argument and a default, a
+    // return, a field and an element of a literal, a cast; and the other
+    // side of == or != from an enum value, the other operand of | & ^ from
+    // a flags value (.A | .B and ~.B waiting for the type, as 1 | 2 is
+    // untyped). 0 converts to a flags type.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { ALLOCATE; RESIZE; FREE; }\n"
+                              "Look :: enum_flags { A; B; C; }\n"
+                              "R :: struct { mode: Mode; look: Look; }\n"
+                              "take :: (m: Mode, k: Mode = .FREE) -> Mode { return .RESIZE; }\n"
+                              "main :: () {\n"
+                              "    m : Mode = .FREE;\n"
+                              "    m = .ALLOCATE;\n"
+                              "    n := take(.RESIZE);\n"
+                              "    r := R.{.FREE, .A | .C};\n"
+                              "    q := R.{look = ~.B};\n"
+                              "    f : Look = .A | .B;\n"
+                              "    f |= .C;\n"
+                              "    f &= ~.B;\n"
+                              "    seen := (f & .A) != 0;\n"
+                              "    same := m == .FREE || .RESIZE != m;\n"
+                              "    g := f == .A | .C;\n"
+                              "    c := cast(Mode) .FREE;\n"
+                              "    all := Mode.[.ALLOCATE, .FREE];\n"
+                              "    empty : Look = 0;\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "m"), "Mode");
+    CHECK_STR(type_of(&a, &c, "n"), "Mode");
+    CHECK_STR(type_of(&a, &c, "c"), "Mode");
+    CHECK_STR(type_of(&a, &c, "f"), "Look");
+    CHECK_STR(type_of(&a, &c, "seen"), "bool");
+    CHECK_STR(type_of(&a, &c, "same"), "bool");
+    CHECK_STR(type_of(&a, &c, "g"), "bool");
+    CHECK_STR(type_of(&a, &c, "all"), "[2]Mode");
+    // The | binds tighter than the ==: its operands took f's type, and
+    // folded, A | C being 5.
+    Ast_Binary *equal = (Ast_Binary *)((Ast_Var *)local_named(&c, "g"))->value;
+    CHECK_STR(type_name(&a, equal->right->type), "Look");
+    CHECK(equal->right->is_constant);
+    CHECK_EQ(equal->right->constant, 5);
+    Ast *empty = ((Ast_Var *)local_named(&c, "empty"))->value;
+    CHECK_STR(type_name(&a, empty->type), "Look");
+    CHECK(empty->is_constant);
+    CHECK_EQ(empty->constant, 0);
+    // A member met by its enum is that member, a constant.
+    Ast *free = ((Ast_Var *)local_named(&c, "m"))->value;
+    CHECK(free->kind == AST_DOT_NAME);
+    CHECK(free->is_constant);
+    CHECK_EQ(free->constant, 2);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(enums_cast_to_and_from_integers) {
+    // Casts between an enum and any integer type are the integer casts of
+    // its integer type: a constant must fit, cast,trunc wraps; between two
+    // enum types there's none.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { A; B; }\n"
+                              "Small :: enum u8 { X; Y :: 200; }\n"
+                              "main :: () {\n"
+                              "    m := cast(Mode) 7;\n"
+                              "    i := cast(int) Small.Y;\n"
+                              "    s := cast(Small) i;\n"
+                              "    t := cast,trunc(Small) 300;\n"
+                              "    u : u8 = cast(u8) s;\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "m"), "Mode");
+    CHECK_STR(type_of(&a, &c, "i"), "int");
+    CHECK_STR(type_of(&a, &c, "s"), "Small");
+    Ast *t = ((Ast_Var *)local_named(&c, "t"))->value;
+    CHECK_STR(type_name(&a, t->type), "Small");
+    CHECK(t->is_constant);
+    CHECK_EQ(t->constant, 44);
+    Ast *i = ((Ast_Var *)local_named(&c, "i"))->value;
+    CHECK(i->is_constant);
+    CHECK_EQ(i->constant, 200);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "Small :: enum u8 { X; }\n"
+                               "main :: () { s := cast(Small) 300; }\n"),
+              "2:19: 300 doesn't fit in 'Small'\n");
+    CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
+                               "Small :: enum u8 { X; }\n"
+                               "main :: () { m := cast(Mode) Small.X; }\n"),
+              "3:19: can't cast 'Small' to 'Mode'\n");
+    arena_free(&a);
+}
+
+TEST(enum_members_are_constants) {
+    // A member is a constant of its enum: a constant's value, an #if's
+    // condition, and, cast to an integer, an array's count.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { A; B :: 4; }\n"
+                              "DEFAULT :: Mode.B;\n"
+                              "main :: () {\n"
+                              "    #if DEFAULT == .B { k := 1; }\n"
+                              "    n : [cast(int) Mode.B]u8;\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *defaulted = top_level_named(c.file, "DEFAULT");
+    CHECK_STR(type_name(&a, defaulted->type), "Mode");
+    CHECK(defaulted->is_constant);
+    CHECK_EQ(defaulted->constant, 4);
+    CHECK_STR(type_of(&a, &c, "k"), "int");
+    CHECK_STR(type_of(&a, &c, "n"), "[4]u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}

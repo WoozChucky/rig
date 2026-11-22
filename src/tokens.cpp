@@ -5,8 +5,8 @@
 static const char *const token_kind_names[TOKEN_KIND_COUNT] = {
     "end of file", "invalid token", "identifier", "integer literal", "float literal", "string literal", "directive",
 
-    "'if'", "'else'", "'while'", "'for'", "'break'", "'continue'", "'return'", "'struct'", "'enum'", "'union'",
-    "'cast'", "'defer'", "'using'", "'true'", "'false'", "'null'", "'context'", "'push_context'",
+    "'if'", "'else'", "'while'", "'for'", "'break'", "'continue'", "'return'", "'struct'", "'enum'", "'enum_flags'",
+    "'union'", "'cast'", "'defer'", "'using'", "'true'", "'false'", "'null'", "'context'", "'push_context'",
 
     "'('", "')'", "'{'", "'}'", "'['", "']'", "','", "';'", "':'", "'::'", "':='", "'='", "'->'", "'.'", "'..'",
     "'---'", "'+'", "'-'", "'*'", "'/'", "'%'", "'&'", "'|'", "'^'", "'~'", "'!'", "'<'", "'>'", "'<='", "'>='",
