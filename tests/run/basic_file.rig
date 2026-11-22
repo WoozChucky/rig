@@ -1,11 +1,14 @@
 // Basic's files (issue #145), under .build/tests/, which the runner makes
 // before any test, and removed at the end: a missing file, an empty one,
-// one of every byte value and one of several megabytes, appending, an
-// allocator with no memory, the File procedures, a file open twice at once
-// and deleted while open, a file read or written in the wrong mode, a
-// directory given as a file, and closed again where Linux's C library
-// opens it, an empty directory, which the test makes and deletes, a path
-// with a zero byte, and a File that isn't open.
+// one of every byte value and one of several megabytes, appending,
+// writing over a file that is there, write_file_in_mode given a mode it
+// doesn't write in, a full disk on Linux (/dev/full), whose error only
+// the close reports, an allocator with no memory, the File procedures, a
+// file open twice at once and deleted while open, or refused, on Windows,
+// a file read or written in the wrong mode, a directory given as a file,
+// and closed again where Linux's C library opens it, an empty directory,
+// which the test makes and deletes, a path with a zero byte, and a File
+// that isn't open.
 #import "Basic";
 
 A :: ".build/tests/basic_file_a.txt";
@@ -93,6 +96,41 @@ main :: () {
     show_int(data.count);
     print_line("");
     free(data.data, HEAP_ALLOCATOR);
+
+    // Writing a file that is there empties it first: B held "new".
+    print_string("write empties:");
+    show_bool(write_entire_file(B, "x"));
+    data, ok = read_entire_file(B, HEAP_ALLOCATOR);
+    show_int(data.count);
+    show_bool(data == "x");
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    // write_file_in_mode writes only to append or to write. Given any other
+    // mode it is false and opens nothing, even for "", which a file opened
+    // to read would take as written, and A is as it was.
+    print_string("helper mode:");
+    show_bool(write_file_in_mode(A, "", FILE_READ));
+    show_bool(write_file_in_mode(A, "x", FILE_READ));
+    show_bool(write_file_in_mode(A, "x", 7));
+    data, ok = read_entire_file(A, HEAP_ALLOCATOR);
+    show_bool(data == "hello\nworld\n");
+    print_line("");
+    free(data.data, HEAP_ALLOCATOR);
+
+    // A full disk: Linux's /dev/full opens, and takes a write into C's
+    // buffer, so only c_fclose, writing that out, reports the error, and
+    // write_entire_file and append_to_file are false through it alone.
+    // Windows has no such file: the line is false false without asking.
+    print_string("full disk:");
+    #if OS == OS_LINUX {
+        show_bool(write_entire_file("/dev/full", "x"));
+        show_bool(append_to_file("/dev/full", "x"));
+    } else {
+        show_bool(false);
+        show_bool(false);
+    }
+    print_line("");
 
     // An allocator with no memory for the file's bytes gives the zeroed
     // string and false.

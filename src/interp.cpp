@@ -864,8 +864,9 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             // The text the program would write: a literal's bytes but its
             // zero, or %b bytes at %a. Its message is what follows the
             // prefix lowering recorded (ir.h), without the final newline;
-            // the whole text when the prefix isn't known, or when `c` lies
-            // outside the text.
+            // the whole text when the prefix isn't known, or when the
+            // prefix (%c, or `constant` for a literal) is longer than the
+            // text.
             const u8 *text;
             u64 count, prefix;
             if (instr->target >= 0) {

@@ -16,11 +16,9 @@
 // Linux's C library takes a path as plain bytes, so a UTF-8 path names the
 // file it says, and one that isn't UTF-8 is a name all the same.
 //
-// The bytes read are the bytes written on every system. kernel32's calls
+// The bytes read are the bytes written on every system: kernel32's calls
 // have no text mode, and on Linux every file is opened in binary mode,
-// "rb", "wb" or "ab": C's text mode on Windows would change them, writing a
-// line feed as a carriage return and a line feed, and stopping reads at
-// Ctrl-Z (26), and on Linux the two modes are the same.
+// "rb", "wb" or "ab", which there is the same as text mode.
 //
 // A directory is not a file here, on either system. Windows' CreateFileW
 // won't open one in any mode Basic asks for, but Linux's fopen opens it
@@ -55,6 +53,11 @@ File :: struct {
 FILE_READ :: 0;
 FILE_WRITE :: 1;
 FILE_APPEND :: 2;
+
+// The most bytes file_read and file_write hand Windows' ReadFile or
+// WriteFile in one call: 1 GiB, well within their 32-bit count. Linux's
+// C calls take a 64-bit count, and don't use it.
+FILE_PIECE_MAX :: 1073741824;
 
 // Opens the file at path in mode, FILE_READ, FILE_WRITE or FILE_APPEND,
 // and gives it and true; the caller closes it with file_close. It gives a
@@ -148,9 +151,8 @@ file_close :: (file: File) {
 file_read :: (file: File, buffer: []u8) -> int {
     if file.handle == null || buffer.count <= 0 { return 0; }
     #if OS == OS_WINDOWS {
-        PIECE :: 1073741824; // 1 GiB, well within ReadFile's 32-bit count
         count := buffer.count;
-        if count > PIECE { count = PIECE; }
+        if count > FILE_PIECE_MAX { count = FILE_PIECE_MAX; }
         read : u32 = 0;
         if c_read_file(file.handle, buffer.data, cast(u32) count, *read, null) == 0 { return 0; }
         return cast(int) read;
@@ -167,17 +169,16 @@ file_read :: (file: File, buffer: []u8) -> int {
 // 1 GiB, each going on where the last stopped, and a piece that fails, or
 // writes nothing, is false. On Linux what is written may stay in C's
 // buffer until the file is closed, which is when an error writing it out
-// shows: c_fclose gives it, which write_entire_file and append_to_file
-// read, and file_close doesn't.
+// shows: c_fclose gives it, which write_file_in_mode reads for
+// write_entire_file and append_to_file, and file_close doesn't.
 file_write :: (file: File, data: string) -> bool {
     if file.handle == null { return false; }
     if data.count <= 0 { return true; }
     #if OS == OS_WINDOWS {
-        PIECE :: 1073741824; // 1 GiB, well within WriteFile's 32-bit count
         done := 0;
         while done < data.count {
             count := data.count - done;
-            if count > PIECE { count = PIECE; }
+            if count > FILE_PIECE_MAX { count = FILE_PIECE_MAX; }
             written : u32 = 0;
             if c_write_file(file.handle, data.data + done, cast(u32) count, *written, null) == 0 || written == 0 { return false; }
             done += cast(int) written;
@@ -274,22 +275,26 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc
 // what C still held, as on a full disk. False for a path file_open
 // refuses.
 write_entire_file :: (path: string, data: string) -> bool {
-    file, opened := file_open(path, FILE_WRITE);
-    if !opened { return false; }
-    written := file_write(file, data);
-    closed := false;
-    #if OS == OS_WINDOWS {
-        closed = c_close_handle(file.handle) != 0;
-    } else {
-        closed = c_fclose(file.handle) == 0;
-    }
-    return written && closed;
+    return write_file_in_mode(path, data, FILE_WRITE);
 }
 
 // Writes data at the end of the file at path, making the file when it
 // isn't there. True as for write_entire_file.
 append_to_file :: (path: string, data: string) -> bool {
-    file, opened := file_open(path, FILE_APPEND);
+    return write_file_in_mode(path, data, FILE_APPEND);
+}
+
+// Opens the file at path in mode, FILE_WRITE or FILE_APPEND, writes data
+// to it and closes it, for write_entire_file and append_to_file: true
+// when it opened, every byte was written and it closed without an error.
+// The file is closed whether the write worked or not, by the system's
+// own call, not file_close: on Linux c_fclose gives an error when it
+// couldn't write out what C still held, as on a full disk, which
+// file_close doesn't say. False, with nothing opened, for any other mode,
+// and for a path file_open refuses.
+write_file_in_mode :: (path: string, data: string, mode: int) -> bool {
+    if mode != FILE_WRITE && mode != FILE_APPEND { return false; }
+    file, opened := file_open(path, mode);
     if !opened { return false; }
     written := file_write(file, data);
     closed := false;
