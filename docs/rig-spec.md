@@ -3275,7 +3275,7 @@ The library named by `#foreign` is checked to be `libc`, and a foreign procedure
 
 When a tool is missing, or the linker fails, the compiler prints the reason or the linker's own output, then `rig: error: linking failed`, and exits with status 1.
 
-A release archive, and an installation made from one, keeps beside `rig` the linker the compiler uses from its own directory (`lld-link.exe` on Windows, `ld.lld` on Linux), and beside both the directory `modules`, with the modules that ship with rig, where `#import` finds them (section 2.14). It holds Preload too, which every program imports, so without it rig can't compile any program.
+A release archive, and an installation made from one, keeps beside `rig` the linker the compiler uses from its own directory (`lld-link.exe` on Windows, `ld.lld` on Linux) and the files it links every program with from there (`rig_runtime.lib`, `ucrtbase.lib` and `kernel32.lib` on Windows, `rig_runtime.o` on Linux), so a program links with nothing installed besides Rig, and beside them the directory `modules`, with the modules that ship with rig, where `#import` finds them (section 2.14). It holds Preload too, which every program imports, so without it rig can't compile any program.
 
 ### 10.7 Debug information
 

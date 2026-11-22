@@ -8,8 +8,9 @@
 # rig-windows-x64.zip and SHA256SUMS, checks the archive's SHA-256, unpacks it
 # into %LOCALAPPDATA%\Programs\rig and adds that folder to the user PATH if it
 # isn't there yet. Then it installs the VS Code extension when `code` is on the
-# PATH, and builds hello world with the installed rig.exe to check that the
-# computer has what linking needs. Running it again upgrades: the files are
+# PATH, and builds hello world with the installed rig.exe to check that it
+# builds and runs a program (a release up to 0.3.0 needs Visual Studio's C++
+# tools to link one). Running it again upgrades: the files are
 # replaced, and the modules folder replaced whole, so a file a module no
 # longer has doesn't stay behind (step 3). -Help lists the options. It asks
 # nothing, and needs no administrator.
@@ -71,6 +72,7 @@ if ($true) { & {
     $vsix = 'rig-vscode.vsix'
     $extensionId = 'woozchucky.rig-language'
     $requirementsUrl = 'https://woozchucky.github.io/rig/install#requirements'
+    $issuesUrl = 'https://github.com/WoozChucky/rig/issues'
 
     # The block's own preferences. Stop makes a failing cmdlet throw, rather
     # than write an error and go on. The progress bar is hidden because
@@ -268,18 +270,20 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         # 3. Unpack into the temporary folder first: an archive that can't
         # be read stops here, with nothing installed. Then copy its files
         # over the old ones, keeping them together: rig.exe finds
-        # lld-link.exe beside it, and the modules that ship with it in
-        # modules\ beside it. The programs and the other files go first: a
-        # program that is running can't be overwritten, and when one is, the
-        # copy stops there and the old installation is still whole. Only
-        # then is the old modules\ removed and the new one copied in, so it
-        # replaces it whole: a file a module no longer has mustn't stay
-        # behind, and Copy-Item copies a folder into the one there, keeping
-        # its other files. The archive is unpacked with .NET's ZipFile rather
-        # than Expand-Archive: in Windows PowerShell 5.1 that is a function
-        # of a script module, which doesn't see the block's preferences, so
-        # it would draw its progress bar, slowly, file by file. (5.1 needs
-        # the assembly loaded; PowerShell 7 has it already.)
+        # lld-link.exe, its runtime (rig_runtime.lib) and its import
+        # libraries (ucrtbase.lib, kernel32.lib) beside it, and the modules
+        # that ship with it in modules\ beside it. The programs and the
+        # other files go first: a program that is running can't be
+        # overwritten, and when one is, the copy stops there and the old
+        # installation is still whole. Only then is the old modules\
+        # removed and the new one copied in, so it replaces it whole: a
+        # file a module no longer has mustn't stay behind, and Copy-Item
+        # copies a folder into the one there, keeping its other files. The
+        # archive is unpacked with .NET's ZipFile rather than
+        # Expand-Archive: in Windows PowerShell 5.1 that is a function of a
+        # script module, which doesn't see the block's preferences, so it
+        # would draw its progress bar, slowly, file by file. (5.1 needs the
+        # assembly loaded; PowerShell 7 has it already.)
         $unpacked = Join-Path $work 'unpacked'
         try {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -288,6 +292,12 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
             throw "couldn't unpack $archive ($($_.Exception.Message))"
         }
         if (-not (Test-Path -LiteralPath (Join-Path $unpacked 'rig.exe'))) { throw "$archive has no rig.exe in it" }
+        # Whether this release carries Rig's runtime, for step 6: noted
+        # here, from the archive, and not from the installed folder, where
+        # the files are copied over the old ones and none is deleted: an
+        # older release installed over a newer one leaves the newer one's
+        # runtime files there.
+        $hasRuntime = Test-Path -LiteralPath (Join-Path $unpacked 'rig_runtime.lib')
         New-Item -ItemType Directory -Force -Path $dir > $null
         $modules = Join-Path $dir 'modules'
         try {
@@ -334,11 +344,15 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
             }
         }
 
-        # 6. Check the requirements: build and run hello world in a folder of
-        # its own (rig writes the program, and its object files under .build,
-        # in the current folder). A failure doesn't undo the install: rig
-        # works once Visual Studio's tools are installed. It says what is
-        # missing instead. WriteAllText writes UTF-8 without a byte order
+        # 6. Check that it builds a program: build and run hello world in a
+        # folder of its own (rig writes the program, and its object files
+        # under .build, in the current folder). A failure doesn't undo the
+        # install. What it says depends on the release just installed: one
+        # that carries Rig's runtime links a program with its own files
+        # and the DLLs every Windows has, so a failed build is a bug to
+        # report. An older one, 0.3.0 or before, links with Visual
+        # Studio's tools, and works once they are installed: it says to
+        # install them. WriteAllText writes UTF-8 without a byte order
         # mark, as a .rig file is.
         $rig = Join-Path $dir 'rig.exe'
         $hello = Join-Path $work 'hello'
@@ -346,14 +360,20 @@ More, and how to install by hand: https://woozchucky.github.io/rig/install
         [IO.File]::WriteAllText((Join-Path $hello 'hello.rig'), "puts :: (s: *u8) -> s32 #foreign libc;`nmain :: () { puts(`"Hello, World!`"); }`n")
         $build = Invoke-Program $rig @('build', 'hello.rig') $hello
         if ($build.Status -ne 0) {
-            # A build that fails is what the requirements are about: the
-            # link step is the one that needs Visual Studio's tools.
+            # For an older release, a build that fails is what the
+            # requirements are about: the link step is the one that needs
+            # Visual Studio's tools.
             Write-Host ''
             Write-Host "Rig is installed, but it couldn't build hello world:"
             Write-Indented $build.Output
-            Write-Host 'Linking a program needs Visual Studio, or its free Build Tools'
-            Write-Host '(https://visualstudio.microsoft.com/downloads/), with the "Desktop development with C++"'
-            Write-Host "workload. More: $requirementsUrl"
+            if ($hasRuntime) {
+                Write-Host 'Rig needs nothing else installed to build a program, so this is a bug:'
+                Write-Host "please report it, with the output above, at $issuesUrl"
+            } else {
+                Write-Host 'Linking a program needs Visual Studio, or its free Build Tools'
+                Write-Host '(https://visualstudio.microsoft.com/downloads/), with the "Desktop development with C++"'
+                Write-Host "workload. More: $requirementsUrl"
+            }
             Write-Host ''
         } else {
             # Built, so the requirements are there. A program that then

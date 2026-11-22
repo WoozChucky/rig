@@ -10,8 +10,9 @@
 # into ~/.local/share/rig and links ~/.local/bin/rig to it. Then it puts
 # ~/.local/bin on the PATH if it isn't there yet, installs the VS Code
 # extension when `code` is on the PATH, and builds hello world with the
-# installed rig to check that the system has what linking needs. Running it
-# again upgrades: the files are replaced, and the modules folder replaced
+# installed rig to check that it builds and runs a program (a release up to
+# 0.3.0 needs glibc's development files to link one). Running it again
+# upgrades: the files are replaced, and the modules folder replaced
 # whole, so a file a module no longer has doesn't stay behind (step 3).
 # `--help` lists the options. It asks nothing, and needs no root or sudo.
 #
@@ -43,6 +44,7 @@ settings() {
     vsix=rig-vscode.vsix
     extension_id=woozchucky.rig-language
     requirements_url=https://woozchucky.github.io/rig/install#requirements
+    issues_url=https://github.com/WoozChucky/rig/issues
 
     # The line added to the shell's startup files when ~/.local/bin isn't on
     # the PATH. The comment at its end marks it as the installer's, so
@@ -263,9 +265,13 @@ remove_path_lines() {
 }
 
 # Builds and runs hello world with the installed rig, in a folder of its
-# own, to check that the system has what linking a program needs (glibc's
-# development files). A failure doesn't undo the install: rig works once
-# they are installed. It says what is missing instead.
+# own, to check that it can build a program. A failure doesn't undo the
+# install. What it says depends on the release just installed: one that
+# carries Rig's runtime (has_runtime, set while unpacking) links a program
+# with its own files and glibc's shared libraries, which every glibc
+# system has, so a failed build is a bug to report. An older one, 0.3.0
+# or before, links with glibc's development files, and works once they
+# are installed: it says to install them.
 check_requirements() {
     hello_dir="$work/hello"
     mkdir "$hello_dir" || die "couldn't make $hello_dir"
@@ -275,16 +281,22 @@ main :: () { puts("Hello, World!"); }
 EOF
     # Each in a subshell, $(...), so the cd doesn't outlive it. rig writes
     # the program, and its object files under .build, in the current
-    # folder. A build that fails is what the requirements are about: the
-    # link step is the one that needs the system's files.
+    # folder. For an older release, a build that fails is what the
+    # requirements are about: the link step is the one that needs the
+    # system's files.
     if ! output=$(cd "$hello_dir" && "$share_dir/rig" build hello.rig 2>&1); then
         say ""
         say "Rig is installed, but it couldn't build hello world:"
         printf '%s\n' "$output" | sed 's/^/    /'
-        say "Linking a program needs glibc's development files: install them with"
-        say "    sudo apt install libc6-dev       (Debian, Ubuntu)"
-        say "    sudo dnf install glibc-devel     (Fedora)"
-        say "Arch's glibc has them already. More: $requirements_url"
+        if [ -n "$has_runtime" ]; then
+            say "Rig needs nothing else installed to build a program, so this is a bug:"
+            say "please report it, with the output above, at $issues_url"
+        else
+            say "Linking a program needs glibc's development files: install them with"
+            say "    sudo apt install libc6-dev       (Debian, Ubuntu)"
+            say "    sudo dnf install glibc-devel     (Fedora)"
+            say "Arch's glibc has them already. More: $requirements_url"
+        fi
         say ""
         return 0
     fi
@@ -354,14 +366,23 @@ install_rig() {
     # read stops here, with nothing installed. Then each file is moved
     # over the old one, which replaces it even while it runs (a new file,
     # where writing into a running program's file fails with "Text file
-    # busy"), keeping them together: rig finds ld.lld beside its own file,
-    # and the modules that ship with it in modules/ beside it. The old
-    # modules/ is removed first, so the new one replaces it whole: a file a
-    # module no longer has mustn't stay behind, and mv can't move a folder
-    # over one that isn't empty.
+    # busy"), keeping them together: rig finds ld.lld and its runtime,
+    # rig_runtime.o, beside its own file, and the modules that ship with
+    # it in modules/ beside it. The old modules/ is removed first, so the
+    # new one replaces it whole: a file a module no longer has mustn't
+    # stay behind, and mv can't move a folder over one that isn't empty.
     mkdir "$work/unpacked" || die "couldn't make $work/unpacked"
     tar -xzf "$work/$archive" -C "$work/unpacked" || die "couldn't unpack $archive"
     [ -x "$work/unpacked/rig" ] || die "$archive has no rig in it"
+    # Whether this release carries Rig's runtime, for check_requirements:
+    # noted here, from the archive, and not from the installed folder,
+    # where the files are moved over the old ones and none is deleted: an
+    # older release installed over a newer one leaves the newer one's
+    # rig_runtime.o there.
+    has_runtime=
+    if [ -e "$work/unpacked/rig_runtime.o" ]; then
+        has_runtime=1
+    fi
     mkdir -p "$share_dir" || die "couldn't make $share_dir"
     rm -rf "$share_dir/modules" || die "couldn't remove the old $share_dir/modules"
     for file in "$work/unpacked"/*; do

@@ -5,8 +5,13 @@ rem Windows runner; so can anyone.
 rem
 rem The archive holds, at its top level (no folder around them):
 rem   rig.exe        the compiler, an optimised build (build.bat release)
-rem   lld-link.exe   LLVM's linker, which rig uses when Visual Studio has no
-rem                  link.exe (spec 10.6)
+rem   lld-link.exe   LLVM's linker, which rig runs from its own folder (spec
+rem                  10.6): without it rig can't link a program
+rem   rig_runtime.lib, ucrtbase.lib, kernel32.lib
+rem                  Rig's runtime and the import libraries of ucrtbase.dll
+rem                  and kernel32.dll, which rig links every program with
+rem                  from its own folder (spec 10.6), in place of Visual
+rem                  Studio's libraries
 rem   modules\       the modules that ship with rig (Preload, Basic,
 rem                  Compiler), which rig finds in modules\ beside rig.exe
 rem                  (spec 2.14)
@@ -51,14 +56,14 @@ call "%ROOT%\build.bat" release || exit /b 1
 bin\rig.exe version || exit /b 1
 
 mkdir "%STAGE%\pack" "%STAGE%\check" || exit /b 1
-for %%f in (bin\rig.exe bin\lld-link.exe LICENSE README.md) do copy /y "%%f" "%STAGE%\pack\" >nul || goto failed
+for %%f in (bin\rig.exe bin\lld-link.exe bin\rig_runtime.lib bin\ucrtbase.lib bin\kernel32.lib LICENSE README.md) do copy /y "%%f" "%STAGE%\pack\" >nul || goto failed
 xcopy /e /i /q /y modules "%STAGE%\pack\modules" >nul || goto failed
 copy /y third_party\llvm\LICENSE.TXT "%STAGE%\pack\LICENSE-LLVM.txt" >nul || goto failed
 copy /y third_party\lld\LICENSE.TXT "%STAGE%\pack\LICENSE-LLD.txt" >nul || goto failed
 
 if not exist dist mkdir dist
 if exist "%ARCHIVE%" del "%ARCHIVE%"
-"%TAR%" --format zip -cf "%ARCHIVE%" -C "%STAGE%\pack" rig.exe lld-link.exe modules LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt || goto failed
+"%TAR%" --format zip -cf "%ARCHIVE%" -C "%STAGE%\pack" rig.exe lld-link.exe rig_runtime.lib ucrtbase.lib kernel32.lib modules LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt || goto failed
 
 "%TAR%" -xf "%ARCHIVE%" -C "%STAGE%\check" || goto failed
 pushd "%STAGE%\check"

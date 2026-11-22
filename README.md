@@ -29,7 +29,7 @@ One command installs Rig for your user. It needs no administrator rights.
 2. Open a new terminal. The one you ran the command in doesn't see the new `PATH` yet.
 3. Check that it works: `rig version`.
 
-The command downloads the latest release and checks it. It puts `rig` on your `PATH`, and adds the [VS Code extension](editors/vscode) if you have VS Code. Then it builds hello world, to check that your system has what Rig needs. If something is missing, it says what to install: Visual Studio's C++ tools on Windows, glibc's development files on Linux.
+The command downloads the latest release and checks it. It puts `rig` on your `PATH`, and adds the [VS Code extension](editors/vscode) if you have VS Code. Then it builds hello world, to check that Rig works: Rig needs nothing else installed, no Visual Studio on Windows and no glibc's development files on Linux.
 
 To upgrade, run the command again. The website's [Install page](https://woozchucky.github.io/rig/install) has the options (a given version, uninstalling) and how to install by hand.
 
