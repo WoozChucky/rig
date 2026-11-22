@@ -1,4 +1,4 @@
-# Milestone 5: The rest of the type system: design
+# Milestone 5, the rest of the type system: design
 
 ## Intent
 
@@ -56,7 +56,7 @@ Milestone 5 finishes Rig's type system, so that a real library can be written cl
 
 ## The design, feature by feature
 
-Everything below is **my call** unless it says otherwise. Items marked *(original design)* come from `docs/superpowers/specs/2026-11-11-rig-language-design.md` (sections 6.8, 6.10 and 6.11), and the maintainer agreed to the order and scope.
+Everything below is a design choice of this milestone unless marked *(original design)*: those come from `docs/superpowers/specs/2026-11-11-rig-language-design.md` (sections 6.8, 6.10 and 6.11). The maintainer settled the order and scope.
 
 ### 1. Enums and `enum_flags`
 
@@ -327,7 +327,7 @@ Everything below is **my call** unless it says otherwise. Items marked *(origina
 
 The type information tags follow Jai's numbering where Jai has one. Section 3's `is_union` and section 7's `parameters` are appended to `Type_Info_Struct`, so earlier fields keep their offsets.
 
-## Calls made after the builder check
+## Settled after a builder's read
 
 - Earlier enum members are plain integer constants inside the enum's body (section 1).
 - `.NAME` takes its type from the other operand of a flags `| & ^` (section 1).
