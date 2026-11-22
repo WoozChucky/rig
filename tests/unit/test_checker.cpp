@@ -6708,6 +6708,51 @@ TEST(the_decider_and_the_checker_share_operating_system) {
     arena_free(&a);
 }
 
+TEST(the_decider_and_the_checker_share_an_enum) {
+    // A program's enum gets its type once, when the decider first declares
+    // the top level's names: DEFAULT, which the decider resolved with
+    // Mode's type, is compared in main with Mode.B, which check() types
+    // with the same Mode, so it checks.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    Load_Options options = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"),
+                                  str("Mode :: enum { A; B; }\nDEFAULT :: Mode.B;\n"
+                                      "#if DEFAULT == .B { X :: 1; } else { X :: 2; }\n"
+                                      "main :: () { same := DEFAULT == Mode.B; x : [X]int; }\n"),
+                                  &options);
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    Ast *mode = top_level_named(file, "Mode");
+    Ast *fallback = top_level_named(file, "DEFAULT");
+    CHECK(mode && mode->kind == AST_ENUM && ((Ast_Enum *)mode)->declared);
+    CHECK(mode && fallback && fallback->type == ((Ast_Enum *)mode)->declared);
+    diag_free(&d);
+    arena_free(&a);
+    // An enum a top-level #if's branch declares is used as any of its
+    // names, from main, but can't decide another top-level #if, whether
+    // its branch was taken or not (branch_declares).
+    Arena b = arena_make();
+    CHECK_STR(check_loaded(&b,
+                           "#if OS == .WINDOWS || OS == .LINUX { E :: enum { A; B; } }\n"
+                           "main :: () { e : E = .B; }\n",
+                           SYSTEM_WINDOWS),
+              "");
+    CHECK_STR(check_loaded(&b,
+                           "#if OS == .WINDOWS || OS == .LINUX { E :: enum { A; B; } }\n"
+                           "#if E.B == .B {}\n"
+                           "main :: () {}\n",
+                           SYSTEM_WINDOWS),
+              "2:5: 'E' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK_STR(check_loaded(&b,
+                           "#if OS == .LINUX { E :: enum { A; B; } }\n"
+                           "#if E.B == .B {}\n"
+                           "main :: () {}\n",
+                           SYSTEM_WINDOWS),
+              "2:5: 'E' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    arena_free(&b);
+}
+
 TEST(top_level_if_directive_chains_of_10000_arms) {
     // A top-level else #if chain, as a generated table writes one, is
     // decided and its taken branch spliced with no recursion per arm, in

@@ -971,7 +971,7 @@ The program prints:
 
 `m` is `FREE_ALL`, 3; `f` is `GLOWING` alone, 4, once `SOLID` is set and cleared; and `r.look`, `VISIBLE | GLOWING`, is 5.
 
-A member meeting a type that isn't an enum is `'.FREE' needs an enum type, not 'int'`, at the `.`; an enum without the member is `'Mode' has no member 'FRE'`, at the member's name, whether written `Mode.FRE` or `.FRE`. Where nothing gives it a type, as in `x := .FREE;`, `.A | .B` alone, `.FREE == .RESIZE`, an operand of any other operator, `Any` and C's `...`:
+A member meeting a type that isn't an enum is `'.FREE' needs an enum type, not 'int'`, at the `.`; an enum without the member is `'Mode' has no member 'FRE'`, at the member's name, whether written `Mode.FRE` or `.FRE`. Where nothing gives it a type, as in `x := .FREE;`, `.A | .B` alone, `.FREE == .RESIZE`, `.FREE == 0` (an untyped constant has no type to give), an operand of any other operator, `Any` and C's `...`:
 
 ```rig error
 main :: () {
@@ -1000,7 +1000,7 @@ main :: () {
 example.rig:5:10: runtime error: the value doesn't fit in 'Small'
 ```
 
-**Operators.** `== != < <= > >=` compare two values of the same enum type, as numbers of its integer type, by its sign (section 5.6); a flags value also compares with `0`. `| & ^` take two values of the same `enum_flags` type, or one and `0`, and give that type, and `~` takes one (sections 5.5, 5.8), each wrapping as its integer type does: in `Look` above, `~Look.ALL` is 204. So do `|=`, `&=` and `^=` (section 6.4). No other operator takes an enum: `'+' needs numbers, not 'Mode'`, `'|' needs integers, not 'Mode'` for an enum that isn't flags, `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Nor does a condition (`the condition of 'if' must be a bool, not 'Mode'`), nor an array's count: `[Mode.FREE]int` is `an array's count must be an integer, not 'Mode'`, and `[cast(int) Mode.FREE_ALL + 1]int` is how.
+**Operators.** `== != < <= > >=` compare two values of the same enum type, as numbers of its integer type, by its sign (section 5.6); a flags value also compares with `0`. `| & ^` take two values of the same `enum_flags` type, or one and `0`, and give that type, and `~` takes one (sections 5.5, 5.8), each wrapping as its integer type does: in the first example's `Look`, an `enum_flags u8` whose `ALL` is 51, `~Look.ALL` is 204. So do `|=`, `&=` and `^=` (section 6.4). No other operator takes an enum: `'+' needs numbers, not 'Mode'`, `'|' needs integers, not 'Mode'` for an enum that isn't flags, `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Nor does a condition (`the condition of 'if' must be a bool, not 'Mode'`), nor an array's count: `[Mode.FREE]int` is `an array's count must be an integer, not 'Mode'`, and `[cast(int) Mode.FREE_ALL + 1]int` is how.
 
 **Constants.** A member, a cast of a constant to an enum and the flags operators on constants are constants of the enum type (section 5.9): they fold, and work in `#if` (`#if DEFAULT == .FREE`), in constants (`DEFAULT :: Mode.FREE;`), as a global's value and in a `#run`'s code. A member is no place: `can't assign to 'Mode.FREE': it's an enum's member`, and `can't take the address of 'Mode.FREE': it's an enum's member`.
 

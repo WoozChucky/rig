@@ -7,8 +7,9 @@
 // members waiting for a flags type met by an enum that isn't flags, or by
 // a type that isn't an enum; an enum's name in parentheses, or called;
 // an enum and 0, or two enum types; a member into an Any; a member and an
-// integer other than 0 meeting a flags type; and a local hiding an enum's
-// name.
+// integer other than 0 meeting a flags type; a member compared with an
+// untyped constant; compound assignments an enum doesn't take, or whose
+// value doesn't convert; and a local hiding an enum's name.
 Mode :: enum { ALLOCATE; RESIZE; FREE; }
 Small :: enum u8 { X; }
 Look :: enum_flags { A; B; }
@@ -50,6 +51,14 @@ main :: () {
     t := cast,trunc(Mode) Small.X;
     l : Any = .FREE;
     g : Look = .A | 1;
+    aa := .A != 0;
+    bb := 0 == .A;
+    cc := .A == null;
+    f |= 1;
+    f |= m;
+    m += 1;
+    ii := 1;
+    ii |= .A;
 }
 
 hidden :: () {

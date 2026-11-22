@@ -1269,10 +1269,10 @@ static void lay_out(Checker *c, Ast_Struct *s, s32 base) {
 
 // Whether the circle that `decl` closes (decl and every declaration needed
 // since, to the end of c->resolving) runs through anything but a struct's
-// layout (a global, a constant, a late field's type, a signature, or a body
-// a #run reaches): a struct's size then depends on itself through a value
-// (S :: struct { a: [g.count]int; } g : [2]S;), not by holding a copy of
-// itself.
+// layout (a global, a constant, a late field's type, a signature, an enum's
+// values, or a body a #run reaches): a struct's size then depends on itself
+// through a value (S :: struct { a: [g.count]int; } g : [2]S;), not by
+// holding a copy of itself.
 static bool circle_through_a_value(Checker *c, Ast *decl) {
     s64 i = c->resolving.count - 1;
     while (c->resolving[i] != decl) i--;
@@ -1284,23 +1284,23 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 
 // A struct's layout, worked out the first time it's needed; its type, or
 // null when it contains itself: "'Node' contains itself; it can hold a
-// pointer to itself, *Node", once per circle, at the struct whose layout
-// was under way when the circle closed. When the circle runs through
-// anything but a struct's layout (a global, a constant, a late field's
-// type, a signature, or a body a #run reaches: circle_through_a_value),
-// the struct doesn't hold itself, its size depends on itself: "'S' is
-// defined in terms of itself", as for a global. Every struct in the circle
-// then has no type (Ast_Struct.declared is null), so nothing more is said
-// about it or its uses checked after; a struct that only holds one in a
-// circle isn't in it, and keeps its type, the field that holds it having
-// none. A global or a signature before it in source order may have taken
-// it behind a pointer already (*Node), and what its value says, true of
-// the pointer whatever the struct, stays said (`h : int = g;` with g a
-// *Node); its type is then made again (made_again), so later uses say
-// nothing. So may a local of a body a #run reaches before it, whose
+// pointer to itself, *Node", once per circle, at the struct whose layout was
+// under way when the circle closed. When the circle runs through anything
+// but a struct's layout (a global, a constant, a late field's type, a
+// signature, an enum's values, or a body a #run reaches:
+// circle_through_a_value), the struct doesn't hold itself, its size depends
+// on itself: "'S' is defined in terms of itself", as for a global. Every
+// struct in the circle then has no type (Ast_Struct.declared is null), so
+// nothing more is said about it or its uses checked after; a struct that
+// only holds one in a circle isn't in it, and keeps its type, the field that
+// holds it having none. A global or a signature before it in source order
+// may have taken it behind a pointer already (*Node), and what its value
+// says, true of the pointer whatever the struct, stays said (`h : int = g;`
+// with g a *Node); its type is then made again (made_again), so later uses
+// say nothing. So may a local of a body a #run reaches before it, whose
 // messages stay said too, but whose type isn't made again. A struct larger
-// than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge'
-// is too big", at its name, and has no type either.
+// than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is
+// too big", at its name, and has no type either.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {

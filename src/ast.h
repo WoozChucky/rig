@@ -245,7 +245,10 @@ struct Ast_Var : Ast {
 
 // A constant: `N :: e;`. Its type is e's (untyped when e is). The checker
 // folds a number or a bool (or null) into the constant's own is_constant
-// and constant; a procedure is in proc, and data in data (spec 4.2).
+// and constant; a procedure is in proc, and data in data (spec 4.2). An
+// enum's member (spec 3.18) is one too, of the enum's integer type whatever
+// its value's type, its value null until the checker gives an implicit
+// member an Ast_Int (Ast_Enum).
 struct Ast_Const : Ast {
     String name;
     Ast *value;

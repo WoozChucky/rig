@@ -1977,7 +1977,8 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // without its enum may be an operand of == and != and of | & ^: it takes
 // the other operand's type (check_convert says when it can't); with one on
 // each side, .A | .B waits for its type as .A does, as 1 | 2 stays untyped,
-// and .A == .B has none to take, which is said at the left one. .A | 0
+// and .A == .B has none to take, which is said at the left one, nor has
+// .A == 0 or .A == null, an untyped constant having no type to give. .A | 0
 // waits too, the untyped 0 being the empty set of the flags type it meets,
 // and so does .A | 1, which that type then refuses as it refuses f | 1
 // (convert_member). Anywhere else, it meets no type.
@@ -1990,9 +1991,10 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (left == &type_untyped_member || right == &type_untyped_member) {
         Ast *other = left == &type_untyped_member ? b->right : b->left;
         bool integer = other->type == &type_untyped_int && other->is_constant;
-        if (left == right || (bitwise && integer)) {
+        bool untyped = type_is_untyped(other->type) || other->type == &type_null;
+        if (left == right || (bitwise && integer) || (equality && untyped)) {
             if (bitwise) return &type_untyped_member;
-            check_default_type(c, b->left);
+            check_default_type(c, left == &type_untyped_member ? b->left : b->right);
             return nullptr;
         }
         Ast *member = left == &type_untyped_member ? b->left : b->right;

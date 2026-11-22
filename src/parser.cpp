@@ -316,6 +316,7 @@ static Ast *parse_type_info(Parser *p) {
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
 //         | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //         | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
+//         | '.' IDENT
 //
 // A '.' starting an expression is a literal without its type, .{1, 2} or
 // .[1, 2], which takes the type it meets (parse_literal); or, before a
