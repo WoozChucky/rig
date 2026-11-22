@@ -2,7 +2,7 @@
 // the first of two sharing a value, a value with no member by its
 // number, read at each width and sign (values that need all of their
 // type's bytes), flags by their names joined by " | " with leftover bits
-// last, skipping a member of 0 and one whose bits aren't all among those
+// last, unsigned at the type's width, skipping a member of 0 and one whose bits aren't all among those
 // not yet written (written already, or only some in the value), enums in
 // structs and arrays, and enums formatted into a string by sprint.
 #import "Basic";
@@ -12,6 +12,8 @@ Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
 Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING; ALL :: VISIBLE | SOLID | GLOWING; }
 Quiet :: enum_flags { NONE :: 0; LOUD; SOFT; }
 Pair :: enum_flags u8 { BOTH :: 3; ONE :: 1; }
+Two :: enum_flags s8 { A; B; }
+Two16 :: enum_flags s16 { A; B; }
 Huge :: enum u64 { TOP :: 18446744073709551615; }
 Signed :: enum s8 { LOW :: -2; }
 Level :: enum u16 { LOW :: 1; HIGH :: 60000; }
@@ -27,6 +29,7 @@ main :: () {
     print("{} {} {}\n", cast(Look) 9, cast(Quiet) 0, cast(Look) 128);
     print("{} {} {}\n", cast(Look) 15, cast(Quiet) 3, cast(Quiet) 2);
     print("{} {}\n", cast(Pair) 5, cast(Pair) 7);
+    print("{} {} {}\n", cast(Two) -1, cast(Two16) -1, cast(Two) -128);
     print("{} {} {} {}\n", Huge.TOP, cast(Huge) 5, Signed.LOW, cast(Signed) -3);
     print("{}\n", cast(Huge) 18446744073709551614);
     print("{} {} {}\n", Level.LOW, Level.HIGH, cast(Level) 300);

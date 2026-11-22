@@ -319,8 +319,10 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
 //   - In an enum_flags, when none has it, as the members it's made of, in
 //     order, joined by " | ": each member that isn't 0 and whose bits are
 //     all among the value's bits not yet written, which it then writes.
-//     Any bits left come last, as a number, as below: cast(Look) 9 is
-//     VISIBLE | 8. A value of no bits, when no member is 0, is 0.
+//     Any bits left come last, as a number read as unsigned at the type's
+//     width: cast(Look) 9 is VISIBLE | 8, and in an enum_flags s8 of A and
+//     B, cast(F) -1 is A | B | 252. A value of no bits, when no member is
+//     0, is 0.
 //   - Otherwise as its number in base 10, by its integer type's sign, as
 //     an integer is: a value no member has is allowed (cast(Mode) 7 is 7).
 print_enum :: (builder: *String_Builder, e: *Type_Info_Enum, p: *void) {
@@ -364,7 +366,16 @@ print_enum :: (builder: *String_Builder, e: *Type_Info_Enum, p: *void) {
             }
         }
         if wrote && left == 0 { return; }
-        if wrote { print_or_append(builder, " | "); }
+        if wrote {
+            // The bits left are bits, not a number with a sign: unsigned,
+            // at the type's width.
+            print_or_append(builder, " | ");
+            bits := cast,trunc(u64) left;
+            if size < 8 { bits &= (cast(u64) 1 << (size * 8)) - 1; }
+            buffer : [INT_TEXT_MAX]u8;
+            print_or_append(builder, format_u64(buffer, bits, 10));
+            return;
+        }
     }
     buffer : [INT_TEXT_MAX]u8;
     if signed {
