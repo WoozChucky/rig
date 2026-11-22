@@ -997,17 +997,21 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
 // its declaration, of an enumerator per member, in order, over its integer
 // type's base type (its class type), as C's enum with a fixed underlying
 // type is, so a debugger shows a value by its member's name, and a number
-// that's no member's as the number. A member's value is as wide as the
-// enum, its low bits of the checker's 64 (which keeps a constant of a
-// signed type sign-extended, and of an unsigned one zero-extended), read as
-// unsigned when the integer type is (so u64's largest is
-// 18446744073709551615, not -1). That's the width clang gives C's: cdb
-// looks a value up by its bits at the enum's size, so an s8's -2 stored as
-// 64 bits would be no member's. An enum_flags is the same: how a debugger
-// shows a value of several members is its own (gdb writes (A | B) when
-// every member is a bit of its own). Two levels, the enum and its base
-// type, which holds no other type: no cycle leads through it, and it's
-// never cut.
+// that's no member's as the number. A member's value is the low bits of
+// the checker's 64 (which keeps a constant of a signed type sign-extended,
+// and of an unsigned one zero-extended), read as unsigned when the integer
+// type is (so u64's largest is 18446744073709551615, not -1), as wide as
+// the enum but for an s32's, which keeps all 64. cdb matches a value
+// against its members by how CodeView writes them, which follows their
+// width: an s8's or s16's -2 written as 64 bits is no member's, and an
+// s32's written as 32 bits is an unsigned 32-bit number (LF_ULONG), which
+// cdb doesn't match against the sign-extended variable either (clang has
+// the same flaw for C++), so only at 64 bits is it found. A signed value
+// is the same number in DWARF at any width, so gdb sees no difference. An
+// enum_flags is the same: how a debugger shows a value of several members
+// is its own (gdb writes (A | B) when every member is a bit of its own).
+// Two levels, the enum and its base type, which holds no other type: no
+// cycle leads through it, and it's never cut.
 static Debug_Type debug_enum(Backend *b, Type *t) {
     Ast_Enum *e = t->enum_decl;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, e->members.count ? e->members.count : 1);
@@ -1015,9 +1019,9 @@ static Debug_Type debug_enum(Backend *b, Type *t) {
         Ast_Const *member = e->members[i];
         RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops the build
         u64 words[1] = {(u64)member->constant};
+        u64 bits = t->is_signed && t->size == 4 ? 64 : (u64)t->size * 8;  // above: an s32's would be LF_ULONG
         members[i] = LLVMDIBuilderCreateEnumeratorOfArbitraryPrecision(
-            b->debug, (const char *)member->name.data, (size_t)member->name.count, (u64)t->size * 8, words,
-            !t->is_signed);
+            b->debug, (const char *)member->name.data, (size_t)member->name.count, bits, words, !t->is_signed);
     }
     LLVMMetadataRef file = type_debug_file(b, t);
     LLVMMetadataRef base = debug_type_at(b, t->underlying, 0).node;

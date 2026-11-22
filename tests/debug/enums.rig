@@ -2,16 +2,17 @@
 // enums.gdb and under cdb with enums.cdb; issue #221, spec 10.7): a
 // variable, a field, a parameter and a constant shown by their members'
 // names, an enum_flags value as its flags, a value with no member as its
-// number, and a chosen integer type, negative members of an s8 and an s16
-// included, each as the debugger shows C's enums of a fixed type. gdb names
-// the type `enum Mode`, as C names an enum by its tag, so enums.gdb's ptype
-// says `enum Mode` (`ptype Mode` is no symbol). cdb's `??` shows flags as a
-// number (`dx` names them) and an enum u8's 200 as 0n-56, while `dt` lists
-// the type's members with B's 0n200.
+// number, and a chosen integer type, negative members of an s8, an s16 and
+// an s32 included, each as the debugger shows C's enums of a fixed type.
+// gdb names the type `enum Mode`, as C names an enum by its tag, so
+// enums.gdb's ptype says `enum Mode` (`ptype Mode` is no symbol). cdb's
+// `??` shows flags as a number (`dx` names them) and an enum u8's 200 as
+// 0n-56, while `dt` lists the type's members with B's 0n200.
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Small :: enum u8 { A; B :: 200; }
 Tiny :: enum s8 { DOWN :: -2; UP; }
 Wide :: enum s16 { LOW :: -300; HIGH :: 300; }
+Large :: enum s32 { FAR :: -70000; NEAR :: -1; }
 Look :: enum_flags { VISIBLE; SOLID; GLOWING; }
 Request :: struct { mode: Mode; size: int; }
 
@@ -22,6 +23,7 @@ main :: () {
     s := Small.B;
     t := Tiny.DOWN;
     w := Wide.LOW;
+    g := Large.FAR;
     f : Look = .VISIBLE | .GLOWING;
     odd := cast(Mode) 7;
     r := Request.{.RESIZE, 8};

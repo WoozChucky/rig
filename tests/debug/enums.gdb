@@ -1,4 +1,4 @@
-break enums.rig:28
+break enums.rig:30
 run
 print m
 print (int) m
@@ -8,6 +8,8 @@ print t
 print (int) t
 print w
 print (int) w
+print g
+print (int) g
 print f
 print odd
 print r
@@ -16,7 +18,8 @@ ptype enum Mode
 ptype enum Small
 ptype enum Tiny
 ptype enum Wide
-break enums.rig:33
+ptype enum Large
+break enums.rig:35
 continue
 print m
 print (int) m

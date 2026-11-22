@@ -1587,8 +1587,9 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Huge\""),
                        "size: 64"));
         CHECK(contains(text, "!DIEnumerator(name: \"TOP\", value: 18446744073709551615, isUnsigned: true)"));
-        // A signed one's values are signed, read from all their 64 bits:
-        // an s8's -2 is -2, not 254.
+        // A signed one's values are signed, the checker's 64 bits cut to
+        // the enum's width (an s32's kept at 64, for cdb: debug_enum), so
+        // an s8's -2 is -2, not 254. The text doesn't show the width.
         String low = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Signed\"");
         CHECK(contains(low, "size: 8"));
         CHECK(contains(node_line(&a, text, attached(&a, low, "baseType:")), "!DIBasicType(name: \"s8\""));
