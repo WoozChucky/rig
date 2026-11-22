@@ -39,11 +39,10 @@ rem (A goto, not a ( ) block: %LLVM% may hold a parenthesis, as in
 rem "Program Files (x86)", which would end the block early.)
 if not exist "%LLVM%\bin\llvm-config.exe" goto no_llvm
 
-rem The compiler: CXX if set, else the pinned clang++.exe. A
-rem deps\llvm-windows made before get_llvm.bat kept clang has LLVM but no
-rem compiler. CXX may be given with quotes around it or without: they're
-rem taken off, and "%CXX%" below puts them back. (That line is reached
-rem only when CXX is set: %CXX:"=% of an unset CXX isn't empty.)
+rem The compiler: CXX if set, else the pinned clang++.exe. CXX may be
+rem given with quotes around it or without: they're taken off, and
+rem "%CXX%" below puts them back. (That line is reached only when CXX is
+rem set: %CXX:"=% of an unset CXX isn't empty.)
 set PINNED_CXX=
 if not defined CXX goto pinned_cxx
 set "CXX=%CXX:"=%"
@@ -54,7 +53,9 @@ set PINNED_CXX=1
 :have_cxx
 rem The pinned clang++.exe is looked for here, with CXX set too: it
 rem compiles Rig's runtime whatever CXX says (at the end), so a missing one
-rem stops the build now, not after the minutes of building Rig.
+rem stops the build now, not after the minutes of building Rig. A
+rem deps\llvm-windows made before get_llvm.bat kept clang has LLVM but no
+rem compiler.
 if not exist "%LLVM%\bin\clang++.exe" goto no_clang
 rem Which compiler made this build, first in its log: "clang version 23.1.5
 rem ...", the first line clang prints. A compiler that doesn't answer stops
