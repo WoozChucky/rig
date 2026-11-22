@@ -997,11 +997,13 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
 // its declaration, of an enumerator per member, in order, over its integer
 // type's base type (its class type), as C's enum with a fixed underlying
 // type is, so a debugger shows a value by its member's name, and a number
-// that's no member's as the number. A member's value is its 64 bits, read
-// as unsigned when the integer type is (so u64's largest is
-// 18446744073709551615, not -1): the checker keeps a constant of a signed
-// type sign-extended, and of an unsigned one zero-extended, to 64 bits. An
-// enum_flags is the same: how a debugger shows a value of several members
+// that's no member's as the number. A member's value is as wide as the
+// enum, its low bits of the checker's 64 (which keeps a constant of a
+// signed type sign-extended, and of an unsigned one zero-extended), read as
+// unsigned when the integer type is (so u64's largest is
+// 18446744073709551615, not -1). That's the width clang gives C's: cdb
+// looks a value up by its bits at the enum's size, so an s8's -2 stored as
+// 64 bits would be no member's. An enum_flags is the same: how a debugger shows a value of several members
 // is its own (gdb writes (A | B) when every member is a bit of its own). Two
 // levels, the enum and its base type, which holds no other type: no cycle
 // leads through it, and it's never cut.
@@ -1011,9 +1013,10 @@ static Debug_Type debug_enum(Backend *b, Type *t) {
     for (s64 i = 0; i < e->members.count; i++) {
         Ast_Const *member = e->members[i];
         RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops the build
-        members[i] = LLVMDIBuilderCreateEnumerator(b->debug, (const char *)member->name.data,
-                                                   (size_t)member->name.count, (int64_t)member->constant,
-                                                   !t->is_signed);
+        u64 words[1] = {(u64)member->constant};
+        members[i] = LLVMDIBuilderCreateEnumeratorOfArbitraryPrecision(
+            b->debug, (const char *)member->name.data, (size_t)member->name.count, (u64)t->size * 8, words,
+            !t->is_signed);
     }
     LLVMMetadataRef file = type_debug_file(b, t);
     LLVMMetadataRef base = debug_type_at(b, t->underlying, 0).node;

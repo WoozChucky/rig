@@ -1,6 +1,8 @@
-21:     took := take(m);
+28:     took := take(m);
 Mode FREE (0n2)
 Small B (0n-56)
+Tiny DOWN (0n-2)
+Wide LOW (0n-300)
 Look 0n5
 VISIBLE | GLOWING (5) [Type: Look]
 Mode 0n7 (No matching enumerant)
@@ -14,9 +16,11 @@ A = 0n0
 B = 0n200
 Mode m = FREE (0n2)
 Small s = B
+Tiny t = DOWN (0n-2)
+Wide w = LOW (0n-300)
 Look f = 0n5
 Mode odd = 0n7
 struct Request r
-26:     return n;
+33:     return n;
 Mode FREE (0n2)
 !Couldn't resolve error

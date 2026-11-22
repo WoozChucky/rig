@@ -1,10 +1,12 @@
 l+t
 l+s
 l+l
-bp `enums.rig:21`
+bp `enums.rig:28`
 g
 ?? m
 ?? s
+?? t
+?? w
 ?? f
 dx f
 ?? odd
@@ -12,7 +14,7 @@ dx r
 ?? DEFAULT
 dt enums!Small
 dv /t
-bp `enums.rig:26`
+bp `enums.rig:33`
 g
 ?? m
 q

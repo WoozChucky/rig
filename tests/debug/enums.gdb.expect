@@ -1,22 +1,28 @@
 main () at
-enums.rig:21
+enums.rig:28
 took := take(m);
 $1 = FREE
 $2 = 2
 $3 = B
 $4 = 200
-$5 = (VISIBLE | GLOWING)
-$6 = 7
-$7 = {mode = RESIZE, size = 8}
-$8 = FREE_ALL
+$5 = DOWN
+$6 = -2
+$7 = LOW
+$8 = -300
+$9 = (VISIBLE | GLOWING)
+$10 = 7
+$11 = {mode = RESIZE, size = 8}
+$12 = FREE_ALL
 type = enum Mode {ALLOCATE, RESIZE, FREE, FREE_ALL}
 type = enum Small {A, B = 200}
+type = enum Tiny {DOWN = -2, UP}
+type = enum Wide {LOW = -300, HIGH = 300}
 take (context=0x
 m=FREE) at
-enums.rig:26
+enums.rig:33
 return n;
-$9 = FREE
-$10 = 2
+$13 = FREE
+$14 = 2
 !No symbol
 !Error in sourced command file
 !.debug_names not created by gdb
