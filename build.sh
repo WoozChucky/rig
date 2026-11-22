@@ -10,7 +10,10 @@
 # otherwise, and is linked statically. The compiler that builds Rig comes
 # from there too: the pinned release's clang++, so every build, here or on
 # CI, is made by the same clang whatever the system has installed. CXX names
-# another compiler to try one (CXX=clang++-22 ./build.sh).
+# another compiler to try one (CXX=clang++-22 ./build.sh). Rig's runtime,
+# which rig links into every program, is built here too (at the end), with
+# the pinned clang whatever CXX says, freestanding, so the programs rig
+# builds need nothing of glibc's development files (spec 10.6).
 #
 # Every build is stamped with Rig's version, from the VERSION file, and the
 # commit it is built from, from git (below; `rig version` shows them).
@@ -110,3 +113,20 @@ $CXX $FLAGS tests/runner.cpp -o bin/run-tests
 
 # Rig links programs with LLVM's lld, shipped beside rig (spec section 3).
 cp "$LLVM/bin/lld" bin/ld.lld
+
+# Rig's runtime, beside rig too, which rig links into every program against
+# glibc's libc.so.6 and libm.so.6 (spec 10.6): runtime/linux.c, the
+# start-up and the three functions glibc keeps out of libc.so.6. Always
+# compiled by the pinned clang, whatever CXX says, so that every rig links
+# programs with the same runtime, and at -O2 without -g in both kinds of
+# build: it has no source on a user's machine to step through. As C,
+# freestanding: no header, no C library of its own (it is the C library's
+# static part), no builtin turned into a call of the C library's, and no
+# stack protector, which would need one more.
+RUNTIME_CC="$LLVM/bin/clang"
+if [ ! -x "$RUNTIME_CC" ]; then
+    echo "build.sh: clang not found in $LLVM; run scripts/get_llvm.sh again" >&2
+    exit 1
+fi
+"$RUNTIME_CC" --target=x86_64-linux-gnu -std=c17 -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -O2 \
+    -Wall -Wextra -c runtime/linux.c -o bin/rig_runtime.o

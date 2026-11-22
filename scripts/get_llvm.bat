@@ -4,8 +4,8 @@ rem deps\llvm-windows (or RIG_LLVM_DIR), keeping only what building Rig
 rem needs:
 rem   - the C API's headers, the static libraries and llvm-config, which
 rem     Rig's compiler is compiled against and linked with;
-rem   - lld-link, the linker build.bat puts beside rig.exe, which rig.exe
-rem     uses when Visual Studio has no link.exe;
+rem   - lld-link, the linker build.bat puts beside rig.exe, with which
+rem     rig.exe links every program;
 rem   - clang, the compiler that builds Rig (build.bat): bin\clang++.exe, the
 rem     one name build.bat runs (it compiles C++ and links C++'s runtime),
 rem     and lib\clang\MAJOR\include, its own headers (stddef.h, stdarg.h,

@@ -6,7 +6,7 @@ title: Install
 
 [![The latest release](https://img.shields.io/github/v/release/WoozChucky/rig)](https://github.com/WoozChucky/rig/releases/latest)
 
-Each release of Rig has the compiler built for 64-bit Windows and Linux, each with LLVM's linker and the modules that ship with Rig beside it, and the VS Code extension. The [release notes](https://github.com/WoozChucky/rig/releases/latest) say what is new; [every release](https://github.com/WoozChucky/rig/releases) is on GitHub.
+Each release of Rig has the compiler built for 64-bit Windows and Linux, each with LLVM's linker, Rig's runtime and the modules that ship with Rig beside it, and the VS Code extension. The [release notes](https://github.com/WoozChucky/rig/releases/latest) say what is new; [every release](https://github.com/WoozChucky/rig/releases) is on GitHub.
 
 Rig is early: the language will change from one release to the next.
 
@@ -36,7 +36,7 @@ Either one installs the latest release for your user alone, with no administrato
 
    For another shell, such as fish, it says what to add.
 4. It installs the [VS Code extension](#vs-code-extension), if `code` is on your `PATH`.
-5. It builds and runs hello world, to check that your system has what Rig needs. If the build fails, Rig stays installed, and the script says what to install: the [requirements](#requirements) below. If hello world builds but doesn't run, the requirements are there, and the script says so: something else stopped the program, such as a temporary folder that doesn't let programs run, or an antivirus.
+5. It builds and runs hello world, to check that Rig works on your system. If the build fails, Rig stays installed, and the script says what to do. From the release after 0.3.0 on, Rig needs nothing else installed, so a failed build is a bug: the script asks you to report it, with the build's output. For 0.3.0 and earlier, it says what to install: the [requirements](#requirements) below. If hello world builds but doesn't run, the script says so: something else stopped the program, such as a temporary folder that doesn't let programs run, or an antivirus.
 6. It prints `rig version`'s line, such as `rig 0.2.0 (89de631d10c7 2026-11-13) LLVM 23.1.5`. If it says to, open a new terminal (one opened before doesn't see the new `PATH`); then build a program with `rig build hello.rig`.
 
 **To upgrade**, run the command again: it overwrites the files, and adds nothing to the `PATH` the second time.
@@ -67,18 +67,18 @@ The scripts are in the repository, to read before you run them: [install.sh](htt
 
 ## Install by hand
 
-The steps the scripts take, one at a time, for those who would rather see each one. (The scripts also build hello world, to check the [requirements](#requirements); that section says how.)
+The steps the scripts take, one at a time, for those who would rather see each one. (The scripts also build hello world, to check that Rig works; [Requirements](#requirements) says how.)
 
 ### Download
 
 | For | File |
 |---|---|
-| Windows x64 | [rig-windows-x64.zip](https://github.com/WoozChucky/rig/releases/latest/download/rig-windows-x64.zip): `rig.exe`, with LLVM's `lld-link.exe` and the `modules` folder |
-| Linux x86-64 | [rig-linux-x64.tar.gz](https://github.com/WoozChucky/rig/releases/latest/download/rig-linux-x64.tar.gz): `rig`, with LLVM's `ld.lld` and the `modules` folder |
+| Windows x64 | [rig-windows-x64.zip](https://github.com/WoozChucky/rig/releases/latest/download/rig-windows-x64.zip): `rig.exe`, with LLVM's `lld-link.exe`, Rig's runtime (`rig_runtime.lib`, `ucrtbase.lib`, `kernel32.lib`) and the `modules` folder |
+| Linux x86-64 | [rig-linux-x64.tar.gz](https://github.com/WoozChucky/rig/releases/latest/download/rig-linux-x64.tar.gz): `rig`, with LLVM's `ld.lld`, Rig's runtime (`rig_runtime.o`) and the `modules` folder |
 | VS Code 1.75 or later | [rig-vscode.vsix](https://github.com/WoozChucky/rig/releases/latest/download/rig-vscode.vsix): the extension |
 | | [SHA256SUMS](https://github.com/WoozChucky/rig/releases/latest/download/SHA256SUMS): the SHA-256 of each of the three |
 
-The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker and the `modules` folder must stay in the same folder as `rig`, which runs the linker from there and finds there Preload, which every program imports, and the modules a program imports (`#import "Basic";`): without that folder rig compiles nothing.
+The links always get the latest release. The commands below download it, check it, and install it for your user alone, with no administrator rights. Each archive's files are at its top level: the linker, the runtime's files and the `modules` folder must stay in the same folder as `rig`, which runs the linker from there, links every program with the runtime's files from there, and finds there Preload, which every program imports, and the modules a program imports (`#import "Basic";`): without that folder rig compiles nothing.
 
 ### Windows
 
@@ -196,7 +196,9 @@ rm -f ~/.local/bin/rig
 
 ## Requirements
 
-`rig build` links a program with the platform's C runtime, as section 10.6 of [the specification](/spec/implementation#106-linking) says, so each system needs that runtime's files:
+From the release after 0.3.0 on, Rig needs nothing installed besides itself. `rig build` links a program with the linker and Rig's runtime beside `rig`, against the C runtime every system has, as section 10.6 of [the specification](/spec/implementation#106-linking) says: on Windows (10 or later) the Universal C Runtime, `ucrtbase.dll`, and `kernel32.dll`; on Linux glibc's shared libraries, `libc.so.6` and `libm.so.6`. Visual Studio and glibc's development files aren't needed, and aren't read when they are installed.
+
+0.3.0 and earlier releases link with the platform's development files, so each system needs them:
 
 - **Windows** needs Visual Studio, or its free [Build Tools](https://visualstudio.microsoft.com/downloads/), with the **Desktop development with C++** workload: it brings the C runtime, the Windows SDK and Microsoft's linker, `link.exe`. Rig links with the newest installation's `link.exe`, or with the `lld-link.exe` beside `rig.exe` when the installation has none, against the same libraries.
 - **Linux** needs glibc's development files, among them its start files (`crt1.o`, `crti.o`, `crtn.o`), `libc.so` and `libm.so`: `sudo apt install libc6-dev` on Debian and Ubuntu, `sudo dnf install glibc-devel` on Fedora; Arch's `glibc` has them. Rig links with the `ld.lld` beside it.

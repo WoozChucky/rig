@@ -320,9 +320,8 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
     // Converts UTF-16 to code_page in bytes, which has room for byte_count
     // of them, and gives the bytes written; a wide_count of -1 converts up
     // to the zero that ends wide, and writes and counts that zero too. In
-    // UTF-8 an unpaired surrogate becomes U+FFFD. Preload declares the same
-    // function as __wide_char_to_multi_byte, for the command line, and two
-    // declarations of one C function are allowed (spec 7.6).
+    // UTF-8 an unpaired surrogate becomes U+FFFD. Rig's start-up calls it
+    // too, to give main its arguments in UTF-8 (spec 10.6).
     c_wide_char_to_multi_byte :: (code_page: u32, flags: u32, wide: *u16, wide_count: s32, bytes: *u8, byte_count: s32, default_char: *u8, used_default: *s32) -> s32 #foreign libc "WideCharToMultiByte";
 
     // The attributes of what is at path, C_INVALID_FILE_ATTRIBUTES when

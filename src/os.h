@@ -168,9 +168,11 @@ void os_release_inaccessible(void *p, u64 size);
 // A function of the system's C library or of the OS, by name, for
 // compile-time C calls, or null. Linux: dlsym on dlopen("libc.so.6",
 // RTLD_LAZY | RTLD_NOLOAD), then on libm.so.6's, taken the same way (libc,
-// the dynamic loader it depends on, and libm, as 10.6's -lc -lm provides
-// them); what -lc links in statically (atexit, at_quick_exit,
-// pthread_atfork) is looked up before this, in the compiler's own table.
+// the dynamic loader it depends on, and libm, as 10.6 links a program
+// against libc.so.6, the loader and libm.so.6, in that order); what libc.so.6
+// doesn't export and Rig's runtime defines in a program (atexit,
+// at_quick_exit, pthread_atfork) is looked up before this, in the
+// compiler's own table.
 // Windows: GetProcAddress in kernel32.dll, then in ucrtbase.dll
 // (LoadLibraryW once); the standard C library's functions are looked up
 // before this, in the compiler's own table. Null isn't a failure: a name

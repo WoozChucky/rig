@@ -513,19 +513,20 @@ void os_release_inaccessible(void *p, u64 size) {
 // The compiler is linked with libc and libm dynamically (build.sh's -lm,
 // which LLVM needs too), so both are loaded already: RTLD_NOLOAD takes a
 // handle to each without loading anything, kept for the process's life.
-// libc is searched first, as the link line's -lc -lm provides them, so a
-// name both export (copysign, frexp, ldexp, modf, scalbn) is libc's, as a
-// program's call binds to it at run time; then libm, for its own (sqrt,
-// sinf, hypotf). dlsym on libc's handle searches libc and the dynamic
-// loader it depends on; on libm's, libm and what it depends on, libc
-// again, which is harmless after libc's own search. A handle that couldn't
-// be taken is skipped rather than ending the search. RTLD_DEFAULT would
-// search every library the compiler loaded, libstdc++ among them, and find
-// functions no program can link (10.6). Neither handle finds what -lc
-// links in statically, from libc_nonshared.a (atexit, at_quick_exit,
-// pthread_atfork), which interp_c_functions.cpp gives instead. dlsym finds
-// data too (stdout, environ): the interpreter calls what a #foreign
-// declaration names, as the linker would link it.
+// libc is searched first, as a program's link line names libc.so.6 before
+// libm.so.6 (10.6), so a name both export (copysign, frexp, ldexp, modf,
+// scalbn) is libc's, as a program's call binds to it at run time; then
+// libm, for its own (sqrt, sinf, hypotf). dlsym on libc's handle searches
+// libc and the dynamic loader it depends on; on libm's, libm and what it
+// depends on, libc again, which is harmless after libc's own search. A
+// handle that couldn't be taken is skipped rather than ending the search.
+// RTLD_DEFAULT would search every library the compiler loaded, libstdc++
+// among them, and find functions no program can link (10.6). Neither handle
+// finds what libc.so.6 doesn't export (atexit, at_quick_exit,
+// pthread_atfork), which a program gets from Rig's runtime and
+// interp_c_functions.cpp gives instead. dlsym finds data too (stdout,
+// environ): the interpreter calls what a #foreign declaration names, as the
+// linker would link it.
 void *os_find_c_function(String name) {
     static void *libc = dlopen("libc.so.6", RTLD_LAZY | RTLD_NOLOAD);
     static void *libm = dlopen("libm.so.6", RTLD_LAZY | RTLD_NOLOAD);

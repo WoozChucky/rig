@@ -2956,11 +2956,11 @@ TEST(interp_finds_c_functions_by_name) {
     // (__tls_get_addr is the loader's), but what libc_nonshared.a links in
     // statically (atexit, at_quick_exit, pthread_atfork), which libc.so.6
     // doesn't export, the compiler's own from its table; then libm's
-    // (sqrt, sinf, hypotf), as the link line's -lc -lm provides them (spec
-    // 10.6), so a name both export (copysign) is libc's, as a program's
-    // call binds to it. libstdc++'s, which the compiler loads too, aren't
-    // found, as no program could link them. Neither finds a name nothing
-    // has.
+    // (sqrt, sinf, hypotf), as a program's link line names libc.so.6, then
+    // libm.so.6 (spec 10.6), so a name both export (copysign) is libc's, as
+    // a program's call binds to it. libstdc++'s, which the compiler loads
+    // too, aren't found, as no program could link them. Neither finds a name
+    // nothing has.
 #ifdef _WIN32
     CHECK(interp_c_library_function(str("strlen")) == (void *)&strlen);
     CHECK(interp_c_library_function(str("sqrt")) == (void *)static_cast<double (*)(double)>(&sqrt));

@@ -12,9 +12,12 @@ rem from there too: the pinned release's clang++.exe, so every build, here or
 rem on a release's runner, is made by the same clang whatever else is
 rem installed. CXX names another compiler's program to try one
 rem (set "CXX=C:\Program Files\LLVM\bin\clang++.exe"). Visual Studio, or its
-rem Build Tools, is still needed: clang compiles against its C and C++
-rem runtime's and the Windows SDK's headers and libraries and links with its
-rem link.exe (:find_msvc, below).
+rem Build Tools, is still needed to build Rig itself: clang compiles rig.exe
+rem against its C and C++ runtime's and the Windows SDK's headers and
+rem libraries and links it with its link.exe (:find_msvc, below). Rig's
+rem runtime, which rig links into every program, is built here too (at the
+rem end), freestanding, with none of that, so the programs rig builds need
+rem nothing of Visual Studio's (spec 10.6).
 rem
 rem Every build is stamped with Rig's version, from the VERSION file, and
 rem the commit it is built from, from git (:stamp, below; `rig version`
@@ -78,12 +81,11 @@ set LLVM_LIBS=
 for /f "delims=" %%i in ('"%LLVM%\bin\llvm-config.exe" --link-static --libnames core passes target x86codegen x86asmparser x86desc x86info') do set LIBNAMES=%%i
 for %%l in (%LIBNAMES%) do call set LLVM_LIBS=%%LLVM_LIBS%% -l%%~nl
 
-rem The Windows libraries LLVM uses, and COM's strings (finding Visual
-rem Studio). llvm-config --system-libs also names zlib, zstd and libxml2,
-rem which the release was built with but doesn't ship: the parts of LLVM Rig
-rem links don't need libxml2, and src\llvm_compression_stubs.cpp stands in
-rem for zlib and zstd.
-set SYSTEM_LIBS=-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lntdll -loleaut32
+rem The Windows libraries LLVM uses. llvm-config --system-libs also names
+rem zlib, zstd and libxml2, which the release was built with but doesn't
+rem ship: the parts of LLVM Rig links don't need libxml2, and
+rem src\llvm_compression_stubs.cpp stands in for zlib and zstd.
+set SYSTEM_LIBS=-lpsapi -lshell32 -lole32 -luuid -ladvapi32 -lws2_32 -lntdll
 
 rem LLVM's release libraries are built against the static C runtime (/MT),
 rem so Rig's compiler is too: mixing the two fails to link (LNK2038).
@@ -96,8 +98,34 @@ rem The unit tests: the whole compiler again, with the tests and their own main.
 rem The end-to-end tests' runner: no LLVM, it only runs rig and its programs.
 "%CXX%" %FLAGS% tests\runner.cpp -o bin\run-tests.exe || exit /b 1
 
-rem Rig falls back to LLVM's lld-link when Visual Studio has no link.exe.
+rem Rig links programs with LLVM's lld-link, beside rig.exe (spec 10.6).
 copy /y "%LLVM%\bin\lld-link.exe" bin\lld-link.exe >nul || exit /b 1
+
+rem Rig's runtime, beside rig.exe too, which rig links into every program
+rem with the two import libraries below (spec 10.6): runtime\windows.c, the
+rem start-up, the stack probe and C's exit handlers, and
+rem runtime\windows_stdio.c, the printf family. Always compiled by the
+rem pinned clang, whatever CXX says, so that every rig links programs with
+rem the same runtime, and at -O2 without -g in both kinds of build: it has
+rem no source on a user's machine to step through, as Visual Studio's own
+rem libraries have none. As C, freestanding: no header, no C runtime of its
+rem own (it is the C runtime's static part), no builtin turned into a call
+rem of the C library's, and no stack protector, which would need one more.
+rem lld-link /lib, LLVM's lib.exe, puts the two objects into a static
+rem library, whose members a link takes only when it needs them.
+if not exist "%LLVM%\bin\clang++.exe" goto no_clang
+if not exist .build\runtime mkdir .build\runtime
+set RUNTIME_FLAGS=-x c --target=x86_64-pc-windows-msvc -std=c17 -ffreestanding -fno-builtin -nostdinc -fno-stack-protector -O2 -Wall -Wextra
+"%LLVM%\bin\clang++.exe" %RUNTIME_FLAGS% -c runtime\windows.c -o .build\runtime\windows.obj || exit /b 1
+"%LLVM%\bin\clang++.exe" %RUNTIME_FLAGS% -c runtime\windows_stdio.c -o .build\runtime\windows_stdio.obj || exit /b 1
+"%LLVM%\bin\lld-link.exe" /lib /nologo /out:bin\rig_runtime.lib .build\runtime\windows.obj .build\runtime\windows_stdio.obj || exit /b 1
+rem The import libraries of the two DLLs every program imports, the
+rem Universal C Runtime's ucrtbase.dll and kernel32.dll: what tells the
+rem linker which DLL each of their names comes from. Made from the names
+rem they export, runtime\ucrtbase.def and runtime\kernel32.def (made by
+rem scripts\def_from_dll.ps1), in place of the Windows SDK's.
+"%LLVM%\bin\lld-link.exe" /lib /nologo /machine:x64 /def:runtime\ucrtbase.def /out:bin\ucrtbase.lib || exit /b 1
+"%LLVM%\bin\lld-link.exe" /lib /nologo /machine:x64 /def:runtime\kernel32.def /out:bin\kernel32.lib || exit /b 1
 exit /b 0
 
 rem call :stamp sets STAMP, the defines that stamp the build (src\version.h):

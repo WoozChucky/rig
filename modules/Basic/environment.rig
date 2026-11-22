@@ -386,7 +386,7 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
 
 // The program's command-line arguments (spec 7.4): the name it was started
 // by first, then each argument. On Windows they are UTF-8: a compiled
-// program's are converted by Preload from the C runtime's wide arguments,
+// program's are converted by its start-up from the C runtime's wide ones,
 // an interpreted one's by interpret mode from the wide command line, so,
 // like a variable's name and value above, they don't depend on the ANSI
 // code page; on Linux they are the bytes the system gave, as they are.

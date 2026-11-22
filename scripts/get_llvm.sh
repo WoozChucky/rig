@@ -4,10 +4,12 @@
 #   - the C API's headers, the static libraries and llvm-config, which Rig's
 #     compiler is compiled against and linked with;
 #   - lld, the linker build.sh puts beside rig (as ld.lld) to link programs;
-#   - clang, the compiler that builds Rig (build.sh): bin/clang-MAJOR, the
-#     program, with bin/clang, a symlink to it, and bin/clang++, a symlink
-#     to clang, the name build.sh runs (a clang run as clang++ compiles C++
-#     and links C++'s runtime), kept as the symlinks they are; and
+#   - clang, the compiler that builds Rig and its runtime (build.sh):
+#     bin/clang-MAJOR, the program, with bin/clang, a symlink to it, and
+#     bin/clang++, a symlink to clang, kept as the symlinks they are.
+#     build.sh runs both names: bin/clang++ for Rig (a clang run as clang++
+#     compiles C++ and links C++'s runtime), and bin/clang, as C, for
+#     runtime/linux.c (bin/rig_runtime.o); and
 #     lib/clang/MAJOR/include, its own headers (stddef.h, stdarg.h, the
 #     intrinsics...), which it finds from where it's installed
 #     (bin/../lib/clang/MAJOR). None of its other tools are kept.

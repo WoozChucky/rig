@@ -556,8 +556,8 @@ bool os_run_merged(Arena *a, Array<String> argv, String directory, s32 seconds, 
 
 // The C runtime's wide arguments, split from the UTF-16 command line by the
 // rules append_quoted writes for, which split every Rig program's arguments
-// too (Preload's __save_command_line, spec 10.6), so rig, bin/unit-tests and
-// the programs they run split a command line alike. (shell32's
+// too (Rig's start-up, runtime/windows.c, spec 10.6), so rig, bin/unit-tests
+// and the programs they run split a command line alike. (shell32's
 // CommandLineToArgvW reads a "" inside quotes otherwise: "a""b" c is a"b and
 // c to the C runtime, and one argument, a"b c, to it.) main's startup made
 // only the narrow argv, so the first call makes the wide one with

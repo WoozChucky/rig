@@ -6,6 +6,10 @@
 #   rig        the compiler, an optimised build (./build.sh release)
 #   ld.lld     LLVM's linker, which rig runs from its own directory (spec
 #              10.6): without it rig can't link a program
+#   rig_runtime.o
+#              Rig's runtime, which rig links into every program from its
+#              own directory (spec 10.6): the start-up, _start, and the
+#              few functions glibc's development files would add
 #   modules/   the modules that ship with rig (Preload, Basic, Compiler),
 #              which rig finds in modules/ beside rig (spec 2.14)
 #   LICENSE, README.md
@@ -30,7 +34,7 @@ set -e
 cd "$(dirname "$0")/.."
 root=$(pwd)
 archive=dist/rig-linux-x64.tar.gz
-files="rig ld.lld modules LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt"
+files="rig ld.lld rig_runtime.o modules LICENSE README.md LICENSE-LLVM.txt LICENSE-LLD.txt"
 
 ./build.sh release
 bin/rig version
@@ -41,7 +45,7 @@ trap 'rm -rf "$stage"' EXIT
 # through it: Ctrl+C would otherwise leave the directory behind.
 trap 'exit 1' INT TERM HUP
 mkdir "$stage/pack" "$stage/check"
-cp bin/rig bin/ld.lld LICENSE README.md "$stage/pack/"
+cp bin/rig bin/ld.lld bin/rig_runtime.o LICENSE README.md "$stage/pack/"
 cp -R modules "$stage/pack/"
 cp third_party/llvm/LICENSE.TXT "$stage/pack/LICENSE-LLVM.txt"
 cp third_party/lld/LICENSE.TXT "$stage/pack/LICENSE-LLD.txt"

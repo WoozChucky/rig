@@ -1,8 +1,8 @@
 // C's other time functions with a 64-bit time_t, compiled and interpreted
-// (issue #161). On Windows msvcrt.lib defines time, gmtime, localtime,
-// mktime, difftime and ctime as their 32-bit versions, while the Universal
-// C Runtime's <time.h> makes those names call the 64-bit ones, _time64 and
-// the rest, which the compiler declares them as. A 32-bit time would write
+// (issue #161). On Windows the Universal C Runtime's <time.h> makes time,
+// gmtime, localtime, mktime, difftime and ctime call the 64-bit functions,
+// _time64 and the rest, and exports no function by those names; the
+// compiler declares them as the 64-bit ones too. A 32-bit time would write
 // only time's low 4 bytes and read only LATER's, a date in 1964. The
 // program prints only what doesn't vary by host, time zone or run.
 

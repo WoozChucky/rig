@@ -3,8 +3,6 @@
 
 #include "link.h"
 
-static const char *INSTALL_GLIBC = "install your distribution's C library development package (libc6-dev on Debian and Ubuntu)";
-
 // "a", "a or b", "a, b or c".
 static String list_with_or(Arena *a, Array<String> items) {
     String all = string_printf(a, "");
@@ -15,8 +13,13 @@ static String list_with_or(Arena *a, Array<String> items) {
     return all;
 }
 
-bool find_crt_directory(Arena *a, Array<String> candidates, String *dir, String *error) {
-    const char *files[] = {"crt1.o", "crti.o", "crtn.o"};
+// Both libraries, side by side: libm.so.6 is glibc's own, installed with
+// libc.so.6, so the program gets the two of one glibc. The candidates'
+// order picks among directories that have both: a 64-bit one is listed
+// ahead of /usr/lib, which holds a 32-bit glibc on Fedora with glibc.i686
+// installed.
+bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String *error) {
+    const char *files[] = {"libc.so.6", "libm.so.6"};
     for (s64 i = 0; i < candidates.count; i++) {
         bool all_there = true;
         for (const char *file : files) {
@@ -27,32 +30,52 @@ bool find_crt_directory(Arena *a, Array<String> candidates, String *dir, String 
             return true;
         }
     }
-    *error = string_printf(a, "glibc's C runtime files (crt1.o, crti.o, crtn.o) weren't found in " STR_FMT "; %s",
-                           STR_ARG(list_with_or(a, candidates)), INSTALL_GLIBC);
-    return false;
-}
-
-bool choose_windows_linker(Arena *a, String link_exe, String lld_link, String *chosen, String *error) {
-    if (os_file_exists(link_exe)) {
-        *chosen = link_exe;
-        return true;
-    }
-    if (os_file_exists(lld_link)) {
-        *chosen = lld_link;
-        return true;
-    }
     *error = string_printf(a,
-                           "Visual Studio has no link.exe, and lld-link.exe wasn't found at " STR_FMT
-                           " either; rebuild Rig with build.bat, which copies it there",
-                           STR_ARG(lld_link));
+                           "glibc's libc.so.6 and libm.so.6 weren't found side by side in " STR_FMT
+                           "; Rig links programs against glibc, the C library of most Linux systems",
+                           STR_ARG(list_with_or(a, candidates)));
     return false;
 }
 
-bool check_linux_linker(Arena *a, String path, String *error) {
-    if (os_file_exists(path)) return true;
-    *error = string_printf(a, "the linker wasn't found at " STR_FMT "; rebuild Rig with build.sh, which copies it there",
-                           STR_ARG(path));
-    return false;
+// Where distributions keep glibc's libraries, in order: Debian's and
+// Ubuntu's multiarch directory, Fedora's and openSUSE's lib64, Arch's lib
+// (where Fedora keeps 32-bit libraries, so after lib64), then the first
+// two's places outside /usr, for a system whose /usr isn't merged with /
+// (an older Debian keeps glibc in /lib/x86_64-linux-gnu).
+Array<String> linux_libc_candidates() {
+    Array<String> candidates = {};
+    array_add(&candidates, str("/usr/lib/x86_64-linux-gnu"));
+    array_add(&candidates, str("/usr/lib64"));
+    array_add(&candidates, str("/usr/lib"));
+    array_add(&candidates, str("/lib/x86_64-linux-gnu"));
+    array_add(&candidates, str("/lib64"));
+    return candidates;
+}
+
+Array<String> windows_rig_files(Arena *a, String runtime_dir) {
+    Array<String> files = {};
+    array_add(&files, string_printf(a, STR_FMT "\\lld-link.exe", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "\\rig_runtime.lib", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "\\ucrtbase.lib", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "\\kernel32.lib", STR_ARG(runtime_dir)));
+    return files;
+}
+
+Array<String> linux_rig_files(Arena *a, String runtime_dir) {
+    Array<String> files = {};
+    array_add(&files, string_printf(a, STR_FMT "/ld.lld", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "/rig_runtime.o", STR_ARG(runtime_dir)));
+    return files;
+}
+
+bool check_rig_files(Arena *a, Array<String> paths, const char *build_script, String *error) {
+    for (s64 i = 0; i < paths.count; i++) {
+        if (os_file_exists(paths[i])) continue;
+        *error = string_printf(a, STR_FMT " wasn't found; rebuild Rig with %s, which puts it beside rig, or install Rig again",
+                               STR_ARG(paths[i]), build_script);
+        return false;
+    }
+    return true;
 }
 
 // The PDB beside a program: its name with .pdb for its .exe (in any case),
@@ -68,9 +91,9 @@ static String pdb_path(Arena *a, String output) {
     return string_printf(a, STR_FMT ".pdb", STR_ARG(stem));
 }
 
-Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String> objects, String output) {
+Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir, Array<String> objects, String output) {
     Array<String> argv = {};
-    array_add(&argv, tc->link_exe);
+    array_add(&argv, lld_link);
     array_add(&argv, str("/NOLOGO"));
     array_add(&argv, str("/INCREMENTAL:NO"));
     array_add(&argv, str("/SUBSYSTEM:CONSOLE"));
@@ -81,32 +104,46 @@ Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String
     // database beside the program, where debuggers look for it (the program
     // names it, with the PDB's own GUID, so a stale one is refused). FULL
     // copies every record into the PDB, so it's complete without the
-    // objects. Both linkers take both options.
+    // objects.
     array_add(&argv, str("/DEBUG:FULL"));
     array_add(&argv, string_printf(a, "/PDB:" STR_FMT, STR_ARG(pdb_path(a, output))));
-    array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->msvc_lib)));
-    array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->ucrt_lib)));
-    array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->um_lib)));
+    // No library but the three given by path below. lld-link, like
+    // Microsoft's link.exe, also reads the libraries an object names as its
+    // defaults, and finds a library named without a path in Visual
+    // Studio's and the Windows SDK's directories when they're installed,
+    // even with no LIB variable set: /NODEFAULTLIB, and every library by
+    // path, keep it from reading anything of theirs, so a program links the
+    // same with them or without.
+    array_add(&argv, str("/NODEFAULTLIB"));
+    // Nothing from the environment either: without /lldignoreenv, lld-link
+    // adds the options in LINK before its command line's and those in
+    // _LINK_ after them, as link.exe does, and looks for libraries in LIB's
+    // directories, so a user with one of them set would get another
+    // program, or none.
+    array_add(&argv, str("/lldignoreenv"));
+    // The start-up, Rig's runtime's (runtime/windows.c). Named, as the
+    // linker would take mainCRTStartup by default for a console program
+    // anyway, so that the object defining it is always linked, and with it
+    // its directives, msvcrt.lib's aliases.
+    array_add(&argv, str("/ENTRY:mainCRTStartup"));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
-    // The C runtime's printf family as functions: the Universal CRT exports
-    // no printf, sprintf, snprintf, fprintf, scanf and the like, only
-    // __stdio_common_vfprintf and its kind, which its headers wrap in inline
-    // functions for C code to call. This static library holds those
-    // wrappers compiled, so a Rig program's #foreign printf finds one
-    // (spec 7.6). The order of the libraries doesn't matter to link.exe or
-    // lld-link, which search them all until nothing more resolves. It goes
-    // first only so that what it calls, the C runtime below, follows it.
-    array_add(&argv, str("legacy_stdio_definitions.lib"));
-    // The C runtime, as DLLs: its startup code and imports, the compiler's
-    // support routines, the Universal CRT (puts and friends), and Windows.
-    array_add(&argv, str("msvcrt.lib"));
-    array_add(&argv, str("vcruntime.lib"));
-    array_add(&argv, str("ucrt.lib"));
-    array_add(&argv, str("kernel32.lib"));
+    // Rig's runtime: the start-up, the stack probe, the printf family as
+    // functions, which the Universal C Runtime doesn't export (spec 7.6),
+    // C's exit handlers. Then the import libraries of the two DLLs a
+    // program imports, made from their exports (spec 10.6): the Universal C
+    // Runtime, ucrtbase.dll, C's library (puts, malloc, memcpy and the
+    // runtime's own entry points), and Windows', kernel32.dll. The order
+    // doesn't matter to lld-link, which searches them all until nothing
+    // more resolves; the runtime goes first only so that what it calls
+    // follows it.
+    array_add(&argv, string_printf(a, STR_FMT "\\rig_runtime.lib", STR_ARG(runtime_dir)));
+    array_add(&argv, string_printf(a, STR_FMT "\\ucrtbase.lib", STR_ARG(runtime_dir)));
+    array_add(&argv, string_printf(a, STR_FMT "\\kernel32.lib", STR_ARG(runtime_dir)));
     return argv;
 }
 
-Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<String> objects, String output) {
+Array<String> link_command_linux(Arena *a, String ld_lld, String runtime_dir, String libc_dir, Array<String> objects,
+                                 String output) {
     Array<String> argv = {};
     array_add(&argv, ld_lld);
     array_add(&argv, str("-o"));
@@ -117,22 +154,32 @@ Array<String> link_command_linux(Arena *a, String ld_lld, String crt_dir, Array<
     // glibc's dynamic loader, which runs the program.
     array_add(&argv, str("-dynamic-linker"));
     array_add(&argv, str("/lib64/ld-linux-x86-64.so.2"));
-    // The C runtime's start (_start, which calls main) and the prologue and
-    // epilogue of .init and .fini, around the program's objects.
-    array_add(&argv, string_printf(a, STR_FMT "/crt1.o", STR_ARG(crt_dir)));
-    array_add(&argv, string_printf(a, STR_FMT "/crti.o", STR_ARG(crt_dir)));
+    // Rig's runtime (runtime/linux.c): the start-up, _start, which calls
+    // glibc's __libc_start_main with main, and atexit, at_quick_exit and
+    // pthread_atfork, which libc.so.6 doesn't export. In place of glibc's
+    // development files, crt1.o and the libc_nonshared.a that libc.so's
+    // linker script adds, which a system needn't have.
+    array_add(&argv, string_printf(a, STR_FMT "/rig_runtime.o", STR_ARG(runtime_dir)));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
-    array_add(&argv, string_printf(a, "-L" STR_FMT, STR_ARG(crt_dir)));
-    // The C library: libc itself, and libm, where glibc keeps most of C's
+    // The C library, its shared libraries by path, as the dynamic loader
+    // loads them: libc itself, and libm, where glibc keeps most of C's
     // <math.h> (sqrt, sin, pow), which libc doesn't export. Both are in
     // glibc's own package, so every program depends on libm.so.6 whether it
-    // calls a math function or not, with nothing more to install (spec 10.6).
-    // ld.lld takes shared libraries in any order, but the order is the one the
-    // dynamic loader searches them in at run time, so -lc goes first: a name
-    // both export (copysign, frexp, ldexp, modf, scalbn) is libc's.
-    array_add(&argv, str("-lc"));
-    array_add(&argv, str("-lm"));
-    array_add(&argv, string_printf(a, STR_FMT "/crtn.o", STR_ARG(crt_dir)));
+    // calls a math function or not, with nothing more to install (spec
+    // 10.6). Not -lc -lm, which find libc.so and libm.so, the development
+    // files' linker scripts. ld.lld takes shared libraries in any order, but
+    // the order is the one the dynamic loader searches them in at run time,
+    // so libc.so.6 goes first: a name both export (copysign, frexp, ldexp,
+    // modf, scalbn) is libc's. Between the two, as libc.so's script has it
+    // (AS_NEEDED), glibc's dynamic loader, for the few names only it exports
+    // (__tls_get_addr, _r_debug), which the interpreter finds too (spec
+    // 10.8): --as-needed makes it a library the program needs only when the
+    // program uses one of them.
+    array_add(&argv, string_printf(a, STR_FMT "/libc.so.6", STR_ARG(libc_dir)));
+    array_add(&argv, str("--as-needed"));
+    array_add(&argv, str("/lib64/ld-linux-x86-64.so.2"));
+    array_add(&argv, str("--no-as-needed"));
+    array_add(&argv, string_printf(a, STR_FMT "/libm.so.6", STR_ARG(libc_dir)));
     return argv;
 }
 
@@ -145,9 +192,11 @@ static bool run_linker(Arena *a, Array<String> argv, String *error) {
         return false;
     }
     if (result.exit_code != 0) {
-        // link.exe writes its errors to stdout, ld.lld to stderr. link.exe
-        // ends its lines with \r\n; rig prints them through the C runtime,
-        // which on Windows turns \n into \r\n itself, so the \r goes.
+        // lld-link and ld.lld write their errors to stderr; stdout is taken
+        // too, so that nothing a linker prints is lost. A \r before a \n
+        // goes: lld-link on Windows ends its lines with \r\n, and rig prints
+        // the text through the C runtime, which on Windows turns \n into
+        // \r\n itself, so its lines would end in \r\r\n.
         String both = string_printf(a, STR_FMT STR_FMT, STR_ARG(result.out), STR_ARG(result.err));
         u8 *text = (u8 *)arena_alloc(a, both.count ? both.count : 1, 1);
         s64 n = 0;
