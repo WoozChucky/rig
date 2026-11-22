@@ -84,7 +84,7 @@
 get_environment :: (name: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
     if name.count == 0 || find_byte(name, "="[0]) >= 0 || find_byte(name, 0) >= 0 { return empty, false; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         // The name's copy is given back as soon as the system has read it,
         // before the value's is asked for, as on Linux, so an allocator
         // sees the same calls in the same order on both systems.
@@ -159,14 +159,14 @@ run_command :: (command: string, allocator: Allocator = context.allocator, loc: 
     if find_byte(command, 0) >= 0 { return -1; }
     // The command's copy for the system: on Windows the whole command
     // line, in UTF-16 (shell_command_line).
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         c_command := shell_command_line(command, allocator, loc);
     } else {
         c_command := to_c_string(command, allocator, loc);
     }
     if c_command == null { return -1; }
     c_fflush(null);
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         status := run_through_shell(c_command, null);
     } else {
         status := c_system(c_command);
@@ -217,7 +217,7 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     if find_byte(command, 0) >= 0 { return empty, -1; }
     // The command's copy for the system: on Windows the whole command
     // line, in UTF-16 (shell_command_line).
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         c_command := shell_command_line(command, allocator, loc);
     } else {
         c_command := to_c_string(command, allocator, loc);
@@ -229,7 +229,7 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     gathered : String_Builder;
     builder_init(*gathered, HEAP_ALLOCATOR);
     defer builder_free(*gathered);
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         status := run_through_shell(c_command, *gathered);
     } else {
         // glibc refuses "rb", and its pipes are binary anyway.
@@ -263,7 +263,7 @@ run_command_with_output :: (command: string, allocator: Allocator = context.allo
     return output, status;
 }
 
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     // The command line Windows runs command with, for run_command and
     // run_command_with_output: "SHELL" /c COMMAND, in UTF-16 with a zero
     // unit after it, in one allocation from allocator at loc, which the

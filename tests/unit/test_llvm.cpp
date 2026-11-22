@@ -1502,7 +1502,15 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Node :: struct { value: int; next: *Node; }\n"
                                 "Tree :: struct { children: []Tree; }\n"
                                 "Empty :: struct {}\n"
+                                "Mode :: enum { A; B :: 5; }\n"
+                                "Small :: enum u8 { X :: 200; }\n"
+                                "Huge :: enum u64 { TOP :: 18446744073709551615; }\n"
+                                "Signed :: enum s8 { LOW :: -2; }\n"
                                 "main :: () {\n"
+                                "    mode: Mode;\n"
+                                "    tiny: Small;\n"
+                                "    huge: Huge;\n"
+                                "    low: Signed;\n"
                                 "    n: Node;\n"
                                 "    t: Tree;\n"
                                 "    e: Empty;\n"
@@ -1554,6 +1562,38 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(text, "!DISubrange(count: 65536, lowerBound: 0)"));
         // *void points at no type, as C's void * does.
         CHECK(contains(text, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64, "));
+        // An enum is an enumeration of its members, in order, over its
+        // integer type (spec 10.7): an unsigned one's values are unsigned,
+        // u64's largest included. It is at its declaration's file and line,
+        // as a struct is.
+        String mode = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Mode\"");
+        CHECK(contains(mode, "size: 64"));
+        CHECK(contains(mode, "line: 4,"));
+        String node_file = attached(&a, line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Node\""),
+                                    "file:");
+        CHECK(node_file.count > 0 && string_eq(attached(&a, mode, "file:"), node_file));
+        CHECK(contains(node_line(&a, text, attached(&a, mode, "baseType:")), "!DIBasicType(name: \"int\""));
+        String mode_members = node_line(&a, text, attached(&a, mode, "elements:"));
+        String a_member = defined_node(line_with(text, "!DIEnumerator(name: \"A\", value: 0)"));
+        String b_member = defined_node(line_with(text, "!DIEnumerator(name: \"B\", value: 5)"));
+        CHECK(a_member.count > 0 && b_member.count > 0);
+        CHECK(contains(mode_members,
+                       string_cstr(&a, string_printf(&a, "!{" STR_FMT ", " STR_FMT "}", STR_ARG(a_member),
+                                                     STR_ARG(b_member)))));
+        String small = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Small\"");
+        CHECK(contains(small, "size: 8"));
+        CHECK(contains(node_line(&a, text, attached(&a, small, "baseType:")), "!DIBasicType(name: \"u8\""));
+        CHECK(contains(text, "!DIEnumerator(name: \"X\", value: 200, isUnsigned: true)"));
+        CHECK(contains(line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Huge\""),
+                       "size: 64"));
+        CHECK(contains(text, "!DIEnumerator(name: \"TOP\", value: 18446744073709551615, isUnsigned: true)"));
+        // A signed one's values are signed, the checker's 64 bits cut to
+        // the enum's width (an s32's kept at 64, for cdb: debug_enum), so
+        // an s8's -2 is -2, not 254. The text doesn't show the width.
+        String low = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Signed\"");
+        CHECK(contains(low, "size: 8"));
+        CHECK(contains(node_line(&a, text, attached(&a, low, "baseType:")), "!DIBasicType(name: \"s8\""));
+        CHECK(contains(text, "!DIEnumerator(name: \"LOW\", value: -2)"));
     }
     arena_free(&a);
 }
@@ -2179,7 +2219,7 @@ TEST(llvm_constants_in_deferred_code) {
                                 "    i := 0;\n"
                                 "    defer { K :: 3; D :: int.[1, 2]; i = K + D[i]; }\n"
                                 "    if i == 0 { return; }\n"
-                                "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"
+                                "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);

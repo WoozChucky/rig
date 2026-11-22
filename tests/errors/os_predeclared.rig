@@ -1,8 +1,10 @@
-// The predeclared constants (issue #147, spec 2.5) can't be declared again
-// at the top level, whatever the declaration is: each is refused at its
-// name, and says what the name is. A local may hide them.
+// The predeclared OS and Operating_System (issues #147, #221, spec 2.5)
+// can't be declared again at the top level, whatever the declaration is:
+// each is refused at its name, and says what the name is. A member's name
+// is in no scope, so WINDOWS is an ordinary procedure. A local may hide
+// them.
 OS :: 3;
-OS_WINDOWS : int;
-OS_LINUX :: () {}
+Operating_System : int;
+WINDOWS :: () {}
 
-main :: () {}
+main :: () { OS := 1; Operating_System := 2; }

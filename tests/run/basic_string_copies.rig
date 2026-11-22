@@ -57,9 +57,9 @@ Counter :: struct {
 
 // Passes every call on to the heap, counting the allocations and keeping
 // the size of the last.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         counter.last_size = size;
     }
@@ -68,9 +68,9 @@ counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
 
 // Counts the allocations it is asked for, as counting_allocator_proc does,
 // and gives no memory, as an allocator that has run out would.
-refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+refusing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         counter.last_size = size;
     }

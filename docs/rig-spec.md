@@ -136,9 +136,9 @@ digit      = "0" … "9" .
 
 A name that contains a byte from 0x80 up, such as `função`, is one bad token, reported once at that byte: `non-ASCII characters can only be in strings and comments, for now`.
 
-Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), `type_info` (section 5.19), the loop variables `it` and `it_index` (section 6.8), the constants `OS`, `OS_WINDOWS` and `OS_LINUX`, untyped integer constants that name the system a program is built for (section 4.9), and the nine procedures built into the language for resizable arrays, `array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset` and `array_free` (section 3.17). How each can be used is described with it.
+Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), `type_info` (section 5.19), the loop variables `it` and `it_index` (section 6.8), the enum `Operating_System`, the systems a program can be built for, and the constant `OS`, the one it is built for (section 4.9), and the nine procedures built into the language for resizable arrays, `array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset` and `array_free` (section 3.17). How each can be used is described with it.
 
-The three constants and the nine procedures are the top level's, visible everywhere, and a top-level declaration can't take one of their names: it is `'OS' is predeclared: it's the system the program is built for`, `'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be`, `'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be` or `'array_add' is predeclared: it's built into the language, for resizable arrays`, at the declaration's name, and the name keeps meaning the constant or the procedure. A local may hide them, as it may any top-level name (section 4.7).
+The enum, the constant and the nine procedures are the top level's, visible everywhere, and a top-level declaration can't take one of their names: it is `'OS' is predeclared: it's the system the program is built for`, `'Operating_System' is predeclared: it's the systems a program can be built for` or `'array_add' is predeclared: it's built into the language, for resizable arrays`, at the declaration's name, and the name keeps meaning the enum, the constant or the procedure. The enum's members, `WINDOWS` and `LINUX`, are in no scope, as any enum's (section 3.18): a top-level `WINDOWS` is an ordinary name. A local may hide the enum, the constant or a procedure, as it may any top-level name (section 4.7).
 
 ### 2.6 Keywords
 
@@ -146,11 +146,12 @@ These words are keywords and cannot be used as identifiers:
 
 ```text
 break         cast          context       continue      defer         else
-enum          false         for           if            null          push_context
-return        struct        true          union         using         while
+enum          enum_flags    false         for           if            null
+push_context  return        struct        true          union         using
+while
 ```
 
-`enum`, `union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears. `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), and `push_context`, which runs a block with another context (section 6.13).
+`union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears. `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), and `push_context`, which runs a block with another context (section 6.13).
 
 ### 2.7 Directives
 
@@ -327,9 +328,9 @@ Hello from Basic
 - **Names.** A module's name is ASCII letters, digits and `_`, a letter first: `Basic`, `Compiler`. Anything else is `'../modules/Basic' isn't a module's name`, at the string, and nothing is looked for, so an `#import` never reaches a file by its path, as a `#load` does. The name is matched as written, case counting, on Windows too, whose file system would open `modules\basic` for `modules\Basic`: `#import "basic";` doesn't find `Basic`. A module in neither place is `there's no module 'Nope' (looked in DIR1 and DIR2)`, at the string, DIR1 and DIR2 being the two places, each absolute, with the system's separators.
 - **The module's files.** The `module.rig` found is named by its absolute path, in diagnostics (section 9.1), in runtime errors and in the debug information, so an editor and a debugger find it wherever the program is; the files it loads are named from it, absolute too. From there the `#import` is a `#load` of that path. The file is known by the same identity as a loaded one (section 2.13), so a module imported twice, or imported by one file and loaded by the path of its `module.rig` by another, is read once, under the name of whichever reached it first. It takes its place in load order where its `#import` is met. A module's file that can't be read is `cannot read 'PATH': MESSAGE`, as for a `#load`.
 - **An `#import` that fails**, with one of the errors above, leaves the program without the module, as a `#load` that fails leaves it without its file: while one has failed, no name anywhere in the program is reported as unknown, nor `main` as missing (section 2.13).
-- **One top level.** For now a module's declarations join the program's one top level, as a loaded file's do (section 4.6): a program that imports Basic can't declare a procedure, struct or constant of a name Basic declares, and no program can declare one of a name Preload declares (below). Modules with scopes of their own come later, with `#import` of a program's own modules and of modules fetched from elsewhere.
+- **One top level.** For now a module's declarations join the program's one top level, as a loaded file's do (section 4.6): a program that imports Basic can't declare a procedure, struct, enum or constant of a name Basic declares, and no program can declare one of a name Preload declares (below). Modules with scopes of their own come later, with `#import` of a program's own modules and of modules fetched from elsewhere.
 - **The modules that ship with rig** are three. `Preload` is what the language itself refers to, and every program imports it (below). `Basic` is Rig's first library, written in Rig over a thin layer of C. `Compiler` is what a build program uses to build other programs (section 7.9). The `README.md` in the directories of `Preload` and `Basic` lists what each declares.
-- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes and the heap allocator, `HEAP_ALLOCATOR`, type information and `Any` (section 3.16), the context: `Context`, the default context, and the temporary storage with its allocator (section 7.10), the resizable arrays' layout, `Resizable_Array`, with the procedures that do the work of their built-in procedures (section 3.17), `Source_Code_Location`, a place in the program's source, what a default `#caller_location` is (section 7.2), the program's command-line arguments, saved before `main`'s first line (section 7.4), and the runtime error a program's own code may end with (section 8.1). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`; `__runtime_init`, which sets the default context up, section 7.10; `__save_command_line` and `__command_line_arguments`, which save and hold the command-line arguments, section 7.4; `__runtime_error`, the runtime error Basic's `assert` ends with, section 8.1; and `__array_add` and the other helpers the resizable arrays' built-in procedures call, section 3.17), and its plain names (`Allocator`, the modes, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, the `TYPE_INFO_*` tags, `ARRAY_FIXED`, `ARRAY_VIEW` and `ARRAY_RESIZABLE`; `Context`, `default_context`, `Temporary_Storage`, `Temporary_Storage_Page`, `TEMPORARY_STORAGE_SIZE`, `temporary_allocator_proc` and `TEMPORARY_ALLOCATOR`; `Resizable_Array`; `Source_Code_Location`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
+- **Preload.** Every program imports `Preload` without an `#import`: an ordinary program, a build program and each of its workspaces (section 7.9), a program `rig check` checks, with `--stdin` and `--stdin-for` too (section 10.1), and one the test mode runs interpreted (section 10.8); the compile-time world where `#run` runs has it too (section 7.8). For now it holds the allocator's shape, `Allocator`, its modes, the enum `Allocator_Mode`, and the heap allocator, `HEAP_ALLOCATOR`, type information and `Any` (section 3.16), the context: `Context`, the default context, and the temporary storage with its allocator (section 7.10), the resizable arrays' layout, `Resizable_Array`, with the procedures that do the work of their built-in procedures (section 3.17), `Source_Code_Location`, a place in the program's source, what a default `#caller_location` is (section 7.2), the program's command-line arguments, saved before `main`'s first line (section 7.4), and the runtime error a program's own code may end with (section 8.1). In load order it comes first (section 2.13), before the main file, and so before a workspace's other files (section 7.9) and the files the main file's own `#load`s and `#import`s reach: its declarations come before the program's, so a program that declares one of its names is told so at its own declaration, `'Allocator' is already declared at .../Preload/module.rig:L:C`, and every use of the name, the program's and Preload's own, finds Preload's. Its `module.rig` is read right after the main file. An `#import "Preload";`, or a `#load` of its `module.rig` by its path, reads nothing more, as for any module. Its files are a module's, named by their absolute paths, and its declarations join the one top level (above); every name it declares for its own use starts with two underscores (`__malloc`; `__runtime_init`, which sets the default context up, section 7.10; `__save_command_line` and `__command_line_arguments`, which save and hold the command-line arguments, section 7.4; `__runtime_error`, the runtime error Basic's `assert` ends with, section 8.1; and `__array_add` and the other helpers the resizable arrays' built-in procedures call, section 3.17), and its plain names (`Allocator`, `Allocator_Mode`, `heap_allocator_proc` and `HEAP_ALLOCATOR`; `Any`, the `Type_Info` structs, `Type_Info_Enum` among them, and the enums `Type_Info_Tag` (the tags, its members) and `Array_Kind`; `Context`, `default_context`, `Temporary_Storage`, `Temporary_Storage_Page`, `TEMPORARY_STORAGE_SIZE`, `temporary_allocator_proc` and `TEMPORARY_ALLOCATOR`; `Resizable_Array`; `Source_Code_Location`) are the ones for programs to use, a convention the compiler doesn't enforce. It is looked for where any module is, before anything is checked: one in neither place is `rig: error: there's no module 'Preload' (looked in DIR1 and DIR2)`, and a `module.rig` that is there but can't be read is `rig: error: cannot read 'PATH': MESSAGE`, PATH its absolute path, each said alone, with status 1 (section 10.1), since no `#import` names it for the message to be at and nothing of the program means anything without it.
 
 So a program that imports nothing has Preload's allocator:
 
@@ -340,9 +341,9 @@ puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {
     a := HEAP_ALLOCATOR;
-    p := a.proc(ALLOCATE, 64, 0, null, a.data);
+    p := a.proc(.ALLOCATE, 64, 0, null, a.data);
     if p != null { puts("64 bytes from the heap"); }
-    a.proc(FREE, 0, 0, p, a.data);
+    a.proc(.FREE, 0, 0, p, a.data);
 }
 ```
 
@@ -369,17 +370,18 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - resizable array types `[..]T` (section 3.17);
 - `string` (section 3.8);
 - struct types, declared by the program (section 3.9), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
+- enum types, declared by the program with `enum` or `enum_flags`, each over an integer type (section 3.18), Preload's and Basic's among them, and the predeclared `Operating_System`, the systems a program can be built for (sections 2.5, 4.9);
 - procedure types `(int, int) -> int`, the types of procedure values (section 3.15).
 
-`void` is not a type of values: it appears only as what a `*void` points at (section 3.10). Untyped constants have types of their own until they meet one (section 3.12).
+`void` is not a type of values: it appears only as what a `*void` points at (section 3.10). Untyped constants have types of their own until they meet one (section 3.12), and so do literals written without their type and members written without their enum.
 
 ```ebnf
 Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | "[" ".." "]" Type | ProcType | identifier .
 ```
 
-A type name is a built-in type's name or a struct's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
+A type name is a built-in type's name, a struct's or an enum's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct or an enum cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
 
-**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
+**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, the same enum declaration (two enums declared alike are two types), or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
 ### 3.2 Integer types
 
@@ -482,6 +484,7 @@ A struct value is copied whole by assignment, as an argument and as a result. St
 | `[]T`, `string` | 16 | 8 |
 | `[..]T` | 40 | 8 |
 | struct | section 3.9 | section 3.9 |
+| enum | its integer type's | its integer type's |
 | procedure type | 8 | 8 |
 
 `size_of(T)` gives a type's size in bytes (section 5.16).
@@ -499,17 +502,18 @@ Numeric literals and arithmetic on them have no fixed type until they meet one.
 
 Where an untyped constant meets a type, in a declaration with a type, an assignment, an argument, a return, a field or element of a literal, or an operand of an operator whose other operand is typed, it takes that type (`Any` aside, below):
 
-- An untyped integer takes any integer type whose range holds its value, or any float type (it is converted to the nearest value of that type). A value outside the range is `300 doesn't fit in 'u8'`.
+- An untyped integer takes any integer type whose range holds its value, or any float type (it is converted to the nearest value of that type). A value outside the range is `300 doesn't fit in 'u8'`. The untyped `0` also takes any `enum_flags` type, as its empty set; no other number takes an enum type (section 3.18).
 - An untyped float takes any float type. Taking `float32`, its value must be within `float32`'s range (`1e+300 doesn't fit in 'float32'`, the value written as C's `%g` writes it) and is rounded to it. An untyped float never becomes an integer implicitly: `x : int = 1.5;` is `a value of type 'float32' doesn't convert to 'int' implicitly`.
 
 Where it meets no type, as in `x := 5;`, an untyped integer becomes an `int` and an untyped float a `float32`. For that reason messages name an untyped integer `int` and an untyped float `float32`. It takes its default type too where it meets `Any`, which holds a value of any type, a cast to `Any` included: `a : Any = 1.5;` and `cast(Any) 1.5` hold a `float32` (section 3.16). One place differs: passed to a variadic foreign procedure after its parameters, where C receives a `double`, an untyped float becomes a `float64` (section 7.6).
 
-Two other kinds of value take their type from where they are used:
+Three other kinds of value take their type from where they are used:
 
 - `null` takes the pointer type or procedure type it meets (sections 3.5, 3.15);
-- a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it, but not `Any` (section 5.17).
+- a compound literal written without its type, `.{...}` or `.[...]`, takes the struct, array or view type it meets, or the type of a cast around it, but not `Any` (section 5.17);
+- a member written without its enum, `.FREE`, takes the enum type it meets, as `.{...}` takes a struct type, and is that enum's member; it also takes the type of the other side of `==` or `!=` from an enum value, and of the other operand of `| & ^` from a flags value (section 3.18).
 
-Neither has a default type: with nothing to take a type from, each is an error, and a literal without its type that meets `Any` has nothing to take one from either (section 5.17). The exceptions are two places where `null` is a `*void`: passed to a variadic foreign procedure after its parameters, as C's `NULL` (section 7.6), and meeting `Any` (section 3.16).
+None has a default type: with nothing to take a type from, each is an error, and a literal without its type, or a member without its enum, that meets `Any` has nothing to take one from either (sections 5.17, 3.18). The exceptions are two places where `null` is a `*void`: passed to a variadic foreign procedure after its parameters, as C's `NULL` (section 7.6), and meeting `Any` (section 3.16).
 
 ### 3.13 Implicit conversions
 
@@ -525,9 +529,10 @@ A value converts implicitly to another type only in these cases:
 - `[..]T` to `[]T`, a view of the resizable array's elements, its `count` of them at its `data`, read where it converts (section 3.17).
 - A string literal, or a string that is constant data holding one (a string constant, a string field or element of constant data, or a `#run`'s string), to `*u8` (section 3.8).
 - `.{...}` to a struct type, and `.[...]` to an array or view type (section 5.17).
+- A member written without its enum, `.FREE`, to its enum type, and the untyped `0` to an `enum_flags` type (section 3.18).
 - Any value to `Any`, Preload's struct of the value's address and its type's description; a value of type `Any` converts as itself (section 3.16).
 
-Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
+Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between an enum and an integer or another enum, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
 
 Implicit conversions happen wherever a value goes into something of a known type: a variable's declaration with a type, an assignment, an argument, a return, a field or element of a compound literal, and a binary operator's operands (section 5.3).
 
@@ -545,6 +550,7 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 |---|---|---|
 | any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below); `cast(Any) e` converts a value of any type, a pointer and a procedure value included (section 3.16) |
 | integer | integer | the same number. If `e` is a constant, a value outside `T`'s range is the compile-time error `300 doesn't fit in 'u8'`, at the cast; otherwise the value is checked at run time (section 8.3). |
+| enum or integer | integer or enum, not two enum types | the integer cast between their integer types, checked the same way (`300 doesn't fit in 'Small'`); a value no member has is allowed (section 3.18) |
 | `bool` | integer | 1 for `true`, 0 for `false` |
 | integer or float | float | the nearest value of `T`, ties to even (`float32` to `float64` is exact) |
 | float | integer | the value truncated toward zero, saturated to `T`'s range: a value above `T`'s largest gives its largest, a value below its smallest gives its smallest, NaN gives 0. No runtime check. |
@@ -561,9 +567,10 @@ Any other cast is an error:
 - a number to `bool`: `can't cast 'int' to 'bool': compare instead, as in x != 0`;
 - a procedure value to anything but its own type, `*void` and `Any`, or anything but `*void` and `null` to a procedure type: `can't cast '(int) -> int' to '(s32) -> s32'; a procedure value casts only to and from *void`;
 - a pointer to any type but a pointer, a 64-bit integer or `Any`, or a number or `bool` to a pointer: `can't cast '*int' to 'u32'; a pointer casts to another pointer or to a 64-bit integer`;
+- one enum type to another: `can't cast 'Small' to 'Mode'` (`cast(Mode) cast(int) s` says what is meant);
 - anything else: `can't cast 'string' to 'int'`.
 
-`cast,trunc(T) e` takes an integer and gives an integer, and nothing else (`cast,trunc only takes integers`). It never fails: narrowing keeps the low bits, widening extends by the sign of `e`'s type (sign extension from a signed type, zero extension from an unsigned one), and between types of the same width the bits are kept and read by `T`'s sign. So `cast,trunc(u8) 300` is 44 and `cast,trunc(s8) 200` is -56.
+`cast,trunc(T) e` takes an integer and gives an integer, and nothing else (`cast,trunc only takes integers`); an enum counts as its integer type here, as in a checked cast, and between two enum types it is `can't cast 'Small' to 'Mode'`, as a checked cast is. It never fails: narrowing keeps the low bits, widening extends by the sign of `e`'s type (sign extension from a signed type, zero extension from an unsigned one), and between types of the same width the bits are kept and read by `T`'s sign. So `cast,trunc(u8) 300` is 44 and `cast,trunc(s8) 200` is -56.
 
 A cast of a constant is a constant of type `T`, folded by the same rules: `cast(s32) 1e30` is 2147483647. In a cast, an untyped integer operand is an `int` first, and an untyped float operand a `float64`. So a cast of an untyped float to `float32` rounds from the double, and a value beyond `float32`'s range becomes an infinity: `cast(float32) 1e300` is infinity, where the implicit conversion in `x : float32 = 1e300;` is an error. `cast(Any) e` is the exception to both: it is the conversion to `Any` (section 3.16), which makes no constant and gives an untyped constant its default type, so `cast(Any) 1.5` holds a `float32`, as `a : Any = 1.5;` does.
 
@@ -663,11 +670,9 @@ main :: () {
 A program can find out, while it runs, what type a value has. `type_info(T)` (section 5.19) gives a `*Type_Info`, the address of a **description** of type `T`, laid out as structs the program reads as it reads any data, and an `Any` pairs a value's address with its type's description. Every value converts to `Any` implicitly (below), so a procedure that takes an `Any` takes a value of any type and finds out what it is. This is Jai's type information, trimmed to Rig's types. The structs, their tags and `Any` are Preload's (section 2.14), so every program has them:
 
 ```text
-TYPE_INFO_INTEGER   :: 0;  TYPE_INFO_FLOAT   :: 1;  TYPE_INFO_BOOL   :: 2;
-TYPE_INFO_STRING    :: 3;  TYPE_INFO_POINTER :: 4;  TYPE_INFO_PROCEDURE :: 5;
-TYPE_INFO_VOID      :: 6;  TYPE_INFO_STRUCT  :: 7;  TYPE_INFO_ARRAY  :: 8;
+Type_Info_Tag :: enum { INTEGER; FLOAT; BOOL; STRING; POINTER; PROCEDURE; VOID; STRUCT; ARRAY; ENUM :: 11; }
 
-Type_Info :: struct { tag: int; size: int; alignment: int; }
+Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
 Type_Info_Integer   :: struct { info: Type_Info; signed: bool; }
 Type_Info_Pointer   :: struct { info: Type_Info; pointer_to: *Type_Info; }
@@ -675,26 +680,29 @@ Type_Info_Procedure :: struct { info: Type_Info; parameter_types: []*Type_Info; 
                                 is_c_call: bool; is_variadic: bool; }
 Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member; }
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
-Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array_kind: int; count: int; }
-ARRAY_FIXED :: 0;  ARRAY_VIEW :: 1;  ARRAY_RESIZABLE :: 2;
+Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
+Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
+Type_Info_Enum      :: struct { info: Type_Info; name: string; underlying: *Type_Info; is_flags: bool;
+                                names: []string; values: []s64; }
 
 Any :: struct { type: *Type_Info; value_pointer: *void; }
 ```
 
-**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, one of the nine tags (constants, numbered as Jai's tags are, until Rig has enums), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `info`, is that `Type_Info` (Rig has no `using`, so it is read as `t.info.size`), and a `*Type_Info` whose tag says the kind is cast to the kind's struct: `cast(*Type_Info_Struct) t` when `t.tag == TYPE_INFO_STRUCT`.
+**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, a member of the enum `Type_Info_Tag` (section 3.18), numbered as Jai's tags are (`ENUM` is Jai's 11, the numbers between being kinds of Jai's that Rig doesn't have), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `info`, is that `Type_Info` (Rig has no `using`, so it is read as `t.info.size`), and a `*Type_Info` whose tag says the kind is cast to the kind's struct: `cast(*Type_Info_Struct) t` when `t.tag == .STRUCT`.
 
-- **Integers**, `s8` to `u64` and `int` (`TYPE_INFO_INTEGER`): a `Type_Info_Integer`, whose `signed` says whether the type is signed.
-- **Floats, `bool`, `string` and `void`** (`TYPE_INFO_FLOAT`, `TYPE_INFO_BOOL`, `TYPE_INFO_STRING`, `TYPE_INFO_VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
-- **Pointers** (`TYPE_INFO_POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
-- **Arrays, views and resizable arrays** (`TYPE_INFO_ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind` is `ARRAY_FIXED` for an array `[N]T`, `ARRAY_VIEW` for a view `[]T` and `ARRAY_RESIZABLE` for a resizable array `[..]T` (section 3.17), in Jai's order, and `count` is the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A resizable array's `size` is 40 (section 3.11).
-- **Structs** (`TYPE_INFO_STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's declared name and whose `members` are its fields in order, none for a struct with none. Each is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9).
-- **Procedure types** (`TYPE_INFO_PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
+- **Integers**, `s8` to `u64` and `int` (`.INTEGER`): a `Type_Info_Integer`, whose `signed` says whether the type is signed.
+- **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
+- **Pointers** (`.POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
+- **Arrays, views and resizable arrays** (`.ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind`, a member of the enum `Array_Kind`, is `.FIXED` for an array `[N]T`, `.VIEW` for a view `[]T` and `.RESIZABLE` for a resizable array `[..]T` (section 3.17), in Jai's order, and `count` is the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A resizable array's `size` is 40 (section 3.11).
+- **Structs** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's declared name and whose `members` are its fields in order, none for a struct with none. Each is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9).
+- **Procedure types** (`.PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
+- **Enums**, `enum` and `enum_flags` types (`.ENUM`, section 3.18): a `Type_Info_Enum`, whose `name` is the enum's declared name, `underlying` the description of its integer type, whose size, alignment and sign it has, and `is_flags` whether it is an `enum_flags`. Its members are `names` and `values`, in order, none for an enum with none: `names[i]` is a member's name and `values[i]` its value, as 64 bits, sign-extended from a signed integer type and zero-extended from an unsigned one, so a `u64` member above `s64`'s largest value reads as a negative `s64`.
 
-Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 56, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48 and `Any` 16, each aligned to 8.
+Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 56, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
 
 **One description per type.** Types that are the same type by section 3.1's identity have one description, at one address, so `a.type == type_info(int)` tells types apart by their descriptions' addresses. `int` and `s64` are two types, with two descriptions, the same in all but their addresses; `float` is `float32`, with one. A description points at the descriptions of the types it is made of, so a struct that holds a pointer to itself (`Node :: struct { next: *Node; }`) is described by pointing back at its own description: the descriptions are cyclic, not infinite.
 
-**Where they live.** The compiler writes each description into the program's read-only data (section 10.3), once, and only for the types the program uses: those `type_info` names, those of the values it converts to `Any`, and every type their descriptions reach (fields, elements, pointees, parameters and results). Names are string literals there, and the arrays that the views of members, parameter types and result types see are read-only too. Writing any of it is a memory error that no check catches (section 8.6). Code run while compiling has descriptions of its own, laid out the same (section 7.8).
+**Where they live.** The compiler writes each description into the program's read-only data (section 10.3), once, and only for the types the program uses: those `type_info` names, those of the values it converts to `Any`, and every type their descriptions reach (fields, elements, pointees, parameters, results and an enum's integer type). Names are string literals there, and the arrays that the views of members, parameter types, result types and an enum's names and values see are read-only too. Writing any of it is a memory error that no check catches (section 8.6). Code run while compiling has descriptions of its own, laid out the same (section 7.8).
 
 **Any.** `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`: its `type` is a value's type's description, and its `value_pointer` the value's address. A value converts to `Any` implicitly wherever a value goes into something of a known type (section 3.13): a variable's declaration with a type, an assignment, an argument, a `..Any` one included (section 5.10), a return, a field or element of a compound literal, and a cast, `cast(Any) e`, which is this conversion for a value of any type, a pointer and a procedure value included (section 3.14).
 
@@ -715,7 +723,7 @@ describe :: (a: Any) {
     if a.type == type_info(int) {
         print_string("an int: ");
         print_int((cast(*int) a.value_pointer).*);
-    } else if a.type.tag == TYPE_INFO_STRUCT {
+    } else if a.type.tag == .STRUCT {
         s := cast(*Type_Info_Struct) a.type;
         print_string(s.name);
         print_string(" with ");
@@ -798,7 +806,7 @@ It is 40 bytes, aligned to 8 (section 3.11). Its first 16 bytes are a view's (se
 
 **A value and its view.** A resizable array is a value, an aggregate as a struct is: assigning it, passing it or returning it copies its 40 bytes, not its elements, so two copies share the elements. Growing or freeing one of them leaves the other pointing at memory that may have moved or been given back, a memory error that no check catches (section 8.6), so code that grows an array is given a pointer to it, `*[..]T`, as the built-in procedures are (below). A resizable array parameter is read-only as a view parameter is (section 7.2): its members can't be assigned nor its address taken, but its elements can be assigned, lying elsewhere.
 
-A `[..]T` converts implicitly to the `[]T` of the same `T` (section 3.13): the view of its `count` elements at its `data`, read where the conversion is, so the view doesn't see a later change of the array's count, as `v[f()]` doesn't see `f`'s (section 5.18). It converts so wherever a value goes into a `[]T`: a variable, an assignment, an argument, a return. A cast, `cast([]T) a`, is that conversion, and a spread, `..a`, passes that view as a `..T` parameter's arguments (section 5.10). The view is valid while the array's memory is: once the array grows or is freed, the memory may have moved or been given back, and using the view is a memory error (section 8.6). Nothing converts to a `[..]T` but a `[..]T`: `a value of type '[]int' doesn't convert to '[..]int' implicitly`, `can't cast '[]int' to '[..]int'`, and a literal makes none, `.[1, 2]` meeting one being `a '.[' literal needs an array or a view type, not '[..]int'`. A `*[..]T` is no `*[]T`, and resizable arrays aren't compared (`'==' needs numbers, bools, pointers, procedure values or strings, not '[..]int'`, section 5.6).
+A `[..]T` converts implicitly to the `[]T` of the same `T` (section 3.13): the view of its `count` elements at its `data`, read where the conversion is, so the view doesn't see a later change of the array's count, as `v[f()]` doesn't see `f`'s (section 5.18). It converts so wherever a value goes into a `[]T`: a variable, an assignment, an argument, a return. A cast, `cast([]T) a`, is that conversion, and a spread, `..a`, passes that view as a `..T` parameter's arguments (section 5.10). The view is valid while the array's memory is: once the array grows or is freed, the memory may have moved or been given back, and using the view is a memory error (section 8.6). Nothing converts to a `[..]T` but a `[..]T`: `a value of type '[]int' doesn't convert to '[..]int' implicitly`, `can't cast '[]int' to '[..]int'`, and a literal makes none, `.[1, 2]` meeting one being `a '.[' literal needs an array or a view type, not '[..]int'`. A `*[..]T` is no `*[]T`, and resizable arrays aren't compared (`'==' needs numbers, bools, pointers, procedure values, strings or enums, not '[..]int'`, section 5.6).
 
 **Members** (section 5.12). `.count`, an `int`, and `.data`, a `*T`, are a view's; `.allocated` is an `int`, and `.allocator` Preload's `Allocator`. Each is a place when the array is one (section 5.1), so each can be assigned: a program chooses an array's allocator by setting `.allocator` before it first grows, and gives it elements it holds elsewhere by setting `.data` and `.count` (below). Any other member is `'[..]int' has no field 'size'`. They aren't reached through a pointer, as a view's aren't: on a `*[..]int`, `.count` is `'.count' isn't reached through a pointer, '*[..]int'; write .*.count`, so code given `p`, a `*[..]T`, writes `p.*.count`.
 
@@ -809,7 +817,7 @@ A `[..]T` converts implicitly to the `[]T` of the same `T` (section 3.13): the v
 - A struct may hold one, of its own type's elements too, since they lie elsewhere (section 3.9): `Node :: struct { name: string; kids: [..]Node; }`.
 - A global variable may be one, zeroed (`numbers : [..]int;`), or hold one zeroed in its value, as a field its value leaves out. It grows as a local does, from the context of the code that first grows it.
 - A constant can't hold one, since no literal makes one, but for one zeroed, a field a struct literal leaves out, as a view field may be (section 4.2): with `Holder :: struct { items: [..]int; n: int; }`, `H :: Holder.{n = 2};` is a constant, and `h := H;` gives `h` an empty array that can grow. Any other, that field itself included (`E :: H.items;`), is `a constant can't hold a resizable array; no literal makes one`, at the value.
-- A resizable array converts to `Any` as any value does (section 3.16). `type_info([..]T)` describes it as a `Type_Info_Array` whose `array_kind` is `ARRAY_RESIZABLE` and whose `count` is -1. Basic's `print` writes it as it writes a view, `[1, 2, 3]`.
+- A resizable array converts to `Any` as any value does (section 3.16). `type_info([..]T)` describes it as a `Type_Info_Array` whose `array_kind` is `Array_Kind.RESIZABLE` and whose `count` is -1. Basic's `print` writes it as it writes a view, `[1, 2, 3]`.
 - A `#run`'s code uses resizable arrays as any code does, their memory being the compile-time world's (section 7.8), and may give a view of one's elements, which is baked as any view is. A `#run`'s result can't hold one, for now, wherever it is in it: `#run's result holds a resizable array, which can't be baked, for now`, at the `#run`.
 - C takes none (section 7.6): a foreign or `#c_call` procedure can't take one (`a foreign procedure can't take a '[..]int'; pass its .data`) or return one, and neither can C's `...`.
 
@@ -845,7 +853,7 @@ After the work, an `array_add`, `array_insert`, `array_reserve` or `array_resize
 
 **The place.** While a built-in procedure calls the allocator, to grow the array or to give its memory back, `context.allocation_location` is the place of the built-in's name in its call, made as a default `#caller_location` is (section 7.2), and the place before it is put back after, as Basic's `alloc` and `free` do (section 7.10). So an allocator that records where it is asked from names the program's line, `array_add(*numbers, 3)`'s, not Preload's: each call its own, and a loop's call the same each time it grows the array. A built-in takes no place to pass on, for now, so a procedure of the program's own that calls `array_add` for its callers gives its own line, not theirs.
 
-**Growth.** Adding or inserting into a full array, its count at least `allocated`, makes room for the larger of 8 and twice `allocated` elements: doubling means that `n` elements added one at a time are moved about `n` times in all. Past half of `int`'s largest value, the room is `int`'s largest. `array_reserve` and `array_resize` grow to exactly the count they are given. An array that owns no memory is given it with the allocator's `ALLOCATE`, and one that owns some has it resized with `RESIZE`, from its `allocated` elements' bytes; room whose bytes are past `int`'s largest asks for `int`'s largest number of bytes, which no allocator gives. `array_free` gives the memory back with `FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them.
+**Growth.** Adding or inserting into a full array, its count at least `allocated`, makes room for the larger of 8 and twice `allocated` elements: doubling means that `n` elements added one at a time are moved about `n` times in all. Past half of `int`'s largest value, the room is `int`'s largest. `array_reserve` and `array_resize` grow to exactly the count they are given. An array that owns no memory is given it with the allocator's `.ALLOCATE`, and one that owns some has it resized with `.RESIZE`, from its `allocated` elements' bytes; room whose bytes are past `int`'s largest asks for `int`'s largest number of bytes, which no allocator gives. `array_free` gives the memory back with `.FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them.
 
 **Owning no memory.** An array whose `data` and `count` a program set by hand, its `allocated` 0, owns no memory: indexing and `for` read its elements where they are, its first growth copies them into memory of its own, from its allocator, leaving them where they were, and grows it to at least its count, and `array_free` gives nothing back for it. Elements of 0 bytes (`[..]Empty`, for a struct with no fields) take no memory at all: growing asks the allocator for nothing, and `data` becomes an address of Preload's that isn't null, so indexing and `for` find the elements, and `array_free` gives nothing back for them.
 
@@ -889,11 +897,142 @@ main :: () {
 example.rig:3:10: runtime error: index -1 is out of bounds (count 0)
 ```
 
+### 3.18 Enum types
+
+An enum is a type of its own over an integer type, whose values are named by its members, as in Jai. `enum_flags` declares one whose members are flags, sets of bits combined with `| & ^ ~`.
+
+```ebnf
+EnumDecl = identifier "::" ( "enum" | "enum_flags" ) [ identifier ] "{" { identifier [ "::" Expression ] ";" } "}" .
+```
+
+```rig
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Small :: enum u8 { A; B :: 5; C; LAST :: C + 3; }
+Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING :: 16; FADING; ALL :: VISIBLE | SOLID | GLOWING | FADING; }
+
+main :: () {
+    print("{} {} {}\n", cast(int) Mode.FREE_ALL, cast(int) Small.LAST, cast(int) Look.ALL);
+    print("{} {}\n", size_of(Mode), size_of(Small));
+}
+```
+
+The program prints:
+
+```text
+3 9 51
+8 1
+```
+
+**Declaration.** An enum is declared at the top level only, for now, as a struct is (section 4.1), and is usable anywhere, before its declaration too; inside a body, `E :: enum` is `enums can only be declared at the top level, for now`, at the name. The name after `enum` or `enum_flags` is its integer type, one of the integer types of section 3.2; without one it is `int`. A C binding writes `enum s32`. Any other type there is `an enum's type must be an integer type, not 'float32'`, at it, and the enum is then over `int`. An enum's size and alignment are its integer type's (section 3.11). An enum may have no members. Each declaration is a type of its own: two enums declared alike are two types (section 3.1). An `#if` among the members is `#if can't be among an enum's members, for now`; anything but a name where a member starts is `expected a member's name, found integer literal`.
+
+**Values.** Each member is a constant. `NAME :: e` sets its value: `e` is a constant expression, known while compiling, that converts to the integer type, as a typed constant's value does (`300 doesn't fit in 's8'`, at it; `the value of constant 'X' isn't known while compiling`). A member without one takes the next value:
+
+- in an `enum`, the value of the member before it plus one, the first member's 0: `Mode`'s members are 0, 1, 2 and 3, `Small`'s 0, 5, 6 and 9;
+- in an `enum_flags`, the lowest power of two above the value of every member before it, each read as unsigned at the integer type's width, the first member's 1: `Look`'s members are 1, 2, 16, 32 and 51.
+
+A value past the integer type's range is an error at the member's name: in `Full :: enum u8 { A :: 255; B; }`, `B` is `256 doesn't fit in 'u8'`. Two members may have the same value, but not the same name (`'A' is already declared at PATH:L:C`).
+
+**Inside the body**, each member is, from after its own declaration on, a plain constant of the integer type, named alone: `LAST :: C + 3` and `ALL :: VISIBLE | SOLID | ...` above. An earlier member hides an outer name of the same in the values that follow it. It may be named with its enum too, a constant of the enum (below): in `F :: enum { Q :: 3; P :: cast(int) F.Q + 1; }`, `P` is 4. A member not worked out yet, its own value's included, needs the whole enum, a cycle (section 4.8), and so does a member reached through another declaration: two enums that name each other's members are each worked out whole, so `E :: enum { A :: cast(int) F.B; }` with `F :: enum { B :: 3; C :: cast(int) E.A; }` is `'E' is defined in terms of itself`, though `B` needs nothing of `E`. Outside the body the members are in no scope: `FREE` alone is never `Mode`'s member, but whatever `FREE` names where it is written.
+
+**Naming a member.** `Mode.FREE`, an enum's name, a `.` and a member's name, is the member, a constant of the enum type (section 5.12). `.FREE`, a `.` and a member's name with no enum before it, is a member written without its enum, which takes the enum type it meets, as `.{...}` takes the struct type it meets (section 3.12): in a declaration with a type, an assignment, an argument (a default value's too), a return, a field or element of a compound literal, and a cast around it. It also takes the type of the other side of `==` or `!=` from an enum value, and the type of the other operand of `| & ^` from a flags value. `.A | .B`, `.A | 0` and `~.A` wait for their type together, as `1 | 2` stays untyped, so `f = .A | .B;` takes `f`'s type. `.A | 1` and `.A | 1.5` wait too, and the flags type they meet refuses the `1` or the `1.5` as `f | 1` does: `mismatched types 'Look' and 'int' for '|'; cast one of them`.
+
+```rig
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Look :: enum_flags { VISIBLE; SOLID; GLOWING; }
+Request :: struct { mode: Mode; look: Look; }
+
+next :: (m: Mode) -> Mode {
+    if m == .FREE_ALL { return .ALLOCATE; }
+    return cast(Mode) (cast(int) m + 1);
+}
+
+main :: () {
+    m : Mode = .RESIZE;
+    m = next(.FREE);
+    r := Request.{.FREE, .VISIBLE | .GLOWING};
+    f : Look = .SOLID;
+    f |= .GLOWING;
+    f &= ~.SOLID;
+    seen := (f & .GLOWING) != 0;
+    same := r.look == .VISIBLE | .GLOWING;
+    print("{} {} {} {}\n", cast(int) m, cast(int) f, seen, same);
+}
+```
+
+The program prints:
+
+```text
+3 4 true true
+```
+
+`m` is `FREE_ALL`, 3; `f` is `GLOWING` alone, 4, once `SOLID` is set and cleared; and `r.look`, `VISIBLE | GLOWING`, is 5.
+
+A member meeting a type that isn't an enum is `'.FREE' needs an enum type, not 'int'`, at the `.`; an enum without the member is `'Mode' has no member 'FRE'`, at the member's name, whether written `Mode.FRE` or `.FRE`. Where nothing gives it a type, as in `x := .FREE;`, `.A | .B` alone, `.FREE == .RESIZE`, `.FREE == 0` (an untyped constant has no type to give), an operand of any other operator, `Any` and C's `...`:
+
+```rig error
+main :: () {
+    x := .FREE;
+}
+```
+
+```text
+example.rig:2:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        x := .FREE;
+             ^
+```
+
+**Conversions.** Nothing converts to or from an enum implicitly (`a value of type 'Mode' doesn't convert to 'int' implicitly`), except the untyped constant `0` to an `enum_flags` type, its empty set: a condition must be a `bool` (section 6.5), so `(f & .GLOWING) != 0` needs it. `cast(T) e` casts between an enum and any integer type, either way, as the integer cast between their integer types does (section 3.14): a constant must fit (`cast(Small) 300` is `300 doesn't fit in 'Small'`), any other value is checked at run time (section 8.3), and `cast,trunc` takes an enum as it takes its integer type. A value no member has is allowed, as in C: `cast(Mode) 7` is a `Mode`. Between two enum types there is no cast (`can't cast 'Small' to 'Mode'`): `cast(Mode) cast(int) s` says what is meant. A value that doesn't fit stops the program at the cast, the message naming the enum:
+
+```rig runtime-error
+Small :: enum u8 { A; B; }
+
+main :: () {
+    n := 300;
+    s := cast(Small) n;
+}
+```
+
+```text
+example.rig:5:10: runtime error: the value doesn't fit in 'Small'
+```
+
+**Operators.** `== != < <= > >=` compare two values of the same enum type, as numbers of its integer type, by its sign (section 5.6); a flags value also compares with `0`. `| & ^` take two values of the same `enum_flags` type, or one and `0`, and give that type, and `~` takes one (sections 5.5, 5.8), each wrapping as its integer type does: in the first example's `Look`, an `enum_flags u8` whose `ALL` is 51, `~Look.ALL` is 204. So do `|=`, `&=` and `^=` (section 6.4). No other operator takes an enum: `'+' needs numbers, not 'Mode'`, `'|' needs integers, not 'Mode'` for an enum that isn't flags, `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Nor does a condition (`the condition of 'if' must be a bool, not 'Mode'`), nor an array's count: `[Mode.FREE]int` is `an array's count must be an integer, not 'Mode'`, and `[cast(int) Mode.FREE_ALL + 1]int` is how.
+
+**Constants.** A member, a cast of a constant to an enum and the flags operators on constants are constants of the enum type (section 5.9): they fold, and work in `#if` (`#if DEFAULT == .FREE`), in constants (`DEFAULT :: Mode.FREE;`), as a global's value and in a `#run`'s code. A member is no place: `can't assign to 'Mode.FREE': it's an enum's member`, and `can't take the address of 'Mode.FREE': it's an enum's member`.
+
+**Type information.** An enum is described by a `Type_Info_Enum`, whose tag is `.ENUM` (section 3.16): its name, its integer type's description, whether it is an `enum_flags`, and its members' names and values, in order. An enum converts to `Any` as any value does, so Basic's `print` writes it by its description: a value a member has as that member's name, the first one's when two share it; a flags value no member has as the members it is made of, joined by ` | `, with any bits no member names last, as a number without a sign (alone, when no member's bits are in it); and a value of an `enum` that no member has as its number (Basic's README says how):
+
+```rig
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING; }
+
+main :: () {
+    print("{} {} {} {}\n", Mode.FREE, cast(Mode) 7, Look.VISIBLE | .GLOWING, cast(Look) 9);
+    t := cast(*Type_Info_Enum) type_info(Look);
+    print("{} {} {} {}\n", t.name, t.is_flags, t.names, t.values);
+}
+```
+
+The program prints:
+
+```text
+FREE 7 VISIBLE | GLOWING VISIBLE | 8
+Look true ["VISIBLE", "SOLID", "GLOWING"] [1, 2, 4]
+```
+
+**How it's compiled.** Below the checker an enum is its integer type: stored as it is (section 10.3), passed to and from C as it is (section 7.6), baked from a `#run` as it is, a constant of the enum (section 7.8), and described to a debugger as an enumeration of its members (section 10.7).
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
 
-A declaration of a name binds it to a constant, a variable, a procedure or a struct, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), `#run`s, which name nothing and run code while compiling (section 7.8), and `#if`s, which name nothing either, and whose taken branch's declarations are the top level's (section 4.9). The forms of a declaration of a name are:
+A declaration of a name binds it to a constant, a variable, a procedure, a struct or an enum, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), `#run`s, which name nothing and run code while compiling (section 7.8), and `#if`s, which name nothing either, and whose taken branch's declarations are the top level's (section 4.9). The forms of a declaration of a name are:
 
 | Form | Declares |
 |---|---|
@@ -902,6 +1041,7 @@ A declaration of a name binds it to a constant, a variable, a procedure or a str
 | `name :: (params) -> results #foreign libc;` | a foreign procedure (section 7.6) |
 | `name :: (params) -> results #foreign libc "c_name";` | a foreign procedure of another C function, `c_name` (section 7.6) |
 | `name :: struct { fields }` | a struct type (section 4.5) |
+| `name :: enum Type { members }`, `name :: enum_flags Type { members }` | an enum type, `Type` optional (section 3.18) |
 | `name :: expression;` | a constant (section 4.2) |
 | `name : Type = expression;` | a variable with a type and a value |
 | `name : Type;` | a variable, zeroed |
@@ -909,7 +1049,7 @@ A declaration of a name binds it to a constant, a variable, a procedure or a str
 | `name := expression;` | a variable whose type is its value's |
 | `a, b := call;` | several local variables, from a call's results (section 6.2); not at the top level |
 
-Procedures and structs are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, and `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
+Procedures, structs and enums are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`, and `Mode :: enum { ... }` is `enums can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
 
 After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=` begins a procedure's parameter list (a parameter written `n := 0` is an error there, section 7.2); any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
 
@@ -921,10 +1061,10 @@ ConstDecl = identifier "::" Expression ";" .
 
 `N :: e;` declares the constant `N` with the value of `e`, which must be known while compiling (section 5.9). A constant holds one of these:
 
-- a number or a `bool`;
+- a number, an enum's value (section 3.18) or a `bool`;
 - a pointer: `null`, or a string literal's address (`GREETING :: cast(*u8) "hi";`, or `NAME.data` for a string constant `NAME`);
 - a procedure (below);
-- data: a string (`NAME :: "rig";`), or a struct or an array (`ORIGIN :: Vec2.{3, 4};`, `PRIMES :: int.[2, 3, 5, 7, 11];`) whose fields and elements hold these in turn, nested to any depth: numbers, `bool`s, pointers as above, procedure values, strings, structs and arrays. It is written as a literal of such values, as another constant holding data, or as a part of one (`COPY :: PRIMES;`, `LINE :: Line.{a = ORIGIN};`, `START :: LINE.a;`): constant data (section 5.9). A field a struct literal leaves out is zero, as in any literal (section 5.17).
+- data: a string (`NAME :: "rig";`), or a struct or an array (`ORIGIN :: Vec2.{3, 4};`, `PRIMES :: int.[2, 3, 5, 7, 11];`) whose fields and elements hold these in turn, nested to any depth: numbers, enums' values, `bool`s, pointers as above, procedure values, strings, structs and arrays. It is written as a literal of such values, as another constant holding data, or as a part of one (`COPY :: PRIMES;`, `LINE :: Line.{a = ORIGIN};`, `START :: LINE.a;`): constant data (section 5.9). A field a struct literal leaves out is zero, as in any literal (section 5.17).
 
 A constant's value may also be a `#run`, worked out by running code while compiling (section 7.8): `LIMIT :: #run triangle(4);`, `PRIMES :: #run primes();`. It holds what the `#run` gives, baked into the program as if it had been written: any of the above but a pointer other than `null`, and views too, as its own value or inside its data, which a written constant can't hold (below). A view's elements are then read-only data of the constant's, as its strings' bytes are.
 
@@ -1049,9 +1189,9 @@ A struct's name is a type, not a value: used as a value it is `'Vec2' is a type,
 
 ### 4.6 The top level
 
-Procedures, structs, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file. Preload's declarations are in the top level too, since every program imports it (section 2.14), so a program can't declare one of its names; Preload comes first in load order, so the error is at the program's declaration, naming Preload's.
+Procedures, structs, enums, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file. Preload's declarations are in the top level too, since every program imports it (section 2.14), so a program can't declare one of its names; Preload comes first in load order, so the error is at the program's declaration, naming Preload's.
 
-Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it.
+Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it. An enum's members are not top-level names: they are reached through their enum (section 3.18).
 
 ### 4.7 Scope
 
@@ -1088,7 +1228,7 @@ main's
 
 ### 4.8 Order and cycles
 
-Top-level declarations can be in any order. Each global variable, global constant and struct layout is worked out where it is first needed, so in `A :: B + 1; B :: 2;` the constant `A` is 3.
+Top-level declarations can be in any order. Each global variable, global constant, struct layout and enum's members' values is worked out where it is first needed, so in `A :: B + 1; B :: 2;` the constant `A` is 3.
 
 A declaration whose value needs itself, directly or through others, is an error, reported once per cycle at the declaration being worked out when the cycle closed:
 
@@ -1105,7 +1245,7 @@ example.rig:1:1: error: 'A' is defined in terms of itself
     ^
 ```
 
-The same holds for a global variable's value, a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`. So is a struct one of whose array counts runs code describing it, by `type_info` or by converting a value to `Any`, even behind a pointer, since the description needs the struct's layout (section 7.8).
+The same holds for a global variable's value, an enum's member's value that needs its own enum (through another enum or a `#run`), reported at the enum, which is worked out whole, so `E :: enum { A :: cast(int) F.B; }` with `F :: enum { B :: 3; C :: cast(int) E.A; }` is a cycle though `B` needs nothing of `E` (in its own body, a member worked out already is no cycle, section 3.18), a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`. So is a struct one of whose array counts runs code describing it, by `type_info` or by converting a value to `Any`, even behind a pointer, since the description needs the struct's layout (section 7.8).
 
 A procedure's default values are worked out with its signature (section 7.2), so a default that needs that signature, directly or through another procedure's default, is a cycle too, reported at the procedure: `f :: (n: int = f(1)) -> int { ... }` is `'f' is defined in terms of itself`, and a `g` whose default calls an `h` whose default calls `g` is one cycle, said once.
 
@@ -1121,18 +1261,18 @@ IfDirective = "#if" Expression Block [ "else" ( Block | IfDirective ) ] .
 
 `#if` compiles code for one system and not the other, or on any other condition known while compiling. `#if c { ... } else { ... }` is decided while compiling: the condition `c` is worked out, and the branch it picks, the **taken** branch, is part of the program, as if it had been written in place of the `#if`, while the other is not. It may be written at the top level, where its blocks hold top-level declarations (section 4.6), and as a statement in a body, where they hold statements (section 6).
 
-**The system.** Three constants are predeclared (section 2.5), untyped integer constants (section 3.12) visible everywhere: `OS_WINDOWS`, which is 1, `OS_LINUX`, which is 2, and `OS`, the system the program is built for, one of the two (0 names no system). rig builds a program for the system it runs on, so `OS` is `OS_WINDOWS` on Windows and `OS_LINUX` on Linux, in the program and in the code its `#run`s run while compiling (section 7.8), which sees the same `OS`. `OS == OS_WINDOWS` is a constant `bool` (section 5.9). A top-level declaration can't take one of the three names, and a local may hide them, as section 2.5 says.
+**The system.** An enum and a constant are predeclared (section 2.5), visible everywhere: `Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }`, the systems a program can be built for (section 3.18), and `OS`, a constant of it, the system the program is built for. rig builds a program for the system it runs on, so `OS` is `.WINDOWS` on Windows and `.LINUX` on Linux, in the program and in the code its `#run`s run while compiling (section 7.8), which sees the same `OS`. `OS == .WINDOWS` is a constant `bool` (section 5.9), the member taking `OS`'s enum from the other side of the `==` (section 3.18). `OS` is no integer: `cast(int) OS` is its number, 1 or 2. Every check of the program, the one that decides the top-level `#if`s too (below), has the one `Operating_System`, so a constant declared as `OS` and used in a top-level condition is still of `OS`'s type in the code checked after. A top-level declaration can't take either name, and a local may hide them, as section 2.5 says.
 
-**The condition** is a `bool` known while compiling (section 5.9): otherwise it is `the condition of '#if' must be a bool, not 'int'`, or `the condition of '#if' must be known while compiling`, at the condition. As an `if`'s, it needs no parentheses: the `{` of the branch ends it (section 6.5). The branches are always blocks in braces, and after `else` comes a block or another `#if`, the next arm of a chain: `#if A { ... } else #if B { ... } else { ... }`. The conditions are worked out in order until one is `true`, whose branch is taken; when none is, the last `else`'s block is, if there is one. Everything after the taken branch is not taken, the later conditions included, which aren't checked. `else if` after an `#if` is `an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }`, at the `if`: in a body it would be an ordinary `if` in the `else`, compiled whatever the condition.
+**The condition** is a `bool` known while compiling (section 5.9): otherwise it is `the condition of '#if' must be a bool, not 'int'`, or `the condition of '#if' must be known while compiling`, at the condition. As an `if`'s, it needs no parentheses: the `{` of the branch ends it (section 6.5). The branches are always blocks in braces, and after `else` comes a block or another `#if`, the next arm of a chain: `#if A { ... } else #if B { ... } else { ... }`. The conditions are worked out in order until one is `true`, whose branch is taken; when none is, the last `else`'s block is, if there is one. Everything after the taken branch is not taken, the later conditions included, which aren't checked. `else if` after an `#if` is `an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`, at the `if`: in a body it would be an ordinary `if` in the `else`, compiled whatever the condition.
 
 A condition with an error takes neither branch, and neither is checked, so the condition's message is the only one about the `#if`.
 
 **A branch not taken** is parsed and nothing more. Its syntax errors are reported (section 9.2), but its names aren't declared, its types aren't resolved, its expressions aren't checked, its `#run`s don't run, its `#load`s and `#import`s aren't read (a file one of them names that isn't there is no error), and nothing of it is compiled into the program. So each branch may hold what would be an error on the other system: a C function only that system has, or a constant that can be worked out only there.
 
-**At the top level** a branch holds what the top level holds: procedures, structs, constants, global variables, `#load`s, `#import`s, `#run`s and other `#if`s, nested as deeply as blocks may be (section 9.4). The `#if` declares no name itself. The taken branch's declarations join the program's one top level (section 4.6), as if written in place of the `#if`: visible everywhere in the program, before the `#if` and after it, in every file. `main` may be declared in a branch. Two branches of one `#if` may declare the same name, since only one is taken; a name declared both in the taken branch and outside it is `'x' is already declared at PATH:L:C`, at the later of the two (section 4.6). A branch's declarations may be written unindented, as C's `#ifdef` has them: only the branch's `}` ends it (section 9.2).
+**At the top level** a branch holds what the top level holds: procedures, structs, enums, constants, global variables, `#load`s, `#import`s, `#run`s and other `#if`s, nested as deeply as blocks may be (section 9.4). The `#if` declares no name itself. The taken branch's declarations join the program's one top level (section 4.6), as if written in place of the `#if`: visible everywhere in the program, before the `#if` and after it, in every file. `main` may be declared in a branch. Two branches of one `#if` may declare the same name, since only one is taken; a name declared both in the taken branch and outside it is `'x' is already declared at PATH:L:C`, at the later of the two (section 4.6). A branch's declarations may be written unindented, as C's `#ifdef` has them: only the branch's `}` ends it (section 9.2).
 
 - **When.** The top-level `#if`s are decided once the files outside every `#if` are read, before anything else is checked: file by file in load order (section 2.13), each file's in source order, and an `#if` nested in a taken branch where it is met. A taken branch's `#load`s and `#import`s are read then, and the top-level `#if`s of the files they reach are decided in their turn.
-- **What a condition may use.** A top-level condition is worked out before the program is checked, from what is known by then: literals, the predeclared constants, and the constants declared outside every top-level `#if`, in any file, with what they need in turn (other constants, and the structs whose sizes they take). A name declared in a branch of a top-level `#if` read by then, taken or not, at any depth, or in a file that only a taken branch loads and that has been read by then, reached from another top-level condition, directly or through constants and types, is `'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if`, at the name: what the branches declare isn't known until the `#if`s are decided. What has been read by then follows the order files are read in (under **Load order**, below), so a name that only a file not read yet declares is `unknown identifier`, or nothing while a `#load` or a condition has failed. Running code would need the whole program checked, so a `#run` reached from a top-level condition, one in a constant's value included, is `a top-level #if's condition can't run code while compiling, for now`, at the `#run`. A condition in a body has neither limit (below).
+- **What a condition may use.** A top-level condition is worked out before the program is checked, from what is known by then: literals, the predeclared `OS` and `Operating_System`, and the constants declared outside every top-level `#if`, in any file, with what they need in turn (other constants, and the structs whose sizes they take). A name declared in a branch of a top-level `#if` read by then, taken or not, at any depth, or in a file that only a taken branch loads and that has been read by then, reached from another top-level condition, directly or through constants and types, is `'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if`, at the name: what the branches declare isn't known until the `#if`s are decided. What has been read by then follows the order files are read in (under **Load order**, below), so a name that only a file not read yet declares is `unknown identifier`, or nothing while a `#load` or a condition has failed. Running code would need the whole program checked, so a `#run` reached from a top-level condition, one in a constant's value included, is `a top-level #if's condition can't run code while compiling, for now`, at the `#run`. A condition in a body has neither limit (below).
 - **A condition with an error** leaves the program without whatever its branches might have declared, as a `#load` that fails leaves it without its file (section 2.13): no name anywhere in the program is then `unknown identifier` or `unknown type`, nor is `main` reported missing.
 - **Load order** is the one the program would have with only its taken branches written: a taken branch's `#load` and `#import` take their places where the `#if` is (section 2.13). Diagnostics are sorted in it (section 9.1), and the top-level `#run`s run in it (section 7.8). The files are read in another order: the files outside every `#if` first, then, as each `#if` is decided in turn, a taken branch's `#load`s and `#import`s, every file they reach read at once, outside its own `#if`s. That order still decides two things about a file loaded more than once: it is named by the first of its `#load`s read, when they spell its path differently (section 9.1), and when it can't be read, it is reported there. A file loaded both in a taken branch and outside every `#if`, say, is named, and reported, at the first of its `#load`s outside; and when `main.rig` loads `a.rig` in one taken branch and `./d.rig` in a later one, and `a.rig` loads `d.rig`, the file is `d.rig`, and reported at `a.rig`'s `#load`, though `main.rig`'s comes first in load order.
 - **Build programs** are known once the top-level `#if`s are decided (section 7.9): a `main` or an `#import "Compiler";` in a branch not taken doesn't count.
@@ -1140,7 +1280,7 @@ A condition with an error takes neither branch, and neither is checked, so the c
 A C function that exists on one system only is declared in that system's branch, with a procedure that both branches declare, which the rest of the program calls on either:
 
 ```rig fragment
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     Sleep :: (milliseconds: u32) #foreign libc;           // kernel32's (section 10.6)
     sleep_ms :: (ms: int) { Sleep(cast(u32) ms); }
 } else {
@@ -1152,7 +1292,7 @@ A C function that exists on one system only is declared in that system's branch,
 A top-level condition can't use what another top-level `#if` declares, whichever of its branches is taken:
 
 ```rig error
-#if OS == OS_WINDOWS { LEVEL :: 2; } else { LEVEL :: 3; }
+#if OS == .WINDOWS { LEVEL :: 2; } else { LEVEL :: 3; }
 
 #if LEVEL > 1 {
     verbose :: () {}
@@ -1174,18 +1314,18 @@ puts :: (s: *u8) -> s32 #foreign libc;
 
 // The last statement: it returns on every path, since its taken branch does.
 system_number :: () -> int {
-    #if OS == OS_WINDOWS { return 1; } else #if OS == OS_LINUX { return 2; } else { return 0; }
+    #if OS == .WINDOWS { return 1; } else #if OS == .LINUX { return 2; } else { return 0; }
 }
 
 main :: () {
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         name := "windows";
     } else {
         name := "linux";
     }
     // name is the taken branch's local: #if makes no scope.
-    if (name[0] == 119) == (OS == OS_WINDOWS) { puts("the name agrees with OS"); }
-    if system_number() == OS { puts("so does the number"); }
+    if (name[0] == 119) == (OS == .WINDOWS) { puts("the name agrees with OS"); }
+    if system_number() == cast(int) OS { puts("so does the number"); }
     VERBOSE :: false;
     #if VERBOSE { puts("never compiled"); } else { puts("a local constant decides"); }
     #if false { x : int = "never checked"; nope(); }
@@ -1210,7 +1350,7 @@ Each system takes its own branches, and the program prints the same on both: `11
 
 ### 5.1 Operands and places
 
-The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups.
+The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), an enum's member, `Mode.FREE`, or `.FREE` without its enum, which takes the enum it meets (section 3.18), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups.
 
 Some expressions denote memory. These are **places**: they can be assigned to (section 6.4) and their address can be taken (section 5.13). The places are:
 
@@ -1221,7 +1361,7 @@ Some expressions denote memory. These are **places**: they can be assigned to (s
 - an element of an array that is a place, and an element of a view, a resizable array, a pointer or a string (`v[i]`, `p[i]`, `s[i]`), unless the string is part of a constant;
 - a view's or a string's `.count` and `.data`, when the view or string is a place, and a resizable array's `.count`, `.data`, `.allocated` and `.allocator`, when the array is one (section 3.17).
 
-These are not places, and the messages say which they are: a constant, and every part of one, its fields and elements and a string constant's bytes (`it's a constant`, naming the constant), a parameter (`it's a parameter`), a loop's iterator or index (`it's the loop's iterator`, `it's the loop's index`), a procedure (`it's a procedure`), and any other value, such as a call's result or an arithmetic result (`only a variable, a field or an element can be assigned to`, `only a variable, a field or an element has an address`). An array's `.count` and `.data` are never places.
+These are not places, and the messages say which they are: a constant, and every part of one, its fields and elements and a string constant's bytes (`it's a constant`, naming the constant), an enum's member (`it's an enum's member`, naming it as `Mode.FREE`), a parameter (`it's a parameter`), a loop's iterator or index (`it's the loop's iterator`, `it's the loop's index`), a procedure (`it's a procedure`), and any other value, such as a call's result or an arithmetic result (`only a variable, a field or an element can be assigned to`, `only a variable, a field or an element has an address`). An array's `.count` and `.data` are never places.
 
 ### 5.2 Operators and precedence
 
@@ -1231,6 +1371,8 @@ Unary      = ( "-" | "~" | "!" | "*" | ".." | "#run" ) Unary | Cast | Postfix .
 Postfix    = Primary { "(" [ Expression { "," Expression } ] ")"
                      | "[" Expression "]" | "." "*" | "." identifier } .
 ```
+
+A `.` then a name where an operand starts, `.FREE`, is a member without its enum (section 3.18): a primary, as a literal is (appendix A.4).
 
 Postfix operators bind tightest, then prefix operators, then the binary operators by level, 5 binding tightest:
 
@@ -1290,7 +1432,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 
 ### 5.5 Bitwise operators and shifts
 
-`&`, `|` and `^` (and, or, exclusive or) take two integers that meet at a type as arithmetic operands do (section 5.3), and give that type. The prefix `~` gives the bitwise complement of an integer: `'~' needs an integer, not 'bool'` otherwise.
+`&`, `|` and `^` (and, or, exclusive or) take two integers that meet at a type as arithmetic operands do (section 5.3), and give that type. The prefix `~` gives the bitwise complement of an integer: `'~' needs an integer, not 'bool'` otherwise. All four also take the values of an `enum_flags` type and give that type (section 3.18): `| & ^` two of the same type, or one and `0`, and `~` one; `f | 1` is `mismatched types 'Look' and 'int' for '|'; cast one of them`, and an enum that isn't flags takes none of them (`'|' needs integers, not 'Mode'`).
 
 `<<` and `>>` shift their left operand by the number of bits their right operand gives. The result has the left operand's type; the amount may be of any integer type and need not match. When the left operand is an untyped constant and the amount is not a constant, the left operand becomes an `int`. The amount is taken modulo the left operand's width in bits, 64 for an untyped constant (only its low bits are used: for a 32-bit type, `x << 33` shifts by 1, and `1 << 64` is 1), so every shift is defined, as on x86. `>>` is an arithmetic shift for a signed type, bringing in copies of the sign bit, and a logical shift for an unsigned type, bringing in zeros. `<<` on an untyped constant must not push bits past `int`'s range (`constant overflows 'int'`).
 
@@ -1303,8 +1445,9 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 - **Pointers** meet at a pointer type, as an implicit conversion allows (`null` and `*void` meet any pointer type), and compare as unsigned addresses. Two pointers that do not meet are `mismatched types '*int' and '*u8' for '=='; cast one of them`; a pointer and something else, `mismatched types '*int' and 'int' for '<'`.
 - **Procedure values** are compared with `==` and `!=` only, two of the same procedure type or one with `null`, as addresses (section 3.15). Two of different types are `mismatched types '(int, int) -> int' and '(int) -> int' for '=='`; a procedure value has no order (`'<' needs numbers, not '(int, int) -> int'`).
 - **Strings** are compared with `==` and `!=` only: two strings are equal when their counts are equal and so is each byte. A string meets no other type (`mismatched types 'string' and '*u8' for '=='`) and has no order (`'<' needs numbers, not 'string'`).
+- **Enums** are compared with all six, two values of the same enum type, as numbers of its integer type by its sign; a flags value also with `0` (section 3.18). An enum meets no other type: `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Two enum types don't meet either, and no cast makes one the other: `mismatched types 'Mode' and 'Look' for '=='`. A member without its enum on one side of `==` or `!=` takes the enum of the other side (`m == .FREE`); on both, it has none to take.
 
-Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'`.
+Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'`.
 
 ### 5.7 Logical operators
 
@@ -1315,7 +1458,7 @@ Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values
 | Operator | Operand | Result |
 |---|---|---|
 | `-x` | a number | the negation. For integers it wraps: `-x` of the most negative value is itself, and `-x` of an unsigned `x` is `0 - x` modulo 2^width. For floats it flips the sign (`-0.0` from `0.0`). |
-| `~x` | an integer | the bitwise complement |
+| `~x` | an integer, or a flags value (section 3.18) | the bitwise complement, wrapping as the integer type does |
 | `!x` | a bool | the logical negation |
 | `*x` | a place | the address of `x` (section 5.13) |
 | `..x` | a view, an array or a resizable array | `x`'s elements as a call's `..` arguments, only as the last argument of a call whose procedure takes a `..T` parameter (section 5.10) |
@@ -1328,10 +1471,11 @@ Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values
 A constant expression is one whose value is known while compiling. The compiler works it out (folds it), with the same result the program would compute. These are constant:
 
 - integer and float literals, `true` and `false`, `null`;
-- the name of a constant holding a number, a `bool` or `null`, the predeclared `OS`, `OS_WINDOWS` and `OS_LINUX` included (section 4.9);
+- the name of a constant holding a number, a `bool`, `null` or an enum's value, the predeclared `OS` included (section 4.9);
+- an enum's member, `Mode.FREE`, and `.FREE` once it takes its enum (section 3.18);
 - `size_of(T)` and an array's `.count`;
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
-- a cast of a constant to a number type or `bool`, and a cast of `null` to a pointer type;
+- a cast of a constant to a number type, an enum type or `bool`, and a cast of `null` to a pointer type;
 - `#run e` whose value is a number, a `bool` or `null` (section 7.8): a call is never a constant, but a `#run` of one is, since its value is worked out while compiling. One whose value is a procedure value stands for that procedure, as a constant naming it does (section 4.2);
 - a part of constant data (below) that is a number, a `bool` or `null`: a field (`ORIGIN.y`), an element at a constant index (`PRIMES[2]`), a string's byte at a constant index (`NAME[1]`, a `u8`), or a string's `.count` (`NAME.count`, an `int`). A literal's parts fold too: `Vec2.{5, 6}.y` is 6, `"abc"[0]` is 97 and `"abc".count` is 3. A field or element that a literal leaves out is 0, `false` or `null`, and a string it leaves out is the empty string: its `.count` is 0 and its `.data` is `null`.
 
@@ -1439,6 +1583,8 @@ An element of an array is a place when the array is one, so an array constant's 
 | `string` | the number of bytes, an `int`; an `int` constant when the string is constant data (section 5.9) | the pointer to them, a `*u8`; a string constant's is its literal's bytes' address, read-only (section 3.8) |
 
 A resizable array has two members more, `.allocated`, an `int`, and `.allocator`, an `Allocator` (section 3.17). A view's and a string's `.count` and `.data`, and a resizable array's four members, are places when the view, the string or the resizable array is one, and can be assigned to. An array's cannot (`can't assign to an array's 'count'`). They are not reached through a pointer: on a pointer to an array, a view, a resizable array or a string, `.count` is `'.count' isn't reached through a pointer, '*string'; write .*.count` (`.allocated` is `'.allocated' isn't reached through a pointer, '*[..]int'; write .*.allocated`). Any other member is `'[3]int' has no field 'size'`.
+
+**Enum members.** When `e` is an enum's name, not in parentheses, `e.x` is the enum's member `x`, a constant of the enum type (section 3.18): `Mode.FREE`. A local of the enum's name hides it, as it hides any top-level name. A member the enum does not have is `'Mode' has no member 'FRE'`, at the member's name. A member is not a place (`can't assign to 'Mode.FREE': it's an enum's member`). `(Mode).FREE` is no member: the name in parentheses is a value, and an enum's name is a type (`'Mode' is a type, not a value`).
 
 ### 5.13 Address and dereference
 
@@ -1602,9 +1748,9 @@ AssignOp        = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | 
 MultiAssignment = Expression "," Expression { "," Expression } "=" Expression ";" .
 ```
 
-`x = e;` stores the value of `e`, converted implicitly to the type of `x`, into `x`. The target must be a place (section 5.1); anything else is reported as what it is: `can't assign to 'N': it's a constant`, `can't assign to 'a': it's a parameter`, `can't assign to 'it': it's the loop's iterator`, `can't assign to 'it_index': it's the loop's index`, `can't assign to 'f': it's a procedure`, or `only a variable, a field or an element can be assigned to`. A field or element of a struct or array parameter belongs to the parameter: `can't assign to 'a': it's a parameter`. Likewise a field or element of a constant, a string constant's byte included, belongs to the constant: `PRIMES[0] = 1;` and `ORIGIN.x = 1;` are `can't assign to 'PRIMES': it's a constant` and `can't assign to 'ORIGIN': it's a constant`.
+`x = e;` stores the value of `e`, converted implicitly to the type of `x`, into `x`. The target must be a place (section 5.1); anything else is reported as what it is: `can't assign to 'N': it's a constant`, `can't assign to 'a': it's a parameter`, `can't assign to 'it': it's the loop's iterator`, `can't assign to 'it_index': it's the loop's index`, `can't assign to 'f': it's a procedure`, `can't assign to 'Mode.FREE': it's an enum's member`, or `only a variable, a field or an element can be assigned to`. A field or element of a struct or array parameter belongs to the parameter: `can't assign to 'a': it's a parameter`. Likewise a field or element of a constant, a string constant's byte included, belongs to the constant: `PRIMES[0] = 1;` and `ORIGIN.x = 1;` are `can't assign to 'PRIMES': it's a constant` and `can't assign to 'ORIGIN': it's a constant`.
 
-`x op= e;` is `x = x op e;` with the place `x` worked out once, for each binary operator `op` of `+ - * / % & | ^ << >>`. The value `e` converts implicitly to the type of `x` (for a shift it may be any integer), and the operation is done at that type, so for `x : u8`, `x += 300;` is `300 doesn't fit in 'u8'`. A pointer takes `+=` and `-=` by an integer (section 5.14).
+`x op= e;` is `x = x op e;` with the place `x` worked out once, for each binary operator `op` of `+ - * / % & | ^ << >>`. The value `e` converts implicitly to the type of `x` (for a shift it may be any integer), and the operation is done at that type, so for `x : u8`, `x += 300;` is `300 doesn't fit in 'u8'`. A pointer takes `+=` and `-=` by an integer (section 5.14). A flags value takes `|=`, `&=` and `^=`, `e` converting to its type (`f &= ~.SOLID;`), and an enum no other (section 3.18).
 
 `a, b = f();` assigns the results of a call to several targets, each result converting to its target's type, but not, for now, to `Any` (`a value of type 'int' doesn't convert to 'Any' implicitly`, at the target, section 3.16). It takes `=` only (`a, b += f();` is `expected '=', found '+='`), and the value must be a call with as many results as there are targets. The call runs before any target is worked out (section 5.18), so `a, b = swap(a, b);` passes the old values.
 
@@ -1845,15 +1991,15 @@ PushContextStmt = "push_context" Expression Block .
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 // The heap, counting what it gives: data is the count.
-counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+counting_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { (cast(*int) data).* += 1; }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
 // Deep in a program: memory from the context, whichever it is.
 make_room :: (size: int) -> *void {
     a := context.allocator;
-    return a.proc(ALLOCATE, size, 0, null, a.data);
+    return a.proc(.ALLOCATE, size, 0, null, a.data);
 }
 
 main :: () {
@@ -1866,8 +2012,8 @@ main :: () {
     }
     q := make_room(64);
     printf("%lld\n", count);
-    heap_allocator_proc(FREE, 0, 0, p, null);
-    heap_allocator_proc(FREE, 0, 0, q, null);
+    heap_allocator_proc(.FREE, 0, 0, p, null);
+    heap_allocator_proc(.FREE, 0, 0, q, null);
 }
 ```
 
@@ -2143,7 +2289,7 @@ hi
 
 A procedure declared with `#foreign` and a library name in place of a body is implemented outside the program, in C. The only library is `libc`, the platform's C runtime, which every program links (section 10.6): on Linux glibc's `libc` and `libm`, on Windows the Universal C Runtime, `ucrtbase.dll`, and `kernel32`. Another name is `unknown library 'm'; the only one so far is 'libc'`. The procedure's name is the C function's name, unless a string after the library names the C function (below), and calls to it follow the platform's C calling convention (section 10.4).
 
-A foreign procedure's parameters and result are numbers, bools, pointers and `#c_call` procedure values (below), which C receives as these types:
+A foreign procedure's parameters and result are numbers, enums, bools, pointers and `#c_call` procedure values (below), which C receives as these types:
 
 | Rig | C |
 |---|---|
@@ -2152,6 +2298,7 @@ A foreign procedure's parameters and result are numbers, bools, pointers and `#c
 | `s32`, `u32` | `int`, `unsigned int` |
 | `s64` or `int`, `u64` | `int64_t`, `uint64_t` (`long long`, `unsigned long long`) |
 | `float32`, `float64` | `float`, `double` |
+| an enum, `enum s32 { ... }` | its integer type's C type, `int` here, as a C `enum` is passed (section 3.18) |
 | `bool` | `_Bool` |
 | `*T`, `*void` | a pointer, `void *` |
 | a `#c_call` procedure type, `(*void, *void) -> s32 #c_call` | a pointer to a function, `int (*)(void *, void *)` |
@@ -2176,6 +2323,25 @@ from the heap
 ```
 
 `malloc`'s `*void` converts to `*int` without a cast, and `free` takes the `*int` back as a `*void` (section 3.5).
+
+An enum is passed and returned exactly as its integer type is, an `enum u8`'s value widened as a `u8`'s is (section 10.4). So a C `enum`, an `int` in C, is bound as an `enum s32` whose members have C's values:
+
+```rig
+Letter :: enum s32 { A :: 65; B; NEWLINE :: 10; }
+
+putchar :: (c: Letter) -> Letter #foreign libc;
+
+main :: () {
+    putchar(.B);
+    if putchar(.NEWLINE) == .NEWLINE { putchar(Letter.A); }
+    putchar(.NEWLINE);
+}
+```
+
+```text
+B
+A
+```
 
 **A C name of its own.** A string literal after the library is the C function's name, and the procedure's own name is its name in Rig: `c_free :: (p: *void) #foreign libc "free";` declares C's `free` as `c_free`. So a program can have a procedure of its own with a C function's name, and still call the C function:
 
@@ -2266,7 +2432,7 @@ main :: () {
 pi is 3.1 (9 bytes)
 ```
 
-Only a foreign procedure may take C's `..`: on a procedure with a body it is `only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in (values: ..int)`, the one message for the mistake: its calls' extra arguments, which no C function receives, are not reported. A foreign procedure, for its part, can't take a `..T` parameter, which passes a view (section 7.2): `a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)`, at the `..`. A call passes C's other arguments one by one: a view can't be spread into them (`only the arguments of a '..' parameter can be spread, as in f(..values)`, section 5.10). A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, a `bool` or a pointer (or a string literal, below). C receives each after its *default argument promotions*, which the caller applies:
+Only a foreign procedure may take C's `..`: on a procedure with a body it is `only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in (values: ..int)`, the one message for the mistake: its calls' extra arguments, which no C function receives, are not reported. A foreign procedure, for its part, can't take a `..T` parameter, which passes a view (section 7.2): `a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)`, at the `..`. A call passes C's other arguments one by one: a view can't be spread into them (`only the arguments of a '..' parameter can be spread, as in f(..values)`, section 5.10). A call passes at least one argument per named parameter (`'printf' takes at least 1 argument, but 0 were given`), each converted to its parameter's type as in any call (section 5.10). The arguments after them have no parameter, so each keeps its own type, which must be a number, an enum, a `bool` or a pointer (or a string literal, below). C receives each after its *default argument promotions*, which the caller applies:
 
 | Rig | C receives |
 |---|---|
@@ -2276,6 +2442,7 @@ Only a foreign procedure may take C's `..`: on a procedure with a body it is `on
 | `s64` or `int`, `u64` | `long long`, `unsigned long long` |
 | `float32` | `double`, of the same value |
 | `float64` | `double` |
+| an enum | what its integer type is passed as: an `enum s8`'s -1 is an `int`'s -1, an `enum u8`'s 200 an `int`'s 200 |
 | `*T`, `*void` | a pointer |
 
 So `%d` prints an `s8`, `u8`, `s16`, `u16`, `bool` or `s32`, `%u` a `u32`, `%lld` an `int` or `s64`, `%llu` a `u64`, and `%f` either float type. What the format says must match what is passed, as in C: the compiler does not read the format, and a mismatch is undefined behaviour in C.
@@ -2390,6 +2557,7 @@ main :: () {
 **Results.** The value of an expression's `#run` is baked into the program: made into the value it would be if it had been written in the source, which the program has as it has a constant's (section 4.2). It may be:
 
 - a number or a `bool`;
+- an enum's value, baked as its integer type's and a constant of the enum, as its members are (section 3.18), whether or not a member has it;
 - a procedure value, which is the procedure it names, a foreign one included, or `null`;
 - a pointer that is `null`;
 - a string, an array or a struct of these, nested to any depth, and a view of any of them.
@@ -2401,7 +2569,7 @@ Strings and views are baked deeply: the bytes or elements they point at are copi
 - A view or a string whose count is below zero has no elements to copy: `#run failed: its result holds a view with a negative count` (`a string with a negative count` for a string).
 - A view is baked as the array of its elements, `[N]T` for a count of `N`: one whose elements would make that array larger than any type may be (section 3.11) is `'[N]T' is too big`, as `'[1152921504606846976]int' is too big` for a `[]int` counting 2^60.
 
-A baked value is a constant, or constant data, as a written one is (section 5.9). A number or a `bool` folds, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count); an integer sizes arrays. A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
+A baked value is a constant, or constant data, as a written one is (section 5.9). A number, an enum's value or a `bool` folds, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count); an integer sizes arrays, and a body's `#if` may decide on any of these (a top-level `#if` can't run code, section 4.9). A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
 
 **Where baked data lives.** A `#run`'s value used in a constant, a local's value or anywhere else in a body is read-only data, as constant data is (section 4.2), the bytes of its strings and the elements of its views included: writing them, through the view or a pointer, is a memory error that no check catches (section 8.6). A `#run`'s value used as a global's, directly or through a constant holding it, is the global's own copy, writable, the bytes of its strings and the elements of its views included, each copied into data of the global's own (section 4.3). So after `numbers : []int = #run make();` and `text := #run name();`, the program may write `numbers[0] = 10;` and `text[0] = 82;`.
 
@@ -2636,12 +2804,12 @@ defer context.allocator = old;
 
 Either way every call in the stretch, and in what it calls, that takes its memory from `context.allocator` takes it from there. Memory goes back to the allocator that gave it: giving it back to the current context's allocator when another gave it, because the context changed in between, is the program's mistake, as in Jai, and no check catches it.
 
-**Where an allocation is asked from.** `context.allocation_location` is the place the allocation being asked for was asked from, a `Source_Code_Location` (section 7.2), while one of the procedures below calls an allocator. It is an ordinary field, which a program may also set: outside such a call it holds whatever the context holds, zeroed, no place, unless the program set it. An allocator's procedure, Jai's shape, which every allocator is written to, takes no place, so the context carries it, and an allocator that records where it is asked from, as a memory debugger does, reads it there:
+**Where an allocation is asked from.** `context.allocation_location` is the place the allocation being asked for was asked from, a `Source_Code_Location` (section 7.2), while one of the procedures below calls an allocator. It is an ordinary field, which a program may also set: outside such a call it holds whatever the context holds, zeroed, no place, unless the program set it. An allocator's procedure, Jai's shape, which every allocator is written to, takes a mode, an `Allocator_Mode` (`.ALLOCATE`, `.RESIZE`, `.FREE` or `.FREE_ALL`, section 3.18), and no place, so the context carries it, and an allocator that records where it is asked from, as a memory debugger does, reads it there:
 
 - Basic's `alloc`, `resize`, `free` and `free_all` take `loc: Source_Code_Location = #caller_location` last (section 7.2). Each saves the field, sets it to its `loc`, calls the allocator, and puts back the one it saved, so the allocator reads the place of the helper's call, and once the helper returns the field is as it was before, also when the allocator itself called Basic.
 - Basic's other procedures that allocate or free through the allocator they are given, or the context's, take `loc` too, and pass it on, so the place is the program's own call, not a line of Basic's. Its arena and its pool pass the place they were asked from on to the allocator under them, so a block has the place of the request that needed it. `print_to_builder` and `sprint` take theirs after their `..Any` arguments, so it is always the place of their call (section 7.2). The procedures under them that write into a builder they are given take none; nor do `talloc` and `tprint`, whose memory is the temporary storage's, nor the storage's reset and marks and `arena_reset`, which give memory back at their own lines, nor do the heap's short-lived copies, the file and directory procedures' copies of a path, `list_directory`'s gathered names and sorting scratch, `get_environment`'s UTF-16 buffer for the value on Windows, `run_command`'s and `run_command_with_output`'s builder of the command line on Windows and their lookup of `%COMSPEC%` there (its name's UTF-16 copy, `get_environment`'s buffer and the value), `run_command_with_output`'s gathered output, and `print_to_builder`'s, `sprint`'s and `print_error`'s scratch builders, freed before the call returns, nor a failing `assert`'s line, built on the heap at its own lines (its `loc` is the line's place) and never given back, nor the memory debugger's own records and its report's scratch, on the heap: their allocator reads a line of Basic's. Basic's `README.md` lists them all.
 - The resizable arrays' built-in procedures set it to their call's place (section 3.17).
-- A direct call of an allocator's procedure, `a.proc(ALLOCATE, 64, 0, null, a.data)`, leaves it as it is, so the allocator reads whatever the context holds: in a program's own call, zeroed unless the program set it.
+- A direct call of an allocator's procedure, `a.proc(.ALLOCATE, 64, 0, null, a.data)`, leaves it as it is, so the allocator reads whatever the context holds: in a program's own call, zeroed unless the program set it.
 
 `default_context` starts with it zeroed, so a copy of the context made outside such a call, as a program makes to push one, holds no place either, unless the program set it in the copy. Each of the procedures above puts back the value it found, whatever that was.
 
@@ -2649,9 +2817,9 @@ Either way every call in the stretch, and in what it calls, that takes its memor
 #import "Basic";
 
 // An allocator over the heap that says where each allocation is asked from.
-traced_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+traced_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     at := context.allocation_location;
-    if mode == ALLOCATE { print("{} bytes for {}:{}:{}\n", size, at.file, at.line, at.column); }
+    if mode == .ALLOCATE { print("{} bytes for {}:{}:{}\n", size, at.file, at.line, at.column); }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
@@ -2664,7 +2832,7 @@ main :: () {
         array_add(*numbers, 1);
         free(p);
         array_free(*numbers);
-        q := context.allocator.proc(ALLOCATE, 8, 0, null, null);
+        q := context.allocator.proc(.ALLOCATE, 8, 0, null, null);
         free(q);
     }
 }
@@ -2681,7 +2849,7 @@ main :: () {
 **Temporary storage.** `context.temporary_storage` is memory handed out one allocation after another and given back all at once, Jai's temporary storage, which suits memory a program is done with by a point it knows: a frame's end, a request's, a command's. Preload holds it (`Temporary_Storage`, with its pages, `Temporary_Storage_Page`), and its allocator, `TEMPORARY_ALLOCATOR`, `Allocator.{temporary_allocator_proc, null}`, which allocates from the storage of the context it is called with, so its `data` is unused and a context pushed with another storage makes it allocate from that one. Preload's `README.md` has the details:
 
 - An allocation comes from the storage's first block, `data`'s `size` bytes, which in Preload's storage lie in the program, then from pages asked of `overflow_allocator`, the heap's in Preload's storage, each the larger of `TEMPORARY_STORAGE_SIZE` bytes and the request with the page's 24-byte header. Each allocation starts a multiple of 8 bytes into its region, the first block or a page's bytes after its header, so it is aligned to 8 when `data` and `overflow_allocator`'s memory are, as Preload's are. When `overflow_allocator` has no page to give, the result is null.
-- `RESIZE` grows or shrinks the last allocation in place when the space it is in holds the new size, and otherwise allocates anew and copies. `FREE` does nothing. `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, and the first block is handed out again from its start.
+- `.RESIZE` grows or shrinks the last allocation in place when the space it is in holds the new size, and otherwise allocates anew and copies. `.FREE` does nothing. `.FREE_ALL` is a reset: every page goes back to `overflow_allocator`, and the first block is handed out again from its start.
 - `occupied` is how far into the storage allocations reach, counted from the first block's start through the pages, and `high_water_mark` the most it has ever been, which a reset keeps, for choosing a size.
 - Nothing is given back until the program resets the storage, at a point of its choosing. Basic (section 2.14) has `talloc(size)`, memory from it; `tprint(format, ..args)`, formatted text in it; `reset_temporary_storage()`; and `get_temporary_storage_mark()` and `set_temporary_storage_mark(mark)`, which go back to a mark, giving back the pages made since.
 - Memory used after a reset, or after going back to a mark made before it was allocated, is a memory error no check catches (section 8.6), and so is going back to a mark of another storage, or to one made before a reset since.
@@ -2918,9 +3086,9 @@ example.rig:4:1: error: expected ';', found '}'
     ^
 ```
 
-An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body or a struct whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields, which can't hold one. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing. So is a top-level `#if` whose condition has an error, whose branches might have declared any name (section 4.9).
+An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body, a struct or an enum whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields or an enum's members, which can't hold one. A struct's or an enum's declaration in column 1 ends any of them too, as a procedure's does. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing. So is a top-level `#if` whose condition has an error, whose branches might have declared any name (section 4.9).
 
-Recovery treats an `#if` (section 4.9) as it treats a `#run`: one that starts a line outside any braces is the next top-level declaration, and after a signature it is where the body's `{` should be. One in column 1 is among the column-1 declarations that a body whose `}` is missing ends before, and the skipping after an error resumes at it inside braces too, as at a procedure's declaration in column 1. It doesn't end a body by itself, since unindented it is a statement there, unless a branch of it (or of an `#if` right inside one of its branches, at any depth) declares a procedure or a struct, or holds a `#run { }`, right inside its braces (not in a block inside the branch), which a body can't hold: it then ends the body as a procedure's declaration in column 1 does. Any `#if` in column 1 ends a struct's fields, and any other among them is `#if can't be among a struct's fields, for now`. Inside a top-level `#if`'s branch, a declaration with an error is given up as at the top level, but the skipping stops at the `}` that closes the branch, so the declarations after the `#if` are read as the top level's. No column-1 rule ends a branch, whose declarations may be unindented: only its `}` does. A branch whose `}` is missing at the end of the file is `expected '}'` there (unless a body never closed in it said so already), and the whole `#if` is given up. A branch not taken is parsed as any other, so its syntax errors are reported.
+Recovery treats an `#if` (section 4.9) as it treats a `#run`: one that starts a line outside any braces is the next top-level declaration, and after a signature it is where the body's `{` should be. One in column 1 is among the column-1 declarations that a body whose `}` is missing ends before, and the skipping after an error resumes at it inside braces too, as at a procedure's declaration in column 1. It doesn't end a body by itself, since unindented it is a statement there, unless a branch of it (or of an `#if` right inside one of its branches, at any depth) declares a procedure, a struct or an enum, or holds a `#run { }`, right inside its braces (not in a block inside the branch), which a body can't hold: it then ends the body as a procedure's declaration in column 1 does. Any `#if` in column 1 ends a struct's fields or an enum's members, and any other among them is `#if can't be among a struct's fields, for now` (`#if can't be among an enum's members, for now`). Inside a top-level `#if`'s branch, a declaration with an error is given up as at the top level, but the skipping stops at the `}` that closes the branch, so the declarations after the `#if` are read as the top level's. No column-1 rule ends a branch, whose declarations may be unindented: only its `}` does. A branch whose `}` is missing at the end of the file is `expected '}'` there (unless a body never closed in it said so already), and the whole `#if` is given up. A branch not taken is parsed as any other, so its syntax errors are reported.
 
 ### 9.3 Representative messages
 
@@ -2989,15 +3157,14 @@ The sections defining each construct give its messages. Some of those met most o
 | `'main' can't be a C function's name: it's where the program starts` | 7.6 |
 | `'__rig_panic' can't be a C function's name: names starting with __rig_ are the compiler's own` | 7.6 |
 | `'OS' is predeclared: it's the system the program is built for` | 2.5, 4.9 |
-| `'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be` | 2.5, 4.9 |
-| `'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be` | 2.5, 4.9 |
+| `'Operating_System' is predeclared: it's the systems a program can be built for` | 2.5, 4.9 |
 | `'array_add' is predeclared: it's built into the language, for resizable arrays` | 2.5, 3.17 |
 | `argument 1 of 'array_add' must be a pointer to a resizable array (*[..]T), not '[..]int'` | 3.17 |
 | `'array_add' can't be a value: it's built into the language` | 3.17 |
 | `#run's result holds a resizable array, which can't be baked, for now` | 7.8, 3.17 |
 | `the condition of '#if' must be a bool, not 'int'` | 4.9 |
 | `the condition of '#if' must be known while compiling` | 4.9 |
-| `an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }` | 4.9 |
+| `an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }` | 4.9 |
 | `'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if` | 4.9 |
 | `a top-level #if's condition can't run code while compiling, for now` | 4.9 |
 | `#if can't be among a struct's fields, for now` | 4.9, 9.2 |
@@ -3020,6 +3187,16 @@ The sections defining each construct give its messages. Some of those met most o
 | `'log' can't be a value: its parameters after '..' take only their default values, which a procedure type doesn't keep` | 3.15 |
 | `'log' takes no argument after a spread: 'loc', after its '..' parameter, takes only its default value` | 5.10 |
 | `a foreign procedure can't take '..int': C's other arguments are written '..' alone, as in (format: *u8, ..)` | 7.6 |
+| `this member's enum isn't known; write it with its enum, as in Mode.FREE` | 3.18 |
+| `'Mode' has no member 'FRE'` | 3.18, 5.12 |
+| `'.FREE' needs an enum type, not 'int'` | 3.18 |
+| `an enum's type must be an integer type, not 'float32'` | 3.18 |
+| `enums can only be declared at the top level, for now` | 3.18, 4.1 |
+| `#if can't be among an enum's members, for now` | 3.18, 9.2 |
+| `expected a member's name, found integer literal` | 3.18 |
+| `can't assign to 'Mode.FREE': it's an enum's member` | 3.18, 6.4 |
+| `can't take the address of 'Mode.FREE': it's an enum's member` | 3.18, 5.13 |
+| `can't cast 'Small' to 'Mode'` | 3.14, 3.18 |
 
 ### 9.4 Limits
 
@@ -3162,6 +3339,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 ### 10.3 Data representation
 
 - **Integers and floats** are stored in their natural sizes and alignments (section 3.11), little-endian.
+- **Enums** are stored, passed and compared as their integer types (section 3.18): an `enum u8` is one byte, an `enum` with no type written eight. Nothing in memory says which enum a value is of, nor checks that a member has it.
 - **bool** is one byte in memory, stored as 0 or 1 and read as "not 0".
 - **Pointers** are 64-bit addresses; `null` is 0.
 - **Structs** are laid out as C lays them out (section 3.9). A struct literal is built in zeroed memory, padding included.
@@ -3169,7 +3347,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
 - **Resizable arrays** are 40 bytes, laid out as Preload's `Resizable_Array` (section 3.17): a view's 16, the count at offset 0 and the data pointer at 8, then `allocated`, a 64-bit signed integer, at 16, and the allocator, an `Allocator`, at 24. Once they have grown, their elements lie in memory their allocator gave, but for elements of 0 bytes, which take none; before, an array whose `data` a program set by hand has them wherever the program put them (section 3.17).
 - **String literals and constants' data** are private, read-only constant data in the object file. A string literal is its bytes followed by one zero byte, once for each literal written in the source that the program uses at run time, or that a constant holds, however many uses reach it, and not at all when it is only folded (`"abc".count`, section 5.9). A constant holding data (section 4.2) is there once, read by the code when the program uses it at run time: its value, laid out as its type is, with relocations for the addresses inside it (a string literal's, a procedure's), which the linker resolves (in one no code reads, a foreign procedure's address is null when the program doesn't otherwise use that procedure, section 4.2). A string constant is a 16-byte string there, whose data points at its literal's bytes; where it becomes a `*u8`, it is the literal's address itself. A pointer constant holding a string literal's address is 8 bytes there, that address, which a debugger reads (section 10.7) and no code does: each use is the address itself. A `#run`'s value that holds data (section 7.8), a string, a struct, an array or a view, is constant data too, its views' elements in constant data of their own, which the view points at: an expression's `#run` there once for each such `#run` the program uses at run time (a string `#run` used only where it becomes a `*u8` is its literal's address itself, as a string constant is), and a constant's once, whether code reads it or not, as any constant holding data is (section 4.2); one that is a number, a `bool`, `null` or a procedure occupies no storage, as such a constant doesn't (section 4.2).
-- **Type descriptions** (section 3.16) are private, read-only constant data too, once for each type the program describes (by `type_info`, or by converting a value of it to `Any`) and for each type their descriptions reach, laid out as Preload's structs are: each a description of its kind's struct, with relocations, which the linker resolves, for the addresses inside it: the descriptions it points at, made before it or after, the bytes of its names, each a zero-ended string literal's of its own, and the read-only arrays its views see (a struct's members, a procedure type's parameter and result types), made only when not empty. An `Any` is 16 bytes, the description's address at offset 0 and the value's at 8, made in a slot of its procedure's frame where the conversion is (section 5.18).
+- **Type descriptions** (section 3.16) are private, read-only constant data too, once for each type the program describes (by `type_info`, or by converting a value of it to `Any`) and for each type their descriptions reach, laid out as Preload's structs are: each a description of its kind's struct, with relocations, which the linker resolves, for the addresses inside it: the descriptions it points at, made before it or after, the bytes of its names, each a zero-ended string literal's of its own, and the read-only arrays its views see (a struct's members, a procedure type's parameter and result types, an enum's names and values), made only when not empty. An `Any` is 16 bytes, the description's address at offset 0 and the value's at 8, made in a slot of its procedure's frame where the conversion is (section 5.18).
 - **Global variables** are data local to the program, initialised with their values' bytes. A global holding a string literal's or an array's address gets it through a relocation, which the linker resolves. The bytes of the strings a `#run` gave a global, and the elements of its views, are data local to the program too, writable, of that global's own (section 4.3).
 - **Local variables** live in their procedure's stack frame. Every stack slot is allocated once, at the procedure's start, however often the block that declares it runs. That is unoptimised code; with a workspace's `optimize` (section 7.9), LLVM may keep a local in registers instead (section 10.7).
 
@@ -3178,7 +3356,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 Rig follows the platform's C calling convention, as clang implements it: the Microsoft x64 convention on Windows and the System V AMD64 convention on Linux.
 
 - **Procedures** are local to the program (internal linkage), except `main`, which is exported as the C program's `main`, returning the C `int` 0 and taking C's `int argc` and `char **argv`. A debugger's `main` is therefore the Rig procedure itself. The two are hidden parameters, which the program's start-up code always passes (Rig's runtime's, section 10.6) and `main`'s prologue hands to Preload's `__save_command_line` (sections 7.4, 10.5); a Rig call of `main` passes them as 0 and null. A program without Preload, which only the compiler's own unit tests make, has nothing to save them into, and its `main` takes neither. Its Rig type says neither that it returns C's `int` nor that it takes `argc` and `argv`, so `main` can't be a procedure value (section 7.4). **Foreign procedures** are external symbols, resolved by the linker against the C runtime.
-- **Scalar parameters and results** (integers, floats, bools, pointers) are passed as C passes values of the C types in section 7.6. On Linux an `s8`, `u8`, `s16` or `u16` argument or result is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
+- **Scalar parameters and results** (integers, floats, bools, pointers, enums) are passed as C passes values of the C types in section 7.6, an enum as its integer type. On Linux an `s8`, `u8`, `s16` or `u16` argument or result, or an enum's over one of them, is extended to 32 bits by the side that passes it, sign-extended if its type is signed and zero-extended if not, as clang does; on Windows the receiving side extends it. A `bool` is passed as a whole byte or more, 0 or 1 with every other bit zero, on both. Rig's own procedures follow the same rules as foreign ones, so a call and its callee always agree.
 - **Variadic calls**, of a foreign procedure declared with C's bare `..` (section 7.6), follow C's convention for a call of a function declared with `...`, as clang makes it: the arguments after the named ones are passed after C's default argument promotions, as an `int`, a `long long`, a `double` or a pointer, so none is narrower than 32 bits. On Linux the caller also sets `al` to the number of vector registers the arguments use (at most 8), which the callee's `va_start` reads to know which to save. On Windows a `double` among the first four arguments goes in its integer register as well as its vector register, since the callee reads its arguments from the integer registers and the stack, as one list. A call of a Rig procedure with a `..T` parameter (section 7.2) is no variadic call: it passes one argument for that parameter, its view (below).
 - **Aggregates** (structs, arrays, views, resizable arrays and strings) are never passed in registers. An aggregate argument is passed as a pointer to a copy the caller makes; the callee only reads it. A `..T` parameter's view is one such argument, a pointer to the caller's copy of the 16-byte view: for gathered arguments, the view the caller builds over its temporary array is that copy; for a spread, the view is copied as any view argument is, and the elements never (section 5.10). An aggregate result is returned through a hidden pointer parameter: there is one per aggregate result, in result order, before the visible parameters, each pointing at a temporary of the caller's that `return` copies the value into, and that the caller copies to its destination after the call. When the aggregate is the procedure's only result, its pointer is the one C passes for a struct returned in memory (LLVM's `sret`), so the procedure also returns it, in `rax`, as C's convention says such a function does.
 - **The context** (section 7.10) is a hidden parameter too, a pointer to the current `Context`, after the hidden result pointers and before the visible parameters, so a lone aggregate result's pointer stays first, where C's convention has it. Every procedure with a body takes it but `main`, which C calls (section 7.4), and a `#c_call` procedure, which C may call: neither has a parameter for it. `main` keeps `default_context`'s address in a slot of its own, set before its first line, and a `#c_call` procedure has a slot only in each of its `push_context` blocks, which holds the address of what the block pushes, as every `push_context` block's does (section 6.13). A call through a value of a type that isn't `#c_call` passes the context, as a direct call does. Foreign and `#compiler` procedures take none. Each `#run`'s code is a procedure of its own, which takes none and starts as `main` does, with the compile-time world's `default_context` (section 7.8).
@@ -3290,8 +3468,8 @@ The debug information holds:
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. A parameter's default value that a call leaves out (section 7.2) is the caller's code, so all of its instructions, a failing check's included, are at the statement holding the call, as the call's own are, whatever file the default is written in, and so are those of the defaults its own calls leave out: stepping never stops at a default's own line, and only a failing check's message names the default's own place (section 8.1). An `#if` adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{`, or only a branch's `}`, has none, and neither does the branch not taken (section 4.9). A deferred statement is compiled at each way out of its block, a copy for each (section 6.12), each copy's instructions at their own statements' positions, and the `defer` adds no code of its own, so its line has code only where the copies are. After the copies, the instruction that leaves is where it would be with no `defer`: a `return`'s, `break`'s or `continue`'s at its keyword, the jump out of an `if`'s block at that block's `}`, a loop body's jump to its test or step at the loop's keyword, and the return at the end of a body at its `}`. So stepping out of a block stops at the deferred lines, in the order they run, then at the place that leaves when it has code of its own there (a `return`'s, `break`'s or `continue`'s line, an `if` block's `}`, the loop's keyword, the body's `}`), and goes on. Only a `return` whose values take code to work out (a variable read, a call, an aggregate copied) stops at its line before the deferred lines too: a `return;`, a `return` of a constant, a `break` or a `continue` has none before them. A jump to the code laid out right after it has no instruction, with a `defer` or without, so a `break` at the end of a `while` body can go from the deferred lines straight on after the loop. A standalone block has no jump at its `}`, so after its deferred lines a debugger goes on to the statement after it. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
 - **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a name a debugger shows (a variable, a procedure, or a constant below), in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view, resizable array or string, a `..T` parameter's view included: a `..T` parameter is shown as the `[]T` it is, section 7.2) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. The context a procedure is given (sections 7.10, 10.4) is a parameter after them, before the visible ones, named `context`, a `*Context` marked artificial, as clang marks C++'s `this`: so gdb's `print context->allocator` and cdb's `?? context->allocator` show the current allocator, and a frame line shows it (`twice (context=0x..., n=4)`). `main`'s is a local `context`, holding `default_context`'s address, set before its first line, so `break main` already shows it. A `push_context` block's is a local `context` in the block's lexical block, the address of what it pushed, hiding the one around it. A `#c_call` procedure has one only in its `push_context` blocks: outside them, gdb's `print context` is `No symbol "context" in current context.`, and cdb's `dx context` can't bind the name.
-- **Constants:** every constant the program declares (section 4.2), at the top level or in a body, used or not, by its Rig name and with its type, but one naming a procedure (`OP :: add;`: a debugger knows the procedure by its own name) unless it hides a name a debugger shows, the predeclared `OS`, `OS_WINDOWS` and `OS_LINUX` (section 4.9), which the program doesn't declare, one in a nested block that can't run, after code that can't go on in the block around it (as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one: section 4.2), which has no code for a debugger to stop in, and one that hides a name, after such code in its own block, which would hide it only where there is no code. An untyped integer constant is shown as an `int`, an untyped float as a `float64`, so its value shows whole (section 3.12), and `N :: null;` as a `*void`. A number, a `bool` or `null` is a constant value with no storage (CodeView's `S_CONSTANT`, DWARF's `DW_AT_const_value`); a constant holding data (a string, a struct, an array, a `#run`'s view) is a variable at its read-only data (section 10.3), and so is a pointer to a string literal (`GREETING :: cast(*u8) "hi";`), at the 8 bytes holding its address there, since CodeView can't give an address as a value, and so is a body's constant naming a procedure that hides a name a debugger shows, at 8 bytes holding the procedure's address, so a debugger shows the procedure where the constant hides the name (under a top-level `OP :: 5;`, cdb's `?? OP` after `OP :: add;` is `add`'s address, not `0n5`). A body's constant that hides nothing is in the lexical block that declares it, even after a declaration that started one inside it: it needs no code where it is declared, and a debugger shows it wherever its block has code. One that hides a name a debugger shows is in the block its declaration starts, as a local is, and so is shown only where code follows it in its block: so in `{ y := x + STEP; LIMIT :: 99; z := LIMIT + y; }` under a top-level `LIMIT :: 12;`, a debugger shows `LIMIT` as 12 at `y`'s line, 99 at `z`'s, and 12 again after the block (on Windows, not when a `return`, `break` or `continue` leaves the block through deferred code: see below). A copy of deferred code (section 6.12) declares its constants anew, as it does its variables. gdb's `print` and `info locals`, cdb's `??` and `dv /t`, and VS Code's Watch, hover and Debug Console show them, on both systems (gdb's `print LIMIT` is `12`, and for `RATIO :: 0.1;`, an untyped float shown as a `float64`, `print RATIO` is `0.10000000000000001`; cdb's `?? LIMIT` is `int64 0n12`). cdb's `dx` doesn't find a top-level number constant, where `??` does; and VS Code's Variables view lists only what has storage: a body's constants holding data, its pointers to a string literal and its procedure constants that hide a name, not its numbers, `bool`s and `null`s.
-- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+- **Constants:** every constant the program declares (section 4.2), at the top level or in a body, used or not, by its Rig name and with its type, but one naming a procedure (`OP :: add;`: a debugger knows the procedure by its own name) unless it hides a name a debugger shows, the predeclared `OS` (section 4.9), which the program doesn't declare, one in a nested block that can't run, after code that can't go on in the block around it (as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one: section 4.2), which has no code for a debugger to stop in, and one that hides a name, after such code in its own block, which would hide it only where there is no code. An untyped integer constant is shown as an `int`, an untyped float as a `float64`, so its value shows whole (section 3.12), and `N :: null;` as a `*void`. A number, an enum's value, a `bool` or `null` is a constant value with no storage (CodeView's `S_CONSTANT`, DWARF's `DW_AT_const_value`); a constant holding data (a string, a struct, an array, a `#run`'s view) is a variable at its read-only data (section 10.3), and so is a pointer to a string literal (`GREETING :: cast(*u8) "hi";`), at the 8 bytes holding its address there, since CodeView can't give an address as a value, and so is a body's constant naming a procedure that hides a name a debugger shows, at 8 bytes holding the procedure's address, so a debugger shows the procedure where the constant hides the name (under a top-level `OP :: 5;`, cdb's `?? OP` after `OP :: add;` is `add`'s address, not `0n5`). A body's constant that hides nothing is in the lexical block that declares it, even after a declaration that started one inside it: it needs no code where it is declared, and a debugger shows it wherever its block has code. One that hides a name a debugger shows is in the block its declaration starts, as a local is, and so is shown only where code follows it in its block: so in `{ y := x + STEP; LIMIT :: 99; z := LIMIT + y; }` under a top-level `LIMIT :: 12;`, a debugger shows `LIMIT` as 12 at `y`'s line, 99 at `z`'s, and 12 again after the block (on Windows, not when a `return`, `break` or `continue` leaves the block through deferred code: see below). A copy of deferred code (section 6.12) declares its constants anew, as it does its variables. gdb's `print` and `info locals`, cdb's `??` and `dv /t`, and VS Code's Watch, hover and Debug Console show them, on both systems (gdb's `print LIMIT` is `12`, and for `RATIO :: 0.1;`, an untyped float shown as a `float64`, `print RATIO` is `0.10000000000000001`; cdb's `?? LIMIT` is `int64 0n12`). cdb's `dx` doesn't find a top-level number constant, where `??` does; and VS Code's Variables view lists only what has storage: a body's constants holding data, its pointers to a string literal and its procedure constants that hide a name, not its numbers, `bool`s and `null`s.
+- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; enums (section 3.18) as enumeration types, as a C `enum` with a fixed type is described: named as the enum, at its declaration, over its integer type, with an enumerator for each member, in order, of the member's value (read as unsigned for an unsigned integer type, so an `enum u64`'s largest member is 18446744073709551615), so a debugger shows a value by its member's name and one that no member has as its number, and an `enum_flags` value as it shows a C `enum` of flags (gdb's `(VISIBLE | GLOWING)`, when each member is a bit of its own); `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A line of deferred code that runs at more than one way out of its block has its code in several places, one per copy, and the debuggers treat a breakpoint on it by their own rules and LLVM's, not Rig's. cdb takes a breakpoint on a line only when the line's code is in one piece, as it refuses one on a `for` line, so it refuses one on such a line (`Ambiguous symbol error`). gdb keeps one place of a line per lexical block, and LLVM writes a lexical block only for a scope that declares a variable itself (a scope that holds only other scopes is folded into the one around it too): so the copies of a deferred line are one place, the first copy in the code, where a breakpoint stops only when that copy runs, unless the line is in a block of the deferred code that declares a variable itself. Both statements of `defer { t := f(); g(t); }` have a place per copy, but the `if` line of `defer if c { t := f(); g(t); }` one, since `t` is in a block inside it. Stepping goes through every copy that runs, in both debuggers.
 
@@ -3397,7 +3575,8 @@ A number literal may not be followed directly by a letter or a digit (section 2.
 
 ```ebnf
 File          = { TopLevel } .
-TopLevel      = ProcDecl | StructDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl | IfDirective .
+TopLevel      = ProcDecl | StructDecl | EnumDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl
+              | IfDirective .
 LoadDecl      = "#load" string_lit ";" .
 ImportDecl    = "#import" string_lit ";" .
 RunDecl       = "#run" ( Block | Expression ";" ) .
@@ -3412,6 +3591,9 @@ Param         = identifier ":" [ ".." ] Type [ "=" Expression ] .
 
 StructDecl    = identifier "::" "struct" "{" { FieldDecl } "}" .
 FieldDecl     = identifier ":" Type ";" .
+
+EnumDecl      = identifier "::" ( "enum" | "enum_flags" ) [ identifier ] "{" { MemberDecl } "}" .
+MemberDecl    = identifier [ "::" Expression ] ";" .
 
 ConstDecl     = identifier "::" Expression ";" .
 VarDecl       = identifier ":" Type [ "=" ( Expression | "---" ) ] ";"
@@ -3429,7 +3611,7 @@ ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
@@ -3485,14 +3667,15 @@ Primary       = identifier
               | "type_info" "(" Type ")"
               | "(" Expression ")"
               | "." StructBody
-              | "." ArrayBody .
+              | "." ArrayBody
+              | "." identifier .
 
 StructBody    = "{" [ Field { "," Field } [ "," ] ] "}" .
 Field         = [ identifier "=" ] Expression .
 ArrayBody     = "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named.
+Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named. A `"." identifier` `Primary` is a member without its enum, `.FREE`; after a `Primary`, `"." identifier` is a member access, an enum's member when the `Primary` is the enum's name (sections 3.18, 5.12).
 
 ## Appendix B: Index of keywords and operators
 
@@ -3504,7 +3687,9 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `continue` | next iteration | 6.9 |
 | `defer` | run a statement when its block is left | 6.12 |
 | `else` | alternative of `if` and of `#if` | 6.5, 4.9 |
-| `enum`, `union`, `using` | reserved | 2.6 |
+| `enum` | enum type | 3.18 |
+| `enum_flags` | enum type of flags | 3.18 |
+| `union`, `using` | reserved | 2.6 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional | 6.5 |
@@ -3525,7 +3710,8 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `size_of` | a type's size | 5.16 |
 | `type_info` | a type's description | 5.19, 3.16 |
 | `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
-| `OS`, `OS_WINDOWS`, `OS_LINUX` | the system a program is built for | 2.5, 4.9 |
+| `OS` | the system a program is built for, an `Operating_System` | 2.5, 4.9 |
+| `Operating_System` | the predeclared enum of the systems a program can be built for, `WINDOWS` and `LINUX` | 2.5, 4.9, 3.18 |
 | `array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset`, `array_free` | a resizable array's built-in procedures | 3.17, 2.5 |
 | `+` `-` `*` `/` | arithmetic | 5.3, 5.4 |
 | `%` | remainder | 5.4 |
@@ -3539,14 +3725,14 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `*` (prefix) | address of | 5.13 |
 | `*` (in a type) | pointer type | 3.5 |
 | `.*` | dereference | 5.13 |
-| `.` | member access, compound literal | 5.12, 5.17 |
+| `.` | member access, an enum's member, compound literal; `.NAME`, a member without its enum | 5.12, 5.17, 3.18 |
 | `[ ]` | indexing, array and view types; `[..]`, resizable array types | 5.11, 3.6, 3.7, 3.17 |
 | `( )` | grouping, call, parameter list, procedure type, several results | 5.1, 5.10, 7.1, 3.15 |
-| `{ }` | block, struct fields, struct literal | 6.1, 4.5, 5.17 |
+| `{ }` | block, struct fields, enum members, struct literal | 6.1, 4.5, 3.18, 5.17 |
 | `=` | assignment, initialiser, named field, default value | 6.4, 4.3, 5.17, 7.2 |
 | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | compound assignment | 6.4 |
 | `:` | variable's type, parameter, field, named iterator | 4.3, 7.1, 4.5, 6.7 |
-| `::` | constant, procedure or struct declaration | 4.1 |
+| `::` | constant, procedure, struct or enum declaration; an enum member's value | 4.1, 3.18 |
 | `:=` | variable declaration with its value's type | 4.3, 6.2 |
 | `->` | results of a procedure or of a procedure type | 7.1, 3.15 |
 | `..` | range; a `..T` parameter and a spread; a variadic foreign procedure's other arguments; `[..]T` | 6.7, 7.2, 5.10, 7.6, 3.17 |

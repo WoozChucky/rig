@@ -6,15 +6,15 @@
 // systems.
 puts :: (s: *u8) -> s32 #foreign libc;
 
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     #load "load/if_windows.rig";
-} else #if OS == OS_LINUX {
+} else #if OS == .LINUX {
     #load "load/if_linux.rig";
 } else {
     #load "load/no_such_file.rig";
 }
 
 main :: () {
-    if (SYSTEM_NAME[0] == 119) == (OS == OS_WINDOWS) { puts("the file for this system"); }
+    if (SYSTEM_NAME[0] == 119) == (OS == .WINDOWS) { puts("the file for this system"); }
     greet();
 }

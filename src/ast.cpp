@@ -534,6 +534,36 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ((Ast_Builtin *)node)->name);
         out(buffer, ")");
         break;
+    case AST_ENUM: {
+        // (enum Small u8 (A) (B (int 5))): each member as (NAME) or
+        // (NAME VALUE), and _ for no integer type written.
+        Ast_Enum *e = (Ast_Enum *)node;
+        out(buffer, e->is_flags ? "(enum_flags " : "(enum ");
+        out(buffer, e->name);
+        out(buffer, " ");
+        if (e->type_expr) {
+            dump_type(buffer, e->type_expr);
+        } else {
+            out(buffer, "_");
+        }
+        for (s64 i = 0; i < e->members.count; i++) {
+            Ast_Const *member = e->members[i];
+            out(buffer, " (");
+            out(buffer, member->name);
+            if (member->value) {
+                out(buffer, " ");
+                dump(buffer, member->value);
+            }
+            out(buffer, ")");
+        }
+        out(buffer, ")");
+        break;
+    }
+    case AST_DOT_NAME:
+        out(buffer, "(dot ");
+        out(buffer, ((Ast_Dot_Name *)node)->name);
+        out(buffer, ")");
+        break;
     }
 }
 
@@ -620,6 +650,10 @@ System host_system() {
 #else
     return SYSTEM_LINUX;
 #endif
+}
+
+bool ast_in_parentheses(Ast *e) {
+    return e->start.line != e->pos.line || e->start.col != e->pos.col;
 }
 
 bool ast_is_build_program(Ast_File *file) {

@@ -32,31 +32,31 @@
 // and the temporary storage's own helpers, talloc, its marks and its reset.
 //
 // An allocator is Jai's shape: one procedure and the data it works on. The
-// procedure is called with a mode, ALLOCATE, RESIZE, FREE or FREE_ALL, and
-// does what the mode says, with the data as its last argument: an arena's
-// procedure gets its Arena, a pool's its Pool, the heap's nothing. Anything
-// that holds an Allocator can be given any of them, or one a program writes
-// itself, without knowing which.
+// procedure is called with a mode, .ALLOCATE, .RESIZE, .FREE or .FREE_ALL,
+// and does what the mode says, with the data as its last argument: an
+// arena's procedure gets its Arena, a pool's its Pool, the heap's nothing.
+// Anything that holds an Allocator can be given any of them, or one a
+// program writes itself, without knowing which.
 
-// The modes an allocator procedure is called with (constants until enums).
-ALLOCATE :: 0;
-RESIZE :: 1;
-FREE :: 2;
-FREE_ALL :: 3;
+// The modes an allocator procedure is called with, each one's work as
+// Allocator's comment says, below. An enum (spec 3.18): a call writes
+// .FREE where the mode's type is known, and print writes a mode by its
+// name.
+Allocator_Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 
 // Jai's shape: one procedure and its data. The procedure type is written
 // out, since Rig has no type aliases yet.
 //
 // The procedure is called as proc(mode, size, old_size, old_memory, data):
 //
-// - ALLOCATE: size bytes, or null.
-// - RESIZE: old_memory, which holds old_size bytes, made size bytes long,
+// - .ALLOCATE: size bytes, or null.
+// - .RESIZE: old_memory, which holds old_size bytes, made size bytes long,
 //   moved or not, with the first of its old bytes kept; or null, and then
 //   old_memory is as it was.
-// - FREE: gives old_memory back. Returns null.
-// - FREE_ALL: gives back everything the allocator gave. Returns null.
+// - .FREE: gives old_memory back. Returns null.
+// - .FREE_ALL: gives back everything the allocator gave. Returns null.
 Allocator :: struct {
-    proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void;
+    proc: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void;
     data: *void;
 }
 
@@ -71,15 +71,15 @@ __free :: (memory: *void) #foreign libc "free";
 // The heap: C's malloc, realloc and free, through Preload's own
 // declarations. Its memory is aligned for any type, as C's is.
 //
-// FREE_ALL does nothing: the heap doesn't know what it gave, so each piece
-// goes back with FREE. A size above 0 converts to C's size_t, a u64,
+// .FREE_ALL does nothing: the heap doesn't know what it gave, so each piece
+// goes back with .FREE. A size above 0 converts to C's size_t, a u64,
 // unchanged. The procedure asks C for exactly what it's given: Basic's
 // helpers never ask it for 0 bytes, whose result C leaves to each C
 // library, nor give it null to resize or free.
-heap_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { return __malloc(cast(u64) size); }
-    if mode == RESIZE { return __realloc(old_memory, cast(u64) size); }
-    if mode == FREE { __free(old_memory); }
+heap_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { return __malloc(cast(u64) size); }
+    if mode == .RESIZE { return __realloc(old_memory, cast(u64) size); }
+    if mode == .FREE { __free(old_memory); }
     return null;
 }
 
@@ -98,37 +98,41 @@ HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
 // Every description starts with a Type_Info, whose tag says its kind. Each
 // kind's struct holds that Type_Info as its first field, info (Rig has no
 // using), so a *Type_Info whose tag says the kind is cast to the kind's
-// struct: cast(*Type_Info_Struct) t when t.tag == TYPE_INFO_STRUCT.
+// struct: cast(*Type_Info_Struct) t when t.tag == .STRUCT.
 
-// The kinds, a Type_Info's tag (constants until enums), numbered as Jai's
-// tags are.
-TYPE_INFO_INTEGER :: 0;
-TYPE_INFO_FLOAT :: 1;
-TYPE_INFO_BOOL :: 2;
-TYPE_INFO_STRING :: 3;
-TYPE_INFO_POINTER :: 4;
-TYPE_INFO_PROCEDURE :: 5;
-TYPE_INFO_VOID :: 6;
-TYPE_INFO_STRUCT :: 7;
-TYPE_INFO_ARRAY :: 8;
+// The kinds, a Type_Info's tag, numbered as Jai's tags are: ENUM is Jai's
+// 11, the numbers between being kinds of Jai's that Rig doesn't have. Over
+// int, so a tag is 8 bytes, as types.h writes it.
+Type_Info_Tag :: enum {
+    INTEGER;
+    FLOAT;
+    BOOL;
+    STRING;
+    POINTER;
+    PROCEDURE;
+    VOID;
+    STRUCT;
+    ARRAY;
+    ENUM :: 11;
+}
 
 // What every description starts with: its kind, then the type's size and
 // alignment in bytes (spec 3.11; void's are 0 and 1). A float, bool,
-// string or void (TYPE_INFO_FLOAT, _BOOL, _STRING, _VOID) is described by
-// this alone: a float's size says which it is.
-Type_Info :: struct { tag: int; size: int; alignment: int; }
+// string or void (.FLOAT, .BOOL, .STRING, .VOID) is described by this
+// alone: a float's size says which it is.
+Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
-// TYPE_INFO_INTEGER: s8 to u64, and int. int and s64 are two types with
-// two descriptions, the same in all but their addresses.
+// .INTEGER: s8 to u64, and int. int and s64 are two types with two
+// descriptions, the same in all but their addresses.
 Type_Info_Integer :: struct { info: Type_Info; signed: bool; }
 
-// TYPE_INFO_POINTER: *T, and the description of the T it points at
-// (void's for a *void).
+// .POINTER: *T, and the description of the T it points at (void's for a
+// *void).
 Type_Info_Pointer :: struct { info: Type_Info; pointer_to: *Type_Info; }
 
-// TYPE_INFO_PROCEDURE: a procedure type, its parameters' types and its
-// results', in order, whether it's called as C calls (#c_call), and whether
-// its last parameter is a ..T, whose type is then described as []T.
+// .PROCEDURE: a procedure type, its parameters' types and its results', in
+// order, whether it's called as C calls (#c_call), and whether its last
+// parameter is a ..T, whose type is then described as []T.
 Type_Info_Procedure :: struct {
     info: Type_Info;
     parameter_types: []*Type_Info;
@@ -137,26 +141,42 @@ Type_Info_Procedure :: struct {
     is_variadic: bool;
 }
 
-// TYPE_INFO_STRUCT: a struct, by its declared name, and its fields in
-// order, none for a struct with none. A struct that holds a pointer to
-// itself is described by pointing back at its own description: the data is
-// cyclic, not infinite.
+// .STRUCT: a struct, by its declared name, and its fields in order, none
+// for a struct with none. A struct that holds a pointer to itself is
+// described by pointing back at its own description: the data is cyclic,
+// not infinite.
 Type_Info_Struct :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member; }
 
 // One field of a struct: its name, its type's description, and where it is
 // in the struct, in bytes from its start (spec 3.9).
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 
-// TYPE_INFO_ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T,
-// which array_kind tells apart (ARRAY_FIXED, ARRAY_VIEW or ARRAY_RESIZABLE);
-// the description of T; and N, or -1 for a view or a resizable array. A
-// string is no view here: it has its own tag, TYPE_INFO_STRING.
-Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: int; count: int; }
+// .ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T, which
+// array_kind tells apart (.FIXED, .VIEW or .RESIZABLE); the description of
+// T; and N, or -1 for a view or a resizable array. A string is no view
+// here: it has its own tag, .STRING.
+Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
 
-// A Type_Info_Array's array_kind, in Jai's order.
-ARRAY_FIXED :: 0;
-ARRAY_VIEW :: 1;
-ARRAY_RESIZABLE :: 2;
+// A Type_Info_Array's array_kind, in Jai's order. Over int, so it is 8
+// bytes, as types.h writes it.
+Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
+
+// .ENUM: an enum or enum_flags type (spec 3.18), by its declared name; the
+// description of its integer type, whose size, alignment and sign it has;
+// whether it is an enum_flags; and its members, in order, none for an enum
+// with none: names[i] is a member's name and values[i] its value, as 64
+// bits, sign-extended from a signed integer type and zero-extended from an
+// unsigned one, so a u64 member above s64's largest reads negative. Its
+// Type_Info is its first field, info, as every kind's is until Rig has
+// using.
+Type_Info_Enum :: struct {
+    info: Type_Info;
+    name: string;
+    underlying: *Type_Info;
+    is_flags: bool;
+    names: []string;
+    values: []s64;
+}
 
 // A value of any type: its type's description and its address. Every value
 // converts to an Any implicitly (spec 3.16), a place by its own address, any
@@ -316,7 +336,7 @@ __save_command_line :: (argc: s32, argv: **u8) #c_call {
 __runtime_error :: (text: string, message_start: int) #compiler;
 
 // C's memmove, under Preload's own name, as __malloc is: the temporary
-// allocator's RESIZE copies with it, and so do the resizable arrays'
+// allocator's .RESIZE copies with it, and so do the resizable arrays'
 // helpers that move or copy elements (__array_grow, __array_insert,
 // __array_pop and the removes).
 __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign libc "memmove";
@@ -338,7 +358,7 @@ __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign l
 // aligned as the count's, so the high water mark is at least the size of a
 // first block that would have held everything.
 //
-// - ALLOCATE starts at the first multiple of 8 at or past the offset, so
+// - .ALLOCATE starts at the first multiple of 8 at or past the offset, so
 //   every allocation is aligned to 8, as any Rig type needs (spec 3.11),
 //   when the first block and overflow_allocator's memory are. When the
 //   region's rest can't hold size bytes, a page is asked of
@@ -347,17 +367,17 @@ __memmove :: (destination: *void, source: *void, count: u64) -> *void #foreign l
 //   unused but counts as occupied. Its null is passed on, the storage as
 //   it was, and a size whose page, with the header, would be past int's
 //   largest gives null too, the storage as it was.
-// - RESIZE grows or shrinks old_memory in place when it is the last
+// - .RESIZE grows or shrinks old_memory in place when it is the last
 //   allocation and the region holds size bytes from it. Otherwise it
 //   allocates anew and copies the old bytes that fit, or gives null with
 //   old_memory as it was.
-// - FREE does nothing. The memory goes back with everything else at the
+// - .FREE does nothing. The memory goes back with everything else at the
 //   next reset.
-// - FREE_ALL is a reset: every page goes back to overflow_allocator, newest
+// - .FREE_ALL is a reset: every page goes back to overflow_allocator, newest
 //   first, and the first block is handed out again from its start. Memory
 //   used after a reset is a memory error no check catches (spec 8.6). The
 //   high water mark stays.
-temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+temporary_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     LARGEST :: 9223372036854775807; // int's largest value
     storage := context.temporary_storage;
     page := storage.overflow_pages;
@@ -370,7 +390,7 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
         start = page.start;
     }
     offset := storage.occupied - start;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         at := (offset + 7) & ~7;
         // Compared as size against what is left, rather than at + size
         // against the region's size, so that a size near int's largest
@@ -386,7 +406,7 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
         bytes := TEMPORARY_STORAGE_SIZE;
         if size_of(Temporary_Storage_Page) + size > bytes { bytes = size_of(Temporary_Storage_Page) + size; }
         overflow := storage.overflow_allocator;
-        fresh := cast(*Temporary_Storage_Page) overflow.proc(ALLOCATE, bytes, 0, null, overflow.data);
+        fresh := cast(*Temporary_Storage_Page) overflow.proc(.ALLOCATE, bytes, 0, null, overflow.data);
         if fresh == null { return null; }
         fresh.previous = page;
         fresh.size = bytes - size_of(Temporary_Storage_Page);
@@ -399,7 +419,7 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
         if storage.occupied > storage.high_water_mark { storage.high_water_mark = storage.occupied; }
         return cast(*u8) fresh + size_of(Temporary_Storage_Page);
     }
-    if mode == RESIZE {
+    if mode == .RESIZE {
         // The last allocation ends where the region's offset is. old_size
         // within the offset keeps old_memory in the region, and its own
         // offset is then the region's less old_size.
@@ -411,7 +431,7 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
                 return old_memory;
             }
         }
-        memory := temporary_allocator_proc(ALLOCATE, size, 0, null, data);
+        memory := temporary_allocator_proc(.ALLOCATE, size, 0, null, data);
         if memory == null { return null; }
         count := old_size;
         if size < count { count = size; }
@@ -420,11 +440,11 @@ temporary_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *v
         if count > 0 { __memmove(memory, old_memory, cast(u64) count); }
         return memory;
     }
-    if mode == FREE_ALL {
+    if mode == .FREE_ALL {
         overflow := storage.overflow_allocator;
         while page != null {
             previous := page.previous;
-            overflow.proc(FREE, 0, 0, page, overflow.data);
+            overflow.proc(.FREE, 0, 0, page, overflow.data);
             page = previous;
         }
         storage.overflow_pages = null;
@@ -488,7 +508,7 @@ Resizable_Array :: struct {
 // holds memory is a memory error no check catches (spec 8.6).
 //
 // Owning memory: the array owns data's memory when allocated is above 0
-// and its elements take bytes, and gives it back with FREE, its old_size
+// and its elements take bytes, and gives it back with .FREE, its old_size
 // allocated elements' bytes, so an allocator that records sizes gets them.
 // An array whose data and count a program set by hand, allocated 0, owns
 // none: its first growth copies its elements into memory of its own,
@@ -526,8 +546,8 @@ __array_no_bytes : int;
 // false the array is as it was, but for the allocator it took.
 //
 // An array that owns no memory (allocated 0, or data null) is given new
-// memory with ALLOCATE, and its count elements at data, unless data is
-// null, are copied there; one that owns some has it resized with RESIZE,
+// memory with .ALLOCATE, and its count elements at data, unless data is
+// null, are copied there; one that owns some has it resized with .RESIZE,
 // from its allocated elements' bytes. Room whose bytes pass int's largest
 // is more than any memory holds: it asks for int's largest bytes, which
 // no allocator gives. Elements of 0 bytes ask for nothing.
@@ -554,7 +574,7 @@ __array_grow :: (array: *Resizable_Array, size: int, room: int, loc: Source_Code
     defer context.allocation_location = saved;
     memory : *void;
     if array.allocated <= 0 || array.data == null {
-        memory = allocator.proc(ALLOCATE, bytes, 0, null, allocator.data);
+        memory = allocator.proc(.ALLOCATE, bytes, 0, null, allocator.data);
         if memory == null { return false; }
         // Within bytes, since elements is at least the count. A count of 0
         // or less copies nothing, and never reaches C as a size_t that
@@ -563,7 +583,7 @@ __array_grow :: (array: *Resizable_Array, size: int, room: int, loc: Source_Code
             __memmove(memory, array.data, cast(u64) (array.count * size));
         }
     } else {
-        memory = allocator.proc(RESIZE, bytes, array.allocated * size, array.data, allocator.data);
+        memory = allocator.proc(.RESIZE, bytes, array.allocated * size, array.data, allocator.data);
         if memory == null { return false; }
     }
     array.data = memory;
@@ -676,7 +696,7 @@ __array_reset :: (array: *Resizable_Array, size: int) {
 }
 
 // array_free: gives the memory the array owns back to its allocator, with
-// FREE and its size. The array is then empty, data null and allocated 0,
+// .FREE and its size. The array is then empty, data null and allocated 0,
 // and keeps its allocator, so it can grow again from it. While the
 // allocator is called, context.allocation_location is loc, and the place
 // before is put back after, as in __array_grow.
@@ -686,7 +706,7 @@ __array_free :: (array: *Resizable_Array, size: int, loc: Source_Code_Location) 
         saved := context.allocation_location;
         context.allocation_location = loc;
         defer context.allocation_location = saved;
-        allocator.proc(FREE, 0, array.allocated * size, array.data, allocator.data);
+        allocator.proc(.FREE, 0, array.allocated * size, array.data, allocator.data);
     }
     array.count = 0;
     array.data = null;

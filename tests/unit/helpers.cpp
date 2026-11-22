@@ -205,8 +205,8 @@ static Ir_Module *lower_with_preload(Arena *a, const char *text) {
     return m;
 }
 
-// The top-level declaration (procedure, global, constant or struct) of f
-// called `name`, which must exist.
+// The top-level declaration (procedure, global, constant, struct or enum)
+// of f called `name`, which must exist.
 static Ast *top_level_named(Ast_File *f, const char *name) {
     for (s64 i = 0; i < f->procs.count; i++) {
         if (string_eq(f->procs[i]->name, str(name))) return f->procs[i];
@@ -216,6 +216,7 @@ static Ast *top_level_named(Ast_File *f, const char *name) {
         String n = g->kind == AST_VAR      ? ((Ast_Var *)g)->name
                    : g->kind == AST_STRUCT ? ((Ast_Struct *)g)->name
                    : g->kind == AST_CONST  ? ((Ast_Const *)g)->name
+                   : g->kind == AST_ENUM   ? ((Ast_Enum *)g)->name
                                            : String{};
         if (string_eq(n, str(name))) return g;
     }

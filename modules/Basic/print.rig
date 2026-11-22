@@ -22,16 +22,16 @@
 // print, print_to_builder, sprint, tprint and print_error write a format
 // whose {} placeholders take ..Any arguments, each written by print_item,
 // through print_formatted, the one format walk. The helpers under them,
-// print_or_append, print_quoted, print_item and print_formatted, take a
-// string builder (builder.rig) first, and a null one means standard
-// output: Rig has no closures or generics, so a builder that may be null
-// is the simplest way for one walk to write to either. print passes null;
-// print_to_builder takes a builder and stops the program on a null one.
-// Written to standard output, nothing is allocated; print_to_builder and
-// print_error write into a builder of their own on the heap, then append
-// it to the one given or write it to standard error. sprint's string is
-// from context.allocator, copied out of a builder of its own on the heap;
-// tprint's is from the temporary storage, with no copy.
+// print_or_append, print_quoted, print_item, print_enum and
+// print_formatted, take a string builder (builder.rig) first, and a null
+// one means standard output: Rig has no closures or generics, so a builder
+// that may be null is the simplest way for one walk to write to either.
+// print passes null; print_to_builder takes a builder and stops the program
+// on a null one. Written to standard output, nothing is allocated;
+// print_to_builder and print_error write into a builder of their own on the
+// heap, then append it to the one given or write it to standard error.
+// sprint's string is from context.allocator, copied out of a builder of its
+// own on the heap; tprint's is from the temporary storage, with no copy.
 #load "libc.rig";
 #load "numbers.rig";
 #load "string.rig";
@@ -166,6 +166,8 @@ print_quoted :: (builder: *String_Builder, s: string) {
 //     would be.
 //   - An array, a view or a resizable array, [value, ...]; [] for one with
 //     no elements, or a view or resizable array whose count is 0 or less.
+//   - An enum, by its members' names, through print_enum: FREE, or
+//     VISIBLE | GLOWING for an enum_flags.
 //
 // nested says the value is inside a struct or an array of any kind, or among
 // the arguments a format leaves over, {!EXTRA: ...}, where a string is
@@ -177,7 +179,7 @@ print_quoted :: (builder: *String_Builder, s: string) {
 // What no conversion to Any makes: a zeroed Any, whose type is null, as a
 // zeroed struct's Any field is, writes null, as a zeroed pointer does; a
 // description of void, which only an Any made by hand can hold, writes
-// void; and a tag that isn't one of the nine writes nothing.
+// void; and a tag that isn't one of the ten writes nothing.
 //
 // A pointer isn't followed, but a view's data (a resizable array's too)
 // and an Any's value_pointer are, so a view or an Any that reaches a value
@@ -191,7 +193,7 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
     p := item.value_pointer;
     if t == null {
         print_or_append(builder, "null");
-    } else if t.tag == TYPE_INFO_INTEGER {
+    } else if t.tag == .INTEGER {
         buffer : [INT_TEXT_MAX]u8;
         if (cast(*Type_Info_Integer) t).signed {
             value : int = 0;
@@ -218,7 +220,7 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             }
             print_or_append(builder, format_u64(buffer, value, 10));
         }
-    } else if t.tag == TYPE_INFO_FLOAT {
+    } else if t.tag == .FLOAT {
         value : float64 = 0;
         if t.size == 4 {
             value = (cast(*float32) p).*;
@@ -236,20 +238,20 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             }
         }
         print_or_append(builder, text);
-    } else if t.tag == TYPE_INFO_BOOL {
+    } else if t.tag == .BOOL {
         if (cast(*bool) p).* {
             print_or_append(builder, "true");
         } else {
             print_or_append(builder, "false");
         }
-    } else if t.tag == TYPE_INFO_STRING {
+    } else if t.tag == .STRING {
         s := (cast(*string) p).*;
         if nested {
             print_quoted(builder, s);
         } else {
             print_or_append(builder, s);
         }
-    } else if t.tag == TYPE_INFO_POINTER || t.tag == TYPE_INFO_PROCEDURE {
+    } else if t.tag == .POINTER || t.tag == .PROCEDURE {
         // Both are an address, 8 bytes, read as a u64 to be written.
         address := (cast(*u64) p).*;
         if address == 0 {
@@ -259,9 +261,9 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             print_or_append(builder, "0x");
             print_or_append(builder, format_u64(buffer, address, 16));
         }
-    } else if t.tag == TYPE_INFO_VOID {
+    } else if t.tag == .VOID {
         print_or_append(builder, "void");
-    } else if t.tag == TYPE_INFO_STRUCT {
+    } else if t.tag == .STRUCT {
         // An Any is a struct too, but it's written as the value it holds:
         // one description per type, so its description's address says
         // it's an Any.
@@ -278,11 +280,11 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             print_item(builder, Any.{it.type, cast(*u8) p + it.offset}, true);
         }
         print_or_append(builder, "}");
-    } else if t.tag == TYPE_INFO_ARRAY {
+    } else if t.tag == .ARRAY {
         a := cast(*Type_Info_Array) t;
         data := cast(*u8) p;
         count := a.count;
-        if a.array_kind != ARRAY_FIXED {
+        if a.array_kind != .FIXED {
             // A view, or a resizable array, which starts as a view does, is
             // a count and a data pointer, whatever its elements, so it's
             // read as a []u8. When its count says it has elements, its
@@ -301,6 +303,85 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             print_item(builder, Any.{a.element_type, data + it * a.element_type.size}, true);
         }
         print_or_append(builder, "]");
+    } else if t.tag == .ENUM {
+        print_enum(builder, cast(*Type_Info_Enum) t, p);
+    }
+}
+
+// Writes the enum value at p, described by e (spec 3.16, 3.18), to
+// builder, or to standard output when builder is null. The value is read
+// at its integer type's size and sign into the 64 bits a member's value
+// has in e.values, sign-extended from a signed type and zero-extended from
+// an unsigned one (a u64's 8 bytes as they are), and written:
+//
+//   - When a member has it, as the name of the first that does, in
+//     declaration order: of two members of one value, the first.
+//   - In an enum_flags, when none has it, as the members it's made of, in
+//     order, joined by " | ": each member that isn't 0 and whose bits are
+//     all among the value's bits not yet written, which it then writes.
+//     Any bits left come last, as a number read as unsigned at the type's
+//     width, and so is a value no member's bits are in, alone: cast(Look) 9
+//     is VISIBLE | 8, and in an enum_flags s8 of A and B, cast(F) -1 is
+//     A | B | 252 and cast(F) -128 is 128. A value of no bits, when no
+//     member is 0, is 0.
+//   - In an enum, as its number in base 10, by its integer type's sign, as
+//     an integer is: a value no member has is allowed (cast(Mode) 7 is 7).
+print_enum :: (builder: *String_Builder, e: *Type_Info_Enum, p: *void) {
+    signed := (cast(*Type_Info_Integer) e.underlying).signed;
+    size := e.info.size;
+    value : s64 = 0;
+    if size == 8 {
+        value = (cast(*s64) p).*;
+    } else if signed {
+        if size == 1 {
+            value = (cast(*s8) p).*;
+        } else if size == 2 {
+            value = (cast(*s16) p).*;
+        } else {
+            value = (cast(*s32) p).*;
+        }
+    } else {
+        if size == 1 {
+            value = (cast(*u8) p).*;
+        } else if size == 2 {
+            value = (cast(*u16) p).*;
+        } else {
+            value = (cast(*u32) p).*;
+        }
+    }
+    for e.values {
+        if it == value {
+            print_or_append(builder, e.names[it_index]);
+            return;
+        }
+    }
+    left := value; // the bits no member's name has written yet
+    if e.is_flags {
+        wrote := false;
+        for e.values {
+            if it != 0 && (left & it) == it {
+                if wrote { print_or_append(builder, " | "); }
+                print_or_append(builder, e.names[it_index]);
+                left &= ~it;
+                wrote = true;
+            }
+        }
+        if wrote && left == 0 { return; }
+        if wrote { print_or_append(builder, " | "); }
+        // The bits left, all of them when no member's name was written,
+        // are bits, not a number with a sign: unsigned, at the type's
+        // width.
+        bits := cast,trunc(u64) left;
+        if size < 8 { bits &= (cast(u64) 1 << (size * 8)) - 1; }
+        buffer : [INT_TEXT_MAX]u8;
+        print_or_append(builder, format_u64(buffer, bits, 10));
+        return;
+    }
+    buffer : [INT_TEXT_MAX]u8;
+    if signed {
+        print_or_append(builder, format_int(buffer, left, 10));
+    } else {
+        print_or_append(builder, format_u64(buffer, cast,trunc(u64) left, 10));
     }
 }
 
@@ -477,7 +558,7 @@ print_error_string :: (s: string) {
         count := s.count - written;
         if count > MOST { count = MOST; }
         wrote := 0;
-        #if OS == OS_WINDOWS {
+        #if OS == .WINDOWS {
             wrote = cast(int) c_write(2, s.data + written, cast(u32) count);
         } else {
             wrote = cast(int) c_write(2, s.data + written, cast(u64) count);

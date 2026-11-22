@@ -1,0 +1,28 @@
+// An enum's description (issue #221, spec 3.16, 3.18): a Type_Info_Enum,
+// tag .ENUM (11), its name, integer type and members in order, none for
+// an enum with none; the predeclared Operating_System's, which print
+// writes by name as a program's own; and the tags and array kinds, now
+// enums.
+#import "Basic";
+
+Small :: enum u8 { A; B :: 5; C; }
+Look :: enum_flags { VISIBLE; SOLID; }
+Empty :: enum { }
+Host :: struct { system: Operating_System; }
+
+main :: () {
+    t := cast(*Type_Info_Enum) type_info(Small);
+    print("{} {} {} {} {}\n", t.info.tag, cast(int) t.info.tag, t.name, t.info.size, t.is_flags);
+    print("{} {}\n", t.underlying == type_info(u8), t.underlying.tag);
+    for t.names { print("{}={} ", it, t.values[it_index]); }
+    print("\n");
+    l := cast(*Type_Info_Enum) type_info(Look);
+    print("{} {} {}\n", l.is_flags, l.values, type_info(Look).tag == .ENUM);
+    e := cast(*Type_Info_Enum) type_info(Empty);
+    print("{} {} {} {}\n", e.names, e.values, e.info.size, cast(Empty) 3);
+    o := cast(*Type_Info_Enum) type_info(Operating_System);
+    print("{} {} {} {} {} {}\n", o.info.tag, o.name, o.names, o.values, o.underlying == type_info(int), o.is_flags);
+    print("{} {} {}\n", Operating_System.WINDOWS, Operating_System.LINUX, Host.{.LINUX});
+    a := cast(*Type_Info_Array) type_info([]int);
+    print("{} {} {}\n", a.array_kind, a.array_kind == .VIEW, type_info(Type_Info_Tag).size);
+}

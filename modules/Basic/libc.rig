@@ -250,7 +250,7 @@ c_fmodf :: (x: float32, y: float32) -> float32 #foreign libc "fmodf";
 // Each system's own functions (the header says why they're apart). Each
 // name is declared in both branches, with that system's signature, unless
 // only one system has it.
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     // Writes count bytes of data to the file descriptor, 2 for standard
     // error, at once, with no buffer of C's in between: the bytes it wrote,
     // or -1 when it couldn't. Its count is 32 bits, and so is its result.

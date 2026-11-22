@@ -147,11 +147,20 @@ TEST(operators_need_no_spaces) {
 }
 
 TEST(keywords_are_not_identifiers) {
-    Lexed *l = lex_text("if iffy for_each null else while for break continue return struct enum union cast defer "
-                        "using true false");
+    Lexed *l = lex_text("if iffy for_each null else while for break continue return struct enum enum_flags union cast "
+                        "defer using true false");
     CHECK_KINDS(l, TOKEN_IF, TOKEN_IDENT, TOKEN_IDENT, TOKEN_NULL, TOKEN_ELSE, TOKEN_WHILE, TOKEN_FOR, TOKEN_BREAK,
-                TOKEN_CONTINUE, TOKEN_RETURN, TOKEN_STRUCT, TOKEN_ENUM, TOKEN_UNION, TOKEN_CAST, TOKEN_DEFER,
-                TOKEN_USING, TOKEN_TRUE, TOKEN_FALSE, TOKEN_EOF);
+                TOKEN_CONTINUE, TOKEN_RETURN, TOKEN_STRUCT, TOKEN_ENUM, TOKEN_ENUM_FLAGS, TOKEN_UNION, TOKEN_CAST,
+                TOKEN_DEFER, TOKEN_USING, TOKEN_TRUE, TOKEN_FALSE, TOKEN_EOF);
+    lexed_free(l);
+}
+
+TEST(enum_flags_is_one_keyword) {
+    // Issue #221: enum_flags is a keyword of its own (spec 2.6), read whole
+    // as any word is: a longer name that starts with it is a name, and so
+    // is _flags after enum.
+    Lexed *l = lex_text("enum_flagsy enum _flags");
+    CHECK_KINDS(l, TOKEN_IDENT, TOKEN_ENUM, TOKEN_IDENT, TOKEN_EOF);
     lexed_free(l);
 }
 

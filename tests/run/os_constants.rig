@@ -1,20 +1,26 @@
-// The predeclared constants (issue #147, spec 2.5): OS is the system the
-// program is built for, OS_WINDOWS (1) or OS_LINUX (2), each an untyped
-// integer constant, so a comparison of them is a constant bool. #run's code
-// sees the program's OS, and a local may hide it. What's printed is the
-// same on both systems.
+// The predeclared OS (issues #147, #221, spec 2.5, 4.9): a constant of the
+// predeclared enum Operating_System, WINDOWS (1) or LINUX (2), so a
+// comparison is a constant bool, and a cast gives its number. #run's code
+// sees the program's OS, a constant a top-level #if decided with is of
+// OS's own type, and a local may hide OS or Operating_System. What's
+// printed is the same on both systems.
 puts :: (s: *u8) -> s32 #foreign libc;
 
-KNOWN :: OS == OS_WINDOWS || OS == OS_LINUX;   // a constant bool
-SEEN :: #run which();                          // #run's code sees the program's OS
-which :: () -> int { return OS; }
+KNOWN :: OS == .WINDOWS || OS == .LINUX;
+SEEN :: #run which();
+MINE :: OS;
+which :: () -> Operating_System { return OS; }
+
+#if MINE == .WINDOWS { WIDE :: true; } else { WIDE :: false; }
 
 main :: () {
     if KNOWN { puts("OS is Windows or Linux"); }
-    if OS_WINDOWS == 1 && OS_LINUX == 2 { puts("OS_WINDOWS is 1, OS_LINUX is 2"); }
+    if cast(int) Operating_System.WINDOWS == 1 && cast(int) Operating_System.LINUX == 2 { puts("WINDOWS is 1, LINUX is 2"); }
+    if cast(int) OS == 1 || cast(int) OS == 2 { puts("OS casts to its number"); }
     if SEEN == OS { puts("#run sees the same OS"); }
-    small : u8 = OS;
-    if small == OS { puts("OS is an untyped integer"); }
+    if MINE == OS && WIDE == (OS == .WINDOWS) { puts("a constant the #if decided with is OS's type"); }
     OS := 7;
     if OS == 7 { puts("a local hides OS"); }
+    Operating_System := 3;
+    if Operating_System == 3 { puts("a local hides Operating_System"); }
 }

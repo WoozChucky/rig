@@ -56,27 +56,27 @@ show_counts :: (counter: *Counter) {
 
 // Passes every call on to the heap, counting the allocations and the
 // frees.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE { counter.allocations += 1; }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .ALLOCATE { counter.allocations += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
 // Counts as counting_allocator_proc does, but gives memory for the first
 // allocation only, as an allocator that runs out after it would.
-first_only_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+first_only_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         if counter.allocations > 1 { return null; }
     }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
 // Gives no memory, as an allocator that has run out would.
-failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+failing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
@@ -142,7 +142,7 @@ main :: () {
     text.data = contents.data;
     text.count = contents.count;
     write_entire_file(FILE, text);
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         output, status = run_command_with_output("type .build\\tests\\basic_command_output.txt", HEAP_ALLOCATOR);
     } else {
         output, status = run_command_with_output("cat .build/tests/basic_command_output.txt", HEAP_ALLOCATOR);
@@ -163,7 +163,7 @@ main :: () {
     // they are, so the output is the text written. Two allocations, the
     // command's copy and the output, both given back.
     write_entire_file(NIHON, "日本 café\n");
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         output, status = run_command_with_output("type .build\\tests\\basic_command_日本.txt", counting);
     } else {
         output, status = run_command_with_output("cat .build/tests/basic_command_日本.txt", counting);
@@ -176,7 +176,7 @@ main :: () {
     print_line("");
 
     // A command that names the file deletes it.
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         status = run_command("del .build\\tests\\basic_command_日本.txt", HEAP_ALLOCATOR);
     } else {
         status = run_command("rm .build/tests/basic_command_日本.txt", HEAP_ALLOCATOR);
@@ -192,7 +192,7 @@ main :: () {
     // -1, read as a signed 32-bit number, as C's system did; sh (dash)
     // refuses exit -1, and its exit 255 is the wait status 65280.
     top := false;
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         top = run_command("exit -1", HEAP_ALLOCATOR) == -1;
     } else {
         top = run_command("exit 255", HEAP_ALLOCATOR) == 65280;
@@ -217,7 +217,7 @@ main :: () {
     quiet_command := sprint(": {}", cast(string) byte_view);
     quiet_status := run_command(quiet_command, counting);
     expected := false;
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         expected = status == -1 && output.count == 0 && quiet_status == -1 && counter.allocations == 0;
     } else {
         expected = status == 0 && quiet_status == 0;

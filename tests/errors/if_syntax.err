@@ -1,10 +1,10 @@
 tests/errors/if_syntax.rig:7:5: error: #if can't be among a struct's fields, for now
         #if true { y: int; }
         ^
-tests/errors/if_syntax.rig:10:23: error: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }
+tests/errors/if_syntax.rig:10:23: error: an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }
         #if true { } else if false { }
                           ^
-tests/errors/if_syntax.rig:12:19: error: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }
+tests/errors/if_syntax.rig:12:19: error: an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }
     #if true { } else if false { }
                       ^
 tests/errors/if_syntax.rig:14:22: error: expected an expression, found ';'

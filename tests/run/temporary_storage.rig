@@ -3,7 +3,7 @@
 // multiple of 8, from its first 32 KB, which lie in the program, then from
 // pages its overflow_allocator gives, of 32 KB or the request with its
 // header, whichever is larger. A resize of the last allocation stays in place
-// when it fits. Nothing is given back until a reset, FREE_ALL. occupied
+// when it fits. Nothing is given back until a reset, .FREE_ALL. occupied
 // counts from the first byte, a page from the first multiple of 8 at or past
 // where the region before it ended, and high_water_mark is the most it has
 // been. A push_context with a program's own storage makes it allocate from
@@ -16,9 +16,9 @@ INT_LARGEST :: 9223372036854775807;
 
 T :: TEMPORARY_ALLOCATOR;
 
-take :: (size: int) -> *u8 { return T.proc(ALLOCATE, size, 0, null, T.data); }
-grow :: (p: *u8, old_size: int, size: int) -> *u8 { return T.proc(RESIZE, size, old_size, p, T.data); }
-reset :: () { T.proc(FREE_ALL, 0, 0, null, T.data); }
+take :: (size: int) -> *u8 { return T.proc(.ALLOCATE, size, 0, null, T.data); }
+grow :: (p: *u8, old_size: int, size: int) -> *u8 { return T.proc(.RESIZE, size, old_size, p, T.data); }
+reset :: () { T.proc(.FREE_ALL, 0, 0, null, T.data); }
 
 pages :: () -> int {
     n := 0;
@@ -50,13 +50,13 @@ Overflow :: struct { allocations: int; frees: int; refuse: bool; }
 
 // Passes every call on to the heap, counting allocations and frees, or
 // gives null for an allocation while refuse is set.
-overflow_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+overflow_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Overflow) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         if counter.refuse { return null; }
         counter.allocations += 1;
     }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
@@ -111,7 +111,7 @@ main :: () {
     for i: 0..9 { sum += cast(int) d[i]; }
     printf("%d %lld\n", d == a, sum);
     show("grown");
-    T.proc(FREE, 0, 20, d, T.data);   // nothing
+    T.proc(.FREE, 0, 20, d, T.data);   // nothing
     show("freed");
     printf("%d\n", take(INT_LARGEST) == null);
     show("too large");

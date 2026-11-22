@@ -10,7 +10,7 @@
 // - Shapes: numbers, strings, comments, `name :: (`. They follow the lexer's
 //   rules (src/lexer.h, the comment above lex()), change rarely, and are
 //   written by hand in rig.tmLanguage.template.json.
-// - Word lists: the keywords, the type names, the predeclared constants, the
+// - Word lists: the keywords, the type names, the predeclared names, the
 //   operators. They change whenever the language grows, so nobody writes
 //   them by hand: where the template says @NAME@, this file fills in the
 //   words from the tables the lexer and the checker themselves use. The
@@ -21,6 +21,7 @@
 //                            KEYWORD_SCOPES below gives it
 //   @TYPES@                  the checker's NAMED_TYPES, then RESERVED_TYPES
 //   @PREDECLARED_CONSTANTS@  the checker's PREDECLARED_CONSTANTS (OS ...)
+//   @PREDECLARED_ENUM@       the checker's OPERATING_SYSTEM
 //   @OPERATORS@              the lexer's PUNCTUATION, one regex
 //   "@OPERATOR_CAPTURES@"    the scope of each operator in that regex
 //
@@ -71,12 +72,13 @@ struct Keyword_Scope {
 // nothing else. How a new keyword is highlighted is a choice, so it isn't
 // guessed: until it has a line here, vscode_grammar_is_current fails.
 static const Keyword_Scope KEYWORD_SCOPES[] = {
-    {"if", KEYWORDS_CONTROL},     {"else", KEYWORDS_CONTROL},     {"while", KEYWORDS_CONTROL},
-    {"for", KEYWORDS_CONTROL},    {"break", KEYWORDS_CONTROL},    {"continue", KEYWORDS_CONTROL},
-    {"return", KEYWORDS_CONTROL}, {"defer", KEYWORDS_CONTROL},    {"struct", KEYWORDS_STORAGE},
-    {"enum", KEYWORDS_STORAGE},   {"union", KEYWORDS_STORAGE},    {"cast", KEYWORDS_CAST},
-    {"using", KEYWORDS_OTHER},    {"true", KEYWORDS_CONSTANT},    {"false", KEYWORDS_CONSTANT},
-    {"null", KEYWORDS_CONSTANT},  {"context", KEYWORDS_VARIABLE}, {"push_context", KEYWORDS_CONTROL},
+    {"if", KEYWORDS_CONTROL},     {"else", KEYWORDS_CONTROL},       {"while", KEYWORDS_CONTROL},
+    {"for", KEYWORDS_CONTROL},    {"break", KEYWORDS_CONTROL},      {"continue", KEYWORDS_CONTROL},
+    {"return", KEYWORDS_CONTROL}, {"defer", KEYWORDS_CONTROL},      {"struct", KEYWORDS_STORAGE},
+    {"enum", KEYWORDS_STORAGE},   {"enum_flags", KEYWORDS_STORAGE}, {"union", KEYWORDS_STORAGE},
+    {"cast", KEYWORDS_CAST},      {"using", KEYWORDS_OTHER},        {"true", KEYWORDS_CONSTANT},
+    {"false", KEYWORDS_CONSTANT}, {"null", KEYWORDS_CONSTANT},      {"context", KEYWORDS_VARIABLE},
+    {"push_context", KEYWORDS_CONTROL},
 };
 
 // ---------------------------------------------------------------------------
@@ -406,9 +408,9 @@ static void grammar_out_types(Array<u8> *out, const Grammar_Tables *t) {
     }
 }
 
-// The predeclared constants' names as a regex's alternatives, OS|OS_WINDOWS,
-// in the checker's order. Names are letters, digits and '_', so nothing
-// needs escaping.
+// The predeclared constants' names as a regex's alternatives, OS|CPU, in
+// the checker's order (OS alone, today). Names are letters, digits and '_',
+// so nothing needs escaping.
 static void grammar_out_predeclared(Array<u8> *out, const Grammar_Tables *t) {
     for (s64 i = 0; i < t->predeclared_count; i++) {
         if (i > 0) grammar_out(out, "|");
@@ -542,6 +544,11 @@ static String generate_grammar(Arena *a, String tmpl, const Grammar_Tables *t, A
         } else if (string_eq(name, str("PREDECLARED_CONSTANTS"))) {
             known = predeclared_used = true;
             grammar_out_predeclared(&out, t);
+        } else if (string_eq(name, str("PREDECLARED_ENUM"))) {
+            // One name, so not a table of Grammar_Tables: the tests'
+            // templates leave it out.
+            known = true;
+            grammar_out(&out, OPERATING_SYSTEM);
         } else if (string_eq(name, str("OPERATORS"))) {
             known = operators_used = true;
             grammar_out_operators(&out, t);
@@ -708,8 +715,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
         {"<", OPERATORS_COMPARISON}, {"..", OPERATORS_RANGE}, {"(", OPERATORS_NONE}, {"<<", OPERATORS_BITWISE}};
     static Type *const named_types[] = {&type_int};
     static const char *const reserved_types[] = {"Any"};
-    static const Predeclared_Constant predeclared[] = {{"OS", SYSTEM_NONE, "the system"},
-                                                       {"OS_LINUX", SYSTEM_LINUX, "Linux"}};
+    static const Predeclared_Constant predeclared[] = {{"OS", "the system"}, {"CPU", "the processor"}};
     Grammar_Tables tables = {
         keywords,    GRAMMAR_COUNT(keywords),    keyword_scopes,  GRAMMAR_COUNT(keyword_scopes),
         punctuation, GRAMMAR_COUNT(punctuation), operator_scopes, GRAMMAR_COUNT(operator_scopes),
@@ -736,7 +742,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
               "{\n"
               "    \"keywords\": \"if|while true\",\n"
               "    \"types\": \"int|Any\",\n"
-              "    \"constants\": \"OS|OS_LINUX\",\n"
+              "    \"constants\": \"OS|CPU\",\n"
               "    \"operators\": {\n"
               "        \"match\": \"(\\\\.\\\\.)|(<<)|(<)\",\n"
               "        \"captures\": {\n"

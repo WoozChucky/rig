@@ -9,13 +9,13 @@
 // leaves its allocator out, in the stretch and in what it calls, come
 // from the arena without passing it down.
 //
-// An allocator's shape (Allocator), its modes (ALLOCATE, RESIZE, FREE and
-// FREE_ALL) and the heap (heap_allocator_proc and HEAP_ALLOCATOR) are
-// Preload's, which every program imports without asking (spec 2.14; its
-// README.md lists them), and so are the context's temporary storage and
-// its allocator, TEMPORARY_ALLOCATOR. This file adds what is built over
-// them: the four helpers, an arena, a pool, and the temporary storage's
-// own helpers, talloc, its marks and its reset.
+// An allocator's shape (Allocator), its modes (Allocator_Mode: .ALLOCATE,
+// .RESIZE, .FREE and .FREE_ALL) and the heap (heap_allocator_proc and
+// HEAP_ALLOCATOR) are Preload's, which every program imports without
+// asking (spec 2.14; its README.md lists them), and so are the context's
+// temporary storage and its allocator, TEMPORARY_ALLOCATOR. This file adds
+// what is built over them: the four helpers, an arena, a pool, and the
+// temporary storage's own helpers, talloc, its marks and its reset.
 //
 // A program calls the four helpers, alloc, resize, free and free_all,
 // rather than an allocator's procedure. They settle the edges once, so no
@@ -51,7 +51,7 @@ alloc :: (size: int, allocator: Allocator = context.allocator, loc: Source_Code_
     saved := context.allocation_location;
     context.allocation_location = loc;
     defer context.allocation_location = saved;
-    return allocator.proc(ALLOCATE, size, 0, null, allocator.data);
+    return allocator.proc(.ALLOCATE, size, 0, null, allocator.data);
 }
 
 // memory, which holds old_size bytes from allocator, the context's unless
@@ -81,7 +81,7 @@ resize :: (memory: *void, old_size: int, new_size: int, allocator: Allocator = c
     saved := context.allocation_location;
     context.allocation_location = loc;
     defer context.allocation_location = saved;
-    return allocator.proc(RESIZE, new_size, old_size, memory, allocator.data);
+    return allocator.proc(.RESIZE, new_size, old_size, memory, allocator.data);
 }
 
 // Gives memory back to allocator, the context's unless given, which must
@@ -94,7 +94,7 @@ free :: (memory: *void, allocator: Allocator = context.allocator, loc: Source_Co
     saved := context.allocation_location;
     context.allocation_location = loc;
     defer context.allocation_location = saved;
-    allocator.proc(FREE, 0, 0, memory, allocator.data);
+    allocator.proc(.FREE, 0, 0, memory, allocator.data);
 }
 
 // Gives back everything allocator, the context's unless given, has given,
@@ -106,7 +106,7 @@ free_all :: (allocator: Allocator = context.allocator, loc: Source_Code_Location
     saved := context.allocation_location;
     context.allocation_location = loc;
     defer context.allocation_location = saved;
-    allocator.proc(FREE_ALL, 0, 0, null, allocator.data);
+    allocator.proc(.FREE_ALL, 0, 0, null, allocator.data);
 }
 
 // The header at the start of each of an arena's blocks: the block made
@@ -149,27 +149,27 @@ arena_init :: (arena: *Arena, block_size: int, parent: Allocator = context.alloc
 
 // An arena's allocator procedure; data is its *Arena.
 //
-// - ALLOCATE starts at the first multiple of 8 at or past used, so every
+// - .ALLOCATE starts at the first multiple of 8 at or past used, so every
 //   allocation is aligned to 8, as any Rig type needs (spec 3.11), when the
 //   parent's memory is, as the heap's is. When the rest of the block can't
 //   hold size bytes, a new block is taken from the parent, block_size bytes
 //   or size when that is larger, plus the header, and what was left of the
 //   old block goes unused. A parent's null is passed on.
-// - RESIZE allocates anew and copies the old bytes that fit: an arena
+// - .RESIZE allocates anew and copies the old bytes that fit: an arena
 //   can't grow memory in place, since more may have been handed out after
 //   it.
-// - FREE does nothing. The memory goes back with the rest of its block.
-// - FREE_ALL gives every block back to the parent.
+// - .FREE does nothing. The memory goes back with the rest of its block.
+// - .FREE_ALL gives every block back to the parent.
 //
-// A block is asked of the parent, and FREE_ALL gives the newest back, with
+// A block is asked of the parent, and .FREE_ALL gives the newest back, with
 // the place the arena is asked from, context.allocation_location, as loc,
 // so a parent that records places has the request that needed the block
 // rather than this file's line. The older blocks go back through
 // arena_reset, at its own line.
-arena_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+arena_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     LARGEST :: 9223372036854775807; // int's largest value
     arena := cast(*Arena) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         start := (arena.used + 7) & ~7;
         // Compared as size against what is left, rather than start + size
         // against the block's size, so that a size near int's largest
@@ -190,15 +190,15 @@ arena_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void,
         arena.used = start + size;
         return cast(*u8) arena.block + size_of(Arena_Block) + start;
     }
-    if mode == RESIZE {
-        memory := arena_allocator_proc(ALLOCATE, size, 0, null, data);
+    if mode == .RESIZE {
+        memory := arena_allocator_proc(.ALLOCATE, size, 0, null, data);
         if memory == null { return null; }
         count := old_size;
         if size < count { count = size; }
         copy_memory(memory, old_memory, count);
         return memory;
     }
-    if mode == FREE_ALL {
+    if mode == .FREE_ALL {
         // A reset gives back every block but the newest, so only that one
         // is left to give back.
         arena_reset(arena);
@@ -277,24 +277,24 @@ pool_init :: (pool: *Pool, slot_size: int, slot_count: int, parent: Allocator = 
 
 // A pool's allocator procedure; data is its *Pool.
 //
-// - ALLOCATE of up to slot_size bytes takes the first free slot. The first
-//   one after pool_init or FREE_ALL takes the slots' memory from the parent
+// - .ALLOCATE of up to slot_size bytes takes the first free slot. The first
+//   one after pool_init or .FREE_ALL takes the slots' memory from the parent
 //   and puts every slot on the free list, in address order. More than
 //   slot_size, no free slot, or a parent's null, gives null.
-// - RESIZE to at most slot_size keeps the same slot. Beyond, it gives null
+// - .RESIZE to at most slot_size keeps the same slot. Beyond, it gives null
 //   and the slot is as it was.
-// - FREE puts the slot back on the free list, first, so it is the next
+// - .FREE puts the slot back on the free list, first, so it is the next
 //   handed out.
-// - FREE_ALL gives the slots' memory back to the parent. The pool can be
+// - .FREE_ALL gives the slots' memory back to the parent. The pool can be
 //   used again, and takes memory anew at its next allocation.
 //
 // The slots' memory is asked of the parent, and given back, with the place
 // the pool is asked from, context.allocation_location, as loc, as an
 // arena's blocks are.
-pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+pool_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     LARGEST :: 9223372036854775807; // int's largest value
     pool := cast(*Pool) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         if size > pool.slot_size { return null; }
         if pool.memory == null {
             // The slots' bytes would have no int size. A slot_count of 0
@@ -318,16 +318,16 @@ pool_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, 
         pool.free_list = first.next;
         return first;
     }
-    if mode == RESIZE {
+    if mode == .RESIZE {
         if size <= pool.slot_size { return old_memory; }
         return null;
     }
-    if mode == FREE {
+    if mode == .FREE {
         slot := cast(*Pool_Slot) old_memory;
         slot.next = pool.free_list;
         pool.free_list = slot;
     }
-    if mode == FREE_ALL {
+    if mode == .FREE_ALL {
         free(pool.memory, pool.parent, context.allocation_location);
         pool.memory = null;
         pool.free_list = null;
@@ -361,7 +361,7 @@ talloc :: (size: int) -> *void {
 
 // Empties the context's temporary storage: every page goes back to its
 // overflow_allocator, and its first block is handed out again from its
-// start, as FREE_ALL of TEMPORARY_ALLOCATOR does. Everything allocated
+// start, as .FREE_ALL of TEMPORARY_ALLOCATOR does. Everything allocated
 // from it before is gone, and memory used after the reset is a memory
 // error no check catches (spec 8.6). Its high_water_mark stays, so a
 // program can see how much a frame or a request took at its most.

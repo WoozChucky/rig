@@ -75,15 +75,15 @@ first_frees : int;
 second_calls : int;
 
 // The heap, counting what it's asked by mode.
-first_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { first_allocations += 1; }
-    if mode == RESIZE { first_resizes += 1; }
-    if mode == FREE { first_frees += 1; }
+first_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { first_allocations += 1; }
+    if mode == .RESIZE { first_resizes += 1; }
+    if mode == .FREE { first_frees += 1; }
     return heap_allocator_proc(mode, size, old_size, old_memory, data);
 }
 
 // The heap, counting each time it's asked anything.
-second_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+second_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     second_calls += 1;
     return heap_allocator_proc(mode, size, old_size, old_memory, data);
 }
@@ -91,15 +91,15 @@ second_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *v
 // The heap, but a resize always moves: it takes new memory, copies the old
 // block's bytes there, and fills the old block with 0xEE bytes before it
 // frees it.
-moving_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode != RESIZE { return heap_allocator_proc(mode, size, old_size, old_memory, data); }
-    memory := heap_allocator_proc(ALLOCATE, size, 0, null, data);
+moving_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode != .RESIZE { return heap_allocator_proc(mode, size, old_size, old_memory, data); }
+    memory := heap_allocator_proc(.ALLOCATE, size, 0, null, data);
     if memory == null { return null; }
     kept := old_size;
     if size < kept { kept = size; }
     copy_memory(memory, old_memory, kept);
     set_memory(old_memory, 0xEE, old_size);
-    heap_allocator_proc(FREE, 0, old_size, old_memory, data);
+    heap_allocator_proc(.FREE, 0, old_size, old_memory, data);
     return memory;
 }
 

@@ -22,22 +22,22 @@ Reusing :: struct {
 // old memory to hand out next, and then takes a note of 8 bytes from the
 // context's allocator, which gets the old memory. A free_all gives the
 // arena's blocks back and then takes a note of 8 bytes the same way.
-reusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+reusing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     reusing := cast(*Reusing) data;
     arena := arena_allocator(*reusing.arena);
-    if mode == ALLOCATE && reusing.kept != null {
+    if mode == .ALLOCATE && reusing.kept != null {
         kept := reusing.kept;
         reusing.kept = null;
         return kept;
     }
-    if mode == RESIZE && old_memory != null && size > 0 {
-        memory := arena.proc(RESIZE, size, old_size, old_memory, arena.data);
+    if mode == .RESIZE && old_memory != null && size > 0 {
+        memory := arena.proc(.RESIZE, size, old_size, old_memory, arena.data);
         reusing.kept = old_memory;
         reusing.note = alloc(8);
         return memory;
     }
-    if mode == FREE_ALL {
-        arena.proc(FREE_ALL, 0, 0, null, arena.data);
+    if mode == .FREE_ALL {
+        arena.proc(.FREE_ALL, 0, 0, null, arena.data);
         reusing.reset_note = alloc(8);
         return null;
     }

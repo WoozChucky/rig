@@ -49,7 +49,7 @@
 // Linux stat follows the link and finds nothing, so it isn't.
 is_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);
@@ -72,7 +72,7 @@ is_directory :: (path: string) -> bool {
 // 0o777 less the process's umask, as a shell's mkdir gives.
 make_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);
@@ -94,7 +94,7 @@ make_directory :: (path: string) -> bool {
 // and gives false.
 delete_directory :: (path: string) -> bool {
     if path.count <= 0 || find_byte(path, 0) >= 0 { return false; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);
@@ -160,7 +160,7 @@ list_directory :: (path: string, allocator: Allocator = context.allocator, loc: 
     defer builder_free(*gathered);
     count := 0;
 
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         wide := to_wide_string(path, HEAP_ALLOCATOR);
         if wide == null { return empty, false; }
         defer free(wide, HEAP_ALLOCATOR);

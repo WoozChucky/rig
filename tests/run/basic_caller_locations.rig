@@ -30,13 +30,13 @@ CHILD :: ".build/tests/basic_caller_locations_dir/child";
 // context.allocation_location, indented under the name of the procedure
 // called. Printing to standard output takes no allocator, so it doesn't
 // ask itself.
-recording_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+recording_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     name := "ALLOCATE";
-    if mode == RESIZE {
+    if mode == .RESIZE {
         name = "RESIZE";
-    } else if mode == FREE {
+    } else if mode == .FREE {
         name = "FREE";
-    } else if mode == FREE_ALL {
+    } else if mode == .FREE_ALL {
         name = "FREE_ALL";
     }
     loc := context.allocation_location;

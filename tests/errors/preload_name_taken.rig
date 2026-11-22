@@ -7,6 +7,6 @@ Allocator :: struct { size: int; }
 
 main :: () {
     a : Allocator = HEAP_ALLOCATOR;
-    p := a.proc(ALLOCATE, 8, 0, null, a.data);
-    a.proc(FREE, 0, 0, p, a.data);
+    p := a.proc(.ALLOCATE, 8, 0, null, a.data);
+    a.proc(.FREE, 0, 0, p, a.data);
 }

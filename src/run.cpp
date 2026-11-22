@@ -152,6 +152,9 @@ static Ast *refuse_pointer(Baking *b) {
 // The node of a scalar value of type t, from its canonical bits, `bits`
 // (interp.h); null after a refusal (refuse). Each kind of scalar:
 // - An integer is an Ast_Int, a signed one sign-extended from its width.
+//   So is an enum (spec 3.18), as its integer type, the node of the enum's
+//   type: a constant of the enum, as a member is, whether or not a member
+//   has its value.
 // - A bool is an Ast_Bool, 1 or 0.
 // - A float is an Ast_Float: a float32's low 32 bits are the float32, whose
 //   value the double holds.
@@ -166,7 +169,8 @@ static Ast *refuse_pointer(Baking *b) {
 static Ast *bake_scalar(Baking *b, Type *t, u64 bits) {
     Compile_Time *ct = b->ct;
     switch (t->kind) {
-    case TYPE_INTEGER: {
+    case TYPE_INTEGER:
+    case TYPE_ENUM: {
         Ast_Int *number = baked_node<Ast_Int>(b, AST_INT, t);
         if (t->is_signed && t->size < 8) {
             s32 shift = 64 - 8 * (s32)t->size;

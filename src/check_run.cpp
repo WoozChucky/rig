@@ -15,12 +15,13 @@
 // helper of Preload's a built-in procedure's call calls (spec 3.17), and
 // Preload's __runtime_init, which every run's procedure calls first (spec
 // 7.10), so whatever the #run's code is lowered with is checked, whether or
-// not it runs. A type's description (type_info(T), a value converted to Any) is
-// lowered with every type it reaches, so the walk follows those too, behind
-// pointers as well (walk_described). And it fails where lowering couldn't
-// go on: a value, a parameter or a result with no type, a #run with no
-// value, a procedure that is broken or had errors, a struct still being
-// laid out, a struct field whose type is still unknown.
+// not it runs. A type's description (type_info(T), a value converted to
+// Any) is lowered with every type it reaches, so the walk follows those
+// too, behind pointers as well (walk_described). And it fails where
+// lowering couldn't go on: a value, a parameter or a result with no type, a
+// #run with no value, a procedure that is broken or had errors, a struct
+// still being laid out, a struct field whose type is still unknown, an enum
+// described with a member whose value is unknown.
 
 #include "check.h"
 
@@ -74,7 +75,10 @@ static void reach_described(Reach *r, Type *t) {
 // operands (a spread's too), a cast's value, a field's struct, an element's
 // array and index, a literal's values. Nothing for a name, a number, a
 // string, a bool, null, size_of, type_info, context, a default
-// #caller_location or a #run, whose operand was checked as it was.
+// #caller_location, a #run, whose operand was checked as it was, or an
+// enum's member, Mode.FREE (Ast_Member.of_enum) or .FREE: a constant,
+// whose enum's name in Mode.FREE (no value, so no type) is nothing to
+// walk, and .FREE has no operand.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -91,7 +95,9 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
         break;
     case AST_CAST: array_add(list, ((Ast_Cast *)e)->value); break;
     case AST_DEREF: array_add(list, ((Ast_Deref *)e)->operand); break;
-    case AST_MEMBER: array_add(list, ((Ast_Member *)e)->operand); break;
+    case AST_MEMBER:
+        if (!((Ast_Member *)e)->of_enum) array_add(list, ((Ast_Member *)e)->operand);
+        break;
     case AST_INDEX:
         array_add(list, ((Ast_Index *)e)->index);
         array_add(list, ((Ast_Index *)e)->operand);
@@ -377,17 +383,36 @@ static bool walk_struct(Reach *r, Type *t, void (*reach)(Reach *r, Type *t)) {
     return true;
 }
 
-// A type reached: each struct in it, held by value, through arrays,
-// views and resizable arrays, has every field's type made now
-// (check_late_field). The #run may come in the declaration pass, before
-// resolve_late_fields has made a late field's type, and lowering and
-// baking need them all. A resizable array (spec 3.17) reaches Preload's
-// Resizable_Array too, its layout, whose last field is its allocator's
-// type. A pointer's target isn't looked behind: holding one needs no more
-// than its address (code that moves it reaches its target where it does,
-// walk_expression). False when a struct has no layout (a circle, too big,
-// too deep), or is still being laid out (a circle through this #run,
-// check_finished_layout), or a field has no type: errors, said.
+// An enum described (walk_described): its members' values worked out
+// (check_enum_values), which lowering writes into its description. False
+// when they need the #run itself (a circle), or a member has none (a
+// mistake in its value, or a circle met before): errors, said.
+static bool walk_enum(Reach *r, Type *t) {
+    if (!check_enum_values(r->c, t)) return false;
+    Ast_Enum *e = t->enum_decl;
+    for (s64 i = 0; i < e->members.count; i++) {
+        if (!e->members[i]->is_constant) return false;
+    }
+    return true;
+}
+
+// A type reached: each struct in it, held by value, through arrays, views
+// and resizable arrays, has every field's type made now (check_late_field).
+// The #run may come in the declaration pass, before resolve_late_fields has
+// made a late field's type, and lowering and baking need them all. A
+// resizable array (spec 3.17) reaches Preload's Resizable_Array too, its
+// layout, whose last field is its allocator's type. A pointer's target
+// isn't looked behind: holding one needs no more than its address (code
+// that moves it reaches its target where it does, walk_expression). Nor is
+// an enum's members' values (spec 3.18): holding one needs only its integer
+// type, which it has from its declaration, and lowering and baking read no
+// more; a member the code names worked its enum's values out when it was
+// checked (find_enum_member), or, named with its enum inside its own enum's
+// body, was worked out already, and a description needs them
+// (walk_described). So a member's #run may hold a value of its own enum.
+// False when a struct has no layout (a circle, too big, too deep), or is
+// still being laid out (a circle through this #run, check_finished_layout),
+// or a field has no type: errors, said.
 static bool walk_type(Reach *r, Type *t) {
     if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) {
         reach_type(r, t->element);
@@ -408,10 +433,14 @@ static bool walk_type(Reach *r, Type *t) {
 // laid out (check_finished_layout) and has its late fields made
 // (check_late_field), as walk_type does for a struct held by value: a #run
 // may describe a struct declared after it, reached only through another's
-// pointer, before resolve_late_fields. Each type is walked once, so a
-// struct that points at itself ends. False when a struct has no layout, or
-// is still being laid out (describing *S in one of S's counts is a circle,
-// as reaching S by value is), or a field has no type: errors, said.
+// pointer, before resolve_late_fields. An enum (spec 3.18) has its
+// members' values worked out now (walk_enum), which walk_type doesn't,
+// since its description holds them, and its integer type is described
+// too. Each type is walked once, so a struct that points at itself ends.
+// False when a struct has no layout, or is still being laid out
+// (describing *S in one of S's counts is a circle, as reaching S by value
+// is), or a field has no type, or an enum's member has no value: errors,
+// said.
 static bool walk_described(Reach *r, Type *t) {
     switch (t->kind) {
     case TYPE_POINTER: reach_described(r, t->pointee); return true;
@@ -426,6 +455,9 @@ static bool walk_described(Reach *r, Type *t) {
         for (s64 i = 0; i < t->result_count; i++) reach_described(r, t->results[i]);
         return true;
     case TYPE_STRUCT: return walk_struct(r, t, reach_described);
+    case TYPE_ENUM:
+        reach_described(r, t->underlying);
+        return walk_enum(r, t);
     default: return true;  // an integer, a float, a bool, a string or void: nothing more
     }
 }

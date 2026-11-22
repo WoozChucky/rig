@@ -9,13 +9,13 @@
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, type_info, fields (e.x), struct literals (Vec2.{1, 2}),
 // elements (a[i]) and array literals (int.[1, 2]), spreads (..xs, a view
-// passed as a '..T' parameter's arguments), and code run while compiling
-// (#run e).
-// And structs, declared at the top level, the files a program loads
-// (#load "PATH";), named there too, and the code it runs while compiling
-// for its effect (#run e; and #run { ... }), there too. And code compiled
-// for one system and not another (#if c { ... } else { ... }), at the top
-// level and in a body.
+// passed as a '..T' parameter's arguments), members without their enum
+// (.FREE), and code run while compiling (#run e).
+// And structs and enums, declared at the top level, the files a program
+// loads (#load "PATH";), named there too, and the code it runs while
+// compiling for its effect (#run e; and #run { ... }), there too. And code
+// compiled for one system and not another (#if c { ... } else { ... }), at
+// the top level and in a body.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -83,6 +83,8 @@ enum Ast_Kind : u8 {
     AST_CALLER_LOCATION,  // a plain Ast: #caller_location, only a parameter's default value (spec 7.2)
     AST_PUSH_CONTEXT,  // Ast_Push_Context: push_context e { ... }
     AST_BUILTIN,       // Ast_Builtin: a predeclared procedure of the resizable arrays (spec 3.17)
+    AST_ENUM,          // Ast_Enum: Mode :: enum { A; B :: 5; }  Look :: enum_flags u8 { ... }
+    AST_DOT_NAME,      // Ast_Dot_Name: .FREE, a member without its enum (spec 3.18)
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -243,7 +245,10 @@ struct Ast_Var : Ast {
 
 // A constant: `N :: e;`. Its type is e's (untyped when e is). The checker
 // folds a number or a bool (or null) into the constant's own is_constant
-// and constant; a procedure is in proc, and data in data (spec 4.2).
+// and constant; a procedure is in proc, and data in data (spec 4.2). An
+// enum's member (spec 3.18) is one too, of the enum's integer type whatever
+// its value's type, its value null until the checker gives an implicit
+// member an Ast_Int (Ast_Enum).
 struct Ast_Const : Ast {
     String name;
     Ast *value;
@@ -284,6 +289,32 @@ struct Ast_Struct : Ast {
     Type *declared;             // its type: made when the checker collects the top level's names,
                                 // so a pointer can name it before its layout is known; null once
                                 // it's found to contain itself
+};
+
+// An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`
+// or `Look :: enum_flags u8 { VISIBLE; SOLID; ALL :: VISIBLE | SOLID; }`,
+// at the top level only (for now), at its name. Its name is a type, usable
+// anywhere, before its declaration too, as a struct's is. Each member is a
+// constant, at its name, of the enum's integer type inside the body (where
+// a later member's value may name it: ALL above) and of the enum outside
+// it, where it's written Mode.FREE, or .FREE where the type is known.
+struct Ast_Enum : Ast {
+    String name;
+    Ast_Type *type_expr;         // the integer type's name after the keyword, or null: int
+    bool is_flags;               // enum_flags
+    Array<Ast_Const *> members;  // in order, at their names; an implicit one's value is null until
+                                 // the checker gives it an Ast_Int of its number
+    Ast_Resolve resolve;         // its members' values (checker.cpp's resolve_enum)
+    Type *declared;              // its TYPE_ENUM, made with the top level's names
+};
+
+// .FREE: a member written without its enum (spec 3.18), which takes the
+// enum it meets, as .{...} takes the struct it meets (check_expr.cpp's
+// check_convert); its type is type_untyped_member until then. Once it met
+// one, it's that member, a constant of the enum. pos is the '.'.
+struct Ast_Dot_Name : Ast {
+    String name;
+    Position name_pos;  // where the name after the '.' is written
 };
 
 // An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,
@@ -335,13 +366,16 @@ struct Ast_Type_Info : Ast {
 };
 
 // e.x: the field x of the struct e, or of the struct e points at (one
-// pointer: p.x is p.*.x). A postfix operator, as .* is. pos is the field's
-// name, where a null pointer's runtime error points; start is e's.
+// pointer: p.x is p.*.x); or, when e is an enum's name, its member x (spec
+// 3.18). A postfix operator, as .* is. pos is the field's name, where a
+// null pointer's runtime error points; start is e's.
 struct Ast_Member : Ast {
-    Ast *operand;  // e
-    String name;   // x
-    s32 index;     // the field's index in its struct's type, set by the checker; -1 for an
-                   // array's, a view's or a string's .count and .data, which lowering knows by name
+    Ast *operand;       // e
+    String name;        // x
+    s32 index;          // the field's index in its struct's type, set by the checker; -1 for an
+                        // array's, a view's or a string's .count and .data, which lowering knows
+                        // by name; for an enum's member, the member's index in Ast_Enum.members
+    Ast_Enum *of_enum;  // e.x names member x of the enum e (Mode.FREE): a constant; null otherwise
 };
 
 // A literal of a struct (Jai's): `T.{a, b}` gives T's fields in order,
@@ -435,8 +469,8 @@ struct Ast_Call : Ast {
 struct Ast_Name : Ast {
     String name;
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
-                // or an Ast_Struct, whose name is a type, not a value (reported), or an
-                // Ast_Builtin, which only a call's callee may name (spec 3.17)
+                // or an Ast_Struct or an Ast_Enum, whose name is a type, not a value (reported),
+                // or an Ast_Builtin, which only a call's callee may name (spec 3.17)
 };
 
 struct Ast_String : Ast {
@@ -588,7 +622,8 @@ struct Ast_Push_Context : Ast {
 };
 
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the
-// predeclared OS_WINDOWS and OS_LINUX are; 0 names none.
+// predeclared enum Operating_System's members, WINDOWS and LINUX, are; 0
+// names none.
 enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
 
 // The system rig runs on (_WIN32 decides, as load.cpp's HOST_IS_WINDOWS).
@@ -599,13 +634,14 @@ System host_system();
 // declarations come after those of the files loaded before it (load
 // order: order, below). Procedures (and broken entries, which are
 // Ast_Procs) are in procs; the globals, top-level variables (Ast_Var,
-// is_global set), constants (Ast_Const) and structs (Ast_Struct), in
-// globals; the loads and imports (Ast_Load), in loads; the top-level runs
-// (Ast_Run, is_top_level set), in runs; the top-level #ifs (Ast_If_Directive,
-// is_top_level set, the first arm of each chain), in ifs. Each list is in
-// source order on its own; ast_declarations merges procs and globals back by
-// position. What a top-level #if's branches declare is in none of the lists
-// until the loader takes the branch (ast_add_declaration).
+// is_global set), constants (Ast_Const), structs (Ast_Struct) and enums
+// (Ast_Enum), in globals; the loads and imports (Ast_Load), in loads; the
+// top-level runs (Ast_Run, is_top_level set), in runs; the top-level #ifs
+// (Ast_If_Directive, is_top_level set, the first arm of each chain), in
+// ifs. Each list is in source order on its own; ast_declarations merges
+// procs and globals back by position. What a top-level #if's branches
+// declare is in none of the lists until the loader takes the branch
+// (ast_add_declaration).
 //
 // order is each file's place in load order (spec 2.13), by Position.file,
 // as Source_File.order is. Empty, as parse() and parse_into leave it, each
@@ -674,7 +710,20 @@ struct Ast_File {
     Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): a call's place, what
                                       // a default #caller_location is and what a built-in procedure
                                       // passes its helper (lower_builtin_call); null without Preload
+    // The predeclared enum Operating_System (spec 2.5), OS's type: made once
+    // per tree, at 0:0 in the tree's arena, by the first checker to declare
+    // the predeclared names (checker.cpp's declare_predeclared), a decider's
+    // or check()'s, so the constants a decider resolved with it and the
+    // checker's are of one type. Null until then.
+    Ast_Enum *operating_system;
 };
+
+// Whether node e was written in parentheses, (e): they leave no node, but
+// move its start to the outermost '(' (parser.cpp's parse_primary). A type
+// in parentheses is no type, so (Vec2).{1} is no literal (the parser's
+// parse_postfix), and an enum's name in them is no enum's, so (Mode).FREE
+// is no member (check_expr.cpp's check_member).
+bool ast_in_parentheses(Ast *e);
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
 // module and has no procedure called main, a broken one included (a broken
@@ -761,7 +810,12 @@ Token_Kind compound_operator(Token_Kind op);
 //   (proc-type (params))   ()
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
-// type as written ((x float) for x: float).
+// type as written ((x float) for x: float). An enum prints as
+// (enum Small u8 (A) (B (int 5))), its integer type as written or _ for
+// none, each member with its value when it has one (a written one, or
+// the number the checker gave it); an enum_flags as
+// (enum_flags Look _ (VISIBLE) ...). A member without its enum, .FREE,
+// prints as (dot FREE).
 // #run e prints as (run (call f)) for #run f(), in an expression, a
 // statement or at the top level alike; a top-level #run { ... } as
 // (run (block ...)).

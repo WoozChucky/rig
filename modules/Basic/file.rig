@@ -47,50 +47,47 @@ File :: struct {
     handle: *void;
 }
 
-// The modes file_open opens a file in: to read it from the start, to write
-// it from empty, made when it isn't there, and to write at its end, made
-// when it isn't there.
-FILE_READ :: 0;
-FILE_WRITE :: 1;
-FILE_APPEND :: 2;
+// The modes file_open opens a file in, an enum (spec 3.18): to read it
+// from the start, to write it from empty, made when it isn't there, and to
+// write at its end, made when it isn't there.
+File_Mode :: enum { READ; WRITE; APPEND; }
 
 // The most bytes file_read and file_write hand Windows' ReadFile or
 // WriteFile in one call: 1 GiB, well within their 32-bit count. Linux's
 // C calls take a 64-bit count, and don't use it.
 FILE_PIECE_MAX :: 1073741824;
 
-// Opens the file at path in mode, FILE_READ, FILE_WRITE or FILE_APPEND,
-// and gives it and true; the caller closes it with file_close. It gives a
-// File that isn't open, and false, for any other mode, for a path with a
-// zero byte, for an empty path, on Windows for one that isn't valid UTF-8,
-// for a file the system can't open (missing, when reading, or not
-// allowed), and for a directory.
+// Opens the file at path in mode, .READ, .WRITE or .APPEND, and gives it
+// and true; the caller closes it with file_close. It gives a File that
+// isn't open, and false, for any other mode (a cast of a number that is
+// none of them), for a path with a zero byte, for an empty path, on
+// Windows for one that isn't valid UTF-8, for a file the system can't open
+// (missing, when reading, or not allowed), and for a directory.
 //
-// On Windows a mode is CreateFileW's access and disposition: FILE_READ
-// reads a file that is there, FILE_WRITE writes one made or emptied, and
-// FILE_APPEND writes at the end of one, made when it isn't there, every
-// write landing at the end. Others may read and write the file while it is
-// open, as C's fopen lets them, but not delete it. A directory doesn't
-// open, in any mode.
+// On Windows a mode is CreateFileW's access and disposition: .READ reads a
+// file that is there, .WRITE writes one made or emptied, and .APPEND writes
+// at the end of one, made when it isn't there, every write landing at the
+// end. Others may read and write the file while it is open, as C's fopen
+// lets them, but not delete it. A directory doesn't open, in any mode.
 //
 // On Linux, to tell a directory from a file when reading, one byte is read
 // and then the position set back to the start, where it was before: a
 // directory opens, but its read fails, where a file's read gives a byte or
 // the end of the file. A position that can't be read or set back fails the
 // open too, since the byte read would be lost.
-file_open :: (path: string, mode: int) -> File, bool {
-    if mode != FILE_READ && mode != FILE_WRITE && mode != FILE_APPEND { return File.{null}, false; }
+file_open :: (path: string, mode: File_Mode) -> File, bool {
+    if mode != .READ && mode != .WRITE && mode != .APPEND { return File.{null}, false; }
     if find_byte(path, 0) >= 0 { return File.{null}, false; }
 
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         wide := to_wide_path(path);
         if wide == null { return File.{null}, false; }
         access : u32 = C_GENERIC_READ;
         disposition : u32 = C_OPEN_EXISTING;
-        if mode == FILE_WRITE {
+        if mode == .WRITE {
             access = C_GENERIC_WRITE;
             disposition = C_CREATE_ALWAYS;
-        } else if mode == FILE_APPEND {
+        } else if mode == .APPEND {
             access = C_FILE_APPEND_DATA;
             disposition = C_OPEN_ALWAYS;
         }
@@ -103,9 +100,9 @@ file_open :: (path: string, mode: int) -> File, bool {
         if c_path == null { return File.{null}, false; }
 
         handle : *void = null;
-        if mode == FILE_READ {
+        if mode == .READ {
             handle = c_fopen(c_path, "rb");
-        } else if mode == FILE_WRITE {
+        } else if mode == .WRITE {
             handle = c_fopen(c_path, "wb");
         } else {
             handle = c_fopen(c_path, "ab");
@@ -120,7 +117,7 @@ file_open :: (path: string, mode: int) -> File, bool {
         keep := false;
         defer if !keep { c_fclose(handle); }
 
-        if mode == FILE_READ {
+        if mode == .READ {
             start : C_Fpos;
             if c_fgetpos(handle, *start) != 0 { return File.{null}, false; }
             probe : u8;
@@ -136,7 +133,7 @@ file_open :: (path: string, mode: int) -> File, bool {
 // File that isn't open is left alone.
 file_close :: (file: File) {
     if file.handle == null { return; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         c_close_handle(file.handle);
     } else {
         c_fclose(file.handle);
@@ -150,7 +147,7 @@ file_close :: (file: File) {
 // most, and the rest by reading again, as read_entire_file does.
 file_read :: (file: File, buffer: []u8) -> int {
     if file.handle == null || buffer.count <= 0 { return 0; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         count := buffer.count;
         if count > FILE_PIECE_MAX { count = FILE_PIECE_MAX; }
         read : u32 = 0;
@@ -174,7 +171,7 @@ file_read :: (file: File, buffer: []u8) -> int {
 file_write :: (file: File, data: string) -> bool {
     if file.handle == null { return false; }
     if data.count <= 0 { return true; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         done := 0;
         while done < data.count {
             count := data.count - done;
@@ -200,7 +197,7 @@ file_write :: (file: File, data: string) -> bool {
 // a read that had reached the end before reads again from where it was.
 file_size :: (file: File) -> int {
     if file.handle == null { return -1; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         size : s64 = 0;
         if c_get_file_size_ex(file.handle, *size) == 0 { return -1; }
         return size;
@@ -237,7 +234,7 @@ file_size :: (file: File) -> int {
 // wide.rig on Windows).
 read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc: Source_Code_Location = #caller_location) -> string, bool {
     empty : string;
-    file, opened := file_open(path, FILE_READ);
+    file, opened := file_open(path, .READ);
     if !opened { return empty, false; }
     // The file is open from here: the deferred file_close closes it on
     // whichever return is taken (spec 6.12), once nothing more is read from
@@ -275,30 +272,30 @@ read_entire_file :: (path: string, allocator: Allocator = context.allocator, loc
 // what C still held, as on a full disk. False for a path file_open
 // refuses.
 write_entire_file :: (path: string, data: string) -> bool {
-    return write_file_in_mode(path, data, FILE_WRITE);
+    return write_file_in_mode(path, data, .WRITE);
 }
 
 // Writes data at the end of the file at path, making the file when it
 // isn't there. True as for write_entire_file.
 append_to_file :: (path: string, data: string) -> bool {
-    return write_file_in_mode(path, data, FILE_APPEND);
+    return write_file_in_mode(path, data, .APPEND);
 }
 
-// Opens the file at path in mode, FILE_WRITE or FILE_APPEND, writes data
-// to it and closes it, for write_entire_file and append_to_file: true
+// Opens the file at path in mode, .WRITE or .APPEND, writes data to it
+// and closes it, for write_entire_file and append_to_file: true
 // when it opened, every byte was written and it closed without an error.
 // The file is closed whether the write worked or not, by the system's
 // own call, not file_close: on Linux c_fclose gives an error when it
 // couldn't write out what C still held, as on a full disk, which
 // file_close doesn't say. False, with nothing opened, for any other mode,
 // and for a path file_open refuses.
-write_file_in_mode :: (path: string, data: string, mode: int) -> bool {
-    if mode != FILE_WRITE && mode != FILE_APPEND { return false; }
+write_file_in_mode :: (path: string, data: string, mode: File_Mode) -> bool {
+    if mode != .WRITE && mode != .APPEND { return false; }
     file, opened := file_open(path, mode);
     if !opened { return false; }
     written := file_write(file, data);
     closed := false;
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         closed = c_close_handle(file.handle) != 0;
     } else {
         closed = c_fclose(file.handle) == 0;
@@ -310,7 +307,7 @@ write_file_in_mode :: (path: string, data: string, mode: int) -> bool {
 // directory, a missing file, one that can't be read, and a path file_open
 // refuses.
 file_exists :: (path: string) -> bool {
-    file, opened := file_open(path, FILE_READ);
+    file, opened := file_open(path, .READ);
     file_close(file);
     return opened;
 }
@@ -324,7 +321,7 @@ file_exists :: (path: string) -> bool {
 // deleted either.
 delete_file :: (path: string) -> bool {
     if !file_exists(path) { return false; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         wide := to_wide_path(path);
         if wide == null { return false; }
         defer free(wide, HEAP_ALLOCATOR);

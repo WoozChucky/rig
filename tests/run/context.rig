@@ -6,18 +6,18 @@
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 // The heap, counting what it gives: data is the count, an *int.
-counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+counting_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { (cast(*int) data).* += 1; }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
 allocate :: (size: int) -> *void {
     a := context.allocator;
-    return a.proc(ALLOCATE, size, 0, null, a.data);
+    return a.proc(.ALLOCATE, size, 0, null, a.data);
 }
 give_back :: (p: *void) {
     a := context.allocator;
-    a.proc(FREE, 0, 0, p, a.data);
+    a.proc(.FREE, 0, 0, p, a.data);
 }
 second :: () -> *void { return allocate(8); }
 first :: () -> *void { return second(); }
@@ -35,7 +35,7 @@ STORAGE :: #run context.temporary_storage.size;
 // A string made from the run's context's allocator, baked: the run leaves
 // out the default, which reads the context there.
 made :: (a: Allocator = context.allocator) -> string {
-    bytes := cast(*u8) a.proc(ALLOCATE, 3, 0, null, a.data);
+    bytes := cast(*u8) a.proc(.ALLOCATE, 3, 0, null, a.data);
     bytes[0] = 114;
     bytes[1] = 117;
     bytes[2] = 110;

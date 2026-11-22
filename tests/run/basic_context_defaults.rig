@@ -31,11 +31,11 @@ count : int;
 // to give back all it gave.
 freed : int;
 
-// The heap, counting each ALLOCATE and RESIZE in count, and each FREE and
-// FREE_ALL in freed.
-counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE || mode == RESIZE { count += 1; }
-    if mode == FREE || mode == FREE_ALL { freed += 1; }
+// The heap, counting each .ALLOCATE and .RESIZE in count, and each .FREE and
+// .FREE_ALL in freed.
+counting_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE || mode == .RESIZE { count += 1; }
+    if mode == .FREE || mode == .FREE_ALL { freed += 1; }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 

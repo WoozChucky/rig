@@ -531,7 +531,8 @@ static void place(Lowering *l, Position pos, s32 scope) {
 }
 
 // The IR type of a checked type. An aggregate's value (a string's too) is
-// the address of its bytes, a ptr.
+// the address of its bytes, a ptr. An enum is its integer type's (spec
+// 3.18).
 static Ir_Type ir_type_of(Type *t) {
     if (!t || t->kind == TYPE_VOID) return IR_VOID;
     if (t->kind == TYPE_BOOL) return IR_I1;
@@ -542,7 +543,8 @@ static Ir_Type ir_type_of(Type *t) {
     if (t->kind == TYPE_PROC) return IR_PTR;
     if (type_is_aggregate(t)) return IR_PTR;
     if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
-    RIG_ASSERT(t->kind == TYPE_INTEGER);
+    t = type_integer_of(t);
+    RIG_ASSERT(t);
     switch (t->size) {
     case 1: return IR_I8;
     case 2: return IR_I16;
@@ -564,10 +566,12 @@ static s32 ir_bits(Ir_Type t) {
 }
 
 // How a parameter or result of type t widens (Ir_Ext): only s8, s16, u8 and
-// u16 are narrower than the 32 bits the calling convention widens to.
+// u16 are narrower than the 32 bits the calling convention widens to, and
+// an enum over one of them widens as it does (spec 7.6).
 static Ir_Ext ir_ext_of(Type *t) {
-    if (!t || t->kind != TYPE_INTEGER || t->size > 2) return IR_EXT_NONE;
-    return t->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
+    Type *integer = t ? type_integer_of(t) : nullptr;
+    if (!integer || integer->size > 2) return IR_EXT_NONE;
+    return integer->is_signed ? IR_EXT_SIGN : IR_EXT_ZERO;
 }
 
 // The position the next instruction gets: the current one, l->pos, except
@@ -1565,7 +1569,10 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
     if (type_is_pointer(to) && from->kind == TYPE_INTEGER) return emit_convert(l, IR_INTTOPTR, IR_I64, v, IR_PTR);
     if (from->kind == TYPE_FLOAT || to->kind == TYPE_FLOAT) return lower_float_cast(l, v, from, to);
-    if (cast->is_trunc || from->kind != TYPE_INTEGER || to->kind != TYPE_INTEGER) return resize(l, v, from, want);
+    // An enum converts as its integer type (spec 3.18): Type has its size
+    // and sign, which is all that's read below, and the message names the
+    // enum, T.
+    if (cast->is_trunc || !type_integer_of(from) || !type_integer_of(to)) return resize(l, v, from, want);
     if (ir_bits(want) < ir_bits(have)) {
         s32 narrow = resize(l, v, from, want);
         s32 back = resize(l, narrow, to, have);
@@ -3457,12 +3464,12 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // description, laid out as the Preload struct its kind is described by
 // (types.h's TYPE_INFO_* constants): a read-only global, type_info.N,
 // numbered in the order they're made, of that struct's size, aligned to 8,
-// with no rig_type (the compiler makes it). What a description points at
-// is a relocation: another type's description, a name's bytes (a str.N of
-// its own, add_bytes), or a read-only array of its own, type_info.N.members
-// for a struct, type_info.N.parameters and .results for a procedure type,
-// made only when not empty (an empty view is zeros). Names with a '.' are
-// no Rig global's.
+// with no rig_type (the compiler makes it). What a description points at is
+// a relocation: another type's description, a name's bytes (a str.N of its
+// own, add_bytes), or a read-only array of its own, type_info.N.members for
+// a struct, type_info.N.parameters and .results for a procedure type,
+// type_info.N.names and .values for an enum, made only when not empty (an
+// empty view is zeros). Names with a '.' are no Rig global's.
 //
 // Descriptions point at each other, in cycles too (a struct holding a
 // pointer to itself), so a description is made empty first, cached by its
@@ -3472,11 +3479,12 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // takes no recursion in C++, and every description is whole when it
 // returns.
 
-// The tag of the description of a type of t's kind: integers, floats,
-// bool, string, pointers, procedure types, void, structs, and arrays, views
-// and resizable arrays (spec 3.17), which share one. The checker gave every
-// value a type of its own before lowering, so the untyped types, null's and
-// a literal's without its type never get here.
+// The tag of the description of a type of t's kind: integers, floats, bool,
+// string, pointers, procedure types, void, structs, arrays, views and
+// resizable arrays (spec 3.17), which share one, and enums (spec 3.18),
+// enum_flags too. The checker gave every value a type of its own before
+// lowering, so the untyped types, null's and a literal's without its type
+// never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
     RIG_ASSERT(!type_is_untyped(t));
     switch (t->kind) {
@@ -3491,6 +3499,7 @@ static Type_Info_Tag type_info_tag(Type *t) {
     case TYPE_ARRAY:
     case TYPE_VIEW:
     case TYPE_RESIZABLE: return TYPE_INFO_ARRAY;
+    case TYPE_ENUM: return TYPE_INFO_ENUM;
     default: RIG_ASSERT(!"a type with no description"); return TYPE_INFO_VOID;
     }
 }
@@ -3505,6 +3514,7 @@ static s64 type_info_size(Type_Info_Tag tag) {
     case TYPE_INFO_PROCEDURE: return TYPE_INFO_PROCEDURE_SIZE;
     case TYPE_INFO_STRUCT: return TYPE_INFO_STRUCT_SIZE;
     case TYPE_INFO_ARRAY: return TYPE_INFO_ARRAY_SIZE;
+    case TYPE_INFO_ENUM: return TYPE_INFO_ENUM_SIZE;
     default: return TYPE_INFO_SIZE;
     }
 }
@@ -3599,18 +3609,56 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, St
     array_add(relocs, Ir_Reloc{TYPE_INFO_MEMBERS_OFFSET + VIEW_DATA_OFFSET, array, false});
 }
 
+// An enum's members, written at TYPE_INFO_ENUM_NAMES_OFFSET and
+// TYPE_INFO_ENUM_VALUES_OFFSET in its description's `bytes` (spec 3.18):
+// two views of read-only arrays of their own, type_info.N.names, a string
+// per member, in order, its bytes a str.N of their own, and
+// type_info.N.values (`name` the description's), each member's value as 8
+// bytes. A value is the member's constant, its 64 bits as the checker
+// keeps them (sign-extended from a signed integer type, zero-extended from
+// an unsigned one), known by now: the checker worked every enum's values
+// out, and a #run's walk those of each enum it describes, failing for one
+// with a member without a value (walk_enum). No members: the empty views,
+// zeros, and no arrays.
+static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
+    Ast_Enum *e = t->enum_decl;
+    s64 count = e->members.count;
+    if (count == 0) return;
+    s64 string_size = type_string.size;  // a name's: its count, then its data
+    u8 *names = (u8 *)arena_alloc(l->arena, (u64)(count * string_size), 1);  // zeroed
+    u8 *values = (u8 *)arena_alloc(l->arena, (u64)count * 8, 1);
+    Array<Ir_Reloc> name_relocs = {};
+    for (s64 i = 0; i < count; i++) {
+        Ast_Const *member = e->members[i];
+        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops lowering and a #run
+        write_bits(names + i * string_size + VIEW_COUNT_OFFSET, (u64)member->name.count, 8);
+        array_add(&name_relocs, Ir_Reloc{i * string_size + VIEW_DATA_OFFSET, add_bytes(l, member->name), false});
+        write_bits(values + i * 8, member->constant, 8);
+    }
+    s32 name_array = add_type_info_global(l, string_printf(l->arena, STR_FMT ".names", STR_ARG(name)),
+                                          count * string_size, {names, count * string_size}, name_relocs);
+    s32 value_array = add_type_info_global(l, string_printf(l->arena, STR_FMT ".values", STR_ARG(name)), count * 8,
+                                           {values, count * 8}, {});
+    write_bits(bytes + TYPE_INFO_ENUM_NAMES_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{TYPE_INFO_ENUM_NAMES_OFFSET + VIEW_DATA_OFFSET, name_array, false});
+    write_bits(bytes + TYPE_INFO_ENUM_VALUES_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{TYPE_INFO_ENUM_VALUES_OFFSET + VIEW_DATA_OFFSET, value_array, false});
+}
+
 // Writes the description `global` of type t: its kind's tag, t's size and
 // alignment (void's 0 and 1), and what its kind adds: an integer's sign; a
 // pointer's pointee's description (a *void's, void's); an array's, a view's
 // or a resizable array's element's description, its kind and its count (-1
-// for a view or a resizable array, whose count is its value's); a
-// struct's name and members; a procedure type's parameters' and results'
+// for a view or a resizable array, whose count is its value's); a struct's
+// name and members; a procedure type's parameters' and results'
 // descriptions (a ..T parameter's []T), #c_call and whether its last
-// parameter is a ..T. Its names' str.N and its arrays' globals are made
-// first; the descriptions it points at are asked for through
-// type_info_global, which only queues them. The relocations go in
-// increasing offset, as the backend wants. The bytes are put in the global
-// last, through its index: the globals array may move while they're made.
+// parameter is a ..T; an enum's name, its integer type's description,
+// whether it's an enum_flags, and its members' names and values. Its names'
+// str.N and its arrays' globals are made first; the descriptions it points
+// at are asked for through type_info_global, which only queues them. The
+// relocations go in increasing offset, as the backend wants. The bytes are
+// put in the global last, through its index: the globals array may move
+// while they're made.
 static void describe_type(Lowering *l, s32 global, Type *t) {
     String name = l->module->globals[global].name;
     s64 size = l->module->globals[global].size;
@@ -3645,6 +3693,13 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
                        string_printf(l->arena, STR_FMT ".results", STR_ARG(name)), t->results, t->result_count);
         bytes[TYPE_INFO_IS_C_CALL_OFFSET] = t->is_c_call;
         bytes[TYPE_INFO_IS_VARIADIC_OFFSET] = t->is_variadic;
+        break;
+    case TYPE_ENUM:
+        write_bits(bytes + TYPE_INFO_ENUM_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
+        array_add(&relocs, Ir_Reloc{TYPE_INFO_ENUM_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
+        array_add(&relocs, Ir_Reloc{TYPE_INFO_ENUM_UNDERLYING_OFFSET, type_info_global(l, t->underlying), false});
+        bytes[TYPE_INFO_ENUM_IS_FLAGS_OFFSET] = t->is_flags;
+        describe_enum_members(l, bytes, &relocs, name, t);
         break;
     default: break;  // a plain Type_Info: a float, bool, string or void
     }

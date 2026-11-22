@@ -1,0 +1,28 @@
+// enum_flags compiled and interpreted (issue #221, spec 3.18): values 1,
+// 2, 4 and on, a set one and the next power of two after it, | & ^ ~ and
+// their assignments, ~ of a variable within its integer type's width,
+// members typed from the other operand, 0 as the empty set, a chosen
+// integer type, and defaults written without their enum, left out.
+#import "Basic";
+
+Look :: enum_flags u8 { VISIBLE; SOLID; GLOWING :: 16; FADING; ALL :: VISIBLE | SOLID | GLOWING | FADING; }
+
+has :: (f: Look, which: Look) -> bool { return (f & which) != 0; }
+take :: (one: Look = .GLOWING, two: Look = .VISIBLE | .FADING) -> int { return cast(int) one + cast(int) two; }
+
+main :: () {
+    print("{} {} {} {}\n", cast(int) Look.VISIBLE, cast(int) Look.SOLID, cast(int) Look.FADING, cast(int) Look.ALL);
+    f : Look = .VISIBLE | .GLOWING;
+    print("{} {} {}\n", cast(int) f, has(f, .GLOWING), has(f, .SOLID));
+    f |= .SOLID;
+    f &= ~.VISIBLE;
+    f ^= .FADING;
+    print("{} {}\n", cast(int) f, f == .SOLID | .GLOWING | .FADING);
+    none : Look;
+    print("{} {} {}\n", none == 0, (Look.ALL & ~Look.ALL) == 0, cast(int) (Look.ALL ^ .VISIBLE));
+    big := cast(Look) 255;
+    print("{}\n", cast(int) (big & ~Look.ALL));
+    g := ~f;
+    print("{}\n", cast(int) g);
+    print("{} {}\n", take(), take(.SOLID));
+}

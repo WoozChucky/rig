@@ -46,27 +46,27 @@ show_counts :: (counter: *Counter) {
 
 // Passes every call on to the heap, counting the allocations and the
 // frees.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE { counter.allocations += 1; }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .ALLOCATE { counter.allocations += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
 // Counts as counting_allocator_proc does, but gives memory for the first
 // allocation only, as an allocator that runs out after it would.
-first_only_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+first_only_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         if counter.allocations > 1 { return null; }
     }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
 // Gives no memory, as an allocator that has run out would.
-failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+failing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
@@ -139,7 +139,7 @@ main :: () {
     bad_name := sprint("RIG_{}", cast(string) byte_view);
     value, found = get_environment(bad_name, counting);
     refused := false;
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         refused = !found && counter.allocations == 0 && counter.frees == 0;
     } else {
         refused = !found && counter.allocations == 1 && counter.frees == 1;

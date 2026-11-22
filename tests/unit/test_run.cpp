@@ -1059,3 +1059,62 @@ TEST(world_counts_its_runs_time) {
     token_list_free(other_list);
     arena_free(&a);
 }
+
+// Issue #221: enums (spec 3.18).
+
+TEST(a_runs_enum_is_baked) {
+    // A #run's enum result is baked as its integer type is, read at that
+    // type's width (u16 here, beside a u16 field that isn't zero) and by
+    // its sign (an s8 -2 is -2, all 64 bits), and is a constant of the enum,
+    // alone or as a struct's field: so it compares with the enum's members,
+    // folding. The enums are declared after the #runs that give them.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "P :: #run pick();\n"
+                          "H :: #run hold();\n"
+                          "N :: #run low();\n"
+                          "pick :: () -> Level { return Level.HIGH; }\n"
+                          "hold :: () -> Holder { return .{.HIGH, 7, 2}; }\n"
+                          "low :: () -> Signed { return .LOW; }\n"
+                          "Holder :: struct { level: Level; tag: u16; count: int; }\n"
+                          "Level :: enum u16 { LOW; HIGH :: 300; }\n"
+                          "Signed :: enum s8 { LOW :: -2; }\n"
+                          "main :: () { same := P == .HIGH; is_low := N == Signed.LOW; }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    CHECK(is_number(&a, global_named(&c, "P"), 300, "Level"));
+    Ast_Literal *fields = literal_data(&a, &c, "H", "Holder");
+    CHECK_EQ(fields ? fields->values.count : 0, 3);
+    if (fields && fields->values.count == 3) {
+        CHECK(is_number(&a, fields->values[0], 300, "Level"));
+        CHECK(is_number(&a, fields->values[1], 7, "u16"));
+        CHECK(is_number(&a, fields->values[2], 2, "int"));
+    }
+    CHECK(is_number(&a, global_named(&c, "N"), (u64)-2, "Signed"));
+    CHECK(is_number(&a, value_of(&c, "same"), 1, "bool"));
+    CHECK(is_number(&a, value_of(&c, "is_low"), 1, "bool"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_members_run_may_hold_its_enum_but_not_need_it) {
+    // A member's #run whose code only holds a value of its own enum needs
+    // no member's value (walk_type), so HIGH is the 10 it gives; one that
+    // names a member needs the enum's values, which need the #run itself:
+    // a circle.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Level :: enum u8 { LOW; HIGH :: #run compute(); }\n"
+                          "compute :: () -> u8 { x : Level; return 10; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast_Enum *level = (Ast_Enum *)global_named(&c, "Level");
+    CHECK(level->members[1]->is_constant);
+    CHECK_EQ(level->members[1]->constant, 10);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "Level :: enum { A :: #run f(); B; }\n"
+                           "f :: () -> int { x := Level.B; return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'Level' is defined in terms of itself\n");
+    arena_free(&a);
+}

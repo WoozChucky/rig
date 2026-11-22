@@ -72,14 +72,14 @@ show_counts :: (counter: *Counter) {
 
 // Passes every call on to the heap, counting the allocations and the
 // frees.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE { counter.allocations += 1; }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .ALLOCATE { counter.allocations += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     // Whether GetFileAttributesW finds a directory at ROOT, a separator and
     // tail, UTF-16 built by hand rather than by Basic's conversion, so that
     // only a directory whose name on disk is tail's units is found: a name
@@ -102,7 +102,7 @@ counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
 }
 
 // Gives no memory, as an allocator that has run out would.
-failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+failing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
@@ -177,7 +177,7 @@ main :: () {
     // found without Basic's conversion; Linux takes the bytes as they are,
     // and prints the same line.
     print_string("\non disk:");
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         cafe : [4]u16;
         cafe[0] = 99;  // 'c'
         cafe[1] = 97;  // 'a'
@@ -256,7 +256,7 @@ main :: () {
     // hold. On Windows the process holds as many handles after a listing
     // as before, which a find handle left open would add to.
     print_string("listing closed:");
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         // A handle another thread opens or closes in between changes the
         // count too, so up to five listings are tried: a find handle left
         // open would add one every time.
@@ -273,12 +273,12 @@ main :: () {
         }
         show_bool(closed);
     } else {
-        f, opened := file_open(FILE, FILE_READ);
+        f, opened := file_open(FILE, .READ);
         descriptor := c_fileno(f.handle);
         file_close(f);
         names, ok = list_directory(ROOT, counting);
         free(names.data, counting);
-        f, opened = file_open(FILE, FILE_READ);
+        f, opened = file_open(FILE, .READ);
         show_bool(ok && opened && c_fileno(f.handle) == descriptor);
         file_close(f);
     }
@@ -292,7 +292,7 @@ main :: () {
     // the one where ROOT is found after its letter and colon, the current
     // directory's. Linux has no drives, and prints the same line.
     same := true;
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         same = false;
         drive : [2]u8;
         drive[1] = 58; // ':'
@@ -349,7 +349,7 @@ main :: () {
     // the empty directory with nothing allocated, lists it in ROOT as its
     // one byte, and deletes it.
     invalid := false;
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         invalid = !make_directory(bad) && !is_directory(bad) && !delete_directory(bad);
         names, ok = list_directory(bad, counting);
         invalid = invalid && !ok && names.count == 0 && names.data == null;

@@ -3072,12 +3072,12 @@ TEST(parse_if_directive_at_the_top_level) {
     // order, and nothing of them is in the file's lists: the #if itself is
     // in Ast_File.ifs, the loader's to decide.
     Arena a = arena_make();
-    Token_List *list = src("#if OS == OS_WINDOWS {\n    f :: () {}\n    N :: 1;\n    #load \"w.rig\";\n} else {\n"
+    Token_List *list = src("#if OS == .WINDOWS {\n    f :: () {}\n    N :: 1;\n    #load \"w.rig\";\n} else {\n"
                            "    g : int;\n}\nmain :: () {}\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK_STR(ast_dump(&a, file),
-              "(#if (binary == (name OS) (name OS_WINDOWS)) (block (proc f (params) (block)) (const N (int 1)) "
+              "(#if (binary == (name OS) (dot WINDOWS)) (block (proc f (params) (block)) (const N (int 1)) "
               "(load \"w.rig\")) (block (var g int)))\n"
               "(proc main (params) (block))\n");
     CHECK_EQ(file->ifs.count, 1);
@@ -3183,9 +3183,9 @@ TEST(parse_else_if_after_if_directive_is_refused) {
     String errors;
     CHECK_STR(parse_src(&a, "#if A {} else if B {}\nmain :: () {}\n", &errors),
               "(broken)\n(proc main (params) (block))\n");
-    CHECK_STR(errors, "1:15: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }\n");
+    CHECK_STR(errors, "1:15: an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }\n");
     body_dump(&a, "#if A {} else if B {}", &errors);
-    CHECK_STR(errors, "2:19: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }\n");
+    CHECK_STR(errors, "2:19: an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }\n");
     arena_free(&a);
 }
 
@@ -3976,5 +3976,98 @@ TEST(caller_location_after_a_signature) {
     CHECK_STR(errors, "2:1: expected '{', found directive\n");
     parse_src(&a, "#caller_location;\n", &errors);
     CHECK_STR(errors, "1:1: expected identifier, found directive\n");
+    arena_free(&a);
+}
+
+// Issue #221: enums and enum_flags (spec 3.18, A.2). NAME :: enum [T] {
+// ... } and NAME :: enum_flags [T] { ... } are top-level declarations, each
+// member a constant at its name; '.' then a name, where an expression
+// starts, is a member without its enum.
+
+TEST(parses_enum_declarations) {
+    Arena a = arena_make();
+    const char *text = "Mode :: enum { ALLOCATE; RESIZE; }\n"
+                       "Small :: enum u8 { A; B :: 5; C; }\n"
+                       "Look :: enum_flags { VISIBLE; ALL :: VISIBLE | 4; }\n"
+                       "Empty :: enum { }\n";
+    String errors;
+    CHECK_STR(parse_src(&a, text, &errors),
+              "(enum Mode _ (ALLOCATE) (RESIZE))\n"
+              "(enum Small u8 (A) (B (int 5)) (C))\n"
+              "(enum_flags Look _ (VISIBLE) (ALL (binary | (name VISIBLE) (int 4))))\n"
+              "(enum Empty _)\n");
+    CHECK_STR(errors, "");
+    // The enum's node is at its name, each member's at its own.
+    Token_List *list = src(text);
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->globals.count, 4);
+    if (file->globals.count == 4) {
+        Ast_Enum *small = (Ast_Enum *)file->globals[1];
+        CHECK(small->kind == AST_ENUM);
+        CHECK_EQ(small->pos.line, 2);
+        CHECK_EQ(small->pos.col, 1);
+        CHECK(!small->is_flags);
+        CHECK(((Ast_Enum *)file->globals[2])->is_flags);
+        CHECK_EQ(small->members.count, 3);
+        if (small->members.count == 3) {
+            CHECK(small->members[1]->kind == AST_CONST);
+            CHECK_EQ(small->members[1]->pos.line, 2);
+            CHECK_EQ(small->members[1]->pos.col, 23);
+            CHECK(!small->members[0]->value);
+        }
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(parses_members_without_their_enum) {
+    // .FREE is a member without its enum wherever an expression starts, an
+    // operator's operand included; Mode.C is a member access of the name.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "m = .FREE; f := .A | ~.B; x := Mode.C;", &errors),
+              "(block (assign = (name m) (dot FREE)) (var f _ (binary | (dot A) (unary ~ (dot B)))) "
+              "(var x _ (member (name Mode) C)))");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(enum_declaration_mistakes) {
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "main :: () {\n    E :: enum { A; }\n}\n", &errors);
+    CHECK_STR(errors, "2:5: enums can only be declared at the top level, for now\n");
+    parse_src(&a, "main :: () {\n    E :: enum_flags u8 { A; }\n}\n", &errors);
+    CHECK_STR(errors, "2:5: enums can only be declared at the top level, for now\n");
+    parse_src(&a, "E :: enum { 5; }\n", &errors);
+    CHECK_STR(errors, "1:13: expected a member's name, found integer literal\n");
+    parse_src(&a, "E :: enum { A: int; }\n", &errors);
+    CHECK_STR(errors, "1:14: expected ';', found ':'\n");
+    parse_src(&a, "E :: enum *u8 { }\n", &errors);
+    CHECK_STR(errors, "1:11: expected '{', found '*'\n");
+    CHECK_STR(parse_src(&a, "E :: enum { #if X { A; } }\nmain :: () {}\n", &errors),
+              "(broken E)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "1:13: #if can't be among an enum's members, for now\n");
+    // A #load among the members is said and skipped, as among a struct's
+    // fields.
+    CHECK_STR(parse_src(&a, "E :: enum {\n    A;\n    #load \"x.rig\";\n    B;\n}\n", &errors), "(enum E _ (A) (B))\n");
+    CHECK_STR(errors, "3:5: #load can only be at the top level\n");
+    // A branch of a top-level #if may declare one, and so it ends a body
+    // never closed before it (branch_declares_top_level), as an enum's own
+    // declaration in column 1 does (starts_declaration).
+    CHECK_STR(parse_src(&a, "#if X {\nE :: enum { A; }\n}\n", &errors), "(#if (name X) (block (enum E _ (A))))\n");
+    CHECK_STR(errors, "");
+    CHECK_STR(parse_src(&a, "main :: () {\n    x := 1;\n#if X {\n    E :: enum_flags { A; }\n}\n", &errors),
+              "(broken main)\n(#if (name X) (block (enum_flags E _ (A))))\n");
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(parse_src(&a, "main :: () {\n    x := 1;\nE :: enum { A; }\n", &errors),
+              "(broken main)\n(enum E _ (A))\n");
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'E'\n");
+    // An enum's braces never closed end there too, and so does a struct's.
+    CHECK_STR(parse_src(&a, "E :: enum {\n    A;\nmain :: () {}\n", &errors),
+              "(broken E)\n(proc main (params) (block))\n");
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'main'\n");
+    CHECK_STR(parse_src(&a, "S :: struct {\n    x: int;\nE :: enum { A; }\n", &errors), "(broken S)\n(enum E _ (A))\n");
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'E'\n");
     arena_free(&a);
 }

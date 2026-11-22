@@ -43,7 +43,7 @@ show_int :: (value: int) {
 }
 
 // Gives no memory, as an allocator that has run out would.
-failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+failing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
@@ -110,9 +110,9 @@ main :: () {
     // mode it is false and opens nothing, even for "", which a file opened
     // to read would take as written, and A is as it was.
     print_string("helper mode:");
-    show_bool(write_file_in_mode(A, "", FILE_READ));
-    show_bool(write_file_in_mode(A, "x", FILE_READ));
-    show_bool(write_file_in_mode(A, "x", 7));
+    show_bool(write_file_in_mode(A, "", .READ));
+    show_bool(write_file_in_mode(A, "x", .READ));
+    show_bool(write_file_in_mode(A, "x", cast(File_Mode) 7));
     data, ok = read_entire_file(A, HEAP_ALLOCATOR);
     show_bool(data == "hello\nworld\n");
     print_line("");
@@ -123,7 +123,7 @@ main :: () {
     // write_entire_file and append_to_file are false through it alone.
     // Windows has no such file: the line is false false without asking.
     print_string("full disk:");
-    #if OS == OS_LINUX {
+    #if OS == .LINUX {
         show_bool(write_entire_file("/dev/full", "x"));
         show_bool(append_to_file("/dev/full", "x"));
     } else {
@@ -188,7 +188,7 @@ main :: () {
     // position where it was: the read after it goes on from byte 5. The
     // last read is at the end, and gives 0. The first read has a buffer of
     // its own, so the later ones don't write over what it read.
-    f, opened := file_open(A, FILE_READ);
+    f, opened := file_open(A, .READ);
     first : [5]u8;
     buffer : [5]u8;
     n1 := file_read(f, first);
@@ -211,7 +211,7 @@ main :: () {
 
     // Opening to write empties the file; writing "" writes nothing and is
     // still a success.
-    f, opened = file_open(A, FILE_WRITE);
+    f, opened = file_open(A, .WRITE);
     // file_size measures a file opened to write too, and one opened to
     // append, below.
     print_string("write mode:");
@@ -225,7 +225,7 @@ main :: () {
     print_line("");
     free(data.data, HEAP_ALLOCATOR);
 
-    f, opened = file_open(A, FILE_APPEND);
+    f, opened = file_open(A, .APPEND);
     print_string("append mode:");
     show_bool(file_write(f, "def"));
     show_int(file_size(f));
@@ -240,12 +240,12 @@ main :: () {
     // doesn't delete it while it is open: Basic opens no file with
     // FILE_SHARE_DELETE. Linux deletes it, open or not, so there it is made
     // again with what it held. Both are closed before the last delete.
-    f, opened = file_open(A, FILE_APPEND);
-    g, again := file_open(A, FILE_READ);
+    f, opened = file_open(A, .APPEND);
+    g, again := file_open(A, .READ);
     print_string("open twice:");
     show_bool(opened);
     show_bool(again);
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         show_bool(!delete_file(A));
     } else {
         show_bool(delete_file(A) && write_entire_file(A, "abcdef"));
@@ -257,21 +257,21 @@ main :: () {
 
     // A file opened to read can't be written, and one opened to write
     // can't be read: the system's writes and reads give 0 for them.
-    f, opened = file_open(A, FILE_READ);
+    f, opened = file_open(A, .READ);
     print_string("wrong mode:");
     show_bool(file_write(f, "x"));
     file_close(f);
-    f, opened = file_open(B, FILE_WRITE);
+    f, opened = file_open(B, .WRITE);
     show_int(file_read(f, buffer));
     file_close(f);
     print_line("");
 
     // A missing file and a mode that isn't one give a File that isn't open.
-    f, opened = file_open(MISSING, FILE_READ);
+    f, opened = file_open(MISSING, .READ);
     print_string("bad opens:");
     show_bool(opened);
     show_bool(f.handle == null);
-    f, opened = file_open(A, 7);
+    f, opened = file_open(A, cast(File_Mode) 7);
     show_bool(opened);
     print_line("");
 
@@ -281,7 +281,7 @@ main :: () {
     show_bool(file_exists("tests/run"));
     d, read_ok := read_entire_file("tests/run", HEAP_ALLOCATOR);
     show_bool(read_ok);
-    f, opened = file_open("tests/run", FILE_READ);
+    f, opened = file_open("tests/run", .READ);
     show_bool(opened);
     print_line("");
 
@@ -291,12 +291,12 @@ main :: () {
     // open would hold. Windows' CreateFileW doesn't open the directory, and
     // a File there holds no descriptor: the line is true without asking.
     print_string("directory closed:");
-    #if OS == OS_LINUX {
-        f, opened = file_open(A, FILE_READ);
+    #if OS == .LINUX {
+        f, opened = file_open(A, .READ);
         descriptor := c_fileno(f.handle);
         file_close(f);
-        f, opened = file_open("tests/run", FILE_READ);
-        f, opened = file_open(A, FILE_READ);
+        f, opened = file_open("tests/run", .READ);
+        f, opened = file_open(A, .READ);
         show_bool(c_fileno(f.handle) == descriptor);
         file_close(f);
     } else {

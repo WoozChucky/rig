@@ -15,18 +15,18 @@ node_info : *Type_Info_Struct = cast(*Type_Info_Struct) type_info(Node);
 // A line for t: its tag, size and alignment, then what its kind adds.
 describe :: (t: *Type_Info) {
     printf("%lld %lld %lld", t.tag, t.size, t.alignment);
-    if t.tag == TYPE_INFO_INTEGER {
+    if t.tag == .INTEGER {
         printf(" signed %d", (cast(*Type_Info_Integer) t).signed);
-    } else if t.tag == TYPE_INFO_POINTER {
+    } else if t.tag == .POINTER {
         printf(" to %lld", (cast(*Type_Info_Pointer) t).pointer_to.tag);
-    } else if t.tag == TYPE_INFO_ARRAY {
+    } else if t.tag == .ARRAY {
         a := cast(*Type_Info_Array) t;
         printf(" of %lld kind %lld count %lld", a.element_type.tag, a.array_kind, a.count);
-    } else if t.tag == TYPE_INFO_STRUCT {
+    } else if t.tag == .STRUCT {
         s := cast(*Type_Info_Struct) t;
         printf(" %.*s", cast(s32) s.name.count, s.name.data);
         for s.members { printf(" %.*s:%lld@%lld", cast(s32) it.name.count, it.name.data, it.type.tag, it.offset); }
-    } else if t.tag == TYPE_INFO_PROCEDURE {
+    } else if t.tag == .PROCEDURE {
         p := cast(*Type_Info_Procedure) t;
         printf(" (");
         for p.parameter_types { printf(" %lld", it.tag); }

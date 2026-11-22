@@ -24,7 +24,7 @@ Empty :: struct {}
 asked := 0;
 
 // The heap, counting what it's asked.
-counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     asked += 1;
     return heap_allocator_proc(mode, size, old_size, old_memory, data);
 }

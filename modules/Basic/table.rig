@@ -37,11 +37,9 @@
 #load "memory.rig";
 #load "array.rig";
 
-// An entry's state (constants until enums). New entries' memory is zeroed,
-// so every entry starts empty.
-TABLE_EMPTY :: 0;
-TABLE_USED :: 1;
-TABLE_REMOVED :: 2;
+// An entry's state, an enum (spec 3.18). New entries' memory is zeroed,
+// so every entry starts .EMPTY, the first member's 0.
+Table_Entry_State :: enum { EMPTY; USED; REMOVED; }
 
 // The 64-bit FNV-1a hash of count bytes from data. From the offset basis,
 // each byte is mixed in with an exclusive or and spread over the hash's
@@ -88,7 +86,7 @@ hash_int :: (key: int) -> u64 {
 // is, and so never its key.
 Table_Entry_Header :: struct {
     hash: u64;
-    state: int;
+    state: Table_Entry_State;
 }
 
 // The header of a string-keyed entry. key is the table's own copy of the
@@ -96,14 +94,14 @@ Table_Entry_Header :: struct {
 // the empty key.
 Table_Entry :: struct {
     hash: u64;
-    state: int;
+    state: Table_Entry_State;
     key: string;
 }
 
 // The header of an int-keyed entry.
 Int_Table_Entry :: struct {
     hash: u64;
-    state: int;
+    state: Table_Entry_State;
     key: int;
 }
 
@@ -172,11 +170,11 @@ table_probe :: (entries: *u8, capacity: int, entry_size: int, hash: u64, key: *v
     for 1..capacity {
         entry := entries + index * entry_size;
         header := cast(*Table_Entry_Header) entry;
-        if header.state == TABLE_EMPTY {
+        if header.state == .EMPTY {
             if slot < 0 { slot = index; }
             return found, slot;
         }
-        if header.state == TABLE_REMOVED {
+        if header.state == .REMOVED {
             if slot < 0 { slot = index; }
         } else if header.hash == hash && same_key(entry, key) {
             return index, slot;
@@ -230,9 +228,9 @@ table_make_room :: (entries: *u8, capacity: int, count: int, removed: int, entry
     for i: 0..capacity - 1 {
         from := entries + i * entry_size;
         header := cast(*Table_Entry_Header) from;
-        if header.state == TABLE_USED {
+        if header.state == .USED {
             index := cast(int) (header.hash & cast(u64) mask);
-            while (cast(*Table_Entry_Header) (new_entries + index * entry_size)).state != TABLE_EMPTY {
+            while (cast(*Table_Entry_Header) (new_entries + index * entry_size)).state != .EMPTY {
                 index = (index + 1) & mask;
             }
             copy_memory(new_entries + index * entry_size, from, entry_size);
@@ -294,9 +292,9 @@ table_set :: (table: *Table, key: string, value: *void, loc: Source_Code_Locatio
     if found < 0 {
         at = slot;
         entry := cast(*Table_Entry) (table.entries + at * table.entry_size);
-        if entry.state == TABLE_REMOVED { table.removed -= 1; }
+        if entry.state == .REMOVED { table.removed -= 1; }
         entry.hash = hash;
-        entry.state = TABLE_USED;
+        entry.state = .USED;
         entry.key.data = cast(*u8) alloc(key.count, table.allocator, loc);
         entry.key.count = key.count;
         copy_memory(entry.key.data, key.data, key.count);
@@ -337,7 +335,7 @@ table_remove :: (table: *Table, key: string, loc: Source_Code_Location = #caller
     free(entry.key.data, table.allocator, loc);
     entry.key.data = null;
     entry.key.count = 0;
-    entry.state = TABLE_REMOVED;
+    entry.state = .REMOVED;
     table.count -= 1;
     table.removed += 1;
     return true;
@@ -357,7 +355,7 @@ table_entry :: (table: Table, index: int) -> bool, string, *void {
     check_index(index, table.capacity);
     entry := cast(*Table_Entry) (table.entries + index * table.entry_size);
     none : string;
-    if entry.state != TABLE_USED { return false, none, null; }
+    if entry.state != .USED { return false, none, null; }
     return true, entry.key, cast(*u8) entry + TABLE_VALUE_OFFSET;
 }
 
@@ -367,7 +365,7 @@ table_entry :: (table: Table, index: int) -> bool, string, *void {
 table_free :: (table: *Table, loc: Source_Code_Location = #caller_location) {
     for i: 0..table.capacity - 1 {
         entry := cast(*Table_Entry) (table.entries + i * table.entry_size);
-        if entry.state == TABLE_USED { free(entry.key.data, table.allocator, loc); }
+        if entry.state == .USED { free(entry.key.data, table.allocator, loc); }
     }
     free(table.entries, table.allocator, loc);
     table.entries = null;
@@ -406,9 +404,9 @@ int_table_set :: (table: *Int_Table, key: int, value: *void, loc: Source_Code_Lo
     if found < 0 {
         at = slot;
         entry := cast(*Int_Table_Entry) (table.entries + at * table.entry_size);
-        if entry.state == TABLE_REMOVED { table.removed -= 1; }
+        if entry.state == .REMOVED { table.removed -= 1; }
         entry.hash = hash;
-        entry.state = TABLE_USED;
+        entry.state = .USED;
         entry.key = key;
         table.count += 1;
     }
@@ -438,7 +436,7 @@ int_table_remove :: (table: *Int_Table, key: int) -> bool {
     found := table_probe(table.entries, table.capacity, table.entry_size, hash_int(key), *wanted, int_table_same_key);
     if found < 0 { return false; }
     entry := cast(*Int_Table_Entry) (table.entries + found * table.entry_size);
-    entry.state = TABLE_REMOVED;
+    entry.state = .REMOVED;
     table.count -= 1;
     table.removed += 1;
     return true;
@@ -449,7 +447,7 @@ int_table_remove :: (table: *Int_Table, key: int) -> bool {
 int_table_entry :: (table: Int_Table, index: int) -> bool, int, *void {
     check_index(index, table.capacity);
     entry := cast(*Int_Table_Entry) (table.entries + index * table.entry_size);
-    if entry.state != TABLE_USED { return false, 0, null; }
+    if entry.state != .USED { return false, 0, null; }
     return true, entry.key, cast(*u8) entry + INT_TABLE_VALUE_OFFSET;
 }
 

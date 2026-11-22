@@ -7,6 +7,8 @@
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
 //               | IDENT '::' 'struct' '{' {IDENT ':' type ';'} '}'   a struct and its fields
+//               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
+//                                                                   an enum: its integer type, its members
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
@@ -55,6 +57,7 @@
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
 //               | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
+//               | '.' IDENT                                       (a member without its enum)
 //   fields      = [field {',' field} [',']]
 //   field       = [IDENT '='] expression
 //   values      = [expression {',' expression} [',']]
@@ -75,6 +78,14 @@
 // has no type written, and takes the one it meets. Named and in order don't
 // mix: "a struct literal's fields are all named or all in order, not both",
 // at the first that breaks the pattern.
+//
+// Enums are Jai's (spec 3.18): `Mode :: enum { ALLOCATE; RESIZE; }`, or
+// `Look :: enum_flags u8 { VISIBLE; SOLID; }` with its integer type named,
+// at the top level only; inside a body, `Mode :: enum` is "enums can only
+// be declared at the top level, for now", at the name. Each member is a
+// name, alone or with '::' and its value. Mode.FREE is a member access, as
+// a field's is; .FREE, a '.' then a name where an expression starts, is a
+// member without its enum, which takes the one it meets.
 //
 // Arrays and views are Jai's (spec 6.5): [N]T is an array of N T's, N an
 // expression (the checker needs a constant), []T a view of T's, and [..]T
@@ -313,13 +324,13 @@
 // can't hold it.
 //
 // Code is compiled for one system and not another with #if (spec 4.9):
-// `#if OS == OS_WINDOWS { ... } else { ... }`, at the top level and as a
+// `#if OS == .WINDOWS { ... } else { ... }`, at the top level and as a
 // statement in a body, Jai's directive. The condition is any expression,
 // as an if's is, and the branch's '{' ends it; the branches are always
 // blocks, and `else #if` begins the chain's next arm, as `else if` does an
 // if's. `else if` after an #if would make an if statement the else part,
 // compiled whatever the condition: it's "an #if's else is a block or
-// another #if, as in else #if OS == OS_LINUX { ... }", at the `if`. In a
+// another #if, as in else #if OS == .LINUX { ... }", at the `if`. In a
 // body each branch is a block of statements; at the top level, of
 // top-level declarations, nested #ifs included, and the #if is a
 // declaration of its own (Ast_File.ifs), its branches in none of the

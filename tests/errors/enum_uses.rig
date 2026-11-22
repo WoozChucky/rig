@@ -1,0 +1,72 @@
+// An enum's uses' mistakes (issue #221, spec 3.18), one a line: a member
+// without its enum where nothing gives it one, or meeting a type that
+// isn't an enum; a member the enum doesn't have; operators an enum doesn't
+// take, or between an enum and an integer; an enum where an integer goes;
+// a member assigned or addressed; a cast between two enums; a member
+// through C's '...'; an enum as a condition and as an array's count;
+// members waiting for a flags type met by an enum that isn't flags, or by
+// a type that isn't an enum; an enum's name in parentheses, or called;
+// an enum and 0, or two enum types; a member into an Any; a member and an
+// integer other than 0 meeting a flags type; a member compared with an
+// untyped constant; compound assignments an enum doesn't take, or whose
+// value doesn't convert; ~ on a member meeting no type, or a type that
+// isn't an enum; a member and an untyped float meeting a flags type; and
+// a local hiding an enum's name.
+Mode :: enum { ALLOCATE; RESIZE; FREE; }
+Small :: enum u8 { X; }
+Look :: enum_flags { A; B; }
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+main :: () {
+    m : Mode;
+    f : Look;
+    x := .FREE;
+    y := .A | .B;
+    z := .FREE == .RESIZE;
+    i : int = .FREE;
+    m = .FRE;
+    k := Mode.FRE;
+    sum := m + 1;
+    b := m | m;
+    c := m == 1;
+    d := f | 1;
+    e := m < .FREE;
+    j : int = m;
+    Mode.FREE = m;
+    p := *Mode.FREE;
+    s := cast(Mode) Small.X;
+    printf("%d\n", .FREE);
+    if m { }
+    a : [Mode.FREE]int;
+    m = .ALLOCATE | .FREE;
+    m = ~.FREE;
+    w : int = .A | .B;
+    v : int = 0 | .A;
+    u := 0 | .A;
+    q := (Mode).FREE;
+    r := Mode(1);
+    h := f << 1;
+    m |= m;
+    n := m == 0;
+    m = 0;
+    o := Mode.FREE == Look.A;
+    t := cast,trunc(Mode) Small.X;
+    l : Any = .FREE;
+    g : Look = .A | 1;
+    aa := .A != 0;
+    bb := 0 == .A;
+    cc := .A == null;
+    f |= 1;
+    f |= m;
+    m += 1;
+    ii := 1;
+    ii |= .A;
+    x2 := ~.A;
+    i2 : int = ~.B;
+    gg : Look = .A | 1.5;
+}
+
+hidden :: () {
+    Mode := 1;
+    x := Mode.FREE;
+}

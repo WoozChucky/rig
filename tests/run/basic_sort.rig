@@ -22,30 +22,30 @@
 Counter :: struct { allocations: int; frees: int; last_size: int; }
 
 // Passes every call on to the heap, counting allocations and frees.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         counter.last_size = size;
     }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
 // Gives no memory, as an allocator that has run out would.
-null_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+null_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
 // Counts allocations and frees as counting_allocator_proc does, but gives
 // no memory, so a request of any size can be made of it.
-counting_null_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_null_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         counter.last_size = size;
     }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return null;
 }
 

@@ -12,7 +12,7 @@ printf :: (format: *u8, ..) -> s32 #foreign libc;
 // C's sort with user data, in each system's own shape: the UCRT's
 // qsort_s passes the data first, glibc's qsort_r last.
 // Each pushes the context its caller gave C as user data.
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     qsort_s :: (base: *void, count: u64, size: u64, compare: (data: *void, a: *void, b: *void) -> s32 #c_call, data: *void) #foreign libc;
     with_data :: (data: *void, a: *void, b: *void) -> s32 #c_call {
         push_context (cast(*Context) data).* {
@@ -33,15 +33,15 @@ printf :: (format: *u8, ..) -> s32 #foreign libc;
 }
 
 // The heap, counting what it gives: data is the count, an *int.
-counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { (cast(*int) data).* += 1; }
+counting_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { (cast(*int) data).* += 1; }
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 
 // Ordinary Rig code: it takes memory from the context it's given.
 use_memory :: () {
     a := context.allocator;
-    a.proc(FREE, 0, 0, a.proc(ALLOCATE, 16, 0, null, a.data), a.data);
+    a.proc(.FREE, 0, 0, a.proc(.ALLOCATE, 16, 0, null, a.data), a.data);
 }
 
 order :: (a: *void, b: *void) -> s32 {

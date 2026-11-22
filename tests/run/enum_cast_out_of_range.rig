@@ -1,0 +1,9 @@
+// A cast to an enum checks its value as a cast to the enum's integer type
+// does (issue #221, spec 3.18, 8.3): 300 isn't a u8, so the program stops
+// at the cast with status 101, the message naming the enum. Whether the
+// value is one of the enum's members is never checked.
+Small :: enum u8 { A; }
+main :: () {
+    n := 300;
+    s := cast(Small) n;
+}

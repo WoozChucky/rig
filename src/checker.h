@@ -8,31 +8,40 @@
 // Ast_Call.builtin with a callee_type made for the call, which lowering and
 // the #run walk look at first; Ast_Member.index (-1 for an array's, a
 // view's or a string's .count and .data, and a resizable array's four
-// members); and each struct's type and layout, Ast_Struct.declared), so the
-// stages after it never look anything up again. checker.cpp checks
+// members) and, for an enum's member, Ast_Member.of_enum; each struct's
+// type and layout, Ast_Struct.declared; and each enum's members' values,
+// its type being Ast_Enum.declared), so the stages after it never look
+// anything up again. A member without its enum, .FREE, gets its enum's
+// type and the member's value, as a constant does. checker.cpp checks
 // declarations and statements, check_expr.cpp expressions, check_run.cpp
 // #run and what it reaches; check.h is what they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
 // Names.
-// - The program's procedures, global variables, top-level constants and
-//   structs are visible everywhere, in any order. They share one set of
-//   names: a global can't take a procedure's ("'x' is already declared at
-//   PATH:L:C").
-// - A struct's name is a type: used as a value, it's "'Vec2' is a type, not
-//   a value". A name declared as anything else, written where a type goes,
-//   is "'foo' is not a type"; a name declared nowhere, "unknown type
-//   'foo'". A built-in type's name always means the built-in type, so a
-//   struct can't take one: "'u8' is a built-in type", at its name.
-// - Three constants are predeclared (spec 2.5), untyped integers visible
-//   everywhere: OS_WINDOWS (1), OS_LINUX (2), and OS, the system the
-//   program is built for (Ast_File.system, else the host's), so
-//   OS == OS_WINDOWS is a constant bool. A top-level declaration can't take
-//   one of their names: "'OS' is predeclared: it's the system the program
-//   is built for", at its name, and it isn't declared. A broken entry
-//   (below) of one of their names isn't declared either, and says nothing.
-//   A local may hide one, as it may any of the top level's names.
+// - The program's procedures, global variables, top-level constants,
+//   structs and enums are visible everywhere, in any order. They share one
+//   set of names: a global can't take a procedure's ("'x' is already
+//   declared at PATH:L:C").
+// - A struct's name is a type, and so is an enum's: used as a value, it's
+//   "'Vec2' is a type, not a value". A name declared as anything else,
+//   written where a type goes, is "'foo' is not a type"; a name declared
+//   nowhere, "unknown type 'foo'". A built-in type's name always means the
+//   built-in type, so a struct or an enum can't take one: "'u8' is a
+//   built-in type", at its name.
+// - An enum and a constant are predeclared (spec 2.5), visible everywhere:
+//   Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }, the systems a
+//   program can be built for, and OS, the one it is (Ast_File.system, else
+//   the host's), a constant of it, so OS == .WINDOWS is a constant bool.
+//   The enum is made once per tree (Ast_File.operating_system), so a
+//   constant a decider resolved as OS has check()'s OS's type. A top-level
+//   declaration can't take one of their names: "'OS' is predeclared: it's
+//   the system the program is built for" ("'Operating_System' is
+//   predeclared: it's the systems a program can be built for"), at its
+//   name, and it isn't declared. A broken entry (below) of one of their
+//   names isn't declared either, and says nothing. A local may hide one,
+//   as it may any of the top level's names. The members' names, WINDOWS
+//   and LINUX, are in no scope, as any enum's (spec 3.18).
 // - So are the nine procedures of the resizable arrays (spec 3.17;
 //   Resizable arrays, below), array_add and the others, the same way:
 //   "'array_add' is predeclared: it's built into the language, for
@@ -150,8 +159,8 @@
 //   also compare two bools; ordering a bool is "'<' needs numbers, not
 //   'bool'", and a bool with anything else is "mismatched types 'bool' and
 //   'int' for '=='". == and != take nothing but numbers, bools, pointers,
-//   procedure values and strings: "'==' needs numbers, bools, pointers,
-//   procedure values or strings, not 'Vec2'".
+//   procedure values, strings and enums: "'==' needs numbers, bools,
+//   pointers, procedure values, strings or enums, not 'Vec2'".
 // - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
 //   needs a bool, not 'int'". && and || don't evaluate their right operand
 //   when the left one decides.
@@ -378,7 +387,8 @@
 //   cast); nothing else converts to or from either but its own type (and a
 //   [..]T to []T: Resizable arrays, below), and either converts to Any
 //   (Type information and Any, below). No operator takes them ("'==' needs
-//   numbers, bools, pointers, procedure values or strings, not '[3]int'").
+//   numbers, bools, pointers, procedure values, strings or enums, not
+//   '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
 //   give ("'[3]int' has 3 elements, but this literal gives 2"), or a view
@@ -474,18 +484,18 @@
 //   which no procedure type can say".
 // - A call gives at least the fixed parameters ("'printf' takes at least 1
 //   argument, but 0 were given"), each converted as any argument is. Each
-//   argument after them keeps its own type: a number, a bool or a pointer,
-//   which C receives after its default argument promotions (lowering
-//   applies them: types.h's type_c_promoted). An untyped integer becomes
-//   an int, an untyped float a float64 (C's double, which a float32 would
-//   become anyway, so it isn't rounded to a float32 first), null a *void,
-//   and a string literal (or constant data holding one: a constant, or a
-//   string field or element of one) is passed as a C string, its bytes'
-//   address, as it is to a *u8 parameter. A struct, an array, a view or
-//   any other string is "argument 2 of 'printf' has type 'Vec2', which C's
-//   '...' can't take; pass a pointer to it" (an array's or a view's: "pass
-//   its .data"; a string's: "pass its .data, which may not end with a zero,
-//   or a literal").
+//   argument after them keeps its own type: a number, an enum (as its
+//   integer type), a bool or a pointer, which C receives after its default
+//   argument promotions (lowering applies them: types.h's type_c_promoted).
+//   An untyped integer becomes an int, an untyped float a float64 (C's
+//   double, which a float32 would become anyway, so it isn't rounded to a
+//   float32 first), null a *void, and a string literal (or constant data
+//   holding one: a constant, or a string field or element of one) is passed
+//   as a C string, its bytes' address, as it is to a *u8 parameter. A
+//   struct, an array, a view or any other string is "argument 2 of 'printf'
+//   has type 'Vec2', which C's '...' can't take; pass a pointer to it" (an
+//   array's or a view's: "pass its .data"; a string's: "pass its .data,
+//   which may not end with a zero, or a literal").
 //
 // Variadic Rig procedures (issue #150, spec 7.2, 5.10).
 // - A procedure's parameter written `name: ..T` (the parser makes sure it
@@ -714,14 +724,15 @@
 //   globals and constants it names, and the struct types of what it
 //   reaches. A type it describes (type_info(T), a value converted to Any)
 //   has every struct its description reaches laid out, behind pointers too,
-//   and their late fields made: the #run's lowering writes the
-//   descriptions, which the interpreter then holds in its own memory, so a
-//   #run describes a struct declared after it as compiled code does (spec
-//   3.16, 10.8). An error anywhere there stops it, saying nothing new: the
-//   error was said where it is. The #run keeps its type but has no value,
-//   and what needs that value (an array's count, a constant, a global) says
-//   nothing more either. Each body, global and constant records whether its
-//   own check had errors (Ast_Proc.had_errors, Ast_Var.had_errors,
+//   and their late fields made, and every enum's members' values worked
+//   out: the #run's lowering writes the descriptions, which the interpreter
+//   then holds in its own memory, so a #run describes a struct or an enum
+//   declared after it as compiled code does (spec 3.16, 10.8). An error
+//   anywhere there stops it, saying nothing new: the error was said where
+//   it is. The #run keeps its type but has no value, and what needs that
+//   value (an array's count, a constant, a global) says nothing more
+//   either. Each body, global and constant records whether its own check
+//   had errors (Ast_Proc.had_errors, Ast_Var.had_errors,
 //   Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
 //   result is baked into the tree, a typed constant (run.cpp): a number, a
@@ -804,7 +815,7 @@
 // - A top-level #if is decided before anything else is checked, by a
 //   decider (check_decider_new) the loader makes once every file outside
 //   every #if is read: a checker that knows those files' declarations, the
-//   base, and the predeclared constants, nothing else. It decides each chain
+//   base, and the predeclared names, nothing else. It decides each chain
 //   as decide_if does a body's, with the same two messages about the
 //   condition, and has two limits of its own. A name declared in a branch of
 //   a top-level #if read so far (any branch, taken or not, decided or not, at
@@ -932,7 +943,7 @@
 //   be an int. So the checker types each call. Each is predeclared
 //   (checker.cpp's BUILTIN_PROCEDURES, declare_predeclared), an Ast_Builtin
 //   at 0:0 in the top level, refused as a top-level declaration's name, as
-//   the predeclared constants are; a local may hide one. It's no value:
+//   OS and Operating_System are; a local may hide one. It's no value:
 //   "'array_add' can't be a value: it's built into the language". Its name
 //   is a procedure's where a place is wanted: "can't assign to
 //   'array_reset': it's a procedure".
@@ -956,6 +967,65 @@
 //   value"). Each calls the helper of Preload's that does the work, in Rig
 //   (__array_add, ...), which the checker keeps on the tree
 //   (Ast_File.array_procs), and a #run's walk reaches.
+//
+// Enums (issue #221, spec 3.18).
+// - `Mode :: enum { ALLOCATE; RESIZE; }` and `Look :: enum_flags u8 {
+//   VISIBLE; SOLID; }` declare a type each, at the top level, usable
+//   anywhere, before its declaration too: its own (two declarations are two
+//   types), over an integer type, int when none is written, whose size,
+//   alignment and sign it has (declare_top_level makes it so). That type
+//   is a built-in integer type's name, or else "an enum's type must be an
+//   integer type, not 'float32'" (an unknown name: "unknown type 'Nope'"),
+//   and the enum is then over int.
+// - Its members are constants of the integer type, worked out where first
+//   needed, as a global's value (checker.cpp's resolve_enum): a value
+//   written must be known while compiling and fit ("300 doesn't fit in
+//   's8'"); without one, an enum's member is the one before's plus one, the
+//   first 0, and an enum_flags' the lowest power of two above every value
+//   before it, read as unsigned, the first 1; one past the type is "256
+//   doesn't fit in 'u8'", at its name. Two members may share a value, not a
+//   name ("'A' is already declared at PATH:L:C"). In the body, an earlier
+//   member is a plain constant by its name (LAST :: C + 3, ALL :: A | B),
+//   hiding an outer one, and E.C names it too (check_expr.cpp's
+//   find_enum_member); outside it, no scope holds the members. A value
+//   needing its own enum, a member not worked out yet or one reached
+//   through another enum or a #run, is "'E' is defined in terms of
+//   itself", at the enum, every member then unknown.
+// - Mode.FREE, a name declaring an enum then a member's name, is the
+//   member, a constant of the enum ("'Mode' has no member 'FRE'", at the
+//   member's name): Ast_Member.of_enum. It's no place: "can't assign to
+//   'Mode.FREE': it's an enum's member" ("can't take the address of ...").
+// - .FREE alone (Ast_Dot_Name) has type_untyped_member until it meets a
+//   type, as .{...} does (check_convert): a declaration's type, an
+//   assignment's target, an argument and a default, a return, a field or an
+//   element of a literal, a cast; and the other side of == or != from an
+//   enum value, the other operand of | & ^ from a flags value. .A | .B,
+//   .A | 0 and ~.A wait together for a flags type, and so does .A | 1, which
+//   the flags type then refuses as it refuses f | 1 ("mismatched types
+//   'Look' and 'int' for '|'; cast one of them"). Meeting an enum, it's the
+//   member; meeting another type, "'.FREE' needs an enum type, not 'int'";
+//   meeting none (x := .FREE;, .A == .B, an operand of anything else, an
+//   Any, C's '...'), "this member's enum isn't known; write it with its
+//   enum, as in Mode.FREE", at the '.'.
+// - Nothing converts to or from an enum implicitly ("a value of type 'Mode'
+//   doesn't convert to 'int' implicitly") but the untyped 0 to a flags
+//   type, the empty set. cast(T) e between an enum and an integer type is
+//   the integer cast between their integer types: a constant must fit
+//   ("300 doesn't fit in 'Small'"), anything else is checked at run time,
+//   and cast,trunc takes them; a value with no member is fine. Between two
+//   enum types: "can't cast 'Small' to 'Mode'".
+// - == != < <= > >= compare two values of one enum type (or a flags value
+//   and 0) as its integer type does ("mismatched types 'Mode' and 'int' for
+//   '=='; cast one of them" otherwise). | & ^ ~ and |= &= ^= take a flags
+//   type's values and give one, folding for constants with its integer's
+//   wrapping. No other operator takes an enum, as for any type that isn't
+//   its operands' ("'+' needs numbers, not 'Mode'", "'|' needs integers,
+//   not 'Mode'" for one that isn't flags); nor does a condition, nor an
+//   array's count ("an array's count must be an integer, not 'Mode'").
+// - What lowering may rely on: an enum is its integer type below the
+//   checker (type_integer_of), laid out, passed and compared as it; Mode.FREE
+//   and every .NAME that reaches lowering are constants, their values in
+//   Ast.constant; no type_untyped_member survives a program that checks.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -985,7 +1055,7 @@
 // The checker also runs after syntax errors, so they and the type errors in
 // the rest of the program are reported together. A declaration the parser
 // gave up on is a broken entry (parser.h): its name is declared (unless
-// it's a predeclared constant's, which keeps meaning the constant), with an
+// it's a predeclared name, which keeps meaning the predeclared one), with an
 // unknown type, and nothing is reported about it or about its uses (a call
 // to it may pass anything). Its body isn't checked: there is none. The
 // checker runs after a #load failed too (load.h), or one that named no
@@ -1018,7 +1088,7 @@ struct Checker;
 // A checker for deciding the top-level #ifs of `file` (spec 4.9), which the
 // loader makes once every file outside every #if is read: it knows those
 // files' declarations (the base: the procs and globals file has now) and the
-// predeclared constants, and nothing else. It says nothing about them as it
+// predeclared names, and nothing else. It says nothing about them as it
 // declares them (check() does, later).
 Checker *check_decider_new(Ast_File *file, Arena *a, Diagnostics *d);
 

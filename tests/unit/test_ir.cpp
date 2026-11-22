@@ -3215,7 +3215,7 @@ TEST(constants_in_deferred_code_and_an_if_directive) {
                                                 "    i := 0;\n"                                           // 4
                                                 "    defer { K :: 3; D :: int.[1, 2]; i = K + D[i]; }\n"  // 5
                                                 "    if i == 0 { return; }\n"                             // 6
-                                                "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
+                                                "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"   // 7
                                                 "}\n"));
     CHECK(contains(ir, "; const C int constant 7 at 2:1\n"));
     String main = proc_ir(ir, "main");
@@ -3283,8 +3283,8 @@ TEST(a_constant_after_a_return_is_recorded) {
                                                           "    if x > 0 { return; } else { return; }\n"               // 4
                                                           "    LIMIT :: 3;\n"                                         // 5
                                                           "    NAME :: \"late\";\n"                                   // 6
-                                                          "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
-                                                          "    { INNER :: 5; }\n"                                    // 8
+                                                          "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"     // 7
+                                                          "    { INNER :: 5; }\n"                                     // 8
                                                           "}\n")),
                           "main");
     CHECK(!contains(main, "; var LIMIT "));
@@ -3305,7 +3305,7 @@ TEST(a_constant_after_a_block_that_returns_is_recorded) {
     String main = proc_ir(ir_print_debug(&a, lower_source(&a,
                                                           "LIMIT :: 12;\n"                                       // 1
                                                           "OP :: 5;\n"                                           // 2
-                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 3
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"   // 3
                                                           "main :: () {\n"                                       // 4
                                                           "    x := 1;\n"                                        // 5
                                                           "    { x += 1; return; }\n"                            // 6
@@ -3337,7 +3337,7 @@ TEST(a_constant_after_a_hiding_one_is_in_its_blocks_scope) {
                                                           "        LIMIT :: 99;\n"                                        // 6
                                                           "        STEP :: 2;\n"                                          // 7
                                                           "        NAME :: \"tail\";\n"                                   // 8
-                                                          "        #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"  // 9
+                                                          "        #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"     // 9
                                                           "    }\n"
                                                           "}\n")),
                           "main");
@@ -5748,6 +5748,84 @@ TEST(arrays_and_views_are_described) {
     arena_free(&a);
 }
 
+// The name, "@str.N", of the string literal whose bytes are `bytes` in IR
+// printed by ir_print, found by its line ("global @str.N = \"...\\00\""); ""
+// when there's none.
+static const char *str_global(Arena *a, String ir, const char *bytes) {
+    String line = line_with(ir, string_cstr(a, string_printf(a, " = \"%s\\00\"", bytes)));
+    s64 at = index_of(line, "@"), end = index_of(line, " = ");
+    if (at < 0 || end < at) return "";
+    return string_cstr(a, string_slice(line, at, end - at));
+}
+
+TEST(an_enums_description) {
+    // An enum's is a Type_Info_Enum (issue #221, spec 3.16, 3.18): the tag
+    // TYPE_INFO_ENUM (11), the enum's size and alignment, its integer
+    // type's (u8: 1 and 1), its name, its integer type's description,
+    // is_flags (false), then its members, two read-only arrays of their
+    // own: type_info.0.names, a string per member, each its str.N, and
+    // type_info.0.values, each member's value as 8 bytes. Preload's
+    // messages are str.N before them, so the names' are found by their bytes.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Small :: enum u8 { A; B :: 5; }\n"
+                                                    "main :: () { t := type_info(Small); }\n"));
+    const char *small = str_global(&a, ir, "Small");
+    const char *name_a = str_global(&a, ir, "A");
+    const char *name_b = str_global(&a, ir, "B");
+    CHECK(small[0] && name_a[0] && name_b[0]);
+    String want = string_printf(&a, "const @type_info.0: 88 align 8 = \""
+                                    "\\0B\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\01\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\01\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\05\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\02\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\02\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 %s reloc 40 @type_info.1"
+                                    " reloc 64 @type_info.0.names reloc 80 @type_info.0.values\n",
+                                    small);
+    CHECK(contains(ir, string_cstr(&a, want)));
+    CHECK(contains(ir, "const @type_info.1: 32 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    want = string_printf(&a, "const @type_info.0.names: 32 align 8 = \""
+                             "\\01\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\01\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 %s reloc 24 %s\n",
+                             name_a, name_b);
+    CHECK(contains(ir, string_cstr(&a, want)));
+    CHECK(contains(ir, "const @type_info.0.values: 16 align 8 = \""
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00\"\n"));
+    // An enum with no members has empty names and values views, zeros from
+    // 56 on with no relocations there, and no arrays of its own.
+    ir = ir_print(&a, lower_with_preload(&a, "Empty :: enum { }\n"
+                                             "main :: () { t := type_info(Empty); }\n"));
+    want = string_printf(&a, "const @type_info.0: 88 align 8 = \""
+                             "\\0B\\00\\00\\00\\00\\00\\00\\00"
+                             "\\08\\00\\00\\00\\00\\00\\00\\00"
+                             "\\08\\00\\00\\00\\00\\00\\00\\00"
+                             "\\05\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 %s reloc 40 @type_info.1\n",
+                             str_global(&a, ir, "Empty"));
+    CHECK(contains(ir, string_cstr(&a, want)));
+    CHECK(!contains(ir, ".names"));
+    CHECK(!contains(ir, ".values"));
+    arena_free(&a);
+}
+
 TEST(a_global_holds_a_descriptions_address) {
     // A global holding a description's address is 8 bytes of its own, the
     // address a relocation the linker writes, as a string literal's is: as
@@ -7122,5 +7200,54 @@ TEST(a_builtin_passes_its_place) {
     // Two places, and the pop's call ends at its result's temporary.
     CHECK(count_of(main, "= local 32 align 8\n") == 2);
     CHECK(contains(main, "  call @__array_pop(%79, %4, %80, %81)\n"));
+    arena_free(&a);
+}
+
+// Issue #221: enums (spec 3.18), their integer types below the checker.
+
+TEST(an_enum_lowers_as_its_integer_type) {
+    // An enum over u8 is a u8 to lowering: its slot is an i8's, a member is
+    // the constant 200 stored there, a cast to int zero-extends it, a cast
+    // from int checks the range a u8 has, and a cast to s8 checks the range
+    // an s8 has, as a u8's would. The same program over u8 itself lowers to
+    // the same IR, instruction for instruction.
+    Arena a = arena_make();
+    String with_enum = proc_ir(ir_print(&a, lower_source(&a,
+                                                         "Small :: enum u8 { A; B :: 200; }\n"
+                                                         "main :: () {\n"
+                                                         "    s := Small.B;\n"
+                                                         "    n := cast(int) s;\n"
+                                                         "    t := cast(Small) n;\n"
+                                                         "    u := cast(s8) s;\n"
+                                                         "}\n")),
+                               "main");
+    String with_u8 = proc_ir(ir_print(&a, lower_source(&a,
+                                                       "main :: () {\n"
+                                                       "    s : u8 = 200;\n"
+                                                       "    n := cast(int) s;\n"
+                                                       "    t := cast(u8) n;\n"
+                                                       "    u := cast(s8) s;\n"
+                                                       "}\n")),
+                             "main");
+    CHECK(contains(with_enum, "= local i8\n"));
+    CHECK(contains(with_enum, "= const i8 200\n"));
+    CHECK(contains(with_enum, "= zext i8 "));
+    CHECK(contains(with_enum, "panic @str."));
+    CHECK_STR(with_enum, string_cstr(&a, with_u8));
+    arena_free(&a);
+}
+
+TEST(an_enums_c_parameters_extend_as_its_integer_type) {
+    // C widens a narrow integer at a call as its sign says (spec 7.6): an
+    // enum over u8 is zero-extended, one over s8 or s16 sign-extended, as
+    // those types are, its parameters and its result alike.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "B :: enum u8 { X; }\n"
+                                          "S :: enum s8 { Y; }\n"
+                                          "W :: enum s16 { Z; }\n"
+                                          "f :: (b: B, s: S) -> W #foreign libc;\n"
+                                          "main :: () { f(.X, .Y); }\n"));
+    CHECK(contains(ir, "foreign proc @f(i8 zeroext, i8 signext) -> i16 signext\n"));
     arena_free(&a);
 }

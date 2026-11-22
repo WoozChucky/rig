@@ -104,8 +104,8 @@ main :: () {
 
 // The heap, but a resize copies to new memory and fills the old with #
 // before it frees it, so nothing can read moved text and find it intact.
-poison_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode != RESIZE {
+poison_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode != .RESIZE {
         return heap_allocator_proc(mode, size, old_size, old_memory, data);
     }
     memory := alloc(size, HEAP_ALLOCATOR);

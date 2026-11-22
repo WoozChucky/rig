@@ -16,13 +16,13 @@ Counter :: struct { allocations: int; resizes: int; frees: int; last_size: int; 
 // counted too, and always moves the bytes: they are copied into new memory,
 // and the old ones written over with '#' before the heap has them back, so
 // a view left pointing at them doesn't read the text.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE {
+    if mode == .ALLOCATE {
         counter.allocations += 1;
         counter.last_size = size;
     }
-    if mode == RESIZE {
+    if mode == .RESIZE {
         counter.resizes += 1;
         memory := alloc(size, HEAP_ALLOCATOR);
         if memory == null { return null; }
@@ -31,7 +31,7 @@ counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *vo
         free(old_memory, HEAP_ALLOCATOR);
         return memory;
     }
-    if mode == FREE { counter.frees += 1; }
+    if mode == .FREE { counter.frees += 1; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 

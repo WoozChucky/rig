@@ -828,16 +828,27 @@ static LLVMMetadataRef debug_file(Backend *b, Position pos) {
     return b->files[pos.file];
 }
 
+// The declaration of t, a struct's or an enum's, at the line that declares
+// it; null for any other type. An enum the compiler declares itself is at
+// line 0 of no file: it has none either.
+static Ast *type_declaration(Type *t) {
+    if (t->kind == TYPE_STRUCT) return t->decl;
+    if (t->kind == TYPE_ENUM && t->enum_decl->pos.line > 0) return t->enum_decl;
+    return nullptr;
+}
+
 // Where a type is declared, the DIFile it and its members are in and its
-// line: a struct's are its declaration's. Any other type (a view, a string,
-// a resizable array, an array's stand-in), which no line declares, is in
-// the main file, the compile unit's, at line 0.
+// line: a struct's and an enum's are its declaration's. Any other type (a
+// view, a string, a resizable array, an array's stand-in), which no line
+// declares, is in the main file, the compile unit's, at line 0.
 static LLVMMetadataRef type_debug_file(Backend *b, Type *t) {
-    return t->kind == TYPE_STRUCT ? debug_file(b, t->decl->pos) : b->files[0];
+    Ast *declaration = type_declaration(t);
+    return declaration ? debug_file(b, declaration->pos) : b->files[0];
 }
 
 static unsigned type_debug_line(Type *t) {
-    return t->kind == TYPE_STRUCT ? (unsigned)t->decl->pos.line : 0;
+    Ast *declaration = type_declaration(t);
+    return declaration ? (unsigned)declaration->pos.line : 0;
 }
 
 // A member of the struct type `in`, which is in `file`: a field's name,
@@ -982,6 +993,44 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
     return LLVMDIBuilderCreatePointerType(b->debug, to, 64, 0, 0, nullptr, 0);
 }
 
+// An enum, t (spec 3.18, 10.7): an enumeration type named as the enum, at
+// its declaration, of an enumerator per member, in order, over its integer
+// type's base type (its class type), as C's enum with a fixed underlying
+// type is, so a debugger shows a value by its member's name, and a number
+// that's no member's as the number. A member's value is the low bits of
+// the checker's 64 (which keeps a constant of a signed type sign-extended,
+// and of an unsigned one zero-extended), read as unsigned when the integer
+// type is (so u64's largest is 18446744073709551615, not -1), as wide as
+// the enum but for an s32's, which keeps all 64. cdb matches a value
+// against its members by how CodeView writes them, which follows their
+// width: an s8's or s16's -2 written as 64 bits is no member's, and an
+// s32's written as 32 bits is an unsigned 32-bit number (LF_ULONG), which
+// cdb doesn't match against the sign-extended variable either (clang has
+// the same flaw for C++), so only at 64 bits is it found. A signed value
+// is the same number in DWARF at any width, so gdb sees no difference. An
+// enum_flags is the same: how a debugger shows a value of several members
+// is its own (gdb writes (A | B) when every member is a bit of its own).
+// Two levels, the enum and its base type, which holds no other type: no
+// cycle leads through it, and it's never cut.
+static Debug_Type debug_enum(Backend *b, Type *t) {
+    Ast_Enum *e = t->enum_decl;
+    LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, e->members.count ? e->members.count : 1);
+    for (s64 i = 0; i < e->members.count; i++) {
+        Ast_Const *member = e->members[i];
+        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops the build
+        u64 words[1] = {(u64)member->constant};
+        u64 bits = t->is_signed && t->size == 4 ? 64 : (u64)t->size * 8;  // above: an s32's would be LF_ULONG
+        members[i] = LLVMDIBuilderCreateEnumeratorOfArbitraryPrecision(
+            b->debug, (const char *)member->name.data, (size_t)member->name.count, bits, words, !t->is_signed);
+    }
+    LLVMMetadataRef file = type_debug_file(b, t);
+    LLVMMetadataRef base = debug_type_at(b, t->underlying, 0).node;
+    LLVMMetadataRef node = LLVMDIBuilderCreateEnumerationType(
+        b->debug, file, (const char *)t->name.data, (size_t)t->name.count, file, type_debug_line(t),
+        (u64)t->size * 8, (u32)t->align * 8, members, (unsigned)e->members.count, base);
+    return remember_debug_type(b, t, Debug_Type{node, 2});
+}
+
 // The subroutine type of a signature: its parameters' types and its
 // results' (spec 10.4). How a procedure of it is called, which isn't how C
 // would pass the same types: an aggregate is never passed or returned in
@@ -1039,6 +1088,7 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 // - *T is a pointer to T's debug type; *void to none (C's void *, which a
 //   debugger shows as an address only).
 // - A struct is a struct type of its fields, each a member at its offset.
+// - An enum is an enumeration type of its members (debug_enum).
 // - [N]T is an array of N T's.
 // - []T, string and [..]T are the structs they're laid out as, named as
 //   Rig names them ("[]int", "string", "[..]int"): a [..]T's four members
@@ -1080,6 +1130,7 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
                                                             LLVMDIFlagZero);
         return remember_debug_type(b, t, Debug_Type{base, 1});
     }
+    case TYPE_ENUM: return debug_enum(b, t);
     default: break;
     }
     if (depth >= DEBUG_TYPE_LEVELS - 1) return stand_in_debug_type(b, t);
@@ -2014,13 +2065,13 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     // file that declares it, in a global variable expression whose expression
     // is empty (the variable is the global's memory itself), attached to the
     // LLVM global (!dbg). What the compiler makes (str.N, string.N, array.N,
-    // const.N, and type_info.N with its .members, .parameters and .results
-    // arrays) has no Rig type, and none of its own: a constant's const.N gets
-    // that constant's variable instead, from the constants
-    // (describe_constants, and declare_variables for a body's), one per
-    // declaration of it lowered: each copy of deferred code declares it again
-    // (declare_variables). One holding a view's elements, or an expression
-    // #run's value, has none.
+    // const.N, and type_info.N with its .members, .parameters, .results,
+    // .names and .values arrays) has no Rig type, and none of its own: a
+    // constant's const.N gets that constant's variable instead, from the
+    // constants (describe_constants, and declare_variables for a body's), one
+    // per declaration of it lowered: each copy of deferred code declares it
+    // again (declare_variables). One holding a view's elements, or an
+    // expression #run's value, has none.
     for (s64 i = 0; b->debug && i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (!g->rig_type) continue;

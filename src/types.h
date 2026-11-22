@@ -1,28 +1,31 @@
 // types.h: Rig's types, as the checker sees them.
 //
-// The integer types, the float types, bool, pointers, structs, arrays,
-// views, resizable arrays, procedure types, string and void, and the types
-// of untyped integer and float constants, of null and of a literal without
-// its type written (.{1, 2}, .[1, 2]). Each type exists once, so two types
-// are the same exactly when their pointers are equal (type_pointer_to keeps
-// one *T per T, type_array_of, type_view_of and type_resizable_of one [N]T,
-// one []T and one [..]T, and type_proc_of one procedure type per signature;
-// a struct's type is its declaration's, Ast_Struct.declared).
+// The integer types, the float types, bool, pointers, structs, enums,
+// arrays, views, resizable arrays, procedure types, string and void, and
+// the types of untyped integer and float constants, of null, of a literal
+// without its type written (.{1, 2}, .[1, 2]) and of a member without its
+// enum (.FREE). Each type exists once, so two types are the same exactly
+// when their pointers are equal (type_pointer_to keeps one *T per T,
+// type_array_of, type_view_of and type_resizable_of one [N]T, one []T and
+// one [..]T, and type_proc_of one procedure type per signature; a struct's
+// type is its declaration's, Ast_Struct.declared, and an enum's its
+// declaration's, Ast_Enum.declared).
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
 // u16 2, s32 u32 float32 4, s64 u64 int float64, pointers and procedure
-// types 8 (a procedure value is the address of its code). A value of
-// the type sits in memory at an address that is a multiple of its alignment,
-// and takes its size in bytes. A struct's are worked out from its fields as
-// C does (checker.cpp's lay_out): each field at the next offset that is a
-// multiple of its alignment, the struct's alignment its largest field's (1
-// when it has none), its size rounded up to a multiple of that, so an array
-// of them keeps every one aligned. An array, [N]T, is N T's one after
-// another: N times T's size, aligned as a T. A view, []T, is a struct of
-// its own, { count: int; data: *T; } (spec 6.5: Jai's order, count first):
-// 16 bytes, aligned to 8. A string is a view of bytes, laid out as []u8.
-// A resizable array, [..]T, starts as a view, then has allocated, an int,
-// and its allocator, Preload's Allocator (spec 3.17): 40 bytes, aligned to 8.
+// types 8 (a procedure value is the address of its code), and an enum its
+// integer type's. A value of the type sits in memory at an address that is
+// a multiple of its alignment, and takes its size in bytes. A struct's are
+// worked out from its fields as C does (checker.cpp's lay_out): each field
+// at the next offset that is a multiple of its alignment, the struct's
+// alignment its largest field's (1 when it has none), its size rounded up
+// to a multiple of that, so an array of them keeps every one aligned. An
+// array, [N]T, is N T's one after another: N times T's size, aligned as a
+// T. A view, []T, is a struct of its own, { count: int; data: *T; } (spec
+// 6.5: Jai's order, count first): 16 bytes, aligned to 8. A string is a
+// view of bytes, laid out as []u8. A resizable array, [..]T, starts as a
+// view, then has allocated, an int, and its allocator, Preload's Allocator
+// (spec 3.17): 40 bytes, aligned to 8.
 
 #pragma once
 
@@ -44,9 +47,12 @@ enum Type_Kind : u8 {
     TYPE_RESIZABLE,  // [..]T: a view's count and data, then allocated and allocator (spec 3.17)
     TYPE_PROC,     // (params) -> results: a procedure's type; a value of it is the address of a
                    // procedure's code, or null (spec 3's "Procedure types")
+    TYPE_ENUM,     // an enum or enum_flags a program declares: its integer type and members (spec 3.18)
+    TYPE_UNTYPED_MEMBER,  // a member without its enum, .FREE, until it meets one (type_untyped_member)
 };
 
 struct Ast_Struct;  // ast.h: a struct's declaration
+struct Ast_Enum;    // ast.h: an enum's declaration
 
 // A field of a struct type: its name, its type and where it is.
 struct Type_Field {
@@ -59,16 +65,16 @@ struct Type {
     Type_Kind kind;
     s64 size;        // in bytes
     s32 align;       // in bytes, a power of 2: where in memory a value of the type may start
-    bool is_signed;  // TYPE_INTEGER
+    bool is_signed;  // TYPE_INTEGER, and TYPE_ENUM (its integer type's)
     Type *pointee;   // TYPE_POINTER
-    String name;     // a built-in type's name, or a struct's (its declaration's)
+    String name;     // a built-in type's name, or a struct's or an enum's (its declaration's)
     Type *pointer;   // the type *this, once asked for
     Type *alias_of;  // a second name for another type (float for float32): the type it names
     Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
     Ast_Struct *decl;          // TYPE_STRUCT: its declaration
     Arena *arena;    // where this type lives, and the types made from it (pointers, arrays, ...): a
-                     // struct's is the compilation's arena (and so theirs), freed with it; a
-                     // built-in type's, null: it and the types made from it last the whole run
+                     // struct's or an enum's is the compilation's arena (and so theirs), freed with
+                     // it; a built-in type's, null: it and the types made from it last the whole run
     Type *element;   // TYPE_ARRAY, TYPE_VIEW, TYPE_RESIZABLE: T in [N]T, []T and [..]T; TYPE_STRING: u8
     s64 count;       // TYPE_ARRAY: N
     Type *view;      // the type []this, once asked for
@@ -86,6 +92,9 @@ struct Type {
     Type *procs;         // the procedure types this type anchors (type_proc_of), linked through
                          // next_proc: each signature made once
     Type *next_proc;
+    Type *underlying;     // TYPE_ENUM: its integer type, whose size, alignment and sign it has
+    bool is_flags;        // TYPE_ENUM: enum_flags
+    Ast_Enum *enum_decl;  // TYPE_ENUM: its declaration, its members' names and values
 };
 
 // The largest size a type may have, 2^40 bytes (a terabyte): an array over
@@ -122,15 +131,21 @@ const s64 RESIZABLE_ALLOCATED_OFFSET = 16, RESIZABLE_ALLOCATOR_OFFSET = 24, RESI
 // which each kind's struct holds as its first field, info, so a *Type_Info
 // is cast to the struct its tag names. Floats, bool, string and void have
 // the plain Type_Info.
+//
+// The tags are the members of Preload's enum Type_Info_Tag, numbered as
+// Jai's tags are: ENUM is Jai's 11, the numbers between being kinds of
+// Jai's that Rig doesn't have.
 enum Type_Info_Tag : s64 {
     TYPE_INFO_INTEGER = 0, TYPE_INFO_FLOAT = 1, TYPE_INFO_BOOL = 2, TYPE_INFO_STRING = 3,
     TYPE_INFO_POINTER = 4, TYPE_INFO_PROCEDURE = 5, TYPE_INFO_VOID = 6, TYPE_INFO_STRUCT = 7,
-    TYPE_INFO_ARRAY = 8,
+    TYPE_INFO_ARRAY = 8, TYPE_INFO_ENUM = 11,
 };
-// Type_Info_Array's array_kind: an array, [N]T, a view, []T, or a resizable
-// array, [..]T (spec 3.17), in Jai's order.
+// Type_Info_Array's array_kind, the members of Preload's enum Array_Kind:
+// an array, [N]T, a view, []T, or a resizable array, [..]T (spec 3.17), in
+// Jai's order.
 const s64 ARRAY_FIXED = 0, ARRAY_VIEW = 1, ARRAY_RESIZABLE = 2;
-// Type_Info: tag, size and alignment, each an int.
+// Type_Info: tag, a Type_Info_Tag (an enum over int), then size and
+// alignment, ints.
 const s64 TYPE_INFO_TAG_OFFSET = 0, TYPE_INFO_SIZE_OFFSET = 8, TYPE_INFO_ALIGNMENT_OFFSET = 16;
 const s64 TYPE_INFO_SIZE = 24;            // a plain Type_Info: a float, bool, string, void
 // Type_Info_Integer: info, then signed, a bool.
@@ -147,10 +162,19 @@ const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_S
 // Type_Info_Struct_Member: name, a string; type, a *Type_Info; offset, an int.
 const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, TYPE_INFO_MEMBER_OFFSET_OFFSET = 24,
           TYPE_INFO_MEMBER_SIZE = 32;
-// Type_Info_Array: info, element_type, a *Type_Info, then the ints
-// array_kind and count (N, or -1 for a view or a resizable array).
+// Type_Info_Array: info, element_type, a *Type_Info, then array_kind, an
+// Array_Kind (an enum over int), and count, an int (N, or -1 for a view or
+// a resizable array).
 const s64 TYPE_INFO_ELEMENT_OFFSET = 24, TYPE_INFO_ARRAY_KIND_OFFSET = 32, TYPE_INFO_COUNT_OFFSET = 40,
           TYPE_INFO_ARRAY_SIZE = 48;
+// Type_Info_Enum (spec 3.16, 3.18): info, name, a string, underlying, the
+// *Type_Info of its integer type, is_flags, a bool, then its members, the
+// views names, of string, and values, of s64, each a member's value as 64
+// bits (sign-extended from a signed integer type, zero-extended from an
+// unsigned one, as Ast.constant holds it).
+const s64 TYPE_INFO_ENUM_NAME_OFFSET = 24, TYPE_INFO_ENUM_UNDERLYING_OFFSET = 40,
+          TYPE_INFO_ENUM_IS_FLAGS_OFFSET = 48, TYPE_INFO_ENUM_NAMES_OFFSET = 56,
+          TYPE_INFO_ENUM_VALUES_OFFSET = 72, TYPE_INFO_ENUM_SIZE = 88;
 // Any: type, the value's *Type_Info, then value_pointer, its address.
 const s64 ANY_TYPE_OFFSET = 0, ANY_VALUE_OFFSET = 8, ANY_SIZE = 16;
 // Every description, member and Any is aligned to 8.
@@ -237,8 +261,10 @@ bool type_has_view_fields(Type *t);
 // C's int and float. s8, s16, u8, u16 and bool become an s32, C's int, every
 // value kept (a signed one sign-extended, the others zero-extended), and a
 // float32 a float64, C's double. s32, u32, s64, u64, int, float64 and
-// pointers stay as they are. For the numbers, bools and pointers the
-// checker lets a variadic call pass (checker.h).
+// pointers stay as they are. An enum is promoted as its integer type is
+// (spec 7.6): an enum s8's value becomes an s32, one over s32 or wider
+// stays as it is. For the numbers, enums, bools and pointers the checker
+// lets a variadic call pass (checker.h).
 Type *type_c_promoted(Type *t);
 
 // The index in struct type t's fields of the one called `name`, or -1.
@@ -303,8 +329,27 @@ extern Type type_untyped_float;
 // (check_default_type).
 extern Type type_untyped_literal;
 
+// The type of a member written without its enum, `.FREE`, until it meets
+// one (spec 3.18): as a literal without its type takes the struct it meets,
+// the member takes the enum of what it's given to, or of the other side of
+// == or != from an enum value, or of the other operand of | & ^ from a
+// flags value, and is that enum's member then (check_convert). `.A | .B`,
+// `.A | 0` (or any untyped constant, `.A | 1.5` too, which the flags type
+// then refuses) and `~.A` have this type too, waiting for one together.
+// Meeting none, it's an error (check_default_type), so messages never name
+// it.
+extern Type type_untyped_member;
+
 // Whether t is the type of an untyped constant, integer or float.
 bool type_is_untyped(Type *t);
+
+// Whether a value of type t takes its type from where it goes: .{...},
+// .[...] (type_untyped_literal) or .NAME (type_untyped_member).
+bool type_waits_for_one(Type *t);
+
+// An integer type, or an enum's integer type (Type.underlying): what
+// lowering, casts and C see of a value of type t; null for any other type.
+Type *type_integer_of(Type *t);
 
 // Whether t is a number: an integer or a float, what + - * / take.
 bool type_is_number(Type *t);

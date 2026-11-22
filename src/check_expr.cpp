@@ -460,12 +460,129 @@ static void convert_array_literal(Checker *c, Ast_Literal *literal, Type *to) {
 // goes takes its default one first: an untyped constant an int or a
 // float32, null a *void. A literal without its type has none to take
 // ("this literal's type isn't known; write it before the '.', as in
-// Vec2.{1, 2}", check_default_type), and is left with no type.
+// Vec2.{1, 2}", check_default_type), nor has a member without its enum,
+// .FREE ("this member's enum isn't known; write it with its enum, as in
+// Mode.FREE"): each is left with no type.
 static void convert_to_any(Checker *c, Ast *e) {
     if (e->type == &type_null) e->type = type_pointer_to(&type_void);
     check_default_type(c, e);
     if (!e->type) return;
     e->to_any = expr_is_place(e) ? ANY_PLACE : ANY_COPY;
+}
+
+// Enums (spec 3.18, checker.h's "Enums").
+
+static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t);
+static Type *check_unify_enums(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op);
+
+// The first member without its enum in e, a .NAME or an operator waiting
+// for its flags type over them (.A | .B, ~.A, 0 | .A), in source order:
+// where a message about all of e points.
+static Ast_Dot_Name *first_dot_name(Ast *e) {
+    for (;;) {
+        if (e->kind == AST_DOT_NAME) return (Ast_Dot_Name *)e;
+        if (e->kind == AST_UNARY) {
+            e = ((Ast_Unary *)e)->operand;
+        } else {
+            Ast_Binary *b = (Ast_Binary *)e;
+            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is an untyped constant
+        }
+    }
+}
+
+// Member `name` of enum type t, its values worked out first
+// (check_enum_values), its index in *index (-1 when it has none): null
+// after "'Mode' has no member 'FRE'", at `at`, and when the values can't
+// be known (a circle) or this member's own had a mistake, said already. In
+// the enum's own body, while its values are being worked out and nothing
+// else is (the last of c->resolving), a member already worked out is a
+// constant of the enum as it is outside: F.Q in `F :: enum { Q :: 3; P ::
+// cast(int) F.Q + 1; }` is 3, and F.Z is "'F' has no member 'Z'". A
+// member not yet worked out, the one being worked out included, needs the
+// whole enum, a circle, as does any member reached through another
+// declaration (an enum's or a global's) the enum's body needs: two enums
+// that name each other's members are each worked out whole.
+static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at, s32 *index) {
+    Ast_Enum *e = t->enum_decl;
+    *index = enum_member_index(e, name);
+    bool own_body = e->resolve == RESOLVE_UNDER_WAY && c->resolving.count > 0 &&
+                    c->resolving[c->resolving.count - 1] == (Ast *)e;
+    if (own_body && *index >= 0 && e->members[*index]->resolve == RESOLVE_DONE) {
+        Ast_Const *member = e->members[*index];
+        return member->type ? member : nullptr;
+    }
+    if (own_body && *index < 0) {
+        diag_error(c->diag, at, "'" STR_FMT "' has no member '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+                   STR_ARG(name));
+        return nullptr;
+    }
+    *index = -1;
+    if (!check_enum_values(c, t)) return nullptr;
+    *index = enum_member_index(e, name);
+    if (*index < 0) {
+        diag_error(c->diag, at, "'" STR_FMT "' has no member '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+                   STR_ARG(name));
+        return nullptr;
+    }
+    Ast_Const *member = t->enum_decl->members[*index];
+    return member->type ? member : nullptr;
+}
+
+// e, of type_untyped_member, meeting type `to` (check_convert): a .NAME
+// becomes the member of that name of enum `to`, a constant of it; .A | .B
+// (& ^ too, and .A | 0) and ~.A, which waited for a flags type, convert
+// their operands and fold. Meeting a type that isn't an enum, "'.FREE'
+// needs an enum type, not 'int'", at the first .NAME in e; an operator
+// meeting an enum that isn't flags, its own message, at the operator ("'|'
+// needs integers, not 'Mode'", "'~' needs an integer, not 'Mode'"), as for
+// two values of it; .A | 1 meeting a flags type, a mismatch at the
+// operator, as f | 1 is. After any of these, e has no type.
+static void convert_member(Checker *c, Ast *e, Type *to) {
+    if (to->kind != TYPE_ENUM) {
+        Ast_Dot_Name *first = first_dot_name(e);
+        diag_error(c->diag, first->pos, "'." STR_FMT "' needs an enum type, not '" STR_FMT "'", STR_ARG(first->name),
+                   STR_ARG(type_name(c->arena, to)));
+        e->type = nullptr;
+        return;
+    }
+    e->type = nullptr;
+    if (e->kind == AST_DOT_NAME) {
+        Ast_Dot_Name *dot = (Ast_Dot_Name *)e;
+        s32 index;
+        Ast_Const *member = find_enum_member(c, to, dot->name, dot->name_pos, &index);
+        if (!member) return;
+        e->type = to;
+        e->is_constant = true;
+        e->constant = member->constant;
+        return;
+    }
+    if (!to->is_flags) {
+        bool tilde = e->kind == AST_UNARY;
+        diag_error(c->diag, e->pos, "%s needs %s, not '" STR_FMT "'",
+                   token_kind_name(tilde ? TOKEN_TILDE : ((Ast_Binary *)e)->op), tilde ? "an integer" : "integers",
+                   STR_ARG(type_name(c->arena, to)));
+        return;
+    }
+    if (e->kind == AST_UNARY) {
+        Ast *operand = ((Ast_Unary *)e)->operand;
+        convert_member(c, operand, to);
+        if (!operand->type) return;
+        e->constant = wrap_to(~operand->constant, to);
+    } else {
+        Ast_Binary *b = (Ast_Binary *)e;
+        // An operand that isn't a member is an untyped constant, which
+        // converts to a flags type only if it's the integer 0, its empty
+        // set: .A | 1 is "mismatched types 'Look' and 'int' for '|'; cast
+        // one of them", as f | 1 is (check_unify_enums).
+        if (b->left->type == &type_untyped_member) convert_member(c, b->left, to);
+        if (b->right->type == &type_untyped_member) convert_member(c, b->right, to);
+        if (!b->left->type || !b->right->type) return;
+        if (!check_unify_enums(c, b, b->left->type, b->right->type, token_kind_name(b->op))) return;
+        b->operand_type = to;
+        e->constant = fold_typed(b->op, b->left->constant, b->right->constant, to);
+    }
+    e->type = to;
+    e->is_constant = true;
 }
 
 bool check_convert(Checker *c, Ast *e, Type *to) {
@@ -498,6 +615,11 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
         e->type = to;
         return true;
     }
+    // .FREE takes the enum it meets, the same way (convert_member).
+    if (from == &type_untyped_member) {
+        convert_member(c, e, to);
+        return true;
+    }
     // null takes the pointer type it meets, as an untyped constant takes a
     // number type: p : *int = null; makes it a *int, still the constant 0.
     // A procedure value may be null too: f : (int) -> int = null;.
@@ -520,6 +642,14 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
                            STR_ARG(type_name(c->arena, to)));
             }
             e->constant = float_bits(e, to);
+            e->type = to;
+            return true;
+        }
+        // The untyped 0 is a flags type's empty set (spec 3.18), since a
+        // condition must be a bool: (f & .VISIBLE) != 0. No other number
+        // converts to an enum.
+        if (to->kind == TYPE_ENUM) {
+            if (from != &type_untyped_int || e->constant != 0 || !to->is_flags) return false;
             e->type = to;
             return true;
         }
@@ -577,6 +707,11 @@ void check_default_type(Checker *c, Ast *e) {
         const char *example = ((Ast_Literal *)e)->is_array ? "int.[1, 2]" : "Vec2.{1, 2}";
         diag_error(c->diag, e->start, "this literal's type isn't known; write it before the '.', as in %s", example);
         e->type = nullptr;
+    } else if (e->type == &type_untyped_member) {
+        // Nor a default enum: the member's must be written.
+        diag_error(c->diag, first_dot_name(e)->pos,
+                   "this member's enum isn't known; write it with its enum, as in Mode.FREE");
+        e->type = nullptr;
     }
 }
 
@@ -595,8 +730,20 @@ Type *check_value(Checker *c, Ast *e) {
 
 Type *check_operand(Checker *c, Ast *e) {
     Type *t = check_value(c, e);
-    if (t != &type_untyped_literal) return t;
+    if (!t || !type_waits_for_one(t)) return t;
     check_default_type(c, e);  // reports it
+    return nullptr;
+}
+
+// check_operand for an operand that may be a member without its enum,
+// which then keeps type_untyped_member, to take the type of the other
+// operand or of where the whole goes (spec 3.18): of == and != and of
+// | & ^, and ~'s.
+static Type *check_member_operand(Checker *c, Ast *e) {
+    Type *t = check_value(c, e);
+    if (t == &type_untyped_member) return t;
+    if (!t || !type_waits_for_one(t)) return t;
+    check_default_type(c, e);  // .{...} meets no type here
     return nullptr;
 }
 
@@ -737,7 +884,8 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         }
         return proc->type;  // null when a part of its signature was an error, reported
     }
-    case AST_STRUCT: report_type_as_value(c, name); return nullptr;
+    case AST_STRUCT:
+    case AST_ENUM: report_type_as_value(c, name); return nullptr;
     // A built-in procedure (spec 3.17) has no procedure type, each call
     // being typed by its array, nor any code to point at: only a call names
     // it.
@@ -754,7 +902,9 @@ static Type *check_name(Checker *c, Ast_Name *name) {
 // where it meets no type: an untyped integer an int; an untyped float a
 // float64, though a float32 is the default elsewhere, since C receives a
 // double either way and rounding it to a float32 first would only lose
-// digits; null a *void, C's NULL. Anything else keeps its type.
+// digits; null a *void, C's NULL. A member without its enum has none to
+// take, and is reported as anywhere it meets no type (check_default_type).
+// Anything else keeps its type.
 static void give_extra_argument_a_type(Checker *c, Ast *arg) {
     Type *t = arg->type;
     if (t == &type_untyped_int) {
@@ -763,6 +913,8 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
         check_convert(c, arg, &type_float64);
     } else if (t == &type_null) {
         check_convert(c, arg, type_pointer_to(&type_void));
+    } else if (t == &type_untyped_member) {
+        check_default_type(c, arg);  // no parameter gives it its enum
     }
 }
 
@@ -770,15 +922,16 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
 // takes C's '..', one after its fixed parameters, checked already
 // (check_value): what C's '...' receives. No parameter gives it a type, so
 // it keeps its own, or takes a default (give_extra_argument_a_type), which
-// must be one C can take: a number, a bool or a pointer, which lowering
-// passes after C's default argument promotions (type_c_promoted). A string
-// literal goes as a C string, its bytes' address, as it does to a *u8
-// (lowering looks at the literal, whose type stays string), and so does
-// constant data holding one (is_literal_string): a constant, or a string
-// field or element of one. C passes structs by rules Rig doesn't follow, and
-// has no views or other Rig strings: each is refused, with what to pass
-// instead. So is a compound literal without its type: being told to write
-// its type would only lead to the same refusal.
+// must be one C can take: a number, an enum (as its integer type, spec
+// 3.18), a bool or a pointer, which lowering passes after C's default
+// argument promotions (type_c_promoted). A string literal goes as a C
+// string, its bytes' address, as it does to a *u8 (lowering looks at the
+// literal, whose type stays string), and so does constant data holding one
+// (is_literal_string): a constant, or a string field or element of one. C
+// passes structs by rules Rig doesn't follow, and has no views or other Rig
+// strings: each is refused, with what to pass instead. So is a compound
+// literal without its type: being told to write its type would only lead to
+// the same refusal.
 static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
     Type *t = arg->type;
     if (!t) return;  // its own mistake, reported already
@@ -926,7 +1079,7 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     if (callee->kind == AST_NAME) {
         Ast_Name *name = (Ast_Name *)callee;
         Ast *decl = check_lookup(c, name->name);
-        if (!decl || decl->kind == AST_STRUCT) {
+        if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM) {
             name->decl = decl;
             if (decl) {
                 diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called",
@@ -1262,12 +1415,12 @@ static Type *check_call(Checker *c, Ast_Call *call) {
             // '..' only so its calls say nothing more: what C would refuse is
             // no mistake of theirs, since no C function receives it. Its
             // extra arguments just take their default types, and a literal
-            // without one stays unknown.
+            // without one, or a member without its enum, stays unknown.
             for (s64 i = n; i < given; i++) {
                 Ast *arg = call->args[i];
                 if (proc->is_foreign) {
                     check_extra_argument(c, proc, arg, i);
-                } else if (arg->type == &type_untyped_literal) {
+                } else if (arg->type && type_waits_for_one(arg->type)) {
                     arg->type = nullptr;
                 } else {
                     give_extra_argument_a_type(c, arg);
@@ -1294,13 +1447,15 @@ static Type *overflows(Checker *c, Ast *e) {
 // flips every bit, as on an int; on a typed one both wrap as at run time.
 // - on a float constant flips its sign, which is exact (0.0 gives -0.0). !
 // on a constant flips it. * takes an address: *x is a *T for an x of type
-// T that has one (check_addressable), never a constant.
+// T that has one (check_addressable), never a constant. ~ also flips the
+// flags of a flags value (spec 3.18), wrapping as its integer type does;
+// ~.A waits for its flags type as .A does (check_convert).
 static Type *check_unary(Checker *c, Ast_Unary *u) {
     if (u->op == TOKEN_STAR) {
         return check_addressable(c, u->operand, false) ? type_pointer_to(u->operand->type) : nullptr;
     }
-    Type *t = check_operand(c, u->operand);
-    if (!t) return nullptr;
+    Type *t = u->op == TOKEN_TILDE ? check_member_operand(c, u->operand) : check_operand(c, u->operand);
+    if (!t || t == &type_untyped_member) return t;
     if (u->op == TOKEN_BANG) {
         if (t != &type_bool) {
             diag_error(c->diag, u->pos, "'!' needs a bool, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
@@ -1312,7 +1467,8 @@ static Type *check_unary(Checker *c, Ast_Unary *u) {
         }
         return t;
     }
-    if (u->op == TOKEN_TILDE ? t->kind != TYPE_INTEGER : !type_is_number(t)) {
+    bool flags = t->kind == TYPE_ENUM && t->is_flags;
+    if (u->op == TOKEN_TILDE ? t->kind != TYPE_INTEGER && !flags : !type_is_number(t)) {
         diag_error(c->diag, u->pos, "%s needs %s, not '" STR_FMT "'", token_kind_name(u->op),
                    u->op == TOKEN_TILDE ? "an integer" : "a number", STR_ARG(type_name(c->arena, t)));
         return nullptr;
@@ -1703,13 +1859,13 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
 }
 
 // Whether == and != take a value of type t: a number, a bool, a pointer
-// (null too), a procedure value or a string. Not a struct: two of them could differ only in
-// their padding, bytes no field owns, so comparing their bytes wouldn't say
-// whether their fields are equal, and comparing field by field is a
-// procedure's job (spec 6.5).
+// (null too), a procedure value, a string or an enum. Not a struct: two of
+// them could differ only in their padding, bytes no field owns, so
+// comparing their bytes wouldn't say whether their fields are equal, and
+// comparing field by field is a procedure's job (spec 6.5).
 static bool takes_equality(Type *t) {
     return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string ||
-           t->kind == TYPE_PROC;
+           t->kind == TYPE_PROC || t->kind == TYPE_ENUM;
 }
 
 // The procedure type two operands of == or != meet at, when either is a
@@ -1732,6 +1888,24 @@ static Type *check_unify_procs(Checker *c, Ast_Binary *b, Type *left, Type *righ
     return nullptr;
 }
 
+// The enum type two operands of a comparison or of | & ^ (`op`) meet at,
+// when either is an enum (spec 3.18): their one enum type, or a flags type
+// the untyped 0 on the other side converts to (check_convert). Null after
+// "mismatched types 'Mode' and 'int' for '=='; cast one of them": nothing
+// else converts to or from an enum, and a cast says which is meant. Two
+// enum types get no such hint ("mismatched types 'Mode' and 'Look' for
+// '=='"): no cast makes one enum another (check_cast).
+static Type *check_unify_enums(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op) {
+    if (left == right) return left;
+    if (left->kind == TYPE_ENUM && type_is_untyped(right) && check_convert(c, b->right, left)) return left;
+    if (right->kind == TYPE_ENUM && type_is_untyped(left) && check_convert(c, b->left, right)) return right;
+    bool two_enums = left->kind == TYPE_ENUM && right->kind == TYPE_ENUM;
+    diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s%s",
+               STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op,
+               two_enums ? "" : "; cast one of them");
+    return nullptr;
+}
+
 // == != < <= > >=: the result is a bool. Two numbers meet at a type as an
 // arithmetic operator's operands do (check_unify_numbers), and are compared
 // as numbers of that type: integers signed or unsigned by its sign, floats
@@ -1745,9 +1919,11 @@ static Type *check_unify_procs(Checker *c, Ast_Binary *b, Type *left, Type *righ
 // for '=='"), and has no order ("'<' needs numbers, not 'string'"). Two
 // procedure values of one type, or one and null, compare as addresses
 // (check_unify_procs), with == and != only: they have no order ("'<' needs
-// numbers, not '(int) -> int'"). Anything else isn't compared: "'==' needs
-// numbers, bools, pointers, procedure values or strings, not 'Vec2'", "'<'
-// needs numbers, not 'Vec2'".
+// numbers, not '(int) -> int'"). Two values of one enum type compare as
+// numbers of its integer type, with all six (check_unify_enums; spec 3.18),
+// a flags value with 0 too. Anything else isn't compared: "'==' needs
+// numbers, bools, pointers, procedure values, strings or enums, not
+// 'Vec2'", "'<' needs numbers, not 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
@@ -1755,7 +1931,7 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
     Type *not_equatable = !takes_equality(left) ? left : !takes_equality(right) ? right : nullptr;
     if (equality && not_equatable) {
         diag_error(c->diag, b->pos,
-                   "%s needs numbers, bools, pointers, procedure values or strings, not '" STR_FMT "'", op,
+                   "%s needs numbers, bools, pointers, procedure values, strings or enums, not '" STR_FMT "'", op,
                    STR_ARG(type_name(c->arena, not_equatable)));
         return nullptr;
     }
@@ -1780,6 +1956,9 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
         t = left;
     } else if (type_is_pointer(left) || type_is_pointer(right) || left == &type_null || right == &type_null) {
         t = check_unify_pointers(c, b, left, right, op);
+        if (!t) return nullptr;
+    } else if (left->kind == TYPE_ENUM || right->kind == TYPE_ENUM) {
+        t = check_unify_enums(c, b, left, right, op);
         if (!t) return nullptr;
     } else {
         if (!check_both_numbers(c, left, right, b->pos, op)) return nullptr;
@@ -1812,12 +1991,54 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // any other divisor not known while compiling is checked at run time
 // (lowering's job). A float divided by zero is IEEE 754's: an infinity, or
 // NaN for 0 / 0, with no check.
+//
+// Enums (spec 3.18): | & ^ take two values of one flags type, or one and
+// the untyped 0, and give that type (check_unify_enums), folded as its
+// integer type wraps; no other of these operators takes an enum, and says
+// so as it says it of any type ("'+' needs numbers, not 'Mode'", "'|'
+// needs integers, not 'Mode'" for an enum that isn't flags). A member
+// without its enum may be an operand of == and != and of | & ^: it takes
+// the other operand's type (check_convert says when it can't); with one on
+// each side, .A | .B waits for its type as .A does, as 1 | 2 stays untyped,
+// and .A == .B has none to take, which is said at the left one, nor has
+// .A == 0 or .A == null, an untyped constant having no type to give. .A | 0
+// waits too, the untyped 0 being the empty set of the flags type it meets,
+// and so do .A | 1 and .A | 1.5, which that type then refuses as it
+// refuses f | 1 (convert_member). Anywhere else, it meets no type.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
-    Type *left = check_operand(c, b->left);
-    Type *right = check_operand(c, b->right);
+    bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
+    bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
+    Type *left = equality || bitwise ? check_member_operand(c, b->left) : check_operand(c, b->left);
+    Type *right = equality || bitwise ? check_member_operand(c, b->right) : check_operand(c, b->right);
     if (!left || !right) return nullptr;
+    if (left == &type_untyped_member || right == &type_untyped_member) {
+        Ast *other = left == &type_untyped_member ? b->right : b->left;
+        bool constant = type_is_untyped(other->type) && other->is_constant;
+        bool untyped = type_is_untyped(other->type) || other->type == &type_null;
+        if (left == right || (bitwise && constant) || (equality && untyped)) {
+            if (bitwise) return &type_untyped_member;
+            check_default_type(c, left == &type_untyped_member ? b->left : b->right);
+            return nullptr;
+        }
+        Ast *member = left == &type_untyped_member ? b->left : b->right;
+        check_convert(c, member, left == &type_untyped_member ? right : left);
+        if (!member->type) return nullptr;
+        left = b->left->type;
+        right = b->right->type;
+    }
     if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return check_logical(c, b, left, right);
     if (is_comparison(b->op)) return check_comparison(c, b, left, right);
+    bool flags = (left->kind == TYPE_ENUM && left->is_flags) || (right->kind == TYPE_ENUM && right->is_flags);
+    if (bitwise && flags) {
+        Type *t = check_unify_enums(c, b, left, right, token_kind_name(b->op));
+        if (!t) return nullptr;
+        b->operand_type = t;
+        if (b->left->is_constant && b->right->is_constant) {
+            b->is_constant = true;
+            b->constant = fold_typed(b->op, b->left->constant, b->right->constant, t);
+        }
+        return t;
+    }
     if ((b->op == TOKEN_PLUS || b->op == TOKEN_MINUS) && (type_is_pointer(left) || type_is_pointer(right))) {
         return check_pointer_arithmetic(c, b, left, right);
     }
@@ -1980,6 +2201,14 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   (is_literal_string, spec 3.8), to *u8.
 //   Otherwise "can't cast 'A' to 'B'".
 // - cast,trunc takes integers only: "cast,trunc only takes integers".
+// - Between an enum and an integer type, either way (spec 3.18): the
+//   integer cast between their integer types, so checked as it is, and
+//   cast,trunc takes them as it takes integers; whether the enum has a
+//   member of the value is never asked. An enum to itself is the same.
+//   Between two enum types there's none, checked or cast,trunc ("can't
+//   cast 'Small' to 'Mode'"): cast(Mode) cast(int) s says what's meant.
+//   A member without its enum takes T first, as where it meets T
+//   (check_convert).
 // A cast of a constant is a constant of T, but a cast to Any: a checked
 // cast's is the same number, a cast,trunc's is wrapped to T as at run time
 // (wrap_to).
@@ -1988,7 +2217,17 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
     Type *from = check_value(c, cast->value);
     if (!to || !from) return nullptr;
     Ast *value = cast->value;
-    bool integers = from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER;
+    if (from == &type_untyped_member) {
+        check_convert(c, value, to);
+        from = value->type;
+        if (!from) return nullptr;
+    }
+    if (from->kind == TYPE_ENUM && to->kind == TYPE_ENUM && from != to) {
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'", STR_ARG(type_name(c->arena, from)),
+                   STR_ARG(type_name(c->arena, to)));
+        return nullptr;
+    }
+    bool integers = type_integer_of(from) && type_integer_of(to);
     if (cast->is_trunc && !integers) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
@@ -2079,7 +2318,8 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         what = "a procedure";
         break;
     case AST_BUILTIN: what = "a procedure"; break;  // built into the language (spec 3.17)
-    case AST_STRUCT: report_type_as_value(c, name); return false;
+    case AST_STRUCT:
+    case AST_ENUM: report_type_as_value(c, name); return false;
     default: RIG_ASSERT(!"not a declaration");
     }
     diag_error(c->diag, name->pos, for_writing ? "can't assign to '" STR_FMT "': it's %s"
@@ -2111,6 +2351,9 @@ bool expr_is_place(Ast *e) {
     case AST_DEREF: return true;
     case AST_CONTEXT: return true;  // the current context, wherever it lies (spec 7.10)
     case AST_MEMBER: {
+        // An enum's member (Mode.FREE) is a constant, and its operand, the
+        // enum's name, has no type.
+        if (((Ast_Member *)e)->of_enum) return false;
         Type *t = ((Ast_Member *)e)->operand->type;
         return type_is_pointer(t) || (t->kind != TYPE_ARRAY && expr_is_place(((Ast_Member *)e)->operand));
     }
@@ -2132,7 +2375,9 @@ Ast_Name *constant_root(Ast *e) {
         }
         case AST_MEMBER: {
             // A struct's field: one reached through a pointer is elsewhere,
-            // and a sequence's .count and .data aren't its bytes.
+            // and a sequence's .count and .data aren't its bytes. An enum's
+            // member is a scalar constant, no data.
+            if (((Ast_Member *)e)->of_enum) return nullptr;
             Ast *operand = ((Ast_Member *)e)->operand;
             if (!operand->type || operand->type->kind != TYPE_STRUCT) return nullptr;
             e = operand;
@@ -2162,6 +2407,14 @@ bool is_place(Checker *c, Ast *e, bool for_writing) {
     case AST_NAME: return name_is_place(c, (Ast_Name *)e, for_writing);
     case AST_MEMBER: {
         Ast_Member *m = (Ast_Member *)e;
+        if (m->of_enum) {
+            // A constant, as a constant's name is (name_is_place).
+            diag_error(c->diag, m->start,
+                       for_writing ? "can't assign to '" STR_FMT "." STR_FMT "': it's an enum's member"
+                                   : "can't take the address of '" STR_FMT "." STR_FMT "': it's an enum's member",
+                       STR_ARG(m->of_enum->name), STR_ARG(m->name));
+            return false;
+        }
         if (m->operand->type->kind != TYPE_ARRAY) return is_place(c, m->operand, for_writing);
         if (for_writing) {
             diag_error(c->diag, m->pos, "can't assign to an array's '" STR_FMT "'", STR_ARG(m->name));
@@ -2443,7 +2696,31 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // folds, as a constant's name does: ORIGIN.y, LINE.b.y, Vec2.{5, 6}.y. An
 // aggregate field, or a pointer to a string literal's bytes, a procedure or
 // a type's description, stays a part of the data, read where it's used.
+//
+// e.x where e is a name, not in parentheses, that declares an enum (a
+// local of the name hides it, as it hides any top-level name) is its
+// member x (spec 3.18): Mode.FREE, a constant of the enum, m->of_enum the
+// enum and m->index the member's; "'Mode' has no member 'FRE'", at the
+// member's name, when it has none. The name is only looked up, not checked
+// as a value: an enum's name is a type, so it has no type of its own. In
+// parentheses, (Mode).FREE, it's an operand as any other, a type used as a
+// value.
 static Type *check_member(Checker *c, Ast_Member *m) {
+    Ast *operand = m->operand;
+    if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
+        Ast_Name *name = (Ast_Name *)operand;
+        Ast *decl = check_lookup(c, name->name);
+        if (decl && decl->kind == AST_ENUM) {
+            name->decl = decl;
+            Ast_Enum *e = (Ast_Enum *)decl;
+            m->of_enum = e;
+            Ast_Const *member = find_enum_member(c, e->declared, m->name, m->pos, &m->index);
+            if (!member) return nullptr;
+            m->is_constant = true;
+            m->constant = member->constant;
+            return e->declared;
+        }
+    }
     Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
     if (t->kind == TYPE_ARRAY || type_has_view_fields(t)) return check_sequence_member(c, m, t);
@@ -2487,9 +2764,10 @@ static void check_field_value(Checker *c, Ast *value, Type *field_type) {
 // is given none (null, as after an error) and isn't looked into, so
 // Vec2.{z = .{nope}} says only that Vec2 has no z: not that the inner
 // literal's type isn't known, nor, in a global, that it isn't known while
-// compiling.
+// compiling. Nor is a member without its enum, .FREE.
 static void check_stray_value(Checker *c, Ast *value) {
-    if (check_expression(c, value) == &type_untyped_literal) value->type = nullptr;
+    Type *t = check_expression(c, value);
+    if (t && type_waits_for_one(t)) value->type = nullptr;
 }
 
 // The values of a literal of struct type t (its type written, T.{...}, or
@@ -2612,6 +2890,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_INDEX: t = check_index(c, (Ast_Index *)e); break;
     case AST_RUN: t = check_run(c, (Ast_Run *)e); break;
     case AST_SPREAD: t = check_spread(c, (Ast_Spread *)e); break;
+    case AST_DOT_NAME: t = &type_untyped_member; break;  // check_convert gives it its enum
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;

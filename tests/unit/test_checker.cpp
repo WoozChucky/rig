@@ -3046,14 +3046,14 @@ TEST(structs_arent_compared) {
                            "    a += b;\n"
                            "    while b { }\n"
                            "}\n"),
-              "5:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
-              "6:12: '!=' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
+              "5:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'\n"
+              "6:12: '!=' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'\n"
               "7:12: '<' needs numbers, not 'Vec2'\n"
               "8:12: '+' needs numbers, not 'Vec2'\n"
               "9:8: the condition of 'if' must be a bool, not 'Vec2'\n"
               "10:10: '-' needs a number, not 'Vec2'\n"
               "11:10: '!' needs a bool, not 'Vec2'\n"
-              "12:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
+              "12:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'\n"
               "13:7: '+=' needs numbers, not 'Vec2'\n"
               "14:11: the condition of 'while' must be a bool, not 'Vec2'\n");
     arena_free(&a);
@@ -3730,7 +3730,7 @@ TEST(array_converts_to_view) {
               "6:18: a value of type '[3]int' doesn't convert to '[4]int' implicitly\n"
               "7:17: a value of type '[3]u8' doesn't convert to '[]int' implicitly\n"
               "8:16: a value of type '[3]int' doesn't convert to '*int' implicitly\n"
-              "9:15: '==' needs numbers, bools, pointers, procedure values or strings, not '[3]int'\n"
+              "9:15: '==' needs numbers, bools, pointers, procedure values, strings or enums, not '[3]int'\n"
               "10:10: can't cast '[3]u8' to '[]int'\n");
     arena_free(&a);
 }
@@ -4197,6 +4197,16 @@ TEST(declarations_needed_inside_others_nest_at_most_max_depth) {
     CHECK_STR(check_source(&a, joined(&a, "main :: () { v : S1001; }\n", chain_of(&a, holds, 1001, 1, -1), last)),
               needed_too_deeply(&a, 1003, "S0"));
     CHECK(builds(&a, joined(&a, last, chain_of(&a, holds, 1, 3000, -1), "main :: () { v : S3000; }\n")));
+    // Enums, each member's value needing the next enum's: an enum's levels
+    // are its deepest member's, here A's two (the cast, and the member .A
+    // in it), not Z's or Y's none. So E0 is at 0, E1 at 3, ..., E333 at
+    // 999, where a member with no value fits; E333 :: enum { ... E334.A ... }
+    // reaches 1001, so it is the one too many.
+    const char *enums = "E%lld :: enum { Z; A :: cast(int) E%lld.A; Y :: 1; }\n";
+    const char *main_e = "main :: () { x := E0.A; }\n";
+    CHECK(builds(&a, joined(&a, main_e, chain_of(&a, enums, 0, 332, 1), "E333 :: enum { A; }\n")));
+    CHECK_STR(check_source(&a, joined(&a, main_e, chain_of(&a, enums, 0, 333, 1), "E334 :: enum { A; }\n")),
+              needed_too_deeply(&a, 335, "E333"));
     // A circle longer than the limit is too deep before it's found to be
     // one: still one message, and no crash.
     CHECK_STR(check_source(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld;\n", 0, 1999, 1), "A2000 :: A0;\n")),
@@ -6038,33 +6048,49 @@ TEST(compiler_main_needs_a_body) {
     arena_free(&a);
 }
 
-// Issue #147: #if and the OS constants (spec 2.5, 4.9).
+// Issue #147: #if and the OS constants (spec 2.5, 4.9), and issue #221: OS
+// a constant of the predeclared enum Operating_System.
 
 TEST(os_constants_are_predeclared) {
-    // Untyped integer constants, visible everywhere as the program's own
-    // constants are: OS fits a u8, and a comparison of them folds.
+    // OS is a constant of the predeclared enum Operating_System, visible
+    // everywhere as the program's own constants are, without Preload: a
+    // comparison of it with a member folds. WINDOWS is 1 and LINUX 2.
     Arena a = arena_make();
-    const char *program = "main :: () { a : u8 = OS; b := OS_WINDOWS; c := OS_LINUX; "
-                          "if OS == OS_WINDOWS || OS == OS_LINUX {} }";
+    const char *program = "KNOWN :: OS == .WINDOWS || OS == .LINUX;\nmain :: () { }\n";
     CHECK_STR(check_source(&a, program), "");
     Checked c = check_src(&a, program);
-    Ast_If *branch = (Ast_If *)c.file->procs[0]->body->statements[3];
-    CHECK_EQ(branch->kind, AST_IF);
-    CHECK(branch->condition->is_constant);
-    CHECK_EQ(branch->condition->constant, 1);
-    Ast_Name *os_linux = (Ast_Name *)((Ast_Var *)local_named(&c, "c"))->value;
-    CHECK_EQ(os_linux->constant, 2);
-    CHECK_EQ(os_linux->decl->kind, AST_CONST);
+    Ast *known = global_named(&c, "KNOWN");
+    CHECK(known->is_constant);
+    CHECK_EQ(known->constant, 1);
+    CHECK_STR(type_name(&a, known->type), "bool");
+    Ast_Enum *system = c.file->operating_system;
+    CHECK(system != nullptr);
+    Ast_Binary *either = (Ast_Binary *)((Ast_Const *)known)->value;
+    Ast *os = ((Ast_Binary *)either->left)->left;
+    CHECK_EQ(os->kind, AST_NAME);
+    CHECK(os->type == system->declared);
+    CHECK_STR(type_name(&a, os->type), "Operating_System");
+    CHECK_EQ(system->declared->kind, TYPE_ENUM);
+    CHECK_EQ(system->members.count, 2);
+    CHECK_STR(system->members[0]->name, "WINDOWS");
+    CHECK_EQ(system->members[0]->constant, 1);
+    CHECK_STR(system->members[1]->name, "LINUX");
+    CHECK_EQ(system->members[1]->constant, 2);
+    // OS is no integer: only a cast gives its number.
+    CHECK_STR(check_source(&a, "main :: () { x : u8 = OS; }\n"),
+              "1:23: a value of type 'Operating_System' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, "main :: () { x : u8 = cast(u8) OS; }\n"), "");
     token_list_free(c.list);
     arena_free(&a);
 }
 
 // The value of N in `N :: OS;`, checked with the tree's system set to
-// `system`.
+// `system`: a constant of the tree's Operating_System.
 static u64 os_value_for(System system) {
     Arena a = arena_make();
     Checked c = check_src(&a, "N :: OS;\nmain :: () {}\n", system);
     RIG_ASSERT(c.ok);
+    RIG_ASSERT(c.file->operating_system && c.file->globals[0]->type == c.file->operating_system->declared);
     u64 value = c.file->globals[0]->constant;
     token_list_free(c.list);
     arena_free(&a);
@@ -6096,14 +6122,16 @@ static bool names_predeclared_os(Ast *value) {
 }
 
 TEST(a_top_level_declaration_of_os_is_refused) {
-    // At its name, whatever it declares; each says what the name is.
+    // At its name, whatever it declares; each says what the name is. A
+    // member's name, WINDOWS, is in no scope: an ordinary procedure's.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "OS :: 3;\nOS_WINDOWS : int;\nOS_LINUX :: () {}\nmain :: () {}\n"),
+    CHECK_STR(check_source(&a, "OS :: 3;\nOperating_System : int;\nWINDOWS :: () {}\nmain :: () {}\n"),
               "1:1: 'OS' is predeclared: it's the system the program is built for\n"
-              "2:1: 'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be\n"
-              "3:1: 'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be\n");
+              "2:1: 'Operating_System' is predeclared: it's the systems a program can be built for\n");
     CHECK_STR(check_source(&a, "OS :: struct { x: int; }\nmain :: () {}\n"),
               "1:1: 'OS' is predeclared: it's the system the program is built for\n");
+    CHECK_STR(check_source(&a, "Operating_System :: struct { }\nmain :: () {}\n"),
+              "1:1: 'Operating_System' is predeclared: it's the systems a program can be built for\n");
     // The refused declaration isn't declared: a use still means the constant.
     Checked c = check_src(&a, "OS :: 3;\nmain :: () { x := OS; }\n");
     CHECK(names_predeclared_os(((Ast_Var *)local_named(&c, "x"))->value));
@@ -6116,7 +6144,7 @@ TEST(a_broken_entry_named_os_isnt_declared) {
     // the constant (not the broken entry's unknown type, which would say
     // nothing).
     Arena a = arena_make();
-    const char *program = "OS :: 5 6;\nmain :: () { x : u8 = OS; }\n";
+    const char *program = "OS :: 5 6;\nmain :: () { x : Operating_System = OS; }\n";
     CHECK_STR(check_source(&a, program), "1:9: expected ';', found integer literal\n");
     Token_List *list = src(program);
     Ast_File *file = parse(list->tokens, &a, &list->diag);
@@ -6294,12 +6322,12 @@ TEST(if_directive_per_system) {
     // branch's error is said.
     Arena a = arena_make();
     const char *program = "main :: () {\n"
-                          "    #if OS == OS_WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
+                          "    #if OS == .WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
                           "}\n";
     CHECK_STR(check_source(&a, program, SYSTEM_WINDOWS),
-              "2:38: a value of type 'string' doesn't convert to 'int' implicitly\n");
+              "2:36: a value of type 'string' doesn't convert to 'int' implicitly\n");
     CHECK_STR(check_source(&a, program, SYSTEM_LINUX),
-              "2:62: a value of type 'string' doesn't convert to 'int' implicitly\n");
+              "2:60: a value of type 'string' doesn't convert to 'int' implicitly\n");
     arena_free(&a);
 }
 
@@ -6383,7 +6411,7 @@ static String decide_source(Arena *a, const char *text, System system, Ast_File 
 TEST(decides_a_top_level_if_by_the_system) {
     // Each system takes its own branch, whatever the host.
     Arena a = arena_make();
-    const char *program = "#if OS == OS_WINDOWS { A :: 1; } else { B :: 2; }";
+    const char *program = "#if OS == .WINDOWS { A :: 1; } else { B :: 2; }";
     Ast_File *file = nullptr;
     CHECK_STR(decide_source(&a, program, SYSTEM_WINDOWS, &file), "");
     Ast_If_Directive *first = file->ifs[0];
@@ -6644,7 +6672,7 @@ TEST(if_branch_names_and_the_rest) {
     // is, at the later of the two in load order, naming the earlier,
     // whichever is in the branch.
     Arena a = arena_make();
-    const char *both = "#if OS == OS_WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
+    const char *both = "#if OS == .WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
     CHECK_STR(check_loaded(&a, both, SYSTEM_WINDOWS), "");
     CHECK_STR(check_loaded(&a, both, SYSTEM_LINUX), "");
     CHECK_STR(check_loaded(&a, "X :: 0;\n#if true { X :: 1; }\nmain :: () {}\n", SYSTEM_NONE),
@@ -6667,6 +6695,80 @@ TEST(what_a_top_level_condition_worked_out_stays_for_check) {
                            SYSTEM_NONE),
               "3:5: the condition of '#if' must be known while compiling\n");
     arena_free(&a);
+}
+
+TEST(the_decider_and_the_checker_share_operating_system) {
+    // The predeclared Operating_System is made once per tree, the first time
+    // its names are declared, by the decider here: MINE, which the decider
+    // resolved with that type, is compared in main with the OS check()
+    // declares, of the same type, so it checks.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    Load_Options options = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"),
+                                  str("MINE :: OS;\n#if MINE == .WINDOWS { A :: 1; } else { A :: 2; }\n"
+                                      "main :: () { same := MINE == OS; }\n"),
+                                  &options);
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(file->operating_system != nullptr);
+    Ast *mine = top_level_named(file, "MINE");
+    CHECK(mine && mine->type == file->operating_system->declared);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(the_decider_and_the_checker_share_an_enum) {
+    // A program's enum gets its type once, when the decider first declares
+    // the top level's names: DEFAULT, which the decider resolved with
+    // Mode's type, is compared in main with Mode.B, which check() types
+    // with the same Mode, so it checks. The decider worked out B's value:
+    // DEFAULT == .B takes the first branch, DEFAULT == .A the other.
+    Arena a = arena_make();
+    const char *conditions[] = {"DEFAULT == .B", "DEFAULT == .A"};
+    for (s64 i = 0; i < 2; i++) {
+        Diagnostics d = {};
+        Load_Options options = {};
+        String program = string_printf(&a,
+                                       "Mode :: enum { A; B; }\nDEFAULT :: Mode.B;\n"
+                                       "#if %s { X :: 1; } else { X :: 2; }\n"
+                                       "main :: () { same := DEFAULT == Mode.B; x : [X]int; }\n",
+                                       conditions[i]);
+        Ast_File *file = load_program(&a, &d, str("test.rig"), program, &options);
+        check(file, &a, &d);
+        CHECK_STR(messages(&a, &d), "");
+        Ast *mode = top_level_named(file, "Mode");
+        Ast *fallback = top_level_named(file, "DEFAULT");
+        CHECK(mode && mode->kind == AST_ENUM && ((Ast_Enum *)mode)->declared);
+        CHECK(mode && fallback && fallback->type == ((Ast_Enum *)mode)->declared);
+        Ast *x = top_level_named(file, "X");
+        CHECK(x && x->is_constant);
+        CHECK_EQ(x ? x->constant : 0, i == 0 ? 1 : 2);
+        diag_free(&d);
+    }
+    arena_free(&a);
+    // An enum a top-level #if's branch declares is used as any of its
+    // names, from main, but can't decide another top-level #if, whether
+    // its branch was taken or not (branch_declares).
+    Arena b = arena_make();
+    CHECK_STR(check_loaded(&b,
+                           "#if OS == .WINDOWS || OS == .LINUX { E :: enum { A; B; } }\n"
+                           "main :: () { e : E = .B; }\n",
+                           SYSTEM_WINDOWS),
+              "");
+    CHECK_STR(check_loaded(&b,
+                           "#if OS == .WINDOWS || OS == .LINUX { E :: enum { A; B; } }\n"
+                           "#if E.B == .B {}\n"
+                           "main :: () {}\n",
+                           SYSTEM_WINDOWS),
+              "2:5: 'E' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK_STR(check_loaded(&b,
+                           "#if OS == .LINUX { E :: enum { A; B; } }\n"
+                           "#if E.B == .B {}\n"
+                           "main :: () {}\n",
+                           SYSTEM_WINDOWS),
+              "2:5: 'E' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    arena_free(&b);
 }
 
 TEST(top_level_if_directive_chains_of_10000_arms) {
@@ -7320,7 +7422,7 @@ struct Preload_Struct {
     const char *name;
     s64 size;
     s32 align;
-    Preload_Field fields[5];
+    Preload_Field fields[6];
     s64 field_count;
 };
 
@@ -7341,7 +7443,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         {"Type_Info",
          TYPE_INFO_SIZE,
          TYPE_INFO_ALIGN,
-         {{"tag", TYPE_INFO_TAG_OFFSET, "int"},
+         {{"tag", TYPE_INFO_TAG_OFFSET, "Type_Info_Tag"},
           {"size", TYPE_INFO_SIZE_OFFSET, "int"},
           {"alignment", TYPE_INFO_ALIGNMENT_OFFSET, "int"}},
          3},
@@ -7383,9 +7485,19 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
          TYPE_INFO_ALIGN,
          {{"info", 0, "Type_Info"},
           {"element_type", TYPE_INFO_ELEMENT_OFFSET, "*Type_Info"},
-          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "int"},
+          {"array_kind", TYPE_INFO_ARRAY_KIND_OFFSET, "Array_Kind"},
           {"count", TYPE_INFO_COUNT_OFFSET, "int"}},
          4},
+        {"Type_Info_Enum",
+         TYPE_INFO_ENUM_SIZE,
+         TYPE_INFO_ALIGN,
+         {{"info", 0, "Type_Info"},
+          {"name", TYPE_INFO_ENUM_NAME_OFFSET, "string"},
+          {"underlying", TYPE_INFO_ENUM_UNDERLYING_OFFSET, "*Type_Info"},
+          {"is_flags", TYPE_INFO_ENUM_IS_FLAGS_OFFSET, "bool"},
+          {"names", TYPE_INFO_ENUM_NAMES_OFFSET, "[]string"},
+          {"values", TYPE_INFO_ENUM_VALUES_OFFSET, "[]s64"}},
+         6},
         {"Any",
          ANY_SIZE,
          TYPE_INFO_ALIGN,
@@ -7417,31 +7529,48 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
             CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
         }
     }
-    // The tags, numbered as Jai's, and the array kinds: constants until
-    // enums.
+    // The tags, numbered as Jai's (ENUM is Jai's 11), and the array kinds:
+    // the members of Preload's enums Type_Info_Tag and Array_Kind, each
+    // over int, so a Type_Info's tag and a Type_Info_Array's array_kind
+    // are ints in memory, as lowering writes them.
     struct {
+        const char *enum_name;
         const char *name;
         s64 value;
-    } constants[] = {
-        {"TYPE_INFO_INTEGER", TYPE_INFO_INTEGER},
-        {"TYPE_INFO_FLOAT", TYPE_INFO_FLOAT},
-        {"TYPE_INFO_BOOL", TYPE_INFO_BOOL},
-        {"TYPE_INFO_STRING", TYPE_INFO_STRING},
-        {"TYPE_INFO_POINTER", TYPE_INFO_POINTER},
-        {"TYPE_INFO_PROCEDURE", TYPE_INFO_PROCEDURE},
-        {"TYPE_INFO_VOID", TYPE_INFO_VOID},
-        {"TYPE_INFO_STRUCT", TYPE_INFO_STRUCT},
-        {"TYPE_INFO_ARRAY", TYPE_INFO_ARRAY},
-        {"ARRAY_FIXED", ARRAY_FIXED},
-        {"ARRAY_VIEW", ARRAY_VIEW},
-        {"ARRAY_RESIZABLE", ARRAY_RESIZABLE},
+    } members[] = {
+        {"Type_Info_Tag", "INTEGER", TYPE_INFO_INTEGER},
+        {"Type_Info_Tag", "FLOAT", TYPE_INFO_FLOAT},
+        {"Type_Info_Tag", "BOOL", TYPE_INFO_BOOL},
+        {"Type_Info_Tag", "STRING", TYPE_INFO_STRING},
+        {"Type_Info_Tag", "POINTER", TYPE_INFO_POINTER},
+        {"Type_Info_Tag", "PROCEDURE", TYPE_INFO_PROCEDURE},
+        {"Type_Info_Tag", "VOID", TYPE_INFO_VOID},
+        {"Type_Info_Tag", "STRUCT", TYPE_INFO_STRUCT},
+        {"Type_Info_Tag", "ARRAY", TYPE_INFO_ARRAY},
+        {"Type_Info_Tag", "ENUM", TYPE_INFO_ENUM},
+        {"Array_Kind", "FIXED", ARRAY_FIXED},
+        {"Array_Kind", "VIEW", ARRAY_VIEW},
+        {"Array_Kind", "RESIZABLE", ARRAY_RESIZABLE},
     };
-    for (s64 i = 0; i < (s64)(sizeof constants / sizeof constants[0]); i++) {
-        Ast *k = top_level_named(tree, constants[i].name);
-        CHECK_EQ(k->kind, AST_CONST);
-        CHECK(k->is_constant);
-        CHECK_EQ(k->constant, constants[i].value);
+    for (s64 i = 0; i < (s64)(sizeof members / sizeof members[0]); i++) {
+        Ast *decl = top_level_named(tree, members[i].enum_name);
+        CHECK_EQ(decl->kind, AST_ENUM);
+        if (decl->kind != AST_ENUM) continue;
+        Ast_Enum *e = (Ast_Enum *)decl;
+        CHECK_EQ(e->declared->underlying, &type_int);
+        s32 index = enum_member_index(e, str(members[i].name));
+        CHECK(index >= 0);
+        if (index < 0) continue;
+        Ast_Const *member = e->members[index];
+        CHECK(member->is_constant);
+        CHECK_EQ((s64)member->constant, members[i].value);
     }
+    // Every member is one the list names: no tag or kind types.h doesn't
+    // know.
+    Ast *tags = top_level_named(tree, "Type_Info_Tag");
+    Ast *kinds = top_level_named(tree, "Array_Kind");
+    CHECK(tags->kind == AST_ENUM && ((Ast_Enum *)tags)->members.count == 10);
+    CHECK(kinds->kind == AST_ENUM && ((Ast_Enum *)kinds)->members.count == 3);
     // Declaring them describes nothing: a program that uses no type
     // information lowers as it did, with no description in its data.
     CHECK(!contains(ir_print(&a, lower_with_preload(&a, "main :: () { }\n")), "type_info"));
@@ -7786,6 +7915,72 @@ TEST(a_run_describes_types_declared_after_it) {
         CHECK(k->is_constant);
         CHECK_EQ(k->constant, values[i]);
     }
+    arena_free(&a);
+}
+
+TEST(a_run_describes_an_enum_declared_after_it) {
+    // Issue #221: a #run that describes an enum declared after it, reached
+    // only through a pointer's description and never by a member, has the
+    // enum's values worked out by its walk (walk_described), before the
+    // enum's own turn, so the interpreter's description holds them, and
+    // its integer type's description too. A member's value that describes
+    // its own enum is a circle, said once at the enum's name.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "SECOND :: #run second(type_info(*Later));\n"
+                                 "SIZE :: #run underlying_size(type_info(*Later));\n"
+                                 "enum_of :: (t: *Type_Info) -> *Type_Info_Enum {\n"
+                                 "    return cast(*Type_Info_Enum) (cast(*Type_Info_Pointer) t).pointer_to;\n"
+                                 "}\n"
+                                 "second :: (t: *Type_Info) -> s64 { return enum_of(t).values[1]; }\n"
+                                 "underlying_size :: (t: *Type_Info) -> int { return enum_of(t).underlying.size; }\n"
+                                 "Later :: enum u16 { FIRST :: 3; SECOND; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    const char *names[] = {"SECOND", "SIZE"};
+    s64 values[] = {4, 2};
+    for (s64 i = 0; i < 2; i++) {
+        Ast *k = top_level_named(tree, names[i]);
+        CHECK_EQ(k->kind, AST_CONST);
+        CHECK(k->is_constant);
+        CHECK_EQ(k->constant, values[i]);
+    }
+    CHECK_STR(check_with_preload(&a,
+                                 "Self :: enum { A :: #run f(); }\n"
+                                 "f :: () -> int { t := type_info(*Self); return 1; }\n"
+                                 "main :: () { }\n"),
+              "1:1: 'Self' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(a_run_doesnt_describe_an_enum_with_an_unknown_member) {
+    // Issue #221: an enum whose member's value had a mistake, declared
+    // before the #run or after it, or whose values were a circle, before a
+    // later #run that describes it, has members without a value, which its
+    // description would need: the #run's walk fails (walk_enum), and only
+    // the enum's own mistake is said.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "Bad :: enum u8 { A :: 300; B; }\n"
+                                 "X :: #run g();\n"
+                                 "g :: () -> int { t := type_info(Bad); return 0; }\n"
+                                 "main :: () { }\n"),
+              "1:23: 300 doesn't fit in 'u8'\n");
+    CHECK_STR(check_with_preload(&a,
+                                 "X :: #run g();\n"
+                                 "g :: () -> int { t := type_info(Bad); return 0; }\n"
+                                 "Bad :: enum u8 { A :: 300; B; }\n"
+                                 "main :: () { }\n"),
+              "3:23: 300 doesn't fit in 'u8'\n");
+    CHECK_STR(check_with_preload(&a,
+                                 "Self :: enum { A :: #run f(); B; }\n"
+                                 "f :: () -> int { t := type_info(*Self); return 1; }\n"
+                                 "X :: #run g();\n"
+                                 "g :: () -> int { t := type_info(Self); return 0; }\n"
+                                 "main :: () { }\n"),
+              "1:1: 'Self' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -8751,38 +8946,38 @@ TEST(the_temporary_allocator_while_compiling) {
     // Preload's temporary allocator, run by the compile-time world's #runs,
     // which share its storage, in declaration order: a resize of the last
     // allocation in place, one of an earlier allocation moved and copied, a
-    // request larger than a page given a page of its own, and FREE_ALL,
+    // request larger than a page given a page of its own, and .FREE_ALL,
     // which gives the pages back and keeps the high water mark.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  "T :: TEMPORARY_ALLOCATOR;\n"
                                  "in_place :: () -> bool {\n"
-                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
-                                 "    p := T.proc(ALLOCATE, 10, 0, null, T.data);\n"
-                                 "    q := T.proc(RESIZE, 100, 10, p, T.data);\n"
+                                 "    T.proc(.FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    p := T.proc(.ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    q := T.proc(.RESIZE, 100, 10, p, T.data);\n"
                                  "    return q == p && context.temporary_storage.occupied == 100;\n"
                                  "}\n"
                                  "moved :: () -> bool {\n"
-                                 "    p := cast(*u8) T.proc(ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    p := cast(*u8) T.proc(.ALLOCATE, 10, 0, null, T.data);\n"
                                  "    p.* = 42;\n"
-                                 "    T.proc(ALLOCATE, 1, 0, null, T.data);\n"
-                                 "    q := cast(*u8) T.proc(RESIZE, 20, 10, p, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 1, 0, null, T.data);\n"
+                                 "    q := cast(*u8) T.proc(.RESIZE, 20, 10, p, T.data);\n"
                                  "    return q != p && q.* == 42;\n"
                                  "}\n"
                                  "page :: () -> int {\n"
-                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
-                                 "    T.proc(ALLOCATE, 10, 0, null, T.data);\n"
-                                 "    T.proc(ALLOCATE, 40000, 0, null, T.data);\n"
+                                 "    T.proc(.FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 40000, 0, null, T.data);\n"
                                  "    return context.temporary_storage.occupied;\n"
                                  "}\n"
                                  "after_reset :: () -> bool {\n"
-                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    T.proc(.FREE_ALL, 0, 0, null, T.data);\n"
                                  "    s := context.temporary_storage;\n"
                                  "    return s.occupied == 0 && s.overflow_pages == null && s.high_water_mark >= 72768;\n"
                                  "}\n"
                                  "left :: () -> int {\n"
-                                 "    T.proc(ALLOCATE, 100, 0, null, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 100, 0, null, T.data);\n"
                                  "    return context.temporary_storage.occupied;\n"
                                  "}\n"
                                  "IN_PLACE :: #run in_place();\n"
@@ -9359,6 +9554,329 @@ TEST(a_default_after_the_dots_counts_its_depth) {
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK_EQ(c.file->procs[3]->defaults_depth, c.file->procs[4]->defaults_depth);
     CHECK(c.file->procs[4]->defaults_depth > c.file->procs[5]->defaults_depth);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #221: enums and enum_flags (spec 3.18).
+
+// Whether `decl` is an enum whose type is over the integer type `integer`
+// (as messages name it), flags or not, its members' values `values` in
+// order, each member a constant of the integer type with a value node.
+static void check_enum_values_are(Arena *a, Ast *decl, const char *integer, bool is_flags, const u64 *values,
+                                  s64 count) {
+    CHECK(decl->kind == AST_ENUM);
+    if (decl->kind != AST_ENUM) return;
+    Ast_Enum *e = (Ast_Enum *)decl;
+    Type *t = e->declared;
+    CHECK(t && t->kind == TYPE_ENUM);
+    if (!t) return;
+    CHECK(string_eq(type_name(a, t), e->name));
+    CHECK_STR(type_name(a, t->underlying), integer);
+    CHECK_EQ(t->size, t->underlying->size);
+    CHECK_EQ(t->align, t->underlying->align);
+    CHECK_EQ(t->is_signed, t->underlying->is_signed);
+    CHECK_EQ(t->is_flags, is_flags);
+    CHECK(t->enum_decl == e);
+    CHECK_EQ(e->members.count, count);
+    for (s64 i = 0; i < e->members.count && i < count; i++) {
+        Ast_Const *member = e->members[i];
+        CHECK(member->type == t->underlying);
+        CHECK(member->is_constant);
+        CHECK_EQ(member->constant, values[i]);
+        CHECK(member->value != nullptr);
+    }
+}
+
+TEST(enum_values_count_up) {
+    // An enum's values start at 0 and go up by one, from a value set too;
+    // a flags type's are the lowest power of two above every value before,
+    // from 1. Earlier members are plain constants of the integer type in
+    // the body (LAST, ALL).
+    // An earlier member hides an outer name of the same in the values
+    // after it (Hide's NEXT), and outside the body it's no name at all
+    // (OUTSIDE is the outer LIMIT). ~ on a flags constant wraps at its
+    // integer type's width (NOT_ALL), as ~ on a member waiting for its
+    // flags type does once it meets it (NOT_P). Values count up from a
+    // negative one too (N8's, as their bits). A member without a value
+    // after one whose value is unknown is unknown too, and says nothing
+    // more (Full's C, F's B).
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { A; B; C :: 10; D; }\n"
+                              "Small :: enum u8 { X :: 250; Y; LAST :: Y + 3; }\n"
+                              "N8 :: enum s8 { A :: -2; B; C; }\n"
+                              "Look :: enum_flags u8 { P; Q; R :: 16; S; ALL :: P | Q | R | S; T; }\n"
+                              "LIMIT :: 10;\n"
+                              "Hide :: enum { FIRST :: LIMIT; LIMIT :: 3; NEXT :: LIMIT + 1; }\n"
+                              "OUTSIDE :: LIMIT;\n"
+                              "NOT_ALL :: ~Look.ALL;\n"
+                              "NOT_P :: cast(Look) ~.P;\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const u64 hide[] = {10, 3, 4};
+    check_enum_values_are(&a, top_level_named(c.file, "Hide"), "int", false, hide, 3);
+    Ast *outside = top_level_named(c.file, "OUTSIDE");
+    CHECK(outside->is_constant);
+    CHECK_EQ(outside->constant, 10);
+    Ast *not_all = top_level_named(c.file, "NOT_ALL");
+    CHECK_STR(type_name(&a, not_all->type), "Look");
+    CHECK(not_all->is_constant);
+    CHECK_EQ(not_all->constant, 204);
+    Ast *not_p = top_level_named(c.file, "NOT_P");
+    CHECK_STR(type_name(&a, not_p->type), "Look");
+    CHECK(not_p->is_constant);
+    CHECK_EQ(not_p->constant, 254);
+    const u64 mode[] = {0, 1, 10, 11};
+    check_enum_values_are(&a, top_level_named(c.file, "Mode"), "int", false, mode, 4);
+    const u64 small[] = {250, 251, 254};
+    check_enum_values_are(&a, top_level_named(c.file, "Small"), "u8", false, small, 3);
+    const u64 n8[] = {(u64)-2, (u64)-1, 0};
+    check_enum_values_are(&a, top_level_named(c.file, "N8"), "s8", false, n8, 3);
+    const u64 look[] = {1, 2, 16, 32, 51, 64};
+    check_enum_values_are(&a, top_level_named(c.file, "Look"), "u8", true, look, 6);
+    Type *mode_type = ((Ast_Enum *)top_level_named(c.file, "Mode"))->declared;
+    CHECK_EQ(mode_type->size, 8);
+    CHECK(mode_type->is_signed);
+    Type *small_type = ((Ast_Enum *)top_level_named(c.file, "Small"))->declared;
+    CHECK_EQ(small_type->size, 1);
+    CHECK(!small_type->is_signed);
+    token_list_free(c.list);
+    Checked unknown = check_src(&a, "Full :: enum u8 { A :: 255; B; C; }\n"
+                                    "F :: enum_flags u8 { A :: 300; B; }\n"
+                                    "main :: () { }\n");
+    CHECK_STR(messages(&a, &unknown.list->diag),
+              "1:29: 256 doesn't fit in 'u8'\n"
+              "2:27: 300 doesn't fit in 'u8'\n");
+    CHECK(!((Ast_Enum *)top_level_named(unknown.file, "Full"))->members[2]->is_constant);
+    CHECK(!((Ast_Enum *)top_level_named(unknown.file, "F"))->members[1]->is_constant);
+    token_list_free(unknown.list);
+    CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
+                               "main :: () { x := A; }\n"),
+              "2:19: unknown identifier 'A'\n");
+    arena_free(&a);
+}
+
+TEST(an_enums_value_may_not_need_its_enum) {
+    // A's value needs B's, which needs A's: a circle, said once, at the
+    // enum whose values were under way when it closed; every member in it
+    // is then unknown, and says nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "A :: enum { X :: cast(int) B.Y; }\n"
+                               "B :: enum { Y :: cast(int) A.X; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'A' is defined in terms of itself\n");
+    // Two enums that name each other's members are each worked out whole:
+    // a circle, though B needs nothing of E.
+    CHECK_STR(check_source(&a, "E :: enum { A :: cast(int) F.B; }\n"
+                               "F :: enum { B :: 3; C :: cast(int) E.A; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    // So is a member reached through a global, and, in its own body, a
+    // member not worked out yet, its own included.
+    CHECK_STR(check_source(&a, "E :: enum { A :: 1; B :: G; }\n"
+                               "G :: cast(int) E.A;\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "E :: enum { A :: cast(int) E.A; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "E :: enum { A :: cast(int) E.B; B; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(an_enums_body_names_its_earlier_members_with_it) {
+    // In its own body, a member worked out already is a constant of the
+    // enum, as it is outside: no circle. A name that's no member's is
+    // said as outside.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "F :: enum { Q :: 3; P :: cast(int) F.Q + 1; R :: cast(int) cast(F) .Q * 2; }\n"
+                              "Look :: enum_flags u8 { A; B; AB :: cast(u8) (Look.A | Look.B); }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Enum *f = (Ast_Enum *)top_level_named(c.file, "F");
+    CHECK_EQ(f->kind, AST_ENUM);
+    if (f->kind == AST_ENUM) {
+        CHECK(f->members[1]->is_constant && f->members[1]->constant == 4);
+        CHECK(f->members[2]->is_constant && f->members[2]->constant == 6);
+    }
+    Ast_Enum *look = (Ast_Enum *)top_level_named(c.file, "Look");
+    CHECK_EQ(look->kind, AST_ENUM);
+    if (look->kind == AST_ENUM) CHECK(look->members[2]->is_constant && look->members[2]->constant == 3);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "F :: enum { Q :: 3; P :: cast(int) F.Z; }\n"
+                               "main :: () { }\n"),
+              "1:38: 'F' has no member 'Z'\n");
+    arena_free(&a);
+}
+
+TEST(members_without_their_enum_take_the_type_they_meet) {
+    // .NAME takes the enum it meets, where .{...} would take a struct: a
+    // typed declaration, an assignment, an argument (..T ones too) and a
+    // default, a return, a field and an element of a literal, a cast; and
+    // the other side of == or != from an enum value, the other operand of
+    // | & ^ from a flags value (.A | .B and ~.B waiting for the type, as
+    // 1 | 2 is untyped). 0 converts to a flags type.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { ALLOCATE; RESIZE; FREE; }\n"
+                              "Look :: enum_flags { A; B; C; }\n"
+                              "R :: struct { mode: Mode; look: Look; }\n"
+                              "take :: (m: Mode, k: Mode = .FREE) -> Mode { return .RESIZE; }\n"
+                              "many :: (ms: ..Mode) -> int { return 0; }\n"
+                              "main :: () {\n"
+                              "    m : Mode = .FREE;\n"
+                              "    m = .ALLOCATE;\n"
+                              "    n := take(.RESIZE);\n"
+                              "    r := R.{.FREE, .A | .C};\n"
+                              "    q := R.{look = ~.B};\n"
+                              "    f : Look = .A | .B;\n"
+                              "    f |= .C;\n"
+                              "    f &= ~.B;\n"
+                              "    seen := (f & .A) != 0;\n"
+                              "    same := m == .FREE || .RESIZE != m;\n"
+                              "    g := f == .A | .C;\n"
+                              "    c := cast(Mode) .FREE;\n"
+                              "    all := Mode.[.ALLOCATE, .FREE];\n"
+                              "    empty : Look = 0;\n"
+                              "    zero : Look = 1 - 1;\n"
+                              "    h : Look = 0 | .B;\n"
+                              "    k : Look = .B | 0;\n"
+                              "    lt := m < n;\n"
+                              "    counted := many(.ALLOCATE, .FREE);\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "m"), "Mode");
+    CHECK_STR(type_of(&a, &c, "n"), "Mode");
+    CHECK_STR(type_of(&a, &c, "c"), "Mode");
+    CHECK_STR(type_of(&a, &c, "f"), "Look");
+    CHECK_STR(type_of(&a, &c, "seen"), "bool");
+    CHECK_STR(type_of(&a, &c, "same"), "bool");
+    CHECK_STR(type_of(&a, &c, "g"), "bool");
+    CHECK_STR(type_of(&a, &c, "all"), "[2]Mode");
+    // The | binds tighter than the ==: its operands took f's type, and
+    // folded, A | C being 5.
+    Ast_Binary *equal = (Ast_Binary *)((Ast_Var *)local_named(&c, "g"))->value;
+    CHECK_STR(type_name(&a, equal->right->type), "Look");
+    CHECK(equal->right->is_constant);
+    CHECK_EQ(equal->right->constant, 5);
+    Ast *empty = ((Ast_Var *)local_named(&c, "empty"))->value;
+    CHECK_STR(type_name(&a, empty->type), "Look");
+    CHECK(empty->is_constant);
+    CHECK_EQ(empty->constant, 0);
+    Ast *zero = ((Ast_Var *)local_named(&c, "zero"))->value;
+    CHECK_STR(type_name(&a, zero->type), "Look");
+    CHECK(zero->is_constant);
+    CHECK_EQ(zero->constant, 0);
+    // A member and the untyped 0 wait for the flags type together, as two
+    // members do.
+    const char *with_zero[] = {"h", "k"};
+    for (const char *name : with_zero) {
+        Ast *value = ((Ast_Var *)local_named(&c, name))->value;
+        CHECK_STR(type_name(&a, value->type), "Look");
+        CHECK(value->is_constant);
+        CHECK_EQ(value->constant, 2);
+    }
+    CHECK_STR(type_of(&a, &c, "lt"), "bool");
+    // Each of a ..Mode parameter's arguments takes Mode.
+    Ast_Call *call = (Ast_Call *)((Ast_Var *)local_named(&c, "counted"))->value;
+    RIG_ASSERT(call->kind == AST_CALL && call->args.count == 2);
+    for (s64 i = 0; i < 2; i++) {
+        CHECK_STR(type_name(&a, call->args[i]->type), "Mode");
+        CHECK(call->args[i]->is_constant);
+        CHECK_EQ(call->args[i]->constant, (u64)(i * 2));
+    }
+    // |= and &= convert their values to f's type, ~.B folded at int's width.
+    Array<Ast *> body = c.file->procs[c.file->procs.count - 1]->body->statements;
+    RIG_ASSERT(body[6]->kind == AST_ASSIGN && body[7]->kind == AST_ASSIGN);
+    Ast *or_value = ((Ast_Assign *)body[6])->value;
+    CHECK_STR(type_name(&a, or_value->type), "Look");
+    CHECK(or_value->is_constant);
+    CHECK_EQ(or_value->constant, 4);
+    Ast *and_value = ((Ast_Assign *)body[7])->value;
+    CHECK_STR(type_name(&a, and_value->type), "Look");
+    CHECK(and_value->is_constant);
+    CHECK_EQ(and_value->constant, ~(u64)2);
+    // A member met by its enum is that member, a constant.
+    Ast *free = ((Ast_Var *)local_named(&c, "m"))->value;
+    CHECK(free->kind == AST_DOT_NAME);
+    CHECK(free->is_constant);
+    CHECK_EQ(free->constant, 2);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(enums_cast_to_and_from_integers) {
+    // Casts between an enum and any integer type are the integer casts of
+    // its integer type: a constant must fit, cast,trunc wraps; between two
+    // enum types there's none, checked or cast,trunc.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { A; B; }\n"
+                              "Small :: enum u8 { X; Y :: 200; }\n"
+                              "main :: () {\n"
+                              "    m := cast(Mode) 7;\n"
+                              "    i := cast(int) Small.Y;\n"
+                              "    s := cast(Small) i;\n"
+                              "    t := cast,trunc(Small) 300;\n"
+                              "    u : u8 = cast(u8) s;\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "m"), "Mode");
+    CHECK_STR(type_of(&a, &c, "i"), "int");
+    CHECK_STR(type_of(&a, &c, "s"), "Small");
+    Ast *t = ((Ast_Var *)local_named(&c, "t"))->value;
+    CHECK_STR(type_name(&a, t->type), "Small");
+    CHECK(t->is_constant);
+    CHECK_EQ(t->constant, 44);
+    Ast *i = ((Ast_Var *)local_named(&c, "i"))->value;
+    CHECK(i->is_constant);
+    CHECK_EQ(i->constant, 200);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "Small :: enum u8 { X; }\n"
+                               "main :: () { s := cast(Small) 300; }\n"),
+              "2:19: 300 doesn't fit in 'Small'\n");
+    CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
+                               "Small :: enum u8 { X; }\n"
+                               "main :: () { m := cast(Mode) Small.X; }\n"),
+              "3:19: can't cast 'Small' to 'Mode'\n");
+    CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
+                               "Small :: enum u8 { X; }\n"
+                               "main :: () { m := cast,trunc(Mode) Small.X; }\n"),
+              "3:19: can't cast 'Small' to 'Mode'\n");
+    arena_free(&a);
+}
+
+TEST(enum_members_are_constants) {
+    // A member is a constant of its enum: a constant's value, a global's
+    // (written with its enum or without, and | of flags ones), an #if's
+    // condition, and, cast to an integer, an array's count.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { A; B :: 4; }\n"
+                              "Look :: enum_flags { A; B; }\n"
+                              "DEFAULT :: Mode.B;\n"
+                              "G : Mode = .B;\n"
+                              "H := Mode.B;\n"
+                              "L : Look = .A | .B;\n"
+                              "main :: () {\n"
+                              "    #if DEFAULT == .B { k := 1; }\n"
+                              "    n : [cast(int) Mode.B]u8;\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *defaulted = top_level_named(c.file, "DEFAULT");
+    CHECK_STR(type_name(&a, defaulted->type), "Mode");
+    CHECK(defaulted->is_constant);
+    CHECK_EQ(defaulted->constant, 4);
+    const char *globals[] = {"G", "H", "L"};
+    const char *types[] = {"Mode", "Mode", "Look"};
+    const u64 values[] = {4, 4, 3};
+    for (s64 i = 0; i < 3; i++) {
+        Ast *value = ((Ast_Var *)top_level_named(c.file, globals[i]))->value;
+        CHECK_STR(type_name(&a, value->type), types[i]);
+        CHECK(value->is_constant);
+        CHECK_EQ(value->constant, values[i]);
+    }
+    CHECK_STR(type_of(&a, &c, "k"), "int");
+    CHECK_STR(type_of(&a, &c, "n"), "[4]u8");
     token_list_free(c.list);
     arena_free(&a);
 }

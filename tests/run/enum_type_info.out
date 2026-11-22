@@ -1,0 +1,8 @@
+ENUM 11 Small 1 false
+true INTEGER
+A=0 B=5 C=6 
+true [1, 2] true
+[] [] 8 3
+ENUM Operating_System ["WINDOWS", "LINUX"] [1, 2] true false
+WINDOWS LINUX {system = LINUX}
+VIEW true 8

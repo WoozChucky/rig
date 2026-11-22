@@ -9,15 +9,15 @@ free :: (memory: *void) #foreign libc;
 // 8 ints from the allocator, written, grown to 16 with the first 8 kept
 // and the new 8 written too, and given back: true when every step worked.
 round_trip :: (a: Allocator) -> bool {
-    numbers : *int = a.proc(ALLOCATE, 8 * size_of(int), 0, null, a.data);
+    numbers : *int = a.proc(.ALLOCATE, 8 * size_of(int), 0, null, a.data);
     if numbers == null { return false; }
     for 0..7 { (numbers + it).* = it; }
-    numbers = a.proc(RESIZE, 16 * size_of(int), 8 * size_of(int), numbers, a.data);
+    numbers = a.proc(.RESIZE, 16 * size_of(int), 8 * size_of(int), numbers, a.data);
     if numbers == null { return false; }
     for 8..15 { (numbers + it).* = it; }
     kept := true;
     for 0..15 { if (numbers + it).* != it { kept = false; } }
-    a.proc(FREE, 0, 0, numbers, a.data);
+    a.proc(.FREE, 0, 0, numbers, a.data);
     return kept;
 }
 
@@ -28,9 +28,10 @@ main :: () {
     if round_trip(HEAP_ALLOCATOR) { puts("allocated, resized and freed on the heap"); }
     if WHILE_COMPILING { puts("and while compiling"); }
     a := HEAP_ALLOCATOR;
-    p := a.proc(ALLOCATE, 64, 0, null, a.data);
+    p := a.proc(.ALLOCATE, 64, 0, null, a.data);
     if p != null { puts("64 bytes from the heap"); }
     free(p);
-    if a.proc(FREE_ALL, 0, 0, null, a.data) == null { puts("FREE_ALL gives null"); }
-    if ALLOCATE == 0 && RESIZE == 1 && FREE == 2 && FREE_ALL == 3 { puts("the modes are 0 to 3"); }
+    if a.proc(.FREE_ALL, 0, 0, null, a.data) == null { puts("FREE_ALL gives null"); }
+    if cast(int) Allocator_Mode.ALLOCATE == 0 && cast(int) Allocator_Mode.RESIZE == 1 && cast(int) Allocator_Mode.FREE == 2 &&
+       cast(int) Allocator_Mode.FREE_ALL == 3 { puts("the modes are 0 to 3"); }
 }

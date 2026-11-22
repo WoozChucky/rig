@@ -6,7 +6,7 @@ printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 // The heap under another name, so a context holding it can be told from
 // the default one.
-marked_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+marked_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }
 

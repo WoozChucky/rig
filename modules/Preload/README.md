@@ -22,11 +22,11 @@ Every name Preload declares for its own use starts with two underscores (`__mall
 
 ### The allocator
 
-An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. Preload holds the shape, the modes and the heap, so every program has them; Basic (`modules/Basic`) adds the helpers `alloc`, `resize`, `free` and `free_all`, an arena and a pool, all over these.
+An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, an `Allocator_Mode`: `.ALLOCATE`, `.RESIZE`, `.FREE` or `.FREE_ALL`. Preload holds the shape, the modes and the heap, so every program has them; Basic (`modules/Basic`) adds the helpers `alloc`, `resize`, `free` and `free_all`, an arena and a pool, all over these.
 
-- `ALLOCATE`, `RESIZE`, `FREE`, `FREE_ALL`: the modes, 0 to 3.
-- `Allocator`: `proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`. The procedure is called as `proc(mode, size, old_size, old_memory, data)`: `ALLOCATE` gives `size` bytes, or null; `RESIZE` gives `old_memory`, which holds `old_size` bytes, made `size` bytes long, moved or not, its first bytes kept, or null with `old_memory` as it was; `FREE` gives `old_memory` back and `FREE_ALL` everything the allocator gave, each returning null.
-- `heap_allocator_proc`, `HEAP_ALLOCATOR`: C's heap, through Preload's own `__malloc`, `__realloc` and `__free`. Its memory is aligned for any type, as C's `malloc` aligns it. `FREE_ALL` does nothing and gives null: the heap doesn't know what it gave, so each piece goes back with `FREE`.
+- `Allocator_Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }`: the modes (spec 3.18), 0 to 3, over `int`. A call writes `.FREE` where the mode's type is known, as an allocator procedure's parameter is, and Basic's `print` writes a mode by its name.
+- `Allocator`: `proc: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`. The procedure is called as `proc(mode, size, old_size, old_memory, data)`: `.ALLOCATE` gives `size` bytes, or null; `.RESIZE` gives `old_memory`, which holds `old_size` bytes, made `size` bytes long, moved or not, its first bytes kept, or null with `old_memory` as it was; `.FREE` gives `old_memory` back and `.FREE_ALL` everything the allocator gave, each returning null.
+- `heap_allocator_proc`, `HEAP_ALLOCATOR`: C's heap, through Preload's own `__malloc`, `__realloc` and `__free`. Its memory is aligned for any type, as C's `malloc` aligns it. `.FREE_ALL` does nothing and gives null: the heap doesn't know what it gave, so each piece goes back with `.FREE`.
 
 Calling an allocator's procedure directly asks it for exactly what it's given: the heap's passes a size of 0, or a null to resize or free, on to C, whose answer is C's business (what `malloc` and `realloc` give for 0 is left to each C library). Basic's `alloc`, `resize`, `free` and `free_all` settle those edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free.
 
@@ -35,9 +35,9 @@ puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {
     a := HEAP_ALLOCATOR;
-    p := a.proc(ALLOCATE, 64, 0, null, a.data);
+    p := a.proc(.ALLOCATE, 64, 0, null, a.data);
     if p != null { puts("64 bytes from the heap"); }
-    a.proc(FREE, 0, 0, p, a.data);
+    a.proc(.FREE, 0, 0, p, a.data);
 }
 ```
 
@@ -49,27 +49,29 @@ main :: () {
 
 There is one description per type, so `a.type == type_info(int)` tells types apart by address. `int` and `s64` are two types with two descriptions, the same in all but their addresses; `float` is `float32`. The compiler writes the descriptions in the program's read-only data, only for the types the program uses and those they reach, and in the interpreter's memory for `#run`. Writing one is a memory error no check catches (spec 8.6).
 
-A `Type_Info`'s `tag` is one of these tags, which are numbered as Jai's are:
+A `Type_Info`'s `tag` is a member of the enum `Type_Info_Tag` (spec 3.18), over `int`, its members numbered as Jai's tags are:
 
-- `TYPE_INFO_INTEGER` 0, `TYPE_INFO_FLOAT` 1, `TYPE_INFO_BOOL` 2, `TYPE_INFO_STRING` 3, `TYPE_INFO_POINTER` 4, `TYPE_INFO_PROCEDURE` 5, `TYPE_INFO_VOID` 6, `TYPE_INFO_STRUCT` 7, `TYPE_INFO_ARRAY` 8.
+- `INTEGER` 0, `FLOAT` 1, `BOOL` 2, `STRING` 3, `POINTER` 4, `PROCEDURE` 5, `VOID` 6, `STRUCT` 7, `ARRAY` 8, `ENUM` 11 (Jai's number; the ones between are kinds of Jai's that Rig doesn't have).
+
+A tag is written `Type_Info_Tag.STRUCT`, or `.STRUCT` where its type is known: `t.tag == .STRUCT`.
 
 Every description starts with a `Type_Info`. Each kind's struct holds it as its first field, `info`, so a `*Type_Info` whose tag says the kind is cast to the kind's struct. Floats, `bool`, `string` and `void` have the plain `Type_Info`.
 
 - `Type_Info`:
-  - `tag: int`: the kind, one of the tags.
+  - `tag: Type_Info_Tag`: the kind.
   - `size: int`, `alignment: int`: the type's size and alignment in bytes (spec 3.11); `void`'s are 0 and 1. A float's size says which float it is.
-- `Type_Info_Integer` (`TYPE_INFO_INTEGER`, for `s8` to `u64` and `int`):
+- `Type_Info_Integer` (`.INTEGER`, for `s8` to `u64` and `int`):
   - `info: Type_Info`.
   - `signed: bool`: whether the integer type is signed.
-- `Type_Info_Pointer` (`TYPE_INFO_POINTER`):
+- `Type_Info_Pointer` (`.POINTER`):
   - `info: Type_Info`.
   - `pointer_to: *Type_Info`: what it points at; `void`'s description for a `*void`.
-- `Type_Info_Procedure` (`TYPE_INFO_PROCEDURE`):
+- `Type_Info_Procedure` (`.PROCEDURE`):
   - `info: Type_Info`.
   - `parameter_types: []*Type_Info`, `result_types: []*Type_Info`: the parameters' types and the results', in order.
   - `is_c_call: bool`: whether it is called as C calls (`#c_call`).
   - `is_variadic: bool`: whether its last parameter is a `..T`, whose type is then described as `[]T`.
-- `Type_Info_Struct` (`TYPE_INFO_STRUCT`):
+- `Type_Info_Struct` (`.STRUCT`):
   - `info: Type_Info`.
   - `name: string`: the struct's declared name.
   - `members: []Type_Info_Struct_Member`: its fields, in order; none for a struct with none. A struct that holds a pointer to itself points back at its own description.
@@ -77,18 +79,24 @@ Every description starts with a `Type_Info`. Each kind's struct holds it as its 
   - `name: string`: the field's name.
   - `type: *Type_Info`: its type's description.
   - `offset: int`: where it is, in bytes from the struct's start (spec 3.9).
-- `Type_Info_Array` (`TYPE_INFO_ARRAY`, for an array `[N]T`, a view `[]T` and a resizable array `[..]T` alike):
+- `Type_Info_Array` (`.ARRAY`, for an array `[N]T`, a view `[]T` and a resizable array `[..]T` alike):
   - `info: Type_Info`.
   - `element_type: *Type_Info`: `T`'s description.
-  - `array_kind: int`: `ARRAY_FIXED` (0) for an array, `ARRAY_VIEW` (1) for a view, `ARRAY_RESIZABLE` (2) for a resizable array (spec 3.17), in Jai's order.
+  - `array_kind: Array_Kind`: a member of the enum `Array_Kind`, over `int`: `.FIXED` (0) for an array, `.VIEW` (1) for a view, `.RESIZABLE` (2) for a resizable array (spec 3.17), in Jai's order.
   - `count: int`: the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A string isn't described as a view: it has its own tag.
+- `Type_Info_Enum` (`.ENUM`, for an `enum` or `enum_flags` type, spec 3.18):
+  - `info: Type_Info`: its size and alignment are its integer type's.
+  - `name: string`: the enum's declared name.
+  - `underlying: *Type_Info`: its integer type's description.
+  - `is_flags: bool`: whether it is an `enum_flags`.
+  - `names: []string`, `values: []s64`: its members, in order; none for an enum with none. `names[i]` is a member's name and `values[i]` its value, as 64 bits: sign-extended from a signed integer type, zero-extended from an unsigned one, so a `u64` member above `s64`'s largest reads negative.
 
 `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`:
 
 - `type: *Type_Info`: the value's type's description.
 - `value_pointer: *void`: its address. A place (spec 5.1) converts by its own address, so the `Any` sees later changes to it and writing through `value_pointer` changes it; any other value is copied into a temporary, which lives until the end of the statement holding the conversion. An `Any` converts to `Any` as itself.
 
-Reading one: compare `a.type` with `type_info(T)` for a type known in advance, or read its `tag`, then cast: `cast(*int) a.value_pointer` for the value, `cast(*Type_Info_Struct) a.type` for the struct's description when the tag says `TYPE_INFO_STRUCT`. Nothing converts from `Any` implicitly.
+Reading one: compare `a.type` with `type_info(T)` for a type known in advance, or read its `tag`, then cast: `cast(*int) a.value_pointer` for the value, `cast(*Type_Info_Struct) a.type` for the struct's description when the tag says `.STRUCT`. Nothing converts from `Any` implicitly.
 
 ```rig
 printf :: (format: *u8, ..) -> s32 #foreign libc;
@@ -98,7 +106,7 @@ Vec2 :: struct { x: float; y: float; }
 describe :: (a: Any) {
     if a.type == type_info(int) {
         printf("an int: %lld\n", (cast(*int) a.value_pointer).*);
-    } else if a.type.tag == TYPE_INFO_STRUCT {
+    } else if a.type.tag == .STRUCT {
         s := cast(*Type_Info_Struct) a.type;
         printf("%.*s with %lld fields\n", cast(s32) s.name.count, s.name.data, s.members.count);
     }
@@ -151,10 +159,10 @@ The context is what code deep in a call chain needs without every caller handing
 
 It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, rounded up to a multiple of 8, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
 
-- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, or `size` with the header would be past `int`'s largest, the result is null and the storage is as it was.
-- `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from where that allocation starts. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
-- `FREE` does nothing: the memory goes back with everything else at the next reset.
-- `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
+- `.ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, or `size` with the header would be past `int`'s largest, the result is null and the storage is as it was.
+- `.RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from where that allocation starts. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
+- `.FREE` does nothing: the memory goes back with everything else at the next reset.
+- `.FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
 
 Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` and `overflow_allocator`'s memory aligned to 8 for its allocations to be.
 
@@ -165,10 +173,10 @@ printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 main :: () {
     t := TEMPORARY_ALLOCATOR;
-    a := t.proc(ALLOCATE, 10, 0, null, t.data);
-    b := t.proc(ALLOCATE, 100, 0, null, t.data);
+    a := t.proc(.ALLOCATE, 10, 0, null, t.data);
+    b := t.proc(.ALLOCATE, 100, 0, null, t.data);
     printf("%lld bytes occupied\n", context.temporary_storage.occupied);
-    t.proc(FREE_ALL, 0, 0, null, t.data);
+    t.proc(.FREE_ALL, 0, 0, null, t.data);
     printf("%lld after the reset, at most %lld\n", context.temporary_storage.occupied, context.temporary_storage.high_water_mark);
 }
 ```
@@ -180,7 +188,7 @@ It prints:
 0 after the reset, at most 116
 ```
 
-`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with, and so do the resizable arrays' helpers that move or copy elements (below); it's not for programs.
+`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `.RESIZE` copies with, and so do the resizable arrays' helpers that move or copy elements (below); it's not for programs.
 
 ### Resizable arrays
 
@@ -203,8 +211,8 @@ It checks the result of those that grow. The helpers check none of these. They'r
 
 - **The allocator.** A zeroed array's allocator has a null procedure. When the array first grows, it takes the caller's `context.allocator` and keeps it, even when that gives no memory, so it grows and goes back to that allocator wherever it's used later. Setting `.allocator` before the first growth chooses another; changing it while the array holds memory is a memory error no check catches (spec 8.6).
 - **Growth.** Adding or inserting into a full array, its count at least `allocated`, grows it to the larger of 8 and twice `allocated`, so `n` elements added one at a time are moved about `n` times in all; past half of `int`'s largest, to `int`'s largest. `array_reserve` and `array_resize` grow to exactly the count they're given, or to the array's count when that is more, as for an array whose `data` and `count` a program set by hand. Room whose bytes pass `int`'s largest asks for `int`'s largest bytes, which no allocator gives.
-- **Asking for memory.** An array that owns none is given it with `ALLOCATE`, copying the elements whose `data` and `count` a program set by hand, which stay where they were; one that owns some has it resized with `RESIZE`, from `allocated` elements' bytes. An allocator's null leaves the array as it was, and the built-in stops the program with `the array's allocator has no memory to give`.
-- **Giving back.** `array_free` gives the memory with `FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them. The array is then empty, `data` null and `allocated` 0, and keeps its allocator. It gives nothing back for an array that owns no memory.
+- **Asking for memory.** An array that owns none is given it with `.ALLOCATE`, copying the elements whose `data` and `count` a program set by hand, which stay where they were; one that owns some has it resized with `.RESIZE`, from `allocated` elements' bytes. An allocator's null leaves the array as it was, and the built-in stops the program with `the array's allocator has no memory to give`.
+- **Giving back.** `array_free` gives the memory with `.FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them. The array is then empty, `data` null and `allocated` 0, and keeps its allocator. It gives nothing back for an array that owns no memory.
 - **The place.** While `__array_grow` and `__array_free` call the allocator, `context.allocation_location` is the place they were given, and the one before is put back after, as Basic's `alloc` and `free` do: an allocator reads the program's line where the built-in was called, not Preload's (spec 7.10). The place has no default, since the compiler always passes it; a program that calls a helper by hand passes one too, `.{}` for no place.
 - **Elements of no size** (`[..]Empty`, for a struct with no fields) take no memory: growing asks for nothing, and `data` becomes `__array_no_bytes`'s address, so indexing and `for` find it not null. It's an `int`, for its 8-byte alignment, which an element of 0 bytes can still need (a struct holding a `[0]int`).
 
@@ -221,5 +229,4 @@ A zeroed `Source_Code_Location`, `file` empty and `line` 0, is no place. The con
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.
-- No enums, so the allocator's modes and the type information's tags are constants.
 - No `using`, so each kind's type information struct holds its `Type_Info` as a field, `info`, and reads it as `t.info.size`.

@@ -20,7 +20,7 @@ short :: (file: string) -> string {
 
 // Calls a helper of its own before it reads the place, which must then be
 // put back to the one it was called with.
-seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+seen_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     free(alloc(1, HEAP_ALLOCATOR), HEAP_ALLOCATOR);
     at := context.allocation_location;
     print("{} {} {}:{}:{}\n", mode, size, short(at.file), at.line, at.column);
@@ -29,7 +29,7 @@ seen_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *voi
 
 // Prints as seen_proc does, and refuses, giving null, any allocation or
 // resize to more than 64 bytes.
-refusing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+refusing_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     at := context.allocation_location;
     print("{} {} {}:{}:{}\n", mode, size, short(at.file), at.line, at.column);
     if size > 64 { return null; }
@@ -53,8 +53,8 @@ main :: () {
         free_all();
         r := resize(null, 0, 8);
         r = resize(r, 8, 0);
-        q := context.allocator.proc(ALLOCATE, 4, 0, null, context.allocator.data);
-        heap_allocator_proc(FREE, 0, 0, q, null);
+        q := context.allocator.proc(.ALLOCATE, 4, 0, null, context.allocator.data);
+        heap_allocator_proc(.FREE, 0, 0, q, null);
         arena : Arena;
         arena_init(*arena, 64);
         a := alloc(8, arena_allocator(*arena));

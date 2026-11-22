@@ -2,7 +2,7 @@
     "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
     "name": "Rig",
     "scopeName": "source.rig",
-    "comment": "rig.tmLanguage.json is generated from rig.tmLanguage.template.json by tests/unit/test_grammar.cpp, which fills in the keyword, type, predeclared constant and operator lists from the compiler's tables: edit the template, then run RIG_BLESS=1 bin/unit-tests vscode_grammar.",
+    "comment": "rig.tmLanguage.json is generated from rig.tmLanguage.template.json by tests/unit/test_grammar.cpp, which fills in the keyword, type, predeclared name and operator lists from the compiler's tables: edit the template, then run RIG_BLESS=1 bin/unit-tests vscode_grammar.",
     "fileTypes": [
         "rig"
     ],
@@ -166,7 +166,7 @@
                     }
                 },
                 {
-                    "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=(?:struct|enum|union)\\b)",
+                    "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=(?:struct|enum|enum_flags|union)\\b)",
                     "captures": {
                         "1": {
                             "name": "entity.name.type.rig"
@@ -276,7 +276,7 @@
                 },
                 {
                     "name": "storage.type.rig",
-                    "match": "\\b(?:struct|enum|union)\\b"
+                    "match": "\\b(?:struct|enum|enum_flags|union)\\b"
                 },
                 {
                     "name": "keyword.other.cast.rig",
@@ -299,9 +299,14 @@
                     "match": "\\b(?:true|false|null)\\b"
                 },
                 {
-                    "comment": "The predeclared constants (spec 2.5), which the lexer reads as identifiers: the list is src/checker.cpp's PREDECLARED_CONSTANTS.",
+                    "comment": "The predeclared constant (spec 2.5), which the lexer reads as an identifier: the list is src/checker.cpp's PREDECLARED_CONSTANTS.",
                     "name": "support.constant.rig",
-                    "match": "\\b(?:OS|OS_WINDOWS|OS_LINUX)\\b"
+                    "match": "\\b(?:OS)\\b"
+                },
+                {
+                    "comment": "The predeclared enum (spec 2.5), OS's type, src/checker.cpp's OPERATING_SYSTEM: a type's scope, where a type is written too, as #type includes #constants before #type-name.",
+                    "name": "support.type.rig",
+                    "match": "\\bOperating_System\\b"
                 }
             ]
         },
