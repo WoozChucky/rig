@@ -476,10 +476,11 @@
 //   which no procedure type can say".
 // - A call gives at least the fixed parameters ("'printf' takes at least 1
 //   argument, but 0 were given"), each converted as any argument is. Each
-//   argument after them keeps its own type: a number, a bool or a pointer,
-//   which C receives after its default argument promotions (lowering
-//   applies them: types.h's type_c_promoted). An untyped integer becomes
-//   an int, an untyped float a float64 (C's double, which a float32 would
+//   argument after them keeps its own type: a number, an enum (as its
+//   integer type), a bool or a pointer, which C receives after its default
+//   argument promotions (lowering applies them: types.h's
+//   type_c_promoted). An untyped integer becomes an int, an untyped float
+//   a float64 (C's double, which a float32 would
 //   become anyway, so it isn't rounded to a float32 first), null a *void,
 //   and a string literal (or constant data holding one: a constant, or a
 //   string field or element of one) is passed as a C string, its bytes'

@@ -1,12 +1,13 @@
 // Enums compiled and interpreted (issue #221, spec 3.18): values counting
 // up and set, a chosen integer type, members named with their enum and
 // without, comparisons, casts both ways, a value with no member, fields,
-// elements, parameters, results, a global, a constant and #if.
+// elements, parameters, results, a global, a constant and #if. A variable
+// is widened and compared by its integer type's sign.
 #import "Basic";
 
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Small :: enum u8 { A; B :: 5; C; LAST :: C + 3; }
-Signed :: enum s8 { LOW :: -2; NEXT; }
+Signed :: enum s8 { LOW :: -2; NEXT; UP :: 1; }
 Request :: struct { mode: Mode; size: int; }
 
 DEFAULT :: Mode.FREE;
@@ -37,4 +38,7 @@ main :: () {
     zero : Mode;
     #if DEFAULT == .FREE { picked := 1; } else { picked := 2; }
     print("{} {} {}\n", cast(int) current, zero == .ALLOCATE, picked);
+    s := Signed.LOW;
+    big := cast(Small) 200;
+    print("{} {} {} {}\n", cast(int) s, s < Signed.UP, cast(int) big, big > Small.LAST);
 }

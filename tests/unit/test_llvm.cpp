@@ -1562,9 +1562,14 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(text, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: null, size: 64, "));
         // An enum is an enumeration of its members, in order, over its
         // integer type (spec 10.7): an unsigned one's values are unsigned,
-        // u64's largest included.
+        // u64's largest included. It is at its declaration's file and line,
+        // as a struct is.
         String mode = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Mode\"");
         CHECK(contains(mode, "size: 64"));
+        CHECK(contains(mode, "line: 4,"));
+        String node_file = attached(&a, line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Node\""),
+                                    "file:");
+        CHECK(node_file.count > 0 && string_eq(attached(&a, mode, "file:"), node_file));
         CHECK(contains(node_line(&a, text, attached(&a, mode, "baseType:")), "!DIBasicType(name: \"int\""));
         String mode_members = node_line(&a, text, attached(&a, mode, "elements:"));
         String a_member = defined_node(line_with(text, "!DIEnumerator(name: \"A\", value: 0)"));

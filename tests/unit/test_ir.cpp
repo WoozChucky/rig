@@ -7129,9 +7129,10 @@ TEST(a_builtin_passes_its_place) {
 
 TEST(an_enum_lowers_as_its_integer_type) {
     // An enum over u8 is a u8 to lowering: its slot is an i8's, a member is
-    // the constant 200 stored there, a cast to int zero-extends it, and a
-    // cast from int checks the range a u8 has. The same program over u8
-    // itself lowers to the same IR, instruction for instruction.
+    // the constant 200 stored there, a cast to int zero-extends it, a cast
+    // from int checks the range a u8 has, and a cast to s8 checks the range
+    // an s8 has, as a u8's would. The same program over u8 itself lowers to
+    // the same IR, instruction for instruction.
     Arena a = arena_make();
     String with_enum = proc_ir(ir_print(&a, lower_source(&a,
                                                          "Small :: enum u8 { A; B :: 200; }\n"
@@ -7139,6 +7140,7 @@ TEST(an_enum_lowers_as_its_integer_type) {
                                                          "    s := Small.B;\n"
                                                          "    n := cast(int) s;\n"
                                                          "    t := cast(Small) n;\n"
+                                                         "    u := cast(s8) s;\n"
                                                          "}\n")),
                                "main");
     String with_u8 = proc_ir(ir_print(&a, lower_source(&a,
@@ -7146,6 +7148,7 @@ TEST(an_enum_lowers_as_its_integer_type) {
                                                        "    s : u8 = 200;\n"
                                                        "    n := cast(int) s;\n"
                                                        "    t := cast(u8) n;\n"
+                                                       "    u := cast(s8) s;\n"
                                                        "}\n")),
                              "main");
     CHECK(contains(with_enum, "= local i8\n"));

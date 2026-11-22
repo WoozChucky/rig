@@ -1064,27 +1064,46 @@ TEST(world_counts_its_runs_time) {
 
 TEST(a_runs_enum_is_baked) {
     // A #run's enum result is baked as its integer type is, read at that
-    // type's width (u16 here), and is a constant of the enum, alone or as a
-    // struct's field: so it compares with the enum's members, folding. The
-    // enum is declared after the #runs that give it.
+    // type's width (u16 here, beside a u16 field that isn't zero) and by
+    // its sign (an s8 -2 is -2, all 64 bits), and is a constant of the enum,
+    // alone or as a struct's field: so it compares with the enum's members,
+    // folding. The enums are declared after the #runs that give them.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "P :: #run pick();\n"
                           "H :: #run hold();\n"
+                          "N :: #run low();\n"
                           "pick :: () -> Level { return Level.HIGH; }\n"
-                          "hold :: () -> Holder { return .{.HIGH, 2}; }\n"
-                          "Holder :: struct { level: Level; count: int; }\n"
+                          "hold :: () -> Holder { return .{.HIGH, 7, 2}; }\n"
+                          "low :: () -> Signed { return .LOW; }\n"
+                          "Holder :: struct { level: Level; tag: u16; count: int; }\n"
                           "Level :: enum u16 { LOW; HIGH :: 300; }\n"
-                          "main :: () { same := P == .HIGH; }\n");
+                          "Signed :: enum s8 { LOW :: -2; }\n"
+                          "main :: () { same := P == .HIGH; is_low := N == Signed.LOW; }\n");
     CHECK_STR(sorted_messages(&a, &c), "");
     CHECK(is_number(&a, global_named(&c, "P"), 300, "Level"));
     Ast_Literal *fields = literal_data(&a, &c, "H", "Holder");
-    CHECK_EQ(fields ? fields->values.count : 0, 2);
-    if (fields && fields->values.count == 2) {
+    CHECK_EQ(fields ? fields->values.count : 0, 3);
+    if (fields && fields->values.count == 3) {
         CHECK(is_number(&a, fields->values[0], 300, "Level"));
-        CHECK(is_number(&a, fields->values[1], 2, "int"));
+        CHECK(is_number(&a, fields->values[1], 7, "u16"));
+        CHECK(is_number(&a, fields->values[2], 2, "int"));
     }
+    CHECK(is_number(&a, global_named(&c, "N"), (u64)-2, "Signed"));
     CHECK(is_number(&a, value_of(&c, "same"), 1, "bool"));
+    CHECK(is_number(&a, value_of(&c, "is_low"), 1, "bool"));
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_runs_enum_is_checked_before_it_runs) {
+    // A #run whose code holds an enum has that enum's values worked out
+    // before it runs (walk_type): here they need the #run itself, a circle.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Level :: enum { A :: #run f(); B; }\n"
+                           "f :: () -> int { x : Level; return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'Level' is defined in terms of itself\n");
     arena_free(&a);
 }
