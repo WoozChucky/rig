@@ -707,84 +707,286 @@ TEST(windows_the_printf_family_links) {
     arena_free(&a);
 }
 
-// A program calling one function or two of each kind of the 219, by what
-// each passes its entry point (runtime/windows_stdio.c's file comment): the
-// entry point, the options and the bits OR'd into them, the stream, the
-// count, and whether a negative result is clamped to -1. Each printf row
-// prints %.0f of 2.5, which is 2 under the options a C program starts with
-// (STANDARD_ROUNDING, rounding to even), and the rows run again after the
-// program sets the options to LEGACY_WIDE_SPECIFIERS alone through
-// __local_stdio_printf_options, as C code may, which makes it 3: so each
-// function reads the options at each call. A wide format's %s takes a
-// UTF-16 string only under LEGACY_WIDE_SPECIFIERS, set in both runs; wide
-// strings are made from narrow ones (wide). A buffer of 16 x's (120s),
-// given a count of 4 where the text is longer, shows the terminators:
-// _vsnprintf and _snwprintf (LEGACY_TERMINATION) leave it out and give -1;
-// vsnprintf (STANDARD_SNPRINTF) keeps it and gives the count it needed;
-// _snprintf_c, _sprintf_p, swprintf and _swprintf_p (neither) keep it, and
-// their entry points' -2 is clamped to -1. _snprintf_s and _snwprintf_s are given _TRUNCATE, (size_t)-1, for
-// their count. vsprintf and the v functions take a va_list, which on
-// Windows x64 is a pointer to the arguments' 8-byte slots, made here as an
-// array. The scanf rows read "%d %s" from a file, stdin, a string, or a
-// string's first `count` characters (_snscanf: "7 ab" of "7 abcdef"); a
-// bounds-checked one (SCANF_SECURE) takes a size after a %s's buffer, and
-// abcdef doesn't fit in 4, so one field is converted and the buffer left
-// empty; scanf_s's size comes before the %d's pointer, which a scanf that
-// ignored sizes would take for the pointer. The console's functions
-// (_cprintf, _cscanf and their kind) write to and read from the console,
-// not stdout and stdin, so they aren't run here.
-static const char PRINTF_FAMILY_CALLS[] =
-    "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "fprintf :: (stream: *void, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_printf_p :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "_fprintf_p :: (stream: *void, format: *u8, ..) -> s32 #foreign libc;\n"
-    "printf_s :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "fprintf_s :: (stream: *void, format: *u8, ..) -> s32 #foreign libc;\n"
-    "wprintf :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "fwprintf :: (stream: *void, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_wprintf_p :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "_fwprintf_p :: (stream: *void, format: *u16, ..) -> s32 #foreign libc;\n"
-    "wprintf_s :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "fwprintf_s :: (stream: *void, format: *u16, ..) -> s32 #foreign libc;\n"
-    "sprintf :: (buffer: *u8, format: *u8, ..) -> s32 #foreign libc;\n"
-    "vsprintf :: (buffer: *u8, format: *u8, arguments: *u64) -> s32 #foreign libc;\n"
-    "_vsnprintf :: (buffer: *u8, count: u64, format: *u8, arguments: *u64) -> s32 #foreign libc;\n"
-    "vsnprintf :: (buffer: *u8, count: u64, format: *u8, arguments: *u64) -> s32 #foreign libc;\n"
-    "_scprintf :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "_snprintf_c :: (buffer: *u8, count: u64, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_sprintf_p :: (buffer: *u8, count: u64, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_scprintf_p :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "sprintf_s :: (buffer: *u8, count: u64, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_snprintf_s :: (buffer: *u8, size: u64, count: u64, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_swprintf :: (buffer: *u16, format: *u16, ..) -> s32 #foreign libc;\n"
-    "swprintf :: (buffer: *u16, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_snwprintf :: (buffer: *u16, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_scwprintf :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "_swprintf_p :: (buffer: *u16, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_scwprintf_p :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "swprintf_s :: (buffer: *u16, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_snwprintf_s :: (buffer: *u16, size: u64, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
-    "fscanf :: (stream: *void, format: *u8, ..) -> s32 #foreign libc;\n"
-    "fscanf_s :: (stream: *void, format: *u8, ..) -> s32 #foreign libc;\n"
-    "scanf :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "scanf_s :: (format: *u8, ..) -> s32 #foreign libc;\n"
-    "fwscanf :: (stream: *void, format: *u16, ..) -> s32 #foreign libc;\n"
-    "fwscanf_s :: (stream: *void, format: *u16, ..) -> s32 #foreign libc;\n"
-    "wscanf :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "wscanf_s :: (format: *u16, ..) -> s32 #foreign libc;\n"
-    "sscanf :: (s: *u8, format: *u8, ..) -> s32 #foreign libc;\n"
-    "sscanf_s :: (s: *u8, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_snscanf :: (s: *u8, count: u64, format: *u8, ..) -> s32 #foreign libc;\n"
-    "_snscanf_s :: (s: *u8, count: u64, format: *u8, ..) -> s32 #foreign libc;\n"
-    "swscanf :: (s: *u16, format: *u16, ..) -> s32 #foreign libc;\n"
-    "swscanf_s :: (s: *u16, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_snwscanf :: (s: *u16, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
-    "_snwscanf_s :: (s: *u16, count: u64, format: *u16, ..) -> s32 #foreign libc;\n"
+// Every function of the family but the console's, each called once by one
+// program, by what it passes its entry point (runtime/windows_stdio.c's
+// file comment): the entry point, the options and the bits OR'd into
+// them, the stream, the buffer and its count, the locale, the arguments,
+// and whether a negative result is clamped to -1. A row of
+// FAMILY_PRINTF_CALLS or FAMILY_SCANF_CALLS names a function, its shape,
+// the parameters its kind takes before the format, and its flags, how its
+// name changes the rest; the program is made from the rows
+// (printf_family_program), and what each call prints is checked. The
+// console's functions (_cprintf, _cscanf and their kind) write to and read
+// from the console, not stdout and stdin, so they are only linked
+// (windows_the_printf_family_links).
+enum : u32 {
+    CALL_WIDE = 1,        // w: a UTF-16 format, buffer and string
+    CALL_LOCALE = 2,      // _l: a locale after the format, given null, the C runtime's current one
+    CALL_VA_LIST = 4,     // v: the arguments as a va_list, not as C's ..
+    CALL_POSITIONAL = 8,  // _p: a format whose specifiers number their arguments (%2$s)
+    CALL_SECURE = 16,     // scanf's _s: each %s's buffer followed by its size
+};
+
+// The printf rows write 2.5 with %.0f and a string with %s. Each runs
+// twice: under the options a C program starts with, where %.0f of 2.5 is
+// 2 (STANDARD_ROUNDING: rounded to even), then after the program sets the
+// options to LEGACY_WIDE_SPECIFIERS alone through
+// __local_stdio_printf_options, as C code may, where it is 3; so each
+// function reads the options at each call. Each # in a row's text is that
+// digit. A wide format's %s takes a UTF-16 string only under
+// LEGACY_WIDE_SPECIFIERS, set in both runs.
+//
+// A function writing to a stream or stdout writes its own name: "%.0f
+// %s\n" gives "# fprintf", and a positional function's "%2$s %1$.0f\n"
+// gives "_fprintf_p #", the row's text. Streams are given stderr. The
+// others write "abcdef", "%.0f%s" giving "#abcdef" and "%2$s%1$.0f"
+// "abcdef#", into a buffer of 16 x's, and the program prints the function's
+// name, its result and the buffer, the row's text being the last two. Where
+// the count is 4 the text doesn't fit, which shows the options' bits: with
+// LEGACY_TERMINATION (_snprintf) the buffer gets no terminator and the
+// result is -1; with STANDARD_SNPRINTF (snprintf) it gets one and the
+// result is the count the text needed; with neither (_snprintf_c, the _p
+// ones, swprintf) it gets one and the entry point's -2 is clamped to -1.
+// The counting functions, _scprintf and its kind, print only their count.
+enum Printf_Shape {
+    PRINTF_TO_STREAM,        // fprintf: a stream
+    PRINTF_TO_STDOUT,        // printf
+    PRINTF_INTO,             // sprintf: a buffer, with no count
+    PRINTF_INTO_COUNT,       // snprintf: a buffer and a count, given 4
+    PRINTF_INTO_SIZE,        // sprintf_s: a buffer and its size, given 16 (one too small ends the program)
+    PRINTF_INTO_SIZE_COUNT,  // _snprintf_s: a buffer, its size, given 4, and a count, given _TRUNCATE
+    PRINTF_COUNTING,         // _scprintf: nothing; the count of what it would write
+};
+
+struct Printf_Call {
+    const char *name;
+    Printf_Shape shape;
+    u32 flags;
+    const char *text;
+};
+
+static const Printf_Call FAMILY_PRINTF_CALLS[] = {
+    {"fprintf", PRINTF_TO_STREAM, 0, "# fprintf"},
+    {"_fprintf_l", PRINTF_TO_STREAM, CALL_LOCALE, "# _fprintf_l"},
+    {"vfprintf", PRINTF_TO_STREAM, CALL_VA_LIST, "# vfprintf"},
+    {"_vfprintf_l", PRINTF_TO_STREAM, CALL_LOCALE | CALL_VA_LIST, "# _vfprintf_l"},
+    {"_fprintf_p", PRINTF_TO_STREAM, CALL_POSITIONAL, "_fprintf_p #"},
+    {"_fprintf_p_l", PRINTF_TO_STREAM, CALL_POSITIONAL | CALL_LOCALE, "_fprintf_p_l #"},
+    {"_vfprintf_p", PRINTF_TO_STREAM, CALL_POSITIONAL | CALL_VA_LIST, "_vfprintf_p #"},
+    {"_vfprintf_p_l", PRINTF_TO_STREAM, CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "_vfprintf_p_l #"},
+    {"fprintf_s", PRINTF_TO_STREAM, 0, "# fprintf_s"},
+    {"_fprintf_s_l", PRINTF_TO_STREAM, CALL_LOCALE, "# _fprintf_s_l"},
+    {"vfprintf_s", PRINTF_TO_STREAM, CALL_VA_LIST, "# vfprintf_s"},
+    {"_vfprintf_s_l", PRINTF_TO_STREAM, CALL_LOCALE | CALL_VA_LIST, "# _vfprintf_s_l"},
+    {"fwprintf", PRINTF_TO_STREAM, CALL_WIDE, "# fwprintf"},
+    {"_fwprintf_l", PRINTF_TO_STREAM, CALL_WIDE | CALL_LOCALE, "# _fwprintf_l"},
+    {"vfwprintf", PRINTF_TO_STREAM, CALL_WIDE | CALL_VA_LIST, "# vfwprintf"},
+    {"_vfwprintf_l", PRINTF_TO_STREAM, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "# _vfwprintf_l"},
+    {"_fwprintf_p", PRINTF_TO_STREAM, CALL_WIDE | CALL_POSITIONAL, "_fwprintf_p #"},
+    {"_fwprintf_p_l", PRINTF_TO_STREAM, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE, "_fwprintf_p_l #"},
+    {"_vfwprintf_p", PRINTF_TO_STREAM, CALL_WIDE | CALL_POSITIONAL | CALL_VA_LIST, "_vfwprintf_p #"},
+    {"_vfwprintf_p_l", PRINTF_TO_STREAM, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST,
+     "_vfwprintf_p_l #"},
+    {"fwprintf_s", PRINTF_TO_STREAM, CALL_WIDE, "# fwprintf_s"},
+    {"_fwprintf_s_l", PRINTF_TO_STREAM, CALL_WIDE | CALL_LOCALE, "# _fwprintf_s_l"},
+    {"vfwprintf_s", PRINTF_TO_STREAM, CALL_WIDE | CALL_VA_LIST, "# vfwprintf_s"},
+    {"_vfwprintf_s_l", PRINTF_TO_STREAM, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "# _vfwprintf_s_l"},
+
+    {"printf", PRINTF_TO_STDOUT, 0, "# printf"},
+    {"_printf_l", PRINTF_TO_STDOUT, CALL_LOCALE, "# _printf_l"},
+    {"vprintf", PRINTF_TO_STDOUT, CALL_VA_LIST, "# vprintf"},
+    {"_vprintf_l", PRINTF_TO_STDOUT, CALL_LOCALE | CALL_VA_LIST, "# _vprintf_l"},
+    {"_printf_p", PRINTF_TO_STDOUT, CALL_POSITIONAL, "_printf_p #"},
+    {"_printf_p_l", PRINTF_TO_STDOUT, CALL_POSITIONAL | CALL_LOCALE, "_printf_p_l #"},
+    {"_vprintf_p", PRINTF_TO_STDOUT, CALL_POSITIONAL | CALL_VA_LIST, "_vprintf_p #"},
+    {"_vprintf_p_l", PRINTF_TO_STDOUT, CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "_vprintf_p_l #"},
+    {"printf_s", PRINTF_TO_STDOUT, 0, "# printf_s"},
+    {"_printf_s_l", PRINTF_TO_STDOUT, CALL_LOCALE, "# _printf_s_l"},
+    {"vprintf_s", PRINTF_TO_STDOUT, CALL_VA_LIST, "# vprintf_s"},
+    {"_vprintf_s_l", PRINTF_TO_STDOUT, CALL_LOCALE | CALL_VA_LIST, "# _vprintf_s_l"},
+    {"wprintf", PRINTF_TO_STDOUT, CALL_WIDE, "# wprintf"},
+    {"_wprintf_l", PRINTF_TO_STDOUT, CALL_WIDE | CALL_LOCALE, "# _wprintf_l"},
+    {"vwprintf", PRINTF_TO_STDOUT, CALL_WIDE | CALL_VA_LIST, "# vwprintf"},
+    {"_vwprintf_l", PRINTF_TO_STDOUT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "# _vwprintf_l"},
+    {"_wprintf_p", PRINTF_TO_STDOUT, CALL_WIDE | CALL_POSITIONAL, "_wprintf_p #"},
+    {"_wprintf_p_l", PRINTF_TO_STDOUT, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE, "_wprintf_p_l #"},
+    {"_vwprintf_p", PRINTF_TO_STDOUT, CALL_WIDE | CALL_POSITIONAL | CALL_VA_LIST, "_vwprintf_p #"},
+    {"_vwprintf_p_l", PRINTF_TO_STDOUT, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "_vwprintf_p_l #"},
+    {"wprintf_s", PRINTF_TO_STDOUT, CALL_WIDE, "# wprintf_s"},
+    {"_wprintf_s_l", PRINTF_TO_STDOUT, CALL_WIDE | CALL_LOCALE, "# _wprintf_s_l"},
+    {"vwprintf_s", PRINTF_TO_STDOUT, CALL_WIDE | CALL_VA_LIST, "# vwprintf_s"},
+    {"_vwprintf_s_l", PRINTF_TO_STDOUT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "# _vwprintf_s_l"},
+
+    {"sprintf", PRINTF_INTO, 0, "7 #abcdef"},
+    {"_sprintf_l", PRINTF_INTO, CALL_LOCALE, "7 #abcdef"},
+    {"vsprintf", PRINTF_INTO, CALL_VA_LIST, "7 #abcdef"},
+    {"_vsprintf_l", PRINTF_INTO, CALL_LOCALE | CALL_VA_LIST, "7 #abcdef"},
+    {"_snprintf", PRINTF_INTO_COUNT, 0, "-1 #abcxxxxxxxxxxxx"},
+    {"_snprintf_l", PRINTF_INTO_COUNT, CALL_LOCALE, "-1 #abcxxxxxxxxxxxx"},
+    {"_vsnprintf", PRINTF_INTO_COUNT, CALL_VA_LIST, "-1 #abcxxxxxxxxxxxx"},
+    {"_vsnprintf_l", PRINTF_INTO_COUNT, CALL_LOCALE | CALL_VA_LIST, "-1 #abcxxxxxxxxxxxx"},
+    {"snprintf", PRINTF_INTO_COUNT, 0, "7 #ab"},
+    {"vsnprintf", PRINTF_INTO_COUNT, CALL_VA_LIST, "7 #ab"},
+    {"_snprintf_c", PRINTF_INTO_COUNT, 0, "-1 #ab"},
+    {"_snprintf_c_l", PRINTF_INTO_COUNT, CALL_LOCALE, "-1 #ab"},
+    {"_vsnprintf_c", PRINTF_INTO_COUNT, CALL_VA_LIST, "-1 #ab"},
+    {"_vsnprintf_c_l", PRINTF_INTO_COUNT, CALL_LOCALE | CALL_VA_LIST, "-1 #ab"},
+    {"_sprintf_p", PRINTF_INTO_COUNT, CALL_POSITIONAL, "-1 abc"},
+    {"_sprintf_p_l", PRINTF_INTO_COUNT, CALL_POSITIONAL | CALL_LOCALE, "-1 abc"},
+    {"_vsprintf_p", PRINTF_INTO_COUNT, CALL_POSITIONAL | CALL_VA_LIST, "-1 abc"},
+    {"_vsprintf_p_l", PRINTF_INTO_COUNT, CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "-1 abc"},
+    {"sprintf_s", PRINTF_INTO_SIZE, 0, "7 #abcdef"},
+    {"_sprintf_s_l", PRINTF_INTO_SIZE, CALL_LOCALE, "7 #abcdef"},
+    {"vsprintf_s", PRINTF_INTO_SIZE, CALL_VA_LIST, "7 #abcdef"},
+    {"_vsprintf_s_l", PRINTF_INTO_SIZE, CALL_LOCALE | CALL_VA_LIST, "7 #abcdef"},
+    {"_snprintf_s", PRINTF_INTO_SIZE_COUNT, 0, "-1 #ab"},
+    {"_snprintf_s_l", PRINTF_INTO_SIZE_COUNT, CALL_LOCALE, "-1 #ab"},
+    {"_vsnprintf_s", PRINTF_INTO_SIZE_COUNT, CALL_VA_LIST, "-1 #ab"},
+    {"vsnprintf_s", PRINTF_INTO_SIZE_COUNT, CALL_VA_LIST, "-1 #ab"},
+    {"_vsnprintf_s_l", PRINTF_INTO_SIZE_COUNT, CALL_LOCALE | CALL_VA_LIST, "-1 #ab"},
+    {"_scprintf", PRINTF_COUNTING, 0, "7"},
+    {"_scprintf_l", PRINTF_COUNTING, CALL_LOCALE, "7"},
+    {"_vscprintf", PRINTF_COUNTING, CALL_VA_LIST, "7"},
+    {"_vscprintf_l", PRINTF_COUNTING, CALL_LOCALE | CALL_VA_LIST, "7"},
+    {"_scprintf_p", PRINTF_COUNTING, CALL_POSITIONAL, "7"},
+    {"_scprintf_p_l", PRINTF_COUNTING, CALL_POSITIONAL | CALL_LOCALE, "7"},
+    {"_vscprintf_p", PRINTF_COUNTING, CALL_POSITIONAL | CALL_VA_LIST, "7"},
+    {"_vscprintf_p_l", PRINTF_COUNTING, CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "7"},
+
+    {"_swprintf", PRINTF_INTO, CALL_WIDE, "7 #abcdef"},
+    {"__swprintf_l", PRINTF_INTO, CALL_WIDE | CALL_LOCALE, "7 #abcdef"},
+    {"_vswprintf", PRINTF_INTO, CALL_WIDE | CALL_VA_LIST, "7 #abcdef"},
+    {"__vswprintf_l", PRINTF_INTO, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "7 #abcdef"},
+    {"_snwprintf", PRINTF_INTO_COUNT, CALL_WIDE, "-1 #abcxxxxxxxxxxxx"},
+    {"_snwprintf_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_LOCALE, "-1 #abcxxxxxxxxxxxx"},
+    {"_vsnwprintf", PRINTF_INTO_COUNT, CALL_WIDE | CALL_VA_LIST, "-1 #abcxxxxxxxxxxxx"},
+    {"_vsnwprintf_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "-1 #abcxxxxxxxxxxxx"},
+    {"swprintf", PRINTF_INTO_COUNT, CALL_WIDE, "-1 #ab"},
+    {"_swprintf_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_LOCALE, "-1 #ab"},
+    {"vswprintf", PRINTF_INTO_COUNT, CALL_WIDE | CALL_VA_LIST, "-1 #ab"},
+    {"_vswprintf_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "-1 #ab"},
+    {"_swprintf_c", PRINTF_INTO_COUNT, CALL_WIDE, "-1 #ab"},
+    {"_swprintf_c_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_LOCALE, "-1 #ab"},
+    {"_vswprintf_c", PRINTF_INTO_COUNT, CALL_WIDE | CALL_VA_LIST, "-1 #ab"},
+    {"_vswprintf_c_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "-1 #ab"},
+    {"_swprintf_p", PRINTF_INTO_COUNT, CALL_WIDE | CALL_POSITIONAL, "-1 abc"},
+    {"_swprintf_p_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE, "-1 abc"},
+    {"_vswprintf_p", PRINTF_INTO_COUNT, CALL_WIDE | CALL_POSITIONAL | CALL_VA_LIST, "-1 abc"},
+    {"_vswprintf_p_l", PRINTF_INTO_COUNT, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "-1 abc"},
+    {"swprintf_s", PRINTF_INTO_SIZE, CALL_WIDE, "7 #abcdef"},
+    {"_swprintf_s_l", PRINTF_INTO_SIZE, CALL_WIDE | CALL_LOCALE, "7 #abcdef"},
+    {"vswprintf_s", PRINTF_INTO_SIZE, CALL_WIDE | CALL_VA_LIST, "7 #abcdef"},
+    {"_vswprintf_s_l", PRINTF_INTO_SIZE, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "7 #abcdef"},
+    {"_snwprintf_s", PRINTF_INTO_SIZE_COUNT, CALL_WIDE, "-1 #ab"},
+    {"_snwprintf_s_l", PRINTF_INTO_SIZE_COUNT, CALL_WIDE | CALL_LOCALE, "-1 #ab"},
+    {"_vsnwprintf_s", PRINTF_INTO_SIZE_COUNT, CALL_WIDE | CALL_VA_LIST, "-1 #ab"},
+    {"_vsnwprintf_s_l", PRINTF_INTO_SIZE_COUNT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "-1 #ab"},
+    {"_scwprintf", PRINTF_COUNTING, CALL_WIDE, "7"},
+    {"_scwprintf_l", PRINTF_COUNTING, CALL_WIDE | CALL_LOCALE, "7"},
+    {"_vscwprintf", PRINTF_COUNTING, CALL_WIDE | CALL_VA_LIST, "7"},
+    {"_vscwprintf_l", PRINTF_COUNTING, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "7"},
+    {"_scwprintf_p", PRINTF_COUNTING, CALL_WIDE | CALL_POSITIONAL, "7"},
+    {"_scwprintf_p_l", PRINTF_COUNTING, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE, "7"},
+    {"_vscwprintf_p", PRINTF_COUNTING, CALL_WIDE | CALL_POSITIONAL | CALL_VA_LIST, "7"},
+    {"_vscwprintf_p_l", PRINTF_COUNTING, CALL_WIDE | CALL_POSITIONAL | CALL_LOCALE | CALL_VA_LIST, "7"},
+};
+
+// The scanf rows read "%s %d" into a buffer of 16 x's and an s32 set to 0
+// first, and the program prints the function's name, its result, the s32
+// and the buffer, the row's text being the last three. A bounds-checked
+// function (SCANF_SECURE) is given the buffer's size as 8 after it; any
+// other is given a third pointer, which one taking a size would read as
+// the %d's, leaving the s32 0, as one that ignored sizes would take the
+// size 8 for the %d's pointer. "abcdefghij" doesn't fit in 8, so a
+// bounds-checked function reading it converts nothing and empties the
+// buffer. A va_list holds the same three arguments.
+enum Scanf_Shape {
+    SCANF_FROM_STREAM,        // fscanf: a stream, a file holding "abc 42"
+    SCANF_FROM_STDIN,         // scanf: stdin, "a 1 b 2 ... p 16", a pair to each in turn
+    SCANF_FROM_STRING,        // sscanf: a string, "abcdefghij 7", with no count
+    SCANF_FROM_STRING_COUNT,  // _snscanf: the same string, and a count, given 4: "abcd"
+};
+
+struct Scanf_Call {
+    const char *name;
+    Scanf_Shape shape;
+    u32 flags;
+    const char *text;
+};
+
+static const Scanf_Call FAMILY_SCANF_CALLS[] = {
+    {"fscanf", SCANF_FROM_STREAM, 0, "2 42 [abc]"},
+    {"_fscanf_l", SCANF_FROM_STREAM, CALL_LOCALE, "2 42 [abc]"},
+    {"vfscanf", SCANF_FROM_STREAM, CALL_VA_LIST, "2 42 [abc]"},
+    {"_vfscanf_l", SCANF_FROM_STREAM, CALL_LOCALE | CALL_VA_LIST, "2 42 [abc]"},
+    {"fscanf_s", SCANF_FROM_STREAM, CALL_SECURE, "2 42 [abc]"},
+    {"_fscanf_s_l", SCANF_FROM_STREAM, CALL_SECURE | CALL_LOCALE, "2 42 [abc]"},
+    {"vfscanf_s", SCANF_FROM_STREAM, CALL_SECURE | CALL_VA_LIST, "2 42 [abc]"},
+    {"_vfscanf_s_l", SCANF_FROM_STREAM, CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "2 42 [abc]"},
+    {"fwscanf", SCANF_FROM_STREAM, CALL_WIDE, "2 42 [abc]"},
+    {"_fwscanf_l", SCANF_FROM_STREAM, CALL_WIDE | CALL_LOCALE, "2 42 [abc]"},
+    {"vfwscanf", SCANF_FROM_STREAM, CALL_WIDE | CALL_VA_LIST, "2 42 [abc]"},
+    {"_vfwscanf_l", SCANF_FROM_STREAM, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "2 42 [abc]"},
+    {"fwscanf_s", SCANF_FROM_STREAM, CALL_WIDE | CALL_SECURE, "2 42 [abc]"},
+    {"_fwscanf_s_l", SCANF_FROM_STREAM, CALL_WIDE | CALL_SECURE | CALL_LOCALE, "2 42 [abc]"},
+    {"vfwscanf_s", SCANF_FROM_STREAM, CALL_WIDE | CALL_SECURE | CALL_VA_LIST, "2 42 [abc]"},
+    {"_vfwscanf_s_l", SCANF_FROM_STREAM, CALL_WIDE | CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "2 42 [abc]"},
+
+    {"scanf", SCANF_FROM_STDIN, 0, "2 1 [a]"},
+    {"_scanf_l", SCANF_FROM_STDIN, CALL_LOCALE, "2 2 [b]"},
+    {"vscanf", SCANF_FROM_STDIN, CALL_VA_LIST, "2 3 [c]"},
+    {"_vscanf_l", SCANF_FROM_STDIN, CALL_LOCALE | CALL_VA_LIST, "2 4 [d]"},
+    {"scanf_s", SCANF_FROM_STDIN, CALL_SECURE, "2 5 [e]"},
+    {"_scanf_s_l", SCANF_FROM_STDIN, CALL_SECURE | CALL_LOCALE, "2 6 [f]"},
+    {"vscanf_s", SCANF_FROM_STDIN, CALL_SECURE | CALL_VA_LIST, "2 7 [g]"},
+    {"_vscanf_s_l", SCANF_FROM_STDIN, CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "2 8 [h]"},
+    {"wscanf", SCANF_FROM_STDIN, CALL_WIDE, "2 9 [i]"},
+    {"_wscanf_l", SCANF_FROM_STDIN, CALL_WIDE | CALL_LOCALE, "2 10 [j]"},
+    {"vwscanf", SCANF_FROM_STDIN, CALL_WIDE | CALL_VA_LIST, "2 11 [k]"},
+    {"_vwscanf_l", SCANF_FROM_STDIN, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "2 12 [l]"},
+    {"wscanf_s", SCANF_FROM_STDIN, CALL_WIDE | CALL_SECURE, "2 13 [m]"},
+    {"_wscanf_s_l", SCANF_FROM_STDIN, CALL_WIDE | CALL_SECURE | CALL_LOCALE, "2 14 [n]"},
+    {"vwscanf_s", SCANF_FROM_STDIN, CALL_WIDE | CALL_SECURE | CALL_VA_LIST, "2 15 [o]"},
+    {"_vwscanf_s_l", SCANF_FROM_STDIN, CALL_WIDE | CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "2 16 [p]"},
+
+    {"sscanf", SCANF_FROM_STRING, 0, "2 7 [abcdefghij]"},
+    {"_sscanf_l", SCANF_FROM_STRING, CALL_LOCALE, "2 7 [abcdefghij]"},
+    {"vsscanf", SCANF_FROM_STRING, CALL_VA_LIST, "2 7 [abcdefghij]"},
+    {"_vsscanf_l", SCANF_FROM_STRING, CALL_LOCALE | CALL_VA_LIST, "2 7 [abcdefghij]"},
+    {"sscanf_s", SCANF_FROM_STRING, CALL_SECURE, "0 0 []"},
+    {"_sscanf_s_l", SCANF_FROM_STRING, CALL_SECURE | CALL_LOCALE, "0 0 []"},
+    {"vsscanf_s", SCANF_FROM_STRING, CALL_SECURE | CALL_VA_LIST, "0 0 []"},
+    {"_vsscanf_s_l", SCANF_FROM_STRING, CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "0 0 []"},
+    {"_snscanf", SCANF_FROM_STRING_COUNT, 0, "1 0 [abcd]"},
+    {"_snscanf_l", SCANF_FROM_STRING_COUNT, CALL_LOCALE, "1 0 [abcd]"},
+    {"_snscanf_s", SCANF_FROM_STRING_COUNT, CALL_SECURE, "1 0 [abcd]"},
+    {"_snscanf_s_l", SCANF_FROM_STRING_COUNT, CALL_SECURE | CALL_LOCALE, "1 0 [abcd]"},
+    {"swscanf", SCANF_FROM_STRING, CALL_WIDE, "2 7 [abcdefghij]"},
+    {"_swscanf_l", SCANF_FROM_STRING, CALL_WIDE | CALL_LOCALE, "2 7 [abcdefghij]"},
+    {"vswscanf", SCANF_FROM_STRING, CALL_WIDE | CALL_VA_LIST, "2 7 [abcdefghij]"},
+    {"_vswscanf_l", SCANF_FROM_STRING, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "2 7 [abcdefghij]"},
+    {"swscanf_s", SCANF_FROM_STRING, CALL_WIDE | CALL_SECURE, "0 0 []"},
+    {"_swscanf_s_l", SCANF_FROM_STRING, CALL_WIDE | CALL_SECURE | CALL_LOCALE, "0 0 []"},
+    {"vswscanf_s", SCANF_FROM_STRING, CALL_WIDE | CALL_SECURE | CALL_VA_LIST, "0 0 []"},
+    {"_vswscanf_s_l", SCANF_FROM_STRING, CALL_WIDE | CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "0 0 []"},
+    {"_snwscanf", SCANF_FROM_STRING_COUNT, CALL_WIDE, "1 0 [abcd]"},
+    {"_snwscanf_l", SCANF_FROM_STRING_COUNT, CALL_WIDE | CALL_LOCALE, "1 0 [abcd]"},
+    {"_vsnwscanf_l", SCANF_FROM_STRING_COUNT, CALL_WIDE | CALL_LOCALE | CALL_VA_LIST, "1 0 [abcd]"},
+    {"_snwscanf_s", SCANF_FROM_STRING_COUNT, CALL_WIDE | CALL_SECURE, "1 0 [abcd]"},
+    {"_snwscanf_s_l", SCANF_FROM_STRING_COUNT, CALL_WIDE | CALL_SECURE | CALL_LOCALE, "1 0 [abcd]"},
+    {"_vsnwscanf_s_l", SCANF_FROM_STRING_COUNT, CALL_WIDE | CALL_SECURE | CALL_LOCALE | CALL_VA_LIST, "1 0 [abcd]"},
+};
+
+// What the program declares and calls besides the family. wide makes a
+// UTF-16 string from a narrow one, in a Wide that lasts for its procedure;
+// a va_list, on Windows x64, is a pointer to the arguments' 8-byte slots,
+// made here as an array of u64s, address giving a pointer's slot.
+static const char PRINTF_FAMILY_HELPERS[] =
     "__acrt_iob_func :: (index: u32) -> *void #foreign libc;\n"
     "__local_stdio_printf_options :: () -> *u64 #foreign libc;\n"
     "fopen :: (path: *u8, mode: *u8) -> *void #foreign libc;\n"
     "fclose :: (stream: *void) -> s32 #foreign libc;\n"
-    "Wide :: struct { units: [1024]u16; used: s64; }\n"
+    "Wide :: struct { units: [4096]u16; used: s64; }\n"
     "wide :: (w: *Wide, s: *u8) -> *u16 {\n"
     "    start := w.units.data + w.used;\n"
     "    i := 0;\n"
@@ -795,237 +997,213 @@ static const char PRINTF_FAMILY_CALLS[] =
     "}\n"
     "fill :: (b: *u8, n: s64) { for 0..n - 1 { b[it] = 120; } }\n"
     "fill_wide :: (b: *u16, n: s64) { for 0..n - 1 { b[it] = 120; } }\n"
-    "address :: (p: *u8) -> u64 { return cast(u64) p; }\n"
-    "print_rows :: (out: *void) {\n"
-    "    w : Wide;\n"
-    "    fprintf(out, \"fprintf %.0f\\n\", 2.5);\n"
-    "    printf(\"printf %.0f\\n\", 2.5);\n"
-    "    _fprintf_p(out, \"%2$s %1$.0f\\n\", 2.5, \"_fprintf_p\");\n"
-    "    _printf_p(\"%2$s %1$.0f\\n\", 2.5, \"_printf_p\");\n"
-    "    fprintf_s(out, \"fprintf_s %.0f\\n\", 2.5);\n"
-    "    printf_s(\"printf_s %.0f\\n\", 2.5);\n"
-    "    fwprintf(out, wide(*w, \"%s %.0f\\n\"), wide(*w, \"fwprintf\"), 2.5);\n"
-    "    wprintf(wide(*w, \"%s %.0f\\n\"), wide(*w, \"wprintf\"), 2.5);\n"
-    "    _fwprintf_p(out, wide(*w, \"%2$s %1$.0f\\n\"), 2.5, wide(*w, \"_fwprintf_p\"));\n"
-    "    _wprintf_p(wide(*w, \"%2$s %1$.0f\\n\"), 2.5, wide(*w, \"_wprintf_p\"));\n"
-    "    fwprintf_s(out, wide(*w, \"%s %.0f\\n\"), wide(*w, \"fwprintf_s\"), 2.5);\n"
-    "    wprintf_s(wide(*w, \"%s %.0f\\n\"), wide(*w, \"wprintf_s\"), 2.5);\n"
-    "    b : [16]u8;\n"
-    "    va : [2]u64;\n"
-    "    (cast(*float64) va.data).* = 2.5;\n"
-    "    va[1] = address(\"abcdef\");\n"
-    "    fill(b.data, 16);\n"
-    "    n := sprintf(b.data, \"%.0f %s\", 2.5, \"abcdef\");\n"
-    "    printf(\"sprintf %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = vsprintf(b.data, \"%.0f %s\", va.data);\n"
-    "    printf(\"vsprintf %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = _vsnprintf(b.data, 4, \"%.0f%s\", va.data);\n"
-    "    printf(\"_vsnprintf %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = vsnprintf(b.data, 4, \"%.0f%s\", va.data);\n"
-    "    printf(\"vsnprintf %d %.16s\\n\", n, b.data);\n"
-    "    printf(\"_scprintf %d\\n\", _scprintf(\"%.0f %s\", 2.5, \"abcdef\"));\n"
-    "    fill(b.data, 16);\n"
-    "    n = _snprintf_c(b.data, 4, \"%.0f%s\", 2.5, \"abcdef\");\n"
-    "    printf(\"_snprintf_c %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = _snprintf_c(b.data, 16, \"%.0f%s\", 2.5, \"abcdef\");\n"
-    "    printf(\"_snprintf_c %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = _sprintf_p(b.data, 16, \"%2$s %1$.0f\", 2.5, \"abcdef\");\n"
-    "    printf(\"_sprintf_p %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = _sprintf_p(b.data, 4, \"%2$s %1$.0f\", 2.5, \"abcdef\");\n"
-    "    printf(\"_sprintf_p %d %.16s\\n\", n, b.data);\n"
-    "    printf(\"_scprintf_p %d\\n\", _scprintf_p(\"%2$s %1$.0f\", 2.5, \"abcdef\"));\n"
-    "    fill(b.data, 16);\n"
-    "    n = sprintf_s(b.data, 16, \"%.0f %s\", 2.5, \"abcdef\");\n"
-    "    printf(\"sprintf_s %d %.16s\\n\", n, b.data);\n"
-    "    fill(b.data, 16);\n"
-    "    n = _snprintf_s(b.data, 8, 0xFFFFFFFFFFFFFFFF, \"%.0f %s\", 2.5, \"abcdef\");\n"
-    "    printf(\"_snprintf_s %d %.16s\\n\", n, b.data);\n"
-    "    c : [16]u16;\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = _swprintf(c.data, wide(*w, \"%.0f %s\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"_swprintf %d %.16ls\\n\", n, c.data);\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = swprintf(c.data, 4, wide(*w, \"%.0f%s\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"swprintf %d %.16ls\\n\", n, c.data);\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = _snwprintf(c.data, 4, wide(*w, \"%.0f%s\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"_snwprintf %d %.16ls\\n\", n, c.data);\n"
-    "    printf(\"_scwprintf %d\\n\", _scwprintf(wide(*w, \"%.0f %s\"), 2.5, wide(*w, \"abcdef\")));\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = _swprintf_p(c.data, 4, wide(*w, \"%2$s %1$.0f\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"_swprintf_p %d %.16ls\\n\", n, c.data);\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = _swprintf_p(c.data, 16, wide(*w, \"%2$s %1$.0f\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"_swprintf_p %d %.16ls\\n\", n, c.data);\n"
-    "    printf(\"_scwprintf_p %d\\n\", _scwprintf_p(wide(*w, \"%2$s %1$.0f\"), 2.5, wide(*w, \"abcdef\")));\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = swprintf_s(c.data, 16, wide(*w, \"%.0f %s\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"swprintf_s %d %.16ls\\n\", n, c.data);\n"
-    "    fill_wide(c.data, 16);\n"
-    "    n = _snwprintf_s(c.data, 8, 0xFFFFFFFFFFFFFFFF, wide(*w, \"%.0f %s\"), 2.5, wide(*w, \"abcdef\"));\n"
-    "    printf(\"_snwprintf_s %d %.16ls\\n\", n, c.data);\n"
-    "}\n"
-    "main :: () {\n"
-    "    out := __acrt_iob_func(1);\n"
-    "    print_rows(out);\n"
-    "    __local_stdio_printf_options().* = 4;\n"
-    "    print_rows(out);\n"
-    "    __local_stdio_printf_options().* = 36;\n"
-    "    w : Wide;\n"
-    "    x : s32;\n"
-    "    b : [8]u8;\n"
-    "    c : [8]u16;\n"
-    "    fill(b.data, 8);\n"
-    "    f := fopen(\".build/printf-family-input\", \"r\");\n"
-    "    n := fscanf(f, \"%d %s\", *x, b.data);\n"
-    "    printf(\"fscanf %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fclose(f);\n"
-    "    fill(b.data, 8);\n"
-    "    f = fopen(\".build/printf-family-input\", \"r\");\n"
-    "    n = fscanf_s(f, \"%d %s\", *x, b.data, cast(u32) 4);\n"
-    "    printf(\"fscanf_s %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fclose(f);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    f = fopen(\".build/printf-family-input\", \"r\");\n"
-    "    n = fwscanf(f, wide(*w, \"%d %s\"), *x, c.data);\n"
-    "    printf(\"fwscanf %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fclose(f);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    f = fopen(\".build/printf-family-input\", \"r\");\n"
-    "    n = fwscanf_s(f, wide(*w, \"%d %s\"), *x, c.data, cast(u32) 4);\n"
-    "    printf(\"fwscanf_s %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fclose(f);\n"
-    "    fill(b.data, 8);\n"
-    "    n = scanf(\"%d %s\", *x, b.data);\n"
-    "    printf(\"scanf %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = wscanf(wide(*w, \"%d %s\"), *x, c.data);\n"
-    "    printf(\"wscanf %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fill(b.data, 8);\n"
-    "    n = scanf_s(\"%s %d\", b.data, cast(u32) 8, *x);\n"
-    "    printf(\"scanf_s %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = wscanf_s(wide(*w, \"%d %s\"), *x, c.data, cast(u32) 4);\n"
-    "    printf(\"wscanf_s %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fill(b.data, 8);\n"
-    "    n = sscanf(\"5 abcdef\", \"%d %s\", *x, b.data);\n"
-    "    printf(\"sscanf %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fill(b.data, 8);\n"
-    "    n = sscanf_s(\"6 abcdef\", \"%d %s\", *x, b.data, cast(u32) 4);\n"
-    "    printf(\"sscanf_s %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fill(b.data, 8);\n"
-    "    n = _snscanf(\"7 abcdef\", 4, \"%d %s\", *x, b.data);\n"
-    "    printf(\"_snscanf %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fill(b.data, 8);\n"
-    "    n = _snscanf_s(\"8 abcdef\", 4, \"%d %s\", *x, b.data, cast(u32) 8);\n"
-    "    printf(\"_snscanf_s %d %d [%.8s]\", n, x, b.data);\n"
-    "    fill(b.data, 8);\n"
-    "    n = _snscanf_s(\"9 abcdef\", 8, \"%d %s\", *x, b.data, cast(u32) 4);\n"
-    "    printf(\", %d %d [%.8s]\\n\", n, x, b.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = swscanf(wide(*w, \"5 abcdef\"), wide(*w, \"%d %s\"), *x, c.data);\n"
-    "    printf(\"swscanf %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = swscanf_s(wide(*w, \"6 abcdef\"), wide(*w, \"%d %s\"), *x, c.data, cast(u32) 4);\n"
-    "    printf(\"swscanf_s %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = _snwscanf(wide(*w, \"7 abcdef\"), 4, wide(*w, \"%d %s\"), *x, c.data);\n"
-    "    printf(\"_snwscanf %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = _snwscanf_s(wide(*w, \"8 abcdef\"), 4, wide(*w, \"%d %s\"), *x, c.data, cast(u32) 8);\n"
-    "    printf(\"_snwscanf_s %d %d [%.8ls]\", n, x, c.data);\n"
-    "    fill_wide(c.data, 8);\n"
-    "    n = _snwscanf_s(wide(*w, \"9 abcdef\"), 8, wide(*w, \"%d %s\"), *x, c.data, cast(u32) 4);\n"
-    "    printf(\", %d %d [%.8ls]\\n\", n, x, c.data);\n"
-    "}\n";
+    "address :: (p: *void) -> u64 { return cast(u64) p; }\n";
 
-// What PRINTF_FAMILY_CALLS's printf rows print, with each # where their
-// %.0f of 2.5 goes.
-static const char PRINTF_FAMILY_ROWS[] =
-    "fprintf #\n"
-    "printf #\n"
-    "_fprintf_p #\n"
-    "_printf_p #\n"
-    "fprintf_s #\n"
-    "printf_s #\n"
-    "fwprintf #\n"
-    "wprintf #\n"
-    "_fwprintf_p #\n"
-    "_wprintf_p #\n"
-    "fwprintf_s #\n"
-    "wprintf_s #\n"
-    "sprintf 8 # abcdef\n"
-    "vsprintf 8 # abcdef\n"
-    "_vsnprintf -1 #abcxxxxxxxxxxxx\n"
-    "vsnprintf 7 #ab\n"
-    "_scprintf 8\n"
-    "_snprintf_c -1 #ab\n"
-    "_snprintf_c 7 #abcdef\n"
-    "_sprintf_p 8 abcdef #\n"
-    "_sprintf_p -1 abc\n"
-    "_scprintf_p 8\n"
-    "sprintf_s 8 # abcdef\n"
-    "_snprintf_s -1 # abcde\n"
-    "_swprintf 8 # abcdef\n"
-    "swprintf -1 #ab\n"
-    "_snwprintf -1 #abcxxxxxxxxxxxx\n"
-    "_scwprintf 8\n"
-    "_swprintf_p -1 abc\n"
-    "_swprintf_p 8 abcdef #\n"
-    "_scwprintf_p 8\n"
-    "swprintf_s 8 # abcdef\n"
-    "_snwprintf_s -1 # abcde\n";
+// A Rig string literal of `text` as a pointer, which address takes, made
+// wide as the program runs for a wide function.
+static String rig_literal(Arena *a, u32 flags, const char *text) {
+    if (flags & CALL_WIDE) return string_printf(a, "wide(*w, \"%s\")", text);
+    return string_printf(a, "cast(*u8) \"%s\"", text);
+}
 
-// PRINTF_FAMILY_ROWS with its #s made `digit`.
-static const char *printf_family_rows(Arena *a, char digit) {
-    s64 count = (s64)strlen(PRINTF_FAMILY_ROWS);
-    char *text = arena_new_array<char>(a, count + 1);
-    for (s64 i = 0; i <= count; i++) text[i] = PRINTF_FAMILY_ROWS[i] == '#' ? digit : PRINTF_FAMILY_ROWS[i];
-    return text;
+// A foreign declaration of a function of the family: the parameters its
+// shape takes before the format (`before`), the format, then its flags'.
+static String family_declaration(Arena *a, const char *name, u32 flags, String before) {
+    return string_printf(a, "%s :: (" STR_FMT "format: *%s%s%s) -> s32 #foreign libc;\n", name, STR_ARG(before),
+                         flags & CALL_WIDE ? "u16" : "u8", flags & CALL_LOCALE ? ", locale: *void" : "",
+                         flags & CALL_VA_LIST ? ", arguments: *u64" : ", ..");
+}
+
+// The parts, one after another.
+static String concatenated(Arena *a, Array<String> parts) {
+    s64 count = 0;
+    for (s64 i = 0; i < parts.count; i++) count += parts[i].count;
+    char *data = arena_new_array<char>(a, count + 1);
+    s64 at = 0;
+    for (s64 i = 0; i < parts.count; i++) {
+        memcpy(data + at, parts[i].data, (u64)parts[i].count);
+        at += parts[i].count;
+    }
+    data[count] = 0;
+    return {(const u8 *)data, count};
+}
+
+// The program calling each row of FAMILY_PRINTF_CALLS, twice, then each of
+// FAMILY_SCANF_CALLS, as the comments above them say.
+static const char *printf_family_program(Arena *a) {
+    Array<String> parts = {};
+    for (const Printf_Call &call : FAMILY_PRINTF_CALLS) {
+        const char *character = call.flags & CALL_WIDE ? "u16" : "u8";
+        String before = str("");
+        if (call.shape == PRINTF_TO_STREAM) before = str("stream: *void, ");
+        if (call.shape == PRINTF_INTO) before = string_printf(a, "buffer: *%s, ", character);
+        if (call.shape == PRINTF_INTO_COUNT || call.shape == PRINTF_INTO_SIZE) {
+            before = string_printf(a, "buffer: *%s, count: u64, ", character);
+        }
+        if (call.shape == PRINTF_INTO_SIZE_COUNT) {
+            before = string_printf(a, "buffer: *%s, size: u64, count: u64, ", character);
+        }
+        array_add(&parts, family_declaration(a, call.name, call.flags, before));
+    }
+    for (const Scanf_Call &call : FAMILY_SCANF_CALLS) {
+        const char *character = call.flags & CALL_WIDE ? "u16" : "u8";
+        String before = str("");
+        if (call.shape == SCANF_FROM_STREAM) before = str("stream: *void, ");
+        if (call.shape == SCANF_FROM_STRING) before = string_printf(a, "s: *%s, ", character);
+        if (call.shape == SCANF_FROM_STRING_COUNT) before = string_printf(a, "s: *%s, count: u64, ", character);
+        array_add(&parts, family_declaration(a, call.name, call.flags, before));
+    }
+    array_add(&parts, str(PRINTF_FAMILY_HELPERS));
+
+    array_add(&parts, str("print_rows :: () {\n"
+                          "    err := __acrt_iob_func(2);\n"
+                          "    w : Wide;\n"
+                          "    b : [16]u8;\n"
+                          "    c : [16]u16;\n"
+                          "    n : s32;\n"
+                          "    va : [2]u64;\n"
+                          "    (cast(*float64) va.data).* = 2.5;\n"));
+    for (const Printf_Call &call : FAMILY_PRINTF_CALLS) {
+        bool wide = call.flags & CALL_WIDE;
+        bool positional = call.flags & CALL_POSITIONAL;
+        bool streamed = call.shape == PRINTF_TO_STREAM || call.shape == PRINTF_TO_STDOUT;
+        const char *buffer = wide ? "c.data" : "b.data";
+        String argument = rig_literal(a, call.flags, streamed ? call.name : "abcdef");
+        const char *format = positional ? "%2$s%1$.0f" : "%.0f%s";
+        if (streamed) format = positional ? "%2$s %1$.0f\\n" : "%.0f %s\\n";
+        String before = str("");
+        if (call.shape == PRINTF_TO_STREAM) before = str("err, ");
+        if (call.shape == PRINTF_INTO) before = string_printf(a, "%s, ", buffer);
+        if (call.shape == PRINTF_INTO_COUNT) before = string_printf(a, "%s, 4, ", buffer);
+        if (call.shape == PRINTF_INTO_SIZE) before = string_printf(a, "%s, 16, ", buffer);
+        if (call.shape == PRINTF_INTO_SIZE_COUNT) before = string_printf(a, "%s, 4, 0xFFFFFFFFFFFFFFFF, ", buffer);
+        if (!streamed && call.shape != PRINTF_COUNTING) {
+            array_add(&parts, string_printf(a, "    %s(%s, 16);\n", wide ? "fill_wide" : "fill", buffer));
+        }
+        String arguments = string_printf(a, ", 2.5, " STR_FMT, STR_ARG(argument));
+        if (call.flags & CALL_VA_LIST) {
+            array_add(&parts, string_printf(a, "    va[1] = address(" STR_FMT ");\n", STR_ARG(argument)));
+            arguments = str(", va.data");
+        }
+        String called = string_printf(a, "%s(" STR_FMT STR_FMT "%s" STR_FMT ")", call.name, STR_ARG(before),
+                                      STR_ARG(rig_literal(a, call.flags, format)),
+                                      call.flags & CALL_LOCALE ? ", null" : "", STR_ARG(arguments));
+        if (streamed) {
+            array_add(&parts, string_printf(a, "    " STR_FMT ";\n", STR_ARG(called)));
+        } else if (call.shape == PRINTF_COUNTING) {
+            array_add(&parts,
+                      string_printf(a, "    printf(\"%s %%d\\n\", " STR_FMT ");\n", call.name, STR_ARG(called)));
+        } else {
+            array_add(&parts, string_printf(a, "    n = " STR_FMT ";\n    printf(\"%s %%d %%.16%s\\n\", n, %s);\n",
+                                            STR_ARG(called), call.name, wide ? "ls" : "s", buffer));
+        }
+    }
+    array_add(&parts, str("}\n"));
+
+    array_add(&parts, str("scan_rows :: () {\n"
+                          "    w : Wide;\n"
+                          "    b : [16]u8;\n"
+                          "    c : [16]u16;\n"
+                          "    n : s32;\n"
+                          "    x : s32;\n"
+                          "    y : s32;\n"
+                          "    f : *void;\n"
+                          "    va : [3]u64;\n"));
+    for (const Scanf_Call &call : FAMILY_SCANF_CALLS) {
+        bool wide = call.flags & CALL_WIDE;
+        bool secure = call.flags & CALL_SECURE;
+        const char *buffer = wide ? "c.data" : "b.data";
+        String source = rig_literal(a, call.flags, "abcdefghij 7");
+        String before = str("");
+        if (call.shape == SCANF_FROM_STREAM) before = str("f, ");
+        if (call.shape == SCANF_FROM_STRING) before = string_printf(a, STR_FMT ", ", STR_ARG(source));
+        if (call.shape == SCANF_FROM_STRING_COUNT) before = string_printf(a, STR_FMT ", 4, ", STR_ARG(source));
+        array_add(&parts, string_printf(a, "    x = 0;\n    %s(%s, 16);\n", wide ? "fill_wide" : "fill", buffer));
+        if (call.shape == SCANF_FROM_STREAM) {
+            array_add(&parts, str("    f = fopen(\".build/printf-family-input\", \"r\");\n"));
+        }
+        String arguments;
+        if (call.flags & CALL_VA_LIST) {
+            array_add(&parts, string_printf(a, "    va[0] = address(%s);\n    va[1] = %s;\n    va[2] = address(%s);\n",
+                                            buffer, secure ? "8" : "address(*x)", secure ? "*x" : "*y"));
+            arguments = str(", va.data");
+        } else {
+            arguments = string_printf(a, ", %s, %s", buffer, secure ? "cast(u32) 8, *x" : "*x, *y");
+        }
+        array_add(&parts, string_printf(a, "    n = %s(" STR_FMT STR_FMT "%s" STR_FMT ");\n", call.name,
+                                        STR_ARG(before), STR_ARG(rig_literal(a, call.flags, "%s %d")),
+                                        call.flags & CALL_LOCALE ? ", null" : "", STR_ARG(arguments)));
+        array_add(&parts, string_printf(a, "    printf(\"%s %%d %%d [%%.16%s]\\n\", n, x, %s);\n", call.name,
+                                        wide ? "ls" : "s", buffer));
+        if (call.shape == SCANF_FROM_STREAM) array_add(&parts, str("    fclose(f);\n"));
+    }
+    array_add(&parts, str("}\n"));
+
+    array_add(&parts, str("main :: () {\n"
+                          "    print_rows();\n"
+                          "    __local_stdio_printf_options().* = 4;\n"
+                          "    print_rows();\n"
+                          "    __local_stdio_printf_options().* = 36;\n"
+                          "    scan_rows();\n"
+                          "}\n"));
+    String program = concatenated(a, parts);
+    array_free(&parts);
+    return (const char *)program.data;
+}
+
+// `text` with each # made `digit`.
+static const char *with_digit(Arena *a, String text, char digit) {
+    char *out = arena_new_array<char>(a, text.count + 1);
+    for (s64 i = 0; i < text.count; i++) out[i] = text.data[i] == '#' ? digit : (char)text.data[i];
+    out[text.count] = 0;
+    return out;
 }
 
 TEST(windows_the_printf_family_passes_what_its_inline_definitions_pass) {
-    // PRINTF_FAMILY_CALLS, its file holding "42 abcdef" and its stdin "1
-    // abc 2 def ghi 3 4 abcdef": its printf rows under both options, then
-    // its scanf rows.
+    // printf_family_program, its file holding "abc 42" and its stdin the 16
+    // pairs its rows reading stdin take. Its stdout has the printf rows not
+    // writing to a stream, under both options, then the scanf rows; its
+    // stderr the rows writing to a stream, under both options.
     Arena a = arena_make();
     os_make_directory(str(".build"));
-    CHECK(os_write_file(str(".build/printf-family-input"), str("42 abcdef\n")));
-    String program = link_module(&a, lower_source(&a, PRINTF_FAMILY_CALLS), "printf-family-calls-test");
+    CHECK(os_write_file(str(".build/printf-family-input"), str("abc 42\n")));
+    String program = link_module(&a, lower_source(&a, printf_family_program(&a)), "printf-family-calls-test");
     Process_Result result = {};
     result.exit_code = -1;
     if (program.count) {
         Array<String> argv = {};
         array_add(&argv, program);
-        CHECK(os_run_with_input(&a, argv, {}, 60, str("1 abc 2 def ghi 3 4 abcdef\n"), &result));
+        CHECK(os_run_with_input(&a, argv, {}, 60,
+                                str("a 1 b 2 c 3 d 4 e 5 f 6 g 7 h 8 i 9 j 10 k 11 l 12 m 13 n 14 o 15 p 16\n"),
+                                &result));
         array_free(&argv);
     }
-    String expected = string_printf(&a, "%s%s%s", printf_family_rows(&a, '2'), printf_family_rows(&a, '3'),
-                                    "fscanf 2 42 [abcdef]\n"
-                                    "fscanf_s 1 42 []\n"
-                                    "fwscanf 2 42 [abcdef]\n"
-                                    "fwscanf_s 1 42 []\n"
-                                    "scanf 2 1 [abc]\n"
-                                    "wscanf 2 2 [def]\n"
-                                    "scanf_s 2 3 [ghi]\n"
-                                    "wscanf_s 1 4 []\n"
-                                    "sscanf 2 5 [abcdef]\n"
-                                    "sscanf_s 1 6 []\n"
-                                    "_snscanf 2 7 [ab]\n"
-                                    "_snscanf_s 2 8 [ab], 1 9 []\n"
-                                    "swscanf 2 5 [abcdef]\n"
-                                    "swscanf_s 1 6 []\n"
-                                    "_snwscanf 2 7 [ab]\n"
-                                    "_snwscanf_s 2 8 [ab], 1 9 []\n");
-    CHECK_STR(without_cr(&a, result.out), string_cstr(&a, expected));
-    CHECK_STR(without_cr(&a, result.err), "");
+    Array<String> out = {};
+    Array<String> err = {};
+    for (const Printf_Call &call : FAMILY_PRINTF_CALLS) {
+        if (call.shape == PRINTF_TO_STREAM) {
+            array_add(&err, string_printf(&a, "%s\n", call.text));
+        } else if (call.shape == PRINTF_TO_STDOUT) {
+            array_add(&out, string_printf(&a, "%s\n", call.text));
+        } else {
+            array_add(&out, string_printf(&a, "%s %s\n", call.name, call.text));
+        }
+    }
+    String printed = concatenated(&a, out);
+    String streamed = concatenated(&a, err);
+    out.count = 0;
+    for (const Scanf_Call &call : FAMILY_SCANF_CALLS) {
+        array_add(&out, string_printf(&a, "%s %s\n", call.name, call.text));
+    }
+    String scanned = concatenated(&a, out);
+    String expected_out = string_printf(&a, "%s%s" STR_FMT, with_digit(&a, printed, '2'), with_digit(&a, printed, '3'),
+                                        STR_ARG(scanned));
+    String expected_err = string_printf(&a, "%s%s", with_digit(&a, streamed, '2'), with_digit(&a, streamed, '3'));
+    CHECK_STR(without_cr(&a, result.out), string_cstr(&a, expected_out));
+    CHECK_STR(without_cr(&a, result.err), string_cstr(&a, expected_err));
     CHECK_EQ(result.exit_code, 0);
+    array_free(&out);
+    array_free(&err);
     remove(".build/printf-family-input");
     arena_free(&a);
 }
@@ -1344,7 +1522,7 @@ TEST(windows_programs_import_only_ucrtbase_and_kernel32) {
     arena_free(&a);
 }
 
-TEST(windows_links_the_same_whatever_link_and_link_say) {
+TEST(windows_link_ignores_the_link_environment_variables) {
     // Issue #125 (spec 10.6): lld-link, like Microsoft's link.exe, reads
     // options from the environment unless told not to (/lldignoreenv): those
     // in LINK before its command line's, those in _LINK_ after them. A user
