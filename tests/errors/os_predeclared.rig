@@ -7,4 +7,4 @@ OS :: 3;
 Operating_System : int;
 WINDOWS :: () {}
 
-main :: () {}
+main :: () { OS := 1; Operating_System := 2; }

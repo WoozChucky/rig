@@ -1,5 +1,7 @@
 OS is Windows or Linux
 WINDOWS is 1, LINUX is 2
+OS casts to its number
 #run sees the same OS
 a constant the #if decided with is OS's type
 a local hides OS
+a local hides Operating_System

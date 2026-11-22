@@ -370,7 +370,7 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - resizable array types `[..]T` (section 3.17);
 - `string` (section 3.8);
 - struct types, declared by the program (section 3.9), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
-- enum types, declared by the program with `enum` or `enum_flags`, each over an integer type (section 3.18);
+- enum types, declared by the program with `enum` or `enum_flags`, each over an integer type (section 3.18), Preload's and Basic's among them, and the predeclared `Operating_System`, the systems a program can be built for (sections 2.5, 4.9);
 - procedure types `(int, int) -> int`, the types of procedure values (section 3.15).
 
 `void` is not a type of values: it appears only as what a `*void` points at (section 3.10). Untyped constants have types of their own until they meet one (section 3.12), and so do literals written without their type and members written without their enum.

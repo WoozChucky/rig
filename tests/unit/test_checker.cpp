@@ -6066,6 +6066,10 @@ TEST(os_constants_are_predeclared) {
     CHECK_EQ(system->members[0]->constant, 1);
     CHECK_STR(system->members[1]->name, "LINUX");
     CHECK_EQ(system->members[1]->constant, 2);
+    // OS is no integer: only a cast gives its number.
+    CHECK_STR(check_source(&a, "main :: () { x : u8 = OS; }\n"),
+              "1:23: a value of type 'Operating_System' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, "main :: () { x : u8 = cast(u8) OS; }\n"), "");
     token_list_free(c.list);
     arena_free(&a);
 }

@@ -2638,6 +2638,8 @@ struct Predeclared_Constant {
 static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
     {"OS", "the system the program is built for"},
 };
+static_assert(sizeof PREDECLARED_CONSTANTS / sizeof PREDECLARED_CONSTANTS[0] == 1,
+              "declare_predeclared declares OS alone, the table's one entry");
 
 // The predeclared enum (spec 2.5, 3.18), OS's type: the systems a program can
 // be built for, each member numbered as System is.
@@ -2728,9 +2730,10 @@ static Ast_Enum *operating_system(Checker *c, Ast_File *file) {
 
 // Puts the predeclared names in c->top_level, before the program's: the
 // enum Operating_System, and OS, an Ast_Const as a checked
-// `OS :: Operating_System.LINUX;` would be: of the enum, folded, done, its
-// value an integer literal of the same number, typed as the enum (so #run's
-// walk, which reaches a constant's value, finds one). OS's value is the
+// `OS :: Operating_System.LINUX;` would be: of the enum, folded, done. Its
+// value, though, isn't that one's member access but an integer literal of
+// the same number, typed as the enum (so #run's walk, which reaches a
+// constant's value, finds one). OS's value is the
 // program's system, the host's when the tree names none. Each built-in
 // procedure is an Ast_Builtin, which only a call's callee may name
 // (check_expr.cpp's check_callee). All are written nowhere: their position
@@ -2745,7 +2748,7 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
     number->is_constant = true;
     number->constant = value;
     Ast_Const *os = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
-    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry
+    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry (asserted by its side)
     os->value = number;
     os->type = system->declared;
     os->is_constant = true;
