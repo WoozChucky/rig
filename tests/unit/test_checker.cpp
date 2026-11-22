@@ -9398,12 +9398,29 @@ TEST(enum_values_count_up) {
     // a flags type's are the lowest power of two above every value before,
     // from 1. Earlier members are plain constants of the integer type in
     // the body (LAST, ALL).
+    // An earlier member hides an outer name of the same in the values
+    // after it (Hide's NEXT), and outside the body it's no name at all
+    // (OUTSIDE is the outer LIMIT). ~ on a flags constant wraps at its
+    // integer type's width (NOT_ALL).
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { A; B; C :: 10; D; }\n"
                               "Small :: enum u8 { X :: 250; Y; LAST :: Y + 3; }\n"
                               "Look :: enum_flags u8 { P; Q; R :: 16; S; ALL :: P | Q | R | S; T; }\n"
+                              "LIMIT :: 10;\n"
+                              "Hide :: enum { FIRST :: LIMIT; LIMIT :: 3; NEXT :: LIMIT + 1; }\n"
+                              "OUTSIDE :: LIMIT;\n"
+                              "NOT_ALL :: ~Look.ALL;\n"
                               "main :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
+    const u64 hide[] = {10, 3, 4};
+    check_enum_values_are(&a, top_level_named(c.file, "Hide"), "int", false, hide, 3);
+    Ast *outside = top_level_named(c.file, "OUTSIDE");
+    CHECK(outside->is_constant);
+    CHECK_EQ(outside->constant, 10);
+    Ast *not_all = top_level_named(c.file, "NOT_ALL");
+    CHECK_STR(type_name(&a, not_all->type), "Look");
+    CHECK(not_all->is_constant);
+    CHECK_EQ(not_all->constant, 204);
     const u64 mode[] = {0, 1, 10, 11};
     check_enum_values_are(&a, top_level_named(c.file, "Mode"), "int", false, mode, 4);
     const u64 small[] = {250, 251, 254};
@@ -9417,6 +9434,9 @@ TEST(enum_values_count_up) {
     CHECK_EQ(small_type->size, 1);
     CHECK(!small_type->is_signed);
     token_list_free(c.list);
+    CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
+                               "main :: () { x := A; }\n"),
+              "2:19: unknown identifier 'A'\n");
     arena_free(&a);
 }
 
@@ -9459,6 +9479,10 @@ TEST(members_without_their_enum_take_the_type_they_meet) {
                               "    c := cast(Mode) .FREE;\n"
                               "    all := Mode.[.ALLOCATE, .FREE];\n"
                               "    empty : Look = 0;\n"
+                              "    zero : Look = 1 - 1;\n"
+                              "    h : Look = 0 | .B;\n"
+                              "    k : Look = .B | 0;\n"
+                              "    lt := m < n;\n"
                               "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK_STR(type_of(&a, &c, "m"), "Mode");
@@ -9479,6 +9503,31 @@ TEST(members_without_their_enum_take_the_type_they_meet) {
     CHECK_STR(type_name(&a, empty->type), "Look");
     CHECK(empty->is_constant);
     CHECK_EQ(empty->constant, 0);
+    Ast *zero = ((Ast_Var *)local_named(&c, "zero"))->value;
+    CHECK_STR(type_name(&a, zero->type), "Look");
+    CHECK(zero->is_constant);
+    CHECK_EQ(zero->constant, 0);
+    // A member and the untyped 0 wait for the flags type together, as two
+    // members do.
+    const char *with_zero[] = {"h", "k"};
+    for (const char *name : with_zero) {
+        Ast *value = ((Ast_Var *)local_named(&c, name))->value;
+        CHECK_STR(type_name(&a, value->type), "Look");
+        CHECK(value->is_constant);
+        CHECK_EQ(value->constant, 2);
+    }
+    CHECK_STR(type_of(&a, &c, "lt"), "bool");
+    // |= and &= convert their values to f's type, ~.B folded at int's width.
+    Array<Ast *> body = c.file->procs[c.file->procs.count - 1]->body->statements;
+    RIG_ASSERT(body[6]->kind == AST_ASSIGN && body[7]->kind == AST_ASSIGN);
+    Ast *or_value = ((Ast_Assign *)body[6])->value;
+    CHECK_STR(type_name(&a, or_value->type), "Look");
+    CHECK(or_value->is_constant);
+    CHECK_EQ(or_value->constant, 4);
+    Ast *and_value = ((Ast_Assign *)body[7])->value;
+    CHECK_STR(type_name(&a, and_value->type), "Look");
+    CHECK(and_value->is_constant);
+    CHECK_EQ(and_value->constant, ~(u64)2);
     // A member met by its enum is that member, a constant.
     Ast *free = ((Ast_Var *)local_named(&c, "m"))->value;
     CHECK(free->kind == AST_DOT_NAME);
@@ -9491,7 +9540,7 @@ TEST(members_without_their_enum_take_the_type_they_meet) {
 TEST(enums_cast_to_and_from_integers) {
     // Casts between an enum and any integer type are the integer casts of
     // its integer type: a constant must fit, cast,trunc wraps; between two
-    // enum types there's none.
+    // enum types there's none, checked or cast,trunc.
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { A; B; }\n"
                               "Small :: enum u8 { X; Y :: 200; }\n"
@@ -9520,6 +9569,10 @@ TEST(enums_cast_to_and_from_integers) {
     CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
                                "Small :: enum u8 { X; }\n"
                                "main :: () { m := cast(Mode) Small.X; }\n"),
+              "3:19: can't cast 'Small' to 'Mode'\n");
+    CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
+                               "Small :: enum u8 { X; }\n"
+                               "main :: () { m := cast,trunc(Mode) Small.X; }\n"),
               "3:19: can't cast 'Small' to 'Mode'\n");
     arena_free(&a);
 }

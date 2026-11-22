@@ -3,7 +3,10 @@
 // isn't an enum; a member the enum doesn't have; operators an enum doesn't
 // take, or between an enum and an integer; an enum where an integer goes;
 // a member assigned or addressed; a cast between two enums; a member
-// through C's '...'; an enum as a condition and as an array's count.
+// through C's '...'; an enum as a condition and as an array's count;
+// members waiting for a flags type met by an enum that isn't flags, or by
+// a type that isn't an enum; an enum's name in parentheses, or called;
+// an enum and 0, or two enum types; and a local hiding an enum's name.
 Mode :: enum { ALLOCATE; RESIZE; FREE; }
 Small :: enum u8 { X; }
 Look :: enum_flags { A; B; }
@@ -30,4 +33,22 @@ main :: () {
     printf("%d\n", .FREE);
     if m { }
     a : [Mode.FREE]int;
+    m = .ALLOCATE | .FREE;
+    m = ~.FREE;
+    w : int = .A | .B;
+    v : int = 0 | .A;
+    u := 0 | .A;
+    q := (Mode).FREE;
+    r := Mode(1);
+    h := f << 1;
+    m |= m;
+    n := m == 0;
+    m = 0;
+    o := Mode.FREE == Look.A;
+    t := cast,trunc(Mode) Small.X;
+}
+
+hidden :: () {
+    Mode := 1;
+    x := Mode.FREE;
 }

@@ -64,16 +64,16 @@ struct Type {
     Type_Kind kind;
     s64 size;        // in bytes
     s32 align;       // in bytes, a power of 2: where in memory a value of the type may start
-    bool is_signed;  // TYPE_INTEGER
+    bool is_signed;  // TYPE_INTEGER, and TYPE_ENUM (its integer type's)
     Type *pointee;   // TYPE_POINTER
-    String name;     // a built-in type's name, or a struct's (its declaration's)
+    String name;     // a built-in type's name, or a struct's or an enum's (its declaration's)
     Type *pointer;   // the type *this, once asked for
     Type *alias_of;  // a second name for another type (float for float32): the type it names
     Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
     Ast_Struct *decl;          // TYPE_STRUCT: its declaration
     Arena *arena;    // where this type lives, and the types made from it (pointers, arrays, ...): a
-                     // struct's is the compilation's arena (and so theirs), freed with it; a
-                     // built-in type's, null: it and the types made from it last the whole run
+                     // struct's or an enum's is the compilation's arena (and so theirs), freed with
+                     // it; a built-in type's, null: it and the types made from it last the whole run
     Type *element;   // TYPE_ARRAY, TYPE_VIEW, TYPE_RESIZABLE: T in [N]T, []T and [..]T; TYPE_STRING: u8
     s64 count;       // TYPE_ARRAY: N
     Type *view;      // the type []this, once asked for
@@ -315,8 +315,8 @@ extern Type type_untyped_literal;
 // one (spec 3.18): as a literal without its type takes the struct it meets,
 // the member takes the enum of what it's given to, or of the other side of
 // == or != from an enum value, or of the other operand of | & ^ from a
-// flags value, and is that enum's member then (check_convert). `.A | .B`
-// and `~.A` have this type too, waiting for one together. Meeting none,
+// flags value, and is that enum's member then (check_convert). `.A | .B`,
+// `.A | 0` and `~.A` have this type too, waiting for one together. Meeting none,
 // it's an error (check_default_type), so messages never name it.
 extern Type type_untyped_member;
 

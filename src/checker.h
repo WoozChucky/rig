@@ -987,8 +987,8 @@
 //   type, as .{...} does (check_convert): a declaration's type, an
 //   assignment's target, an argument and a default, a return, a field or an
 //   element of a literal, a cast; and the other side of == or != from an
-//   enum value, the other operand of | & ^ from a flags value. .A | .B
-//   and ~.A wait together for a flags type. Meeting an enum, it's the
+//   enum value, the other operand of | & ^ from a flags value. .A | .B,
+//   .A | 0 and ~.A wait together for a flags type. Meeting an enum, it's the
 //   member; meeting another type, "'.FREE' needs an enum type, not 'int'";
 //   meeting none (x := .FREE;, .A == .B, an operand of anything else, an
 //   Any, C's '...'), "this member's enum isn't known; write it with its

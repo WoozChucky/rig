@@ -963,12 +963,15 @@ s32 enum_member_index(Ast_Enum *e, String name) {
     return -1;
 }
 
-// "N doesn't fit in 'u8'", at `at`, for the number one past integer type
-// t's largest value, `largest`, which an enum's next member would have:
-// past every 64-bit number for a u64's.
-static void report_past_the_range(Checker *c, Position at, u64 largest, Type *t) {
-    String number = largest == UINT64_MAX ? str("18446744073709551616")
-                                          : string_printf(c->arena, "%llu", (unsigned long long)(largest + 1));
+// "N doesn't fit in 'u8'", at `at`, for N the number one above `below`,
+// the value an enum's next member would have, past integer type t's range:
+// for an enum, below is t's largest value; for an enum_flags, the next
+// power of two less one, which may be well past t's largest (a signed
+// type's, with a negative member before). Past every 64-bit number when
+// below is the largest of them.
+static void report_past_the_range(Checker *c, Position at, u64 below, Type *t) {
+    String number = below == UINT64_MAX ? str("18446744073709551616")
+                                        : string_printf(c->arena, "%llu", (unsigned long long)(below + 1));
     diag_error(c->diag, at, STR_FMT " doesn't fit in '" STR_FMT "'", STR_ARG(number), STR_ARG(type_name(c->arena, t)));
 }
 
@@ -986,8 +989,8 @@ static void report_past_the_range(Checker *c, Position at, u64 largest, Type *t)
 //   compiling", at it.
 // - An enum's member without one is the one before's plus one, the first 0;
 //   an enum_flags', the lowest power of two above every value before it,
-//   each read as unsigned at the type's width, the first 1. One past the
-//   type's range is "256 doesn't fit in 'u8'", at the member's name. It's
+//   each read as unsigned at the type's width, the first 1. A value past
+//   the type's range is "256 doesn't fit in 'u8'", at the member's name. It's
 //   given an Ast_Int of its number as its value, as declare_predeclared
 //   gives OS one, so whatever reaches a constant's value finds one.
 // A member whose value had a mistake is unknown (no type), and so is a

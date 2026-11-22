@@ -473,12 +473,17 @@ static void convert_to_any(Checker *c, Ast *e) {
 static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t);
 
 // The first member without its enum in e, a .NAME or an operator waiting
-// for its flags type over them (.A | .B, ~.A), in source order: where a
-// message about all of e points.
+// for its flags type over them (.A | .B, ~.A, 0 | .A), in source order:
+// where a message about all of e points.
 static Ast_Dot_Name *first_dot_name(Ast *e) {
     for (;;) {
         if (e->kind == AST_DOT_NAME) return (Ast_Dot_Name *)e;
-        e = e->kind == AST_UNARY ? ((Ast_Unary *)e)->operand : ((Ast_Binary *)e)->left;
+        if (e->kind == AST_UNARY) {
+            e = ((Ast_Unary *)e)->operand;
+        } else {
+            Ast_Binary *b = (Ast_Binary *)e;
+            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is the untyped 0
+        }
     }
 }
 
@@ -501,8 +506,8 @@ static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at
 
 // e, of type_untyped_member, meeting type `to` (check_convert): a .NAME
 // becomes the member of that name of enum `to`, a constant of it; .A | .B
-// (& ^ too) and ~.A, which waited for a flags type, convert their operands
-// and fold. Meeting a type that isn't an enum, "'.FREE' needs an enum type,
+// (& ^ too, and .A | 0) and ~.A, which waited for a flags type, convert
+// their operands and fold. Meeting a type that isn't an enum, "'.FREE' needs an enum type,
 // not 'int'", at the first .NAME in e; an operator meeting an enum that
 // isn't flags, its own message, at the operator ("'|' needs integers, not
 // 'Mode'", "'~' needs an integer, not 'Mode'"), as for two values of it.
@@ -540,8 +545,10 @@ static void convert_member(Checker *c, Ast *e, Type *to) {
         e->constant = wrap_to(~operand->constant, to);
     } else {
         Ast_Binary *b = (Ast_Binary *)e;
-        convert_member(c, b->left, to);
-        convert_member(c, b->right, to);
+        // An operand that isn't a member is the untyped 0, which converts
+        // to a flags type, its empty set.
+        check_convert(c, b->left, to);
+        check_convert(c, b->right, to);
         if (!b->left->type || !b->right->type) return;
         b->operand_type = to;
         e->constant = fold_typed(b->op, b->left->constant, b->right->constant, to);
@@ -887,8 +894,9 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
 // takes C's '..', one after its fixed parameters, checked already
 // (check_value): what C's '...' receives. No parameter gives it a type, so
 // it keeps its own, or takes a default (give_extra_argument_a_type), which
-// must be one C can take: a number, a bool or a pointer, which lowering
-// passes after C's default argument promotions (type_c_promoted). A string
+// must be one C can take: a number, an enum (as its integer type, spec
+// 3.18), a bool or a pointer, which lowering passes after C's default
+// argument promotions (type_c_promoted). A string
 // literal goes as a C string, its bytes' address, as it does to a *u8
 // (lowering looks at the literal, whose type stays string), and so does
 // constant data holding one (is_literal_string): a constant, or a string
@@ -1856,13 +1864,17 @@ static Type *check_unify_procs(Checker *c, Ast_Binary *b, Type *left, Type *righ
 // when either is an enum (spec 3.18): their one enum type, or a flags type
 // the untyped 0 on the other side converts to (check_convert). Null after
 // "mismatched types 'Mode' and 'int' for '=='; cast one of them": nothing
-// else converts to or from an enum, and a cast says which is meant.
+// else converts to or from an enum, and a cast says which is meant. Two
+// enum types get no such hint ("mismatched types 'Mode' and 'Look' for
+// '=='"): no cast makes one enum another (check_cast).
 static Type *check_unify_enums(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op) {
     if (left == right) return left;
     if (left->kind == TYPE_ENUM && type_is_untyped(right) && check_convert(c, b->right, left)) return left;
     if (right->kind == TYPE_ENUM && type_is_untyped(left) && check_convert(c, b->left, right)) return right;
-    diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s; cast one of them",
-               STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op);
+    bool two_enums = left->kind == TYPE_ENUM && right->kind == TYPE_ENUM;
+    diag_error(c->diag, b->pos, "mismatched types '" STR_FMT "' and '" STR_FMT "' for %s%s",
+               STR_ARG(type_name(c->arena, left)), STR_ARG(type_name(c->arena, right)), op,
+               two_enums ? "" : "; cast one of them");
     return nullptr;
 }
 
@@ -1960,8 +1972,9 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // without its enum may be an operand of == and != and of | & ^: it takes
 // the other operand's type (check_convert says when it can't); with one on
 // each side, .A | .B waits for its type as .A does, as 1 | 2 stays untyped,
-// and .A == .B has none to take, which is said at the left one. Anywhere
-// else, it meets no type.
+// and .A == .B has none to take, which is said at the left one. .A | 0
+// waits too, the untyped 0 being the empty set of the flags type it meets.
+// Anywhere else, it meets no type.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -1969,7 +1982,9 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     Type *right = equality || bitwise ? check_member_operand(c, b->right) : check_operand(c, b->right);
     if (!left || !right) return nullptr;
     if (left == &type_untyped_member || right == &type_untyped_member) {
-        if (left == right) {
+        Ast *other = left == &type_untyped_member ? b->right : b->left;
+        bool zero = other->type == &type_untyped_int && other->is_constant && other->constant == 0;
+        if (left == right || (bitwise && zero)) {
             if (bitwise) return &type_untyped_member;
             check_default_type(c, b->left);
             return nullptr;
@@ -2159,9 +2174,10 @@ static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to
 //   integer cast between their integer types, so checked as it is, and
 //   cast,trunc takes them as it takes integers; whether the enum has a
 //   member of the value is never asked. An enum to itself is the same.
-//   Between two enum types there's none ("can't cast 'Small' to 'Mode'"):
-//   cast(Mode) cast(int) s says what's meant. A member without its enum
-//   takes T first, as where it meets T (check_convert).
+//   Between two enum types there's none, checked or cast,trunc ("can't
+//   cast 'Small' to 'Mode'"): cast(Mode) cast(int) s says what's meant.
+//   A member without its enum takes T first, as where it meets T
+//   (check_convert).
 // A cast of a constant is a constant of T, but a cast to Any: a checked
 // cast's is the same number, a cast,trunc's is wrapped to T as at run time
 // (wrap_to).
@@ -2175,8 +2191,12 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
         from = value->type;
         if (!from) return nullptr;
     }
-    bool two_enums = from->kind == TYPE_ENUM && to->kind == TYPE_ENUM && from != to;
-    bool integers = type_integer_of(from) && type_integer_of(to) && !two_enums;
+    if (from->kind == TYPE_ENUM && to->kind == TYPE_ENUM && from != to) {
+        diag_error(c->diag, cast->pos, "can't cast '" STR_FMT "' to '" STR_FMT "'", STR_ARG(type_name(c->arena, from)),
+                   STR_ARG(type_name(c->arena, to)));
+        return nullptr;
+    }
+    bool integers = type_integer_of(from) && type_integer_of(to);
     if (cast->is_trunc && !integers) {
         diag_error(c->diag, cast->pos, "cast,trunc only takes integers");
         return nullptr;
