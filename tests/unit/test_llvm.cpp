@@ -1505,10 +1505,12 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Mode :: enum { A; B :: 5; }\n"
                                 "Small :: enum u8 { X :: 200; }\n"
                                 "Huge :: enum u64 { TOP :: 18446744073709551615; }\n"
+                                "Signed :: enum s8 { LOW :: -2; }\n"
                                 "main :: () {\n"
                                 "    mode: Mode;\n"
                                 "    tiny: Small;\n"
                                 "    huge: Huge;\n"
+                                "    low: Signed;\n"
                                 "    n: Node;\n"
                                 "    t: Tree;\n"
                                 "    e: Empty;\n"
@@ -1585,6 +1587,12 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Huge\""),
                        "size: 64"));
         CHECK(contains(text, "!DIEnumerator(name: \"TOP\", value: 18446744073709551615, isUnsigned: true)"));
+        // A signed one's values are signed, read from all their 64 bits:
+        // an s8's -2 is -2, not 254.
+        String low = line_with(text, "!DICompositeType(tag: DW_TAG_enumeration_type, name: \"Signed\"");
+        CHECK(contains(low, "size: 8"));
+        CHECK(contains(node_line(&a, text, attached(&a, low, "baseType:")), "!DIBasicType(name: \"s8\""));
+        CHECK(contains(text, "!DIEnumerator(name: \"LOW\", value: -2)"));
     }
     arena_free(&a);
 }

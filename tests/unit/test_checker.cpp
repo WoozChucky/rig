@@ -6712,22 +6712,30 @@ TEST(the_decider_and_the_checker_share_an_enum) {
     // A program's enum gets its type once, when the decider first declares
     // the top level's names: DEFAULT, which the decider resolved with
     // Mode's type, is compared in main with Mode.B, which check() types
-    // with the same Mode, so it checks.
+    // with the same Mode, so it checks. The decider worked out B's value:
+    // DEFAULT == .B takes the first branch, DEFAULT == .A the other.
     Arena a = arena_make();
-    Diagnostics d = {};
-    Load_Options options = {};
-    Ast_File *file = load_program(&a, &d, str("test.rig"),
-                                  str("Mode :: enum { A; B; }\nDEFAULT :: Mode.B;\n"
-                                      "#if DEFAULT == .B { X :: 1; } else { X :: 2; }\n"
-                                      "main :: () { same := DEFAULT == Mode.B; x : [X]int; }\n"),
-                                  &options);
-    check(file, &a, &d);
-    CHECK_STR(messages(&a, &d), "");
-    Ast *mode = top_level_named(file, "Mode");
-    Ast *fallback = top_level_named(file, "DEFAULT");
-    CHECK(mode && mode->kind == AST_ENUM && ((Ast_Enum *)mode)->declared);
-    CHECK(mode && fallback && fallback->type == ((Ast_Enum *)mode)->declared);
-    diag_free(&d);
+    const char *conditions[] = {"DEFAULT == .B", "DEFAULT == .A"};
+    for (s64 i = 0; i < 2; i++) {
+        Diagnostics d = {};
+        Load_Options options = {};
+        String program = string_printf(&a,
+                                       "Mode :: enum { A; B; }\nDEFAULT :: Mode.B;\n"
+                                       "#if %s { X :: 1; } else { X :: 2; }\n"
+                                       "main :: () { same := DEFAULT == Mode.B; x : [X]int; }\n",
+                                       conditions[i]);
+        Ast_File *file = load_program(&a, &d, str("test.rig"), program, &options);
+        check(file, &a, &d);
+        CHECK_STR(messages(&a, &d), "");
+        Ast *mode = top_level_named(file, "Mode");
+        Ast *fallback = top_level_named(file, "DEFAULT");
+        CHECK(mode && mode->kind == AST_ENUM && ((Ast_Enum *)mode)->declared);
+        CHECK(mode && fallback && fallback->type == ((Ast_Enum *)mode)->declared);
+        Ast *x = top_level_named(file, "X");
+        CHECK(x && x->is_constant);
+        CHECK_EQ(x ? x->constant : 0, i == 0 ? 1 : 2);
+        diag_free(&d);
+    }
     arena_free(&a);
     // An enum a top-level #if's branch declares is used as any of its
     // names, from main, but can't decide another top-level #if, whether

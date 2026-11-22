@@ -2,9 +2,10 @@
 // integer type that isn't one, or isn't known; a member twice; a value
 // past the integer type's range, counted up to (past u8's, u64's and s8's,
 // a signed flags type's values read as unsigned) or set; a value not known
-// while compiling; an enum named as a built-in type; and an enum's name
-// used as a value. The first two enums are over int then, so their uses
-// say nothing more.
+// while compiling; a struct as the integer type; a value of another type
+// (a string, a float, a member without its enum, another enum's member);
+// an enum named as a built-in type; and an enum's name used as a value.
+// The first two enums are over int then, so their uses say nothing more.
 Bad :: enum float32 { A; }
 Unknown :: enum Nope { A; }
 Twice :: enum { A; A; }
@@ -17,6 +18,12 @@ Negative :: enum_flags s8 { A :: -1; B; }
 Over :: enum s8 { A :: 300; }
 counter := 1;
 Late :: enum { X :: counter; }
+S :: struct { x: int; }
+OverStruct :: enum S { A; }
+Text :: enum { A :: "x"; }
+Real :: enum { A :: 1.5; }
+Dotted :: enum { A :: .Q; }
+Other :: enum { A :: Mode.A; }
 u8 :: enum { A; }
 Mode :: enum { A; }
 main :: () { m := Mode; b := cast(int) Bad.A; u : Unknown = .A; }

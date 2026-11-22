@@ -9,7 +9,9 @@
 // an enum and 0, or two enum types; a member into an Any; a member and an
 // integer other than 0 meeting a flags type; a member compared with an
 // untyped constant; compound assignments an enum doesn't take, or whose
-// value doesn't convert; and a local hiding an enum's name.
+// value doesn't convert; ~ on a member meeting no type, or a type that
+// isn't an enum; a member and an untyped float meeting a flags type; and
+// a local hiding an enum's name.
 Mode :: enum { ALLOCATE; RESIZE; FREE; }
 Small :: enum u8 { X; }
 Look :: enum_flags { A; B; }
@@ -59,6 +61,9 @@ main :: () {
     m += 1;
     ii := 1;
     ii |= .A;
+    x2 := ~.A;
+    i2 : int = ~.B;
+    gg : Look = .A | 1.5;
 }
 
 hidden :: () {

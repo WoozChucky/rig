@@ -483,7 +483,7 @@ static Ast_Dot_Name *first_dot_name(Ast *e) {
             e = ((Ast_Unary *)e)->operand;
         } else {
             Ast_Binary *b = (Ast_Binary *)e;
-            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is an untyped integer
+            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is an untyped constant
         }
     }
 }
@@ -547,10 +547,10 @@ static void convert_member(Checker *c, Ast *e, Type *to) {
         e->constant = wrap_to(~operand->constant, to);
     } else {
         Ast_Binary *b = (Ast_Binary *)e;
-        // An operand that isn't a member is an untyped integer, which
-        // converts to a flags type only if it's 0, its empty set: .A | 1
-        // is "mismatched types 'Look' and 'int' for '|'; cast one of
-        // them", as f | 1 is (check_unify_enums).
+        // An operand that isn't a member is an untyped constant, which
+        // converts to a flags type only if it's the integer 0, its empty
+        // set: .A | 1 is "mismatched types 'Look' and 'int' for '|'; cast
+        // one of them", as f | 1 is (check_unify_enums).
         if (b->left->type == &type_untyped_member) convert_member(c, b->left, to);
         if (b->right->type == &type_untyped_member) convert_member(c, b->right, to);
         if (!b->left->type || !b->right->type) return;
@@ -1980,8 +1980,8 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // and .A == .B has none to take, which is said at the left one, nor has
 // .A == 0 or .A == null, an untyped constant having no type to give. .A | 0
 // waits too, the untyped 0 being the empty set of the flags type it meets,
-// and so does .A | 1, which that type then refuses as it refuses f | 1
-// (convert_member). Anywhere else, it meets no type.
+// and so do .A | 1 and .A | 1.5, which that type then refuses as it
+// refuses f | 1 (convert_member). Anywhere else, it meets no type.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -1990,9 +1990,9 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (!left || !right) return nullptr;
     if (left == &type_untyped_member || right == &type_untyped_member) {
         Ast *other = left == &type_untyped_member ? b->right : b->left;
-        bool integer = other->type == &type_untyped_int && other->is_constant;
+        bool constant = type_is_untyped(other->type) && other->is_constant;
         bool untyped = type_is_untyped(other->type) || other->type == &type_null;
-        if (left == right || (bitwise && integer) || (equality && untyped)) {
+        if (left == right || (bitwise && constant) || (equality && untyped)) {
             if (bitwise) return &type_untyped_member;
             check_default_type(c, left == &type_untyped_member ? b->left : b->right);
             return nullptr;

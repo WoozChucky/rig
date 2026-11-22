@@ -1096,13 +1096,24 @@ TEST(a_runs_enum_is_baked) {
     arena_free(&a);
 }
 
-TEST(a_runs_enum_is_checked_before_it_runs) {
-    // A #run whose code holds an enum has that enum's values worked out
-    // before it runs (walk_type): here they need the #run itself, a circle.
+TEST(a_members_run_may_hold_its_enum_but_not_need_it) {
+    // A member's #run whose code only holds a value of its own enum needs
+    // no member's value (walk_type), so HIGH is the 10 it gives; one that
+    // names a member needs the enum's values, which need the #run itself:
+    // a circle.
     Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Level :: enum u8 { LOW; HIGH :: #run compute(); }\n"
+                          "compute :: () -> u8 { x : Level; return 10; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(sorted_messages(&a, &c), "");
+    Ast_Enum *level = (Ast_Enum *)global_named(&c, "Level");
+    CHECK(level->members[1]->is_constant);
+    CHECK_EQ(level->members[1]->constant, 10);
+    token_list_free(c.list);
     CHECK_STR(check_source(&a,
                            "Level :: enum { A :: #run f(); B; }\n"
-                           "f :: () -> int { x : Level; return 1; }\n"
+                           "f :: () -> int { x := Level.B; return 1; }\n"
                            "main :: () { }\n"),
               "1:1: 'Level' is defined in terms of itself\n");
     arena_free(&a);

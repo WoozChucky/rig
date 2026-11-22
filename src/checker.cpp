@@ -950,7 +950,8 @@ static void resolve_global(Checker *c, Ast *decl) {
 // needs nothing more of it. Its members' values are worked out where first
 // needed, as a global's value is (resolve_global): by its own turn in
 // check()'s pass, or earlier, by Mode.FREE or a .FREE meeting it in a value
-// checked before then, or by a #run's walk (check_enum_values). A value
+// checked before then, or by the walk of a #run that describes the enum
+// (check_enum_values), its description holding them. A value
 // that needs its own enum, through another enum's or a #run's, finds it
 // under way: "'E' is defined in terms of itself", at the enum's name, once,
 // and every member of every enum in the circle is then unknown, so nothing

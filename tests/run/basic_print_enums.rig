@@ -3,8 +3,8 @@
 // number, read at each width and sign (values that need all of their
 // type's bytes), flags by their names joined by " | " with leftover bits
 // last, skipping a member of 0 and one whose bits aren't all among those
-// not yet written (written already, or only some in the value), and enums
-// in structs and arrays.
+// not yet written (written already, or only some in the value), enums in
+// structs and arrays, and enums formatted into a string by sprint.
 #import "Basic";
 
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
@@ -35,4 +35,6 @@ main :: () {
     print("{}\n", Request.{.RESIZE, .SOLID | .GLOWING});
     print("{}\n", Packet.{cast(Level) 300, 65535});
     print("{}\n", Mode.[.ALLOCATE, .FREE_ALL]);
+    s := sprint("{} {} {}", Mode.FREE, cast(Look) 9, cast(Mode) 7);
+    print("{}\n", s);
 }

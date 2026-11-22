@@ -1,123 +1,132 @@
-tests/errors/enum_uses.rig:21:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:23:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         x := .FREE;
              ^
-tests/errors/enum_uses.rig:22:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:24:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         y := .A | .B;
              ^
-tests/errors/enum_uses.rig:23:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:25:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         z := .FREE == .RESIZE;
              ^
-tests/errors/enum_uses.rig:24:15: error: '.FREE' needs an enum type, not 'int'
+tests/errors/enum_uses.rig:26:15: error: '.FREE' needs an enum type, not 'int'
         i : int = .FREE;
                   ^
-tests/errors/enum_uses.rig:25:10: error: 'Mode' has no member 'FRE'
+tests/errors/enum_uses.rig:27:10: error: 'Mode' has no member 'FRE'
         m = .FRE;
              ^
-tests/errors/enum_uses.rig:26:15: error: 'Mode' has no member 'FRE'
+tests/errors/enum_uses.rig:28:15: error: 'Mode' has no member 'FRE'
         k := Mode.FRE;
                   ^
-tests/errors/enum_uses.rig:27:14: error: '+' needs numbers, not 'Mode'
+tests/errors/enum_uses.rig:29:14: error: '+' needs numbers, not 'Mode'
         sum := m + 1;
                  ^
-tests/errors/enum_uses.rig:28:12: error: '|' needs integers, not 'Mode'
+tests/errors/enum_uses.rig:30:12: error: '|' needs integers, not 'Mode'
         b := m | m;
                ^
-tests/errors/enum_uses.rig:29:12: error: mismatched types 'Mode' and 'int' for '=='; cast one of them
+tests/errors/enum_uses.rig:31:12: error: mismatched types 'Mode' and 'int' for '=='; cast one of them
         c := m == 1;
                ^
-tests/errors/enum_uses.rig:30:12: error: mismatched types 'Look' and 'int' for '|'; cast one of them
+tests/errors/enum_uses.rig:32:12: error: mismatched types 'Look' and 'int' for '|'; cast one of them
         d := f | 1;
                ^
-tests/errors/enum_uses.rig:31:14: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:33:14: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         e := m < .FREE;
                  ^
-tests/errors/enum_uses.rig:32:15: error: a value of type 'Mode' doesn't convert to 'int' implicitly
+tests/errors/enum_uses.rig:34:15: error: a value of type 'Mode' doesn't convert to 'int' implicitly
         j : int = m;
                   ^
-tests/errors/enum_uses.rig:33:5: error: can't assign to 'Mode.FREE': it's an enum's member
+tests/errors/enum_uses.rig:35:5: error: can't assign to 'Mode.FREE': it's an enum's member
         Mode.FREE = m;
         ^
-tests/errors/enum_uses.rig:34:11: error: can't take the address of 'Mode.FREE': it's an enum's member
+tests/errors/enum_uses.rig:36:11: error: can't take the address of 'Mode.FREE': it's an enum's member
         p := *Mode.FREE;
               ^
-tests/errors/enum_uses.rig:35:10: error: can't cast 'Small' to 'Mode'
+tests/errors/enum_uses.rig:37:10: error: can't cast 'Small' to 'Mode'
         s := cast(Mode) Small.X;
              ^
-tests/errors/enum_uses.rig:36:20: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:38:20: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         printf("%d\n", .FREE);
                        ^
-tests/errors/enum_uses.rig:37:8: error: the condition of 'if' must be a bool, not 'Mode'
+tests/errors/enum_uses.rig:39:8: error: the condition of 'if' must be a bool, not 'Mode'
         if m { }
            ^
-tests/errors/enum_uses.rig:38:10: error: an array's count must be an integer, not 'Mode'
+tests/errors/enum_uses.rig:40:10: error: an array's count must be an integer, not 'Mode'
         a : [Mode.FREE]int;
              ^
-tests/errors/enum_uses.rig:39:19: error: '|' needs integers, not 'Mode'
+tests/errors/enum_uses.rig:41:19: error: '|' needs integers, not 'Mode'
         m = .ALLOCATE | .FREE;
                       ^
-tests/errors/enum_uses.rig:40:9: error: '~' needs an integer, not 'Mode'
+tests/errors/enum_uses.rig:42:9: error: '~' needs an integer, not 'Mode'
         m = ~.FREE;
             ^
-tests/errors/enum_uses.rig:41:15: error: '.A' needs an enum type, not 'int'
+tests/errors/enum_uses.rig:43:15: error: '.A' needs an enum type, not 'int'
         w : int = .A | .B;
                   ^
-tests/errors/enum_uses.rig:42:19: error: '.A' needs an enum type, not 'int'
+tests/errors/enum_uses.rig:44:19: error: '.A' needs an enum type, not 'int'
         v : int = 0 | .A;
                       ^
-tests/errors/enum_uses.rig:43:14: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:45:14: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         u := 0 | .A;
                  ^
-tests/errors/enum_uses.rig:44:11: error: 'Mode' is a type, not a value
+tests/errors/enum_uses.rig:46:11: error: 'Mode' is a type, not a value
         q := (Mode).FREE;
               ^
-tests/errors/enum_uses.rig:45:10: error: 'Mode' isn't a procedure, so it can't be called
+tests/errors/enum_uses.rig:47:10: error: 'Mode' isn't a procedure, so it can't be called
         r := Mode(1);
              ^
-tests/errors/enum_uses.rig:46:12: error: '<<' needs integers, not 'Look'
+tests/errors/enum_uses.rig:48:12: error: '<<' needs integers, not 'Look'
         h := f << 1;
                ^
-tests/errors/enum_uses.rig:47:7: error: '|=' needs integers, not 'Mode'
+tests/errors/enum_uses.rig:49:7: error: '|=' needs integers, not 'Mode'
         m |= m;
           ^
-tests/errors/enum_uses.rig:48:12: error: mismatched types 'Mode' and 'int' for '=='; cast one of them
+tests/errors/enum_uses.rig:50:12: error: mismatched types 'Mode' and 'int' for '=='; cast one of them
         n := m == 0;
                ^
-tests/errors/enum_uses.rig:49:9: error: a value of type 'int' doesn't convert to 'Mode' implicitly
+tests/errors/enum_uses.rig:51:9: error: a value of type 'int' doesn't convert to 'Mode' implicitly
         m = 0;
             ^
-tests/errors/enum_uses.rig:50:20: error: mismatched types 'Mode' and 'Look' for '=='
+tests/errors/enum_uses.rig:52:20: error: mismatched types 'Mode' and 'Look' for '=='
         o := Mode.FREE == Look.A;
                        ^
-tests/errors/enum_uses.rig:51:10: error: can't cast 'Small' to 'Mode'
+tests/errors/enum_uses.rig:53:10: error: can't cast 'Small' to 'Mode'
         t := cast,trunc(Mode) Small.X;
              ^
-tests/errors/enum_uses.rig:52:15: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:54:15: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         l : Any = .FREE;
                   ^
-tests/errors/enum_uses.rig:53:19: error: mismatched types 'Look' and 'int' for '|'; cast one of them
+tests/errors/enum_uses.rig:55:19: error: mismatched types 'Look' and 'int' for '|'; cast one of them
         g : Look = .A | 1;
                       ^
-tests/errors/enum_uses.rig:54:11: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:56:11: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         aa := .A != 0;
               ^
-tests/errors/enum_uses.rig:55:16: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:57:16: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         bb := 0 == .A;
                    ^
-tests/errors/enum_uses.rig:56:11: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_uses.rig:58:11: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         cc := .A == null;
               ^
-tests/errors/enum_uses.rig:57:10: error: a value of type 'int' doesn't convert to 'Look' implicitly
+tests/errors/enum_uses.rig:59:10: error: a value of type 'int' doesn't convert to 'Look' implicitly
         f |= 1;
              ^
-tests/errors/enum_uses.rig:58:10: error: a value of type 'Mode' doesn't convert to 'Look' implicitly
+tests/errors/enum_uses.rig:60:10: error: a value of type 'Mode' doesn't convert to 'Look' implicitly
         f |= m;
              ^
-tests/errors/enum_uses.rig:59:7: error: '+=' needs numbers, not 'Mode'
+tests/errors/enum_uses.rig:61:7: error: '+=' needs numbers, not 'Mode'
         m += 1;
           ^
-tests/errors/enum_uses.rig:61:11: error: '.A' needs an enum type, not 'int'
+tests/errors/enum_uses.rig:63:11: error: '.A' needs an enum type, not 'int'
         ii |= .A;
               ^
-tests/errors/enum_uses.rig:66:15: error: '.FREE' needs a struct or a pointer to one, not 'int'
+tests/errors/enum_uses.rig:64:12: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+        x2 := ~.A;
+               ^
+tests/errors/enum_uses.rig:65:17: error: '.B' needs an enum type, not 'int'
+        i2 : int = ~.B;
+                    ^
+tests/errors/enum_uses.rig:66:20: error: mismatched types 'Look' and 'float32' for '|'; cast one of them
+        gg : Look = .A | 1.5;
+                       ^
+tests/errors/enum_uses.rig:71:15: error: '.FREE' needs a struct or a pointer to one, not 'int'
         x := Mode.FREE;
                   ^

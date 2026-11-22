@@ -381,11 +381,10 @@ static bool walk_struct(Reach *r, Type *t, void (*reach)(Reach *r, Type *t)) {
     return true;
 }
 
-// An enum reached, held by value (walk_type) or described (walk_described):
-// its members' values worked out (check_enum_values), which lowering and
-// baking read as constants. False when they need the #run itself (a
-// circle), or a member has none (a mistake in its value, or a circle met
-// before): errors, said.
+// An enum described (walk_described): its members' values worked out
+// (check_enum_values), which lowering writes into its description. False
+// when they need the #run itself (a circle), or a member has none (a
+// mistake in its value, or a circle met before): errors, said.
 static bool walk_enum(Reach *r, Type *t) {
     if (!check_enum_values(r->c, t)) return false;
     Ast_Enum *e = t->enum_decl;
@@ -403,14 +402,15 @@ static bool walk_enum(Reach *r, Type *t) {
 // Resizable_Array too, its layout, whose last field is its allocator's
 // type. A pointer's target isn't looked behind: holding one needs no more
 // than its address (code that moves it reaches its target where it does,
-// walk_expression). An enum (spec 3.18) has its members' values worked out
-// now (walk_enum), for one declared after the #run, which lowering and
-// baking read as constants. False when a struct has no layout (a circle,
-// too big, too deep), or is still being laid out (a circle through this
-// #run, check_finished_layout), or a field has no type, or an enum's
-// member has no value: errors, said.
+// walk_expression). Nor is an enum's members' values (spec 3.18): holding
+// one needs only its integer type, which it has from its declaration, and
+// lowering and baking read no more; a member the code names worked its
+// enum's values out when it was checked (find_enum_member), and a
+// description needs them (walk_described). So a member's #run may hold a
+// value of its own enum. False when a struct has no layout (a circle, too
+// big, too deep), or is still being laid out (a circle through this #run,
+// check_finished_layout), or a field has no type: errors, said.
 static bool walk_type(Reach *r, Type *t) {
-    if (t->kind == TYPE_ENUM) return walk_enum(r, t);
     if (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) {
         reach_type(r, t->element);
         if (t->kind == TYPE_RESIZABLE) reach_type(r, r->c->file->resizable_array_type);
@@ -431,7 +431,7 @@ static bool walk_type(Reach *r, Type *t) {
 // (check_late_field), as walk_type does for a struct held by value: a #run
 // may describe a struct declared after it, reached only through another's
 // pointer, before resolve_late_fields. An enum (spec 3.18) has its
-// members' values worked out now (walk_enum), as walk_type does,
+// members' values worked out now (walk_enum), which walk_type doesn't,
 // since its description holds them, and its integer type is described
 // too. Each type is walked once, so a struct that points at itself ends.
 // False when a struct has no layout, or is still being laid out
