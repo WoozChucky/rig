@@ -491,11 +491,32 @@ static Ast_Dot_Name *first_dot_name(Ast *e) {
 // Member `name` of enum type t, its values worked out first
 // (check_enum_values), its index in *index (-1 when it has none): null
 // after "'Mode' has no member 'FRE'", at `at`, and when the values can't
-// be known (a circle) or this member's own had a mistake, said already.
+// be known (a circle) or this member's own had a mistake, said already. In
+// the enum's own body, while its values are being worked out and nothing
+// else is (the last of c->resolving), a member already worked out is a
+// constant of the enum as it is outside: F.Q in `F :: enum { Q :: 3; P ::
+// cast(int) F.Q + 1; }` is 3, and F.Z is "'F' has no member 'Z'". A
+// member not yet worked out, the one being worked out included, needs the
+// whole enum, a circle, as does any member reached through another
+// declaration (an enum's or a global's) the enum's body needs: two enums
+// that name each other's members are each worked out whole.
 static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at, s32 *index) {
+    Ast_Enum *e = t->enum_decl;
+    *index = enum_member_index(e, name);
+    bool own_body = e->resolve == RESOLVE_UNDER_WAY && c->resolving.count > 0 &&
+                    c->resolving[c->resolving.count - 1] == (Ast *)e;
+    if (own_body && *index >= 0 && e->members[*index]->resolve == RESOLVE_DONE) {
+        Ast_Const *member = e->members[*index];
+        return member->type ? member : nullptr;
+    }
+    if (own_body && *index < 0) {
+        diag_error(c->diag, at, "'" STR_FMT "' has no member '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+                   STR_ARG(name));
+        return nullptr;
+    }
     *index = -1;
     if (!check_enum_values(c, t)) return nullptr;
-    *index = enum_member_index(t->enum_decl, name);
+    *index = enum_member_index(e, name);
     if (*index < 0) {
         diag_error(c->diag, at, "'" STR_FMT "' has no member '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                    STR_ARG(name));

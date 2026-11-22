@@ -951,11 +951,12 @@ static void resolve_global(Checker *c, Ast *decl) {
 // needed, as a global's value is (resolve_global): by its own turn in
 // check()'s pass, or earlier, by Mode.FREE or a .FREE meeting it in a value
 // checked before then, or by the walk of a #run that describes the enum
-// (check_enum_values), its description holding them. A value
-// that needs its own enum, through another enum's or a #run's, finds it
-// under way: "'E' is defined in terms of itself", at the enum's name, once,
-// and every member of every enum in the circle is then unknown, so nothing
-// more is said about it or its uses.
+// (check_enum_values), its description holding them. A value that needs
+// its own enum, through another enum's or a #run's, finds it under way:
+// "'E' is defined in terms of itself", at the enum's name, once, and every
+// member of every enum in the circle is then unknown, so nothing more is
+// said about it or its uses. Its own body may name a member already worked
+// out as E.X, which needs nothing more of it (find_enum_member).
 
 s32 enum_member_index(Ast_Enum *e, String name) {
     for (s64 i = 0; i < e->members.count; i++) {
@@ -2643,7 +2644,7 @@ static_assert(sizeof PREDECLARED_CONSTANTS / sizeof PREDECLARED_CONSTANTS[0] == 
               "declare_predeclared declares OS alone, the table's one entry");
 
 // The predeclared enum (spec 2.5, 3.18), OS's type: the systems a program can
-/// be built for, each member numbered as System is. The VS Code grammar
+// be built for, each member numbered as System is. The VS Code grammar
 // names it too (tests/unit/test_grammar.cpp).
 static const char *const OPERATING_SYSTEM = "Operating_System";
 static const char *const OPERATING_SYSTEM_MEANING = "the systems a program can be built for";

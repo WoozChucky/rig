@@ -9663,6 +9663,49 @@ TEST(an_enums_value_may_not_need_its_enum) {
                                "B :: enum { Y :: cast(int) A.X; }\n"
                                "main :: () { }\n"),
               "1:1: 'A' is defined in terms of itself\n");
+    // Two enums that name each other's members are each worked out whole:
+    // a circle, though B needs nothing of E.
+    CHECK_STR(check_source(&a, "E :: enum { A :: cast(int) F.B; }\n"
+                               "F :: enum { B :: 3; C :: cast(int) E.A; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    // So is a member reached through a global, and, in its own body, a
+    // member not worked out yet, its own included.
+    CHECK_STR(check_source(&a, "E :: enum { A :: 1; B :: G; }\n"
+                               "G :: cast(int) E.A;\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "E :: enum { A :: cast(int) E.A; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "E :: enum { A :: cast(int) E.B; B; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'E' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(an_enums_body_names_its_earlier_members_with_it) {
+    // In its own body, a member worked out already is a constant of the
+    // enum, as it is outside: no circle. A name that's no member's is
+    // said as outside.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "F :: enum { Q :: 3; P :: cast(int) F.Q + 1; R :: cast(int) cast(F) .Q * 2; }\n"
+                              "Look :: enum_flags u8 { A; B; AB :: cast(u8) (Look.A | Look.B); }\n"
+                              "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Enum *f = (Ast_Enum *)top_level_named(c.file, "F");
+    CHECK_EQ(f->kind, AST_ENUM);
+    if (f->kind == AST_ENUM) {
+        CHECK(f->members[1]->is_constant && f->members[1]->constant == 4);
+        CHECK(f->members[2]->is_constant && f->members[2]->constant == 6);
+    }
+    Ast_Enum *look = (Ast_Enum *)top_level_named(c.file, "Look");
+    CHECK_EQ(look->kind, AST_ENUM);
+    if (look->kind == AST_ENUM) CHECK(look->members[2]->is_constant && look->members[2]->constant == 3);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "F :: enum { Q :: 3; P :: cast(int) F.Z; }\n"
+                               "main :: () { }\n"),
+              "1:38: 'F' has no member 'Z'\n");
     arena_free(&a);
 }
 

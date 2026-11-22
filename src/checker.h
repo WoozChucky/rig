@@ -983,9 +983,11 @@
 //   doesn't fit in 'u8'", at its name. Two members may share a value, not a
 //   name ("'A' is already declared at PATH:L:C"). In the body, an earlier
 //   member is a plain constant by its name (LAST :: C + 3, ALL :: A | B),
-//   hiding an outer one; outside it, no scope holds the members. A value
-//   needing its own enum (through another enum or a #run) is "'E' is
-//   defined in terms of itself", at the enum, every member then unknown.
+//   hiding an outer one, and E.C names it too (check_expr.cpp's
+//   find_enum_member); outside it, no scope holds the members. A value
+//   needing its own enum, a member not worked out yet or one reached
+//   through another enum or a #run, is "'E' is defined in terms of
+//   itself", at the enum, every member then unknown.
 // - Mode.FREE, a name declaring an enum then a member's name, is the
 //   member, a constant of the enum ("'Mode' has no member 'FRE'", at the
 //   name): Ast_Member.of_enum. It's no place: "can't assign to 'Mode.FREE':
