@@ -1004,7 +1004,7 @@ example.rig:5:10: runtime error: the value doesn't fit in 'Small'
 
 **Constants.** A member, a cast of a constant to an enum and the flags operators on constants are constants of the enum type (section 5.9): they fold, and work in `#if` (`#if DEFAULT == .FREE`), in constants (`DEFAULT :: Mode.FREE;`), as a global's value and in a `#run`'s code. A member is no place: `can't assign to 'Mode.FREE': it's an enum's member`, and `can't take the address of 'Mode.FREE': it's an enum's member`.
 
-**Type information.** An enum is described by a `Type_Info_Enum`, whose tag is `.ENUM` (section 3.16): its name, its integer type's description, whether it is an `enum_flags`, and its members' names and values, in order. An enum converts to `Any` as any value does, so Basic's `print` writes it by its description: a value a member has as that member's name, the first one's when two share it; a flags value no member has as the members it is made of, joined by ` | `, with any bits no member names last, as a number without a sign; and any other value as its number (Basic's README says how):
+**Type information.** An enum is described by a `Type_Info_Enum`, whose tag is `.ENUM` (section 3.16): its name, its integer type's description, whether it is an `enum_flags`, and its members' names and values, in order. An enum converts to `Any` as any value does, so Basic's `print` writes it by its description: a value a member has as that member's name, the first one's when two share it; a flags value no member has as the members it is made of, joined by ` | `, with any bits no member names last, as a number without a sign (alone, when no member's bits are in it); and a value of an `enum` that no member has as its number (Basic's README says how):
 
 ```rig
 #import "Basic";
