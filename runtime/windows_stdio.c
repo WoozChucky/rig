@@ -64,6 +64,19 @@ static unsigned long long scanf_options = SCANF_LEGACY_WIDE_SPECIFIERS;
 
 // Where the options are: C code compiled with the SDK's headers reads and
 // may change them through these, as the inline functions' own copies do.
+//
+// Not yet for a program that also links an object compiled from C with the
+// SDK's headers (milestone 6). That object defines these two, and each
+// function of the family it calls, as COMDAT sections a linker may keep
+// one copy of; here they are ordinary definitions, which a linker may not
+// drop, all in one member of rig_runtime.lib, taken whole once the
+// program names any function in it. lld-link then stops with a
+// duplicate symbol: printf, say, as much as these two, so moving these
+// into a member of their own would not be enough. Visual Studio's
+// legacy_stdio_definitions.lib defines all 221 as COMDATs of selection
+// "any", which declaring each __inline __attribute__((used)) also gives.
+// The options would then be shared only if the functions here read them
+// through these, not through the statics.
 unsigned long long *__local_stdio_printf_options(void) {
     return &printf_options;
 }
