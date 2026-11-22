@@ -3624,18 +3624,19 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
     Ast_Enum *e = t->enum_decl;
     s64 count = e->members.count;
     if (count == 0) return;
-    u8 *names = (u8 *)arena_alloc(l->arena, (u64)count * 16, 1);  // zeroed: a string is 16 bytes
+    s64 string_size = type_string.size;  // a name's: its count, then its data
+    u8 *names = (u8 *)arena_alloc(l->arena, (u64)(count * string_size), 1);  // zeroed
     u8 *values = (u8 *)arena_alloc(l->arena, (u64)count * 8, 1);
     Array<Ir_Reloc> name_relocs = {};
     for (s64 i = 0; i < count; i++) {
         Ast_Const *member = e->members[i];
         RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops lowering and a #run
-        write_bits(names + i * 16 + VIEW_COUNT_OFFSET, (u64)member->name.count, 8);
-        array_add(&name_relocs, Ir_Reloc{i * 16 + VIEW_DATA_OFFSET, add_bytes(l, member->name), false});
+        write_bits(names + i * string_size + VIEW_COUNT_OFFSET, (u64)member->name.count, 8);
+        array_add(&name_relocs, Ir_Reloc{i * string_size + VIEW_DATA_OFFSET, add_bytes(l, member->name), false});
         write_bits(values + i * 8, member->constant, 8);
     }
-    s32 name_array = add_type_info_global(l, string_printf(l->arena, STR_FMT ".names", STR_ARG(name)), count * 16,
-                                          {names, count * 16}, name_relocs);
+    s32 name_array = add_type_info_global(l, string_printf(l->arena, STR_FMT ".names", STR_ARG(name)),
+                                          count * string_size, {names, count * string_size}, name_relocs);
     s32 value_array = add_type_info_global(l, string_printf(l->arena, STR_FMT ".values", STR_ARG(name)), count * 8,
                                            {values, count * 8}, {});
     write_bits(bytes + TYPE_INFO_ENUM_NAMES_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);

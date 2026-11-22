@@ -469,12 +469,6 @@ static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position s
     return literal;
 }
 
-// Whether the name e was written in parentheses, (e): they leave no node,
-// but move its start to the outermost '(' (parse_primary).
-static bool in_parentheses(Ast *e) {
-    return e->start.line != e->pos.line || e->start.col != e->pos.col;
-}
-
 // postfix = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
 //                   | '.' '*' | '.' IDENT | '.' '{' fields '}' | '.' '[' values ']' }
 //
@@ -510,7 +504,7 @@ static Ast *parse_postfix(Parser *p) {
                 if (!set_height(p, p->height + 1)) return nullptr;
                 e = member;
             } else if ((after->kind == TOKEN_LBRACE || after->kind == TOKEN_LBRACKET) && e->kind == AST_NAME &&
-                       !in_parentheses(e)) {
+                       !ast_in_parentheses(e)) {
                 // The name was a type's: T.{...}, or T.[...] with T the
                 // elements' type. A type is never in parentheses, so
                 // (Vec2).{1} is no literal.
@@ -1835,35 +1829,6 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     return proc;
 }
 
-// struct = 'struct' '{' {IDENT ':' type ';'} '}'
-//
-// A struct's fields, after IDENT '::' (the caller read them, and saw
-// 'struct'). Every field ends with its ';', the last too. A column-1
-// declaration of a procedure, a struct or an enum, or a #run {
-// (starts_declaration), before the '}' means the braces were never closed:
-// "expected '}'" there, where the top level resumes (p->resume). So does
-// any #run in column 1: a struct holds no code, so it can only be the top
-// level's. A #run anywhere else among the fields is "expected a field's
-// name". An #if in column 1 ends the fields too, read as the top level's;
-// anywhere else, fields compiled conditionally aren't in the language yet
-// (spec 4.9): "#if can't be among a struct's fields, for now", at the
-// '#if', and the struct is given up. A #load among the fields is reported
-// and skipped, as in a body (skip_misplaced_load), and the fields after it
-// are kept.
-//
-// The #loads in column 1 right before such an end are read again at the
-// top level, as after a body never closed (parse_block_rest): "expected
-// '}'" is reported at the first of them, and the top level resumes there,
-// so the files they name are still loaded. So one in column 1 is only
-// reported as misplaced once known to stay among the fields: when a field
-// or a load not in column 1 follows it, or the '}' closes. Fields in column
-// 1 aren't read again as globals, as a body's would be: a field is written
-// as a global is, so nothing tells a forgotten '}' before a global from a
-// field that wasn't indented.
-//
-// An enum's members are in braces too (parse_enum), which end the same way:
-// braced_next is what both do before each field or member.
-
 // What braced_next found before the next field of a struct or member of an
 // enum.
 enum Braced_Next : u8 {
@@ -1903,6 +1868,34 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
     return BRACED_ITEM;
 }
 
+// struct = 'struct' '{' {IDENT ':' type ';'} '}'
+//
+// A struct's fields, after IDENT '::' (the caller read them, and saw
+// 'struct'). Every field ends with its ';', the last too. A column-1
+// declaration of a procedure, a struct or an enum, or a #run {
+// (starts_declaration), before the '}' means the braces were never closed:
+// "expected '}'" there, where the top level resumes (p->resume). So does
+// any #run in column 1: a struct holds no code, so it can only be the top
+// level's. A #run anywhere else among the fields is "expected a field's
+// name". An #if in column 1 ends the fields too, read as the top level's;
+// anywhere else, fields compiled conditionally aren't in the language yet
+// (spec 4.9): "#if can't be among a struct's fields, for now", at the
+// '#if', and the struct is given up. A #load among the fields is reported
+// and skipped, as in a body (skip_misplaced_load), and the fields after it
+// are kept.
+//
+// The #loads in column 1 right before such an end are read again at the
+// top level, as after a body never closed (parse_block_rest): "expected
+// '}'" is reported at the first of them, and the top level resumes there,
+// so the files they name are still loaded. So one in column 1 is only
+// reported as misplaced once known to stay among the fields: when a field
+// or a load not in column 1 follows it, or the '}' closes. Fields in column
+// 1 aren't read again as globals, as a body's would be: a field is written
+// as a global is, so nothing tells a forgotten '}' before a global from a
+// field that wasn't indented.
+//
+// An enum's members are in braces too (parse_enum), which end the same way:
+// braced_next is what both do before each field or member.
 static Ast *parse_struct(Parser *p, Token *name) {
     advance(p);  // 'struct'
     Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);

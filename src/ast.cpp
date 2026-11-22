@@ -652,6 +652,10 @@ System host_system() {
 #endif
 }
 
+bool ast_in_parentheses(Ast *e) {
+    return e->start.line != e->pos.line || e->start.col != e->pos.col;
+}
+
 bool ast_is_build_program(Ast_File *file) {
     if (!file->reaches_compiler) return false;
     for (s64 i = 0; i < file->procs.count; i++) {

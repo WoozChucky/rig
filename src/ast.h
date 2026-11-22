@@ -718,6 +718,13 @@ struct Ast_File {
     Ast_Enum *operating_system;
 };
 
+/// Whether node e was written in parentheses, (e): they leave no node, but
+// move its start to the outermost '(' (parser.cpp's parse_primary). A type
+// in parentheses is no type, so (Vec2).{1} is no literal (the parser's
+// parse_postfix), and an enum's name in them is no enum's, so (Mode).FREE
+// is no member (check_expr.cpp's check_member).
+bool ast_in_parentheses(Ast *e);
+
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
 // module and has no procedure called main, a broken one included (a broken
 // main is the main of an ordinary program the parser gave up on). A global

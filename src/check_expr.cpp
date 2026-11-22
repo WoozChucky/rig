@@ -2705,8 +2705,7 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // value.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
-    bool in_parentheses = operand->start.line != operand->pos.line || operand->start.col != operand->pos.col;
-    if (operand->kind == AST_NAME && !in_parentheses) {
+    if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
         Ast_Name *name = (Ast_Name *)operand;
         Ast *decl = check_lookup(c, name->name);
         if (decl && decl->kind == AST_ENUM) {

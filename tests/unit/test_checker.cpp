@@ -7567,8 +7567,10 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     }
     // Every member is one the list names: no tag or kind types.h doesn't
     // know.
-    CHECK_EQ(((Ast_Enum *)top_level_named(tree, "Type_Info_Tag"))->members.count, 10);
-    CHECK_EQ(((Ast_Enum *)top_level_named(tree, "Array_Kind"))->members.count, 3);
+    Ast *tags = top_level_named(tree, "Type_Info_Tag");
+    Ast *kinds = top_level_named(tree, "Array_Kind");
+    CHECK(tags->kind == AST_ENUM && ((Ast_Enum *)tags)->members.count == 10);
+    CHECK(kinds->kind == AST_ENUM && ((Ast_Enum *)kinds)->members.count == 3);
     // Declaring them describes nothing: a program that uses no type
     // information lowers as it did, with no description in its data.
     CHECK(!contains(ir_print(&a, lower_with_preload(&a, "main :: () { }\n")), "type_info"));

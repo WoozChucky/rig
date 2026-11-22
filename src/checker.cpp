@@ -2704,6 +2704,23 @@ static Ast_Const *operating_system_member(Arena *a, const char *name, System val
     return member;
 }
 
+// Makes enum e's Type, e->declared, over integer type `integer`, whose
+// size, alignment and sign it has, in c's arena, as a struct's is: the
+// program's enums' (declare_top_level) and Operating_System's.
+static void declare_enum_type(Checker *c, Ast_Enum *e, Type *integer) {
+    Type *t = arena_new<Type>(c->arena);
+    t->kind = TYPE_ENUM;
+    t->name = e->name;
+    t->size = integer->size;
+    t->align = integer->align;
+    t->is_signed = integer->is_signed;
+    t->underlying = integer;
+    t->is_flags = e->is_flags;
+    t->enum_decl = e;
+    t->arena = c->arena;
+    e->declared = t;
+}
+
 // The tree's predeclared Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }
 // (spec 2.5): made the first time, resolved, its Type made as
 // declare_top_level makes an enum's, and kept on the tree, so every checker
@@ -2717,16 +2734,7 @@ static Ast_Enum *operating_system(Checker *c, Ast_File *file) {
     array_add(&e->members, operating_system_member(c->arena, "WINDOWS", SYSTEM_WINDOWS));
     array_add(&e->members, operating_system_member(c->arena, "LINUX", SYSTEM_LINUX));
     e->resolve = RESOLVE_DONE;
-    Type *t = arena_new<Type>(c->arena);
-    t->kind = TYPE_ENUM;
-    t->name = e->name;
-    t->size = type_int.size;
-    t->align = type_int.align;
-    t->is_signed = type_int.is_signed;
-    t->underlying = &type_int;
-    t->enum_decl = e;
-    t->arena = c->arena;  // as a program's enum's (declare_top_level)
-    e->declared = t;
+    declare_enum_type(c, e, &type_int);
     file->operating_system = e;
     return e;
 }
@@ -2827,17 +2835,7 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
             if (!e->declared) {
                 Type *integer = e->type_expr ? type_from_name(e->type_expr->name) : &type_int;
                 if (!integer || integer->kind != TYPE_INTEGER) integer = &type_int;
-                Type *t = arena_new<Type>(c->arena);
-                t->kind = TYPE_ENUM;
-                t->name = e->name;
-                t->size = integer->size;
-                t->align = integer->align;
-                t->is_signed = integer->is_signed;
-                t->underlying = integer;
-                t->is_flags = e->is_flags;
-                t->enum_decl = e;
-                t->arena = c->arena;  // as a struct's
-                e->declared = t;
+                declare_enum_type(c, e, integer);
             }
         }
         // A built-in type's name always means the built-in type
