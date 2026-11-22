@@ -6038,33 +6038,45 @@ TEST(compiler_main_needs_a_body) {
     arena_free(&a);
 }
 
-// Issue #147: #if and the OS constants (spec 2.5, 4.9).
+// Issue #147: #if and the OS constants (spec 2.5, 4.9), and issue #221: OS
+// a constant of the predeclared enum Operating_System.
 
 TEST(os_constants_are_predeclared) {
-    // Untyped integer constants, visible everywhere as the program's own
-    // constants are: OS fits a u8, and a comparison of them folds.
+    // OS is a constant of the predeclared enum Operating_System, visible
+    // everywhere as the program's own constants are, without Preload: a
+    // comparison of it with a member folds. WINDOWS is 1 and LINUX 2.
     Arena a = arena_make();
-    const char *program = "main :: () { a : u8 = OS; b := OS_WINDOWS; c := OS_LINUX; "
-                          "if OS == OS_WINDOWS || OS == OS_LINUX {} }";
+    const char *program = "KNOWN :: OS == .WINDOWS || OS == .LINUX;\nmain :: () { }\n";
     CHECK_STR(check_source(&a, program), "");
     Checked c = check_src(&a, program);
-    Ast_If *branch = (Ast_If *)c.file->procs[0]->body->statements[3];
-    CHECK_EQ(branch->kind, AST_IF);
-    CHECK(branch->condition->is_constant);
-    CHECK_EQ(branch->condition->constant, 1);
-    Ast_Name *os_linux = (Ast_Name *)((Ast_Var *)local_named(&c, "c"))->value;
-    CHECK_EQ(os_linux->constant, 2);
-    CHECK_EQ(os_linux->decl->kind, AST_CONST);
+    Ast *known = global_named(&c, "KNOWN");
+    CHECK(known->is_constant);
+    CHECK_EQ(known->constant, 1);
+    CHECK_STR(type_name(&a, known->type), "bool");
+    Ast_Enum *system = c.file->operating_system;
+    CHECK(system != nullptr);
+    Ast_Binary *either = (Ast_Binary *)((Ast_Const *)known)->value;
+    Ast *os = ((Ast_Binary *)either->left)->left;
+    CHECK_EQ(os->kind, AST_NAME);
+    CHECK(os->type == system->declared);
+    CHECK_STR(type_name(&a, os->type), "Operating_System");
+    CHECK_EQ(system->declared->kind, TYPE_ENUM);
+    CHECK_EQ(system->members.count, 2);
+    CHECK_STR(system->members[0]->name, "WINDOWS");
+    CHECK_EQ(system->members[0]->constant, 1);
+    CHECK_STR(system->members[1]->name, "LINUX");
+    CHECK_EQ(system->members[1]->constant, 2);
     token_list_free(c.list);
     arena_free(&a);
 }
 
 // The value of N in `N :: OS;`, checked with the tree's system set to
-// `system`.
+// `system`: a constant of the tree's Operating_System.
 static u64 os_value_for(System system) {
     Arena a = arena_make();
     Checked c = check_src(&a, "N :: OS;\nmain :: () {}\n", system);
     RIG_ASSERT(c.ok);
+    RIG_ASSERT(c.file->operating_system && c.file->globals[0]->type == c.file->operating_system->declared);
     u64 value = c.file->globals[0]->constant;
     token_list_free(c.list);
     arena_free(&a);
@@ -6096,14 +6108,16 @@ static bool names_predeclared_os(Ast *value) {
 }
 
 TEST(a_top_level_declaration_of_os_is_refused) {
-    // At its name, whatever it declares; each says what the name is.
+    // At its name, whatever it declares; each says what the name is. A
+    // member's name, WINDOWS, is in no scope: an ordinary procedure's.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, "OS :: 3;\nOS_WINDOWS : int;\nOS_LINUX :: () {}\nmain :: () {}\n"),
+    CHECK_STR(check_source(&a, "OS :: 3;\nOperating_System : int;\nWINDOWS :: () {}\nmain :: () {}\n"),
               "1:1: 'OS' is predeclared: it's the system the program is built for\n"
-              "2:1: 'OS_WINDOWS' is predeclared: it's Windows, one of the systems OS may be\n"
-              "3:1: 'OS_LINUX' is predeclared: it's Linux, one of the systems OS may be\n");
+              "2:1: 'Operating_System' is predeclared: it's the systems a program can be built for\n");
     CHECK_STR(check_source(&a, "OS :: struct { x: int; }\nmain :: () {}\n"),
               "1:1: 'OS' is predeclared: it's the system the program is built for\n");
+    CHECK_STR(check_source(&a, "Operating_System :: struct { }\nmain :: () {}\n"),
+              "1:1: 'Operating_System' is predeclared: it's the systems a program can be built for\n");
     // The refused declaration isn't declared: a use still means the constant.
     Checked c = check_src(&a, "OS :: 3;\nmain :: () { x := OS; }\n");
     CHECK(names_predeclared_os(((Ast_Var *)local_named(&c, "x"))->value));
@@ -6116,7 +6130,7 @@ TEST(a_broken_entry_named_os_isnt_declared) {
     // the constant (not the broken entry's unknown type, which would say
     // nothing).
     Arena a = arena_make();
-    const char *program = "OS :: 5 6;\nmain :: () { x : u8 = OS; }\n";
+    const char *program = "OS :: 5 6;\nmain :: () { x : Operating_System = OS; }\n";
     CHECK_STR(check_source(&a, program), "1:9: expected ';', found integer literal\n");
     Token_List *list = src(program);
     Ast_File *file = parse(list->tokens, &a, &list->diag);
@@ -6294,12 +6308,12 @@ TEST(if_directive_per_system) {
     // branch's error is said.
     Arena a = arena_make();
     const char *program = "main :: () {\n"
-                          "    #if OS == OS_WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
+                          "    #if OS == .WINDOWS { a : int = \"w\"; } else { b : int = \"l\"; }\n"
                           "}\n";
     CHECK_STR(check_source(&a, program, SYSTEM_WINDOWS),
-              "2:38: a value of type 'string' doesn't convert to 'int' implicitly\n");
+              "2:36: a value of type 'string' doesn't convert to 'int' implicitly\n");
     CHECK_STR(check_source(&a, program, SYSTEM_LINUX),
-              "2:62: a value of type 'string' doesn't convert to 'int' implicitly\n");
+              "2:60: a value of type 'string' doesn't convert to 'int' implicitly\n");
     arena_free(&a);
 }
 
@@ -6383,7 +6397,7 @@ static String decide_source(Arena *a, const char *text, System system, Ast_File 
 TEST(decides_a_top_level_if_by_the_system) {
     // Each system takes its own branch, whatever the host.
     Arena a = arena_make();
-    const char *program = "#if OS == OS_WINDOWS { A :: 1; } else { B :: 2; }";
+    const char *program = "#if OS == .WINDOWS { A :: 1; } else { B :: 2; }";
     Ast_File *file = nullptr;
     CHECK_STR(decide_source(&a, program, SYSTEM_WINDOWS, &file), "");
     Ast_If_Directive *first = file->ifs[0];
@@ -6644,7 +6658,7 @@ TEST(if_branch_names_and_the_rest) {
     // is, at the later of the two in load order, naming the earlier,
     // whichever is in the branch.
     Arena a = arena_make();
-    const char *both = "#if OS == OS_WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
+    const char *both = "#if OS == .WINDOWS { NAME :: 1; } else { NAME :: 2; }\nmain :: () {}\n";
     CHECK_STR(check_loaded(&a, both, SYSTEM_WINDOWS), "");
     CHECK_STR(check_loaded(&a, both, SYSTEM_LINUX), "");
     CHECK_STR(check_loaded(&a, "X :: 0;\n#if true { X :: 1; }\nmain :: () {}\n", SYSTEM_NONE),
@@ -6666,6 +6680,27 @@ TEST(what_a_top_level_condition_worked_out_stays_for_check) {
                            "main :: () { s : S; b := f(s); }\n",
                            SYSTEM_NONE),
               "3:5: the condition of '#if' must be known while compiling\n");
+    arena_free(&a);
+}
+
+TEST(the_decider_and_the_checker_share_operating_system) {
+    // The predeclared Operating_System is made once per tree, the first time
+    // its names are declared, by the decider here: MINE, which the decider
+    // resolved with that type, is compared in main with the OS check()
+    // declares, of the same type, so it checks.
+    Arena a = arena_make();
+    Diagnostics d = {};
+    Load_Options options = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"),
+                                  str("MINE :: OS;\n#if MINE == .WINDOWS { A :: 1; } else { A :: 2; }\n"
+                                      "main :: () { same := MINE == OS; }\n"),
+                                  &options);
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(file->operating_system != nullptr);
+    Ast *mine = top_level_named(file, "MINE");
+    CHECK(mine && mine->type == file->operating_system->declared);
+    diag_free(&d);
     arena_free(&a);
 }
 
@@ -8842,38 +8877,38 @@ TEST(the_temporary_allocator_while_compiling) {
     // Preload's temporary allocator, run by the compile-time world's #runs,
     // which share its storage, in declaration order: a resize of the last
     // allocation in place, one of an earlier allocation moved and copied, a
-    // request larger than a page given a page of its own, and FREE_ALL,
+    // request larger than a page given a page of its own, and .FREE_ALL,
     // which gives the pages back and keeps the high water mark.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  "T :: TEMPORARY_ALLOCATOR;\n"
                                  "in_place :: () -> bool {\n"
-                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
-                                 "    p := T.proc(ALLOCATE, 10, 0, null, T.data);\n"
-                                 "    q := T.proc(RESIZE, 100, 10, p, T.data);\n"
+                                 "    T.proc(.FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    p := T.proc(.ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    q := T.proc(.RESIZE, 100, 10, p, T.data);\n"
                                  "    return q == p && context.temporary_storage.occupied == 100;\n"
                                  "}\n"
                                  "moved :: () -> bool {\n"
-                                 "    p := cast(*u8) T.proc(ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    p := cast(*u8) T.proc(.ALLOCATE, 10, 0, null, T.data);\n"
                                  "    p.* = 42;\n"
-                                 "    T.proc(ALLOCATE, 1, 0, null, T.data);\n"
-                                 "    q := cast(*u8) T.proc(RESIZE, 20, 10, p, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 1, 0, null, T.data);\n"
+                                 "    q := cast(*u8) T.proc(.RESIZE, 20, 10, p, T.data);\n"
                                  "    return q != p && q.* == 42;\n"
                                  "}\n"
                                  "page :: () -> int {\n"
-                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
-                                 "    T.proc(ALLOCATE, 10, 0, null, T.data);\n"
-                                 "    T.proc(ALLOCATE, 40000, 0, null, T.data);\n"
+                                 "    T.proc(.FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 10, 0, null, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 40000, 0, null, T.data);\n"
                                  "    return context.temporary_storage.occupied;\n"
                                  "}\n"
                                  "after_reset :: () -> bool {\n"
-                                 "    T.proc(FREE_ALL, 0, 0, null, T.data);\n"
+                                 "    T.proc(.FREE_ALL, 0, 0, null, T.data);\n"
                                  "    s := context.temporary_storage;\n"
                                  "    return s.occupied == 0 && s.overflow_pages == null && s.high_water_mark >= 72768;\n"
                                  "}\n"
                                  "left :: () -> int {\n"
-                                 "    T.proc(ALLOCATE, 100, 0, null, T.data);\n"
+                                 "    T.proc(.ALLOCATE, 100, 0, null, T.data);\n"
                                  "    return context.temporary_storage.occupied;\n"
                                  "}\n"
                                  "IN_PLACE :: #run in_place();\n"

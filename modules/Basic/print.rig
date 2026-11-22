@@ -547,7 +547,7 @@ print_error_string :: (s: string) {
         count := s.count - written;
         if count > MOST { count = MOST; }
         wrote := 0;
-        #if OS == OS_WINDOWS {
+        #if OS == .WINDOWS {
             wrote = cast(int) c_write(2, s.data + written, cast(u32) count);
         } else {
             wrote = cast(int) c_write(2, s.data + written, cast(u64) count);

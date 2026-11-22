@@ -11,7 +11,7 @@
 #import "Basic";
 
 // Prints that it was called, and gives the call to the heap.
-telling_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+telling_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     print_line("the context's allocator was called");
     return heap_allocator_proc(mode, size, old_size, old_memory, null);
 }

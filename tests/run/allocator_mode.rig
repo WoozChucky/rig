@@ -1,0 +1,19 @@
+// Preload's allocator modes as an enum (issue #221, spec 2.14, 7.10): an
+// allocator procedure takes an Allocator_Mode, which print writes by
+// name, from Basic's helpers and from direct calls with .ALLOCATE and
+// .FREE.
+#import "Basic";
+
+printing_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    print("{} {}\n", mode, size);
+    return heap_allocator_proc(mode, size, old_size, old_memory, null);
+}
+
+main :: () {
+    a := Allocator.{printing_proc, null};
+    p := alloc(16, a);
+    p = resize(p, 16, 32, a);
+    free(p, a);
+    q := a.proc(.ALLOCATE, 8, 0, null, a.data);
+    a.proc(.FREE, 0, 8, q, a.data);
+}

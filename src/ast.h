@@ -619,7 +619,8 @@ struct Ast_Push_Context : Ast {
 };
 
 // The systems a program can be built for (spec 2.5, 4.9), numbered as the
-// predeclared OS_WINDOWS and OS_LINUX are; 0 names none.
+// predeclared enum Operating_System's members, WINDOWS and LINUX, are; 0
+// names none.
 enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
 
 // The system rig runs on (_WIN32 decides, as load.cpp's HOST_IS_WINDOWS).
@@ -706,6 +707,12 @@ struct Ast_File {
     Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): a call's place, what
                                       // a default #caller_location is and what a built-in procedure
                                       // passes its helper (lower_builtin_call); null without Preload
+    // The predeclared enum Operating_System (spec 2.5), OS's type: made once
+    // per tree, at 0:0 in the tree's arena, by the first checker to declare
+    // the predeclared names (checker.cpp's declare_predeclared), a decider's
+    // or check()'s, so the constants a decider resolved with it and the
+    // checker's are of one type. Null until then.
+    Ast_Enum *operating_system;
 };
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

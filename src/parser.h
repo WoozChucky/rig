@@ -324,13 +324,13 @@
 // can't hold it.
 //
 // Code is compiled for one system and not another with #if (spec 4.9):
-// `#if OS == OS_WINDOWS { ... } else { ... }`, at the top level and as a
+// `#if OS == .WINDOWS { ... } else { ... }`, at the top level and as a
 // statement in a body, Jai's directive. The condition is any expression,
 // as an if's is, and the branch's '{' ends it; the branches are always
 // blocks, and `else #if` begins the chain's next arm, as `else if` does an
 // if's. `else if` after an #if would make an if statement the else part,
 // compiled whatever the condition: it's "an #if's else is a block or
-// another #if, as in else #if OS == OS_LINUX { ... }", at the `if`. In a
+// another #if, as in else #if OS == .LINUX { ... }", at the `if`. In a
 // body each branch is a block of statements; at the top level, of
 // top-level declarations, nested #ifs included, and the #if is a
 // declaration of its own (Ast_File.ifs), its branches in none of the

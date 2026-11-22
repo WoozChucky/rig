@@ -22,11 +22,11 @@ Every name Preload declares for its own use starts with two underscores (`__mall
 
 ### The allocator
 
-An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, `ALLOCATE`, `RESIZE`, `FREE` or `FREE_ALL`. Preload holds the shape, the modes and the heap, so every program has them; Basic (`modules/Basic`) adds the helpers `alloc`, `resize`, `free` and `free_all`, an arena and a pool, all over these.
+An allocator is passed to whatever needs memory, as Jai has it: an `Allocator` holds a procedure and the data it works on, and the procedure is called with a mode, an `Allocator_Mode`: `.ALLOCATE`, `.RESIZE`, `.FREE` or `.FREE_ALL`. Preload holds the shape, the modes and the heap, so every program has them; Basic (`modules/Basic`) adds the helpers `alloc`, `resize`, `free` and `free_all`, an arena and a pool, all over these.
 
-- `ALLOCATE`, `RESIZE`, `FREE`, `FREE_ALL`: the modes, 0 to 3.
-- `Allocator`: `proc: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`. The procedure is called as `proc(mode, size, old_size, old_memory, data)`: `ALLOCATE` gives `size` bytes, or null; `RESIZE` gives `old_memory`, which holds `old_size` bytes, made `size` bytes long, moved or not, its first bytes kept, or null with `old_memory` as it was; `FREE` gives `old_memory` back and `FREE_ALL` everything the allocator gave, each returning null.
-- `heap_allocator_proc`, `HEAP_ALLOCATOR`: C's heap, through Preload's own `__malloc`, `__realloc` and `__free`. Its memory is aligned for any type, as C's `malloc` aligns it. `FREE_ALL` does nothing and gives null: the heap doesn't know what it gave, so each piece goes back with `FREE`.
+- `Allocator_Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }`: the modes (spec 3.18), 0 to 3, over `int`. A call writes `.FREE` where the mode's type is known, as an allocator procedure's parameter is, and Basic's `print` writes a mode by its name.
+- `Allocator`: `proc: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void` and `data: *void`. The procedure is called as `proc(mode, size, old_size, old_memory, data)`: `.ALLOCATE` gives `size` bytes, or null; `.RESIZE` gives `old_memory`, which holds `old_size` bytes, made `size` bytes long, moved or not, its first bytes kept, or null with `old_memory` as it was; `.FREE` gives `old_memory` back and `.FREE_ALL` everything the allocator gave, each returning null.
+- `heap_allocator_proc`, `HEAP_ALLOCATOR`: C's heap, through Preload's own `__malloc`, `__realloc` and `__free`. Its memory is aligned for any type, as C's `malloc` aligns it. `.FREE_ALL` does nothing and gives null: the heap doesn't know what it gave, so each piece goes back with `.FREE`.
 
 Calling an allocator's procedure directly asks it for exactly what it's given: the heap's passes a size of 0, or a null to resize or free, on to C, whose answer is C's business (what `malloc` and `realloc` give for 0 is left to each C library). Basic's `alloc`, `resize`, `free` and `free_all` settle those edges, so an allocator is only ever asked for more than 0 bytes and only ever given memory that isn't null to resize or free.
 
@@ -35,9 +35,9 @@ puts :: (s: *u8) -> s32 #foreign libc;
 
 main :: () {
     a := HEAP_ALLOCATOR;
-    p := a.proc(ALLOCATE, 64, 0, null, a.data);
+    p := a.proc(.ALLOCATE, 64, 0, null, a.data);
     if p != null { puts("64 bytes from the heap"); }
-    a.proc(FREE, 0, 0, p, a.data);
+    a.proc(.FREE, 0, 0, p, a.data);
 }
 ```
 
@@ -159,10 +159,10 @@ The context is what code deep in a call chain needs without every caller handing
 
 It hands out the current region: the newest page's bytes after its header, or, with no page, the first block. A page starts in the storage's count where the region before it ended, rounded up to a multiple of 8, so `occupied` keeps counting through the pages and the newest page's own offset is `occupied - start`, found without walking the pages.
 
-- `ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, or `size` with the header would be past `int`'s largest, the result is null and the storage is as it was.
-- `RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from where that allocation starts. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
-- `FREE` does nothing: the memory goes back with everything else at the next reset.
-- `FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
+- `.ALLOCATE` starts at the first multiple of 8 at or past the region's offset, so every allocation is aligned to 8 when the first block and `overflow_allocator`'s memory are, as the heap's is: a page's 24-byte header is a multiple of 8. When the rest of the region can't hold `size` bytes, a page is asked of `overflow_allocator`: `TEMPORARY_STORAGE_SIZE` bytes, or `size` with the 24-byte header when that is larger. The rest of the region before it goes unused but counts as occupied. When `overflow_allocator` has none to give, or `size` with the header would be past `int`'s largest, the result is null and the storage is as it was.
+- `.RESIZE` grows or shrinks the last allocation in place when the region holds `size` bytes from where that allocation starts. Otherwise it allocates anew and copies the old bytes that fit, or gives null with the memory as it was.
+- `.FREE` does nothing: the memory goes back with everything else at the next reset.
+- `.FREE_ALL` is a reset: every page goes back to `overflow_allocator`, newest first, `overflow_pages` is null and `occupied` 0, so the first block is handed out again from its start. `high_water_mark` stays: the largest `occupied` has been, counting the unused tails of regions a page replaced. A page's start, rounded up, keeps its offsets as aligned as the count's, so the mark is at least the size of a first block that would have held everything.
 
 Memory the temporary allocator gave, used after a reset, is a memory error no check catches (spec 8.6): the bytes are handed out again, or their page is back with `overflow_allocator`. A program's own `Temporary_Storage` needs `data`, `size` and `overflow_allocator` set, and its `data` and `overflow_allocator`'s memory aligned to 8 for its allocations to be.
 
@@ -173,10 +173,10 @@ printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 main :: () {
     t := TEMPORARY_ALLOCATOR;
-    a := t.proc(ALLOCATE, 10, 0, null, t.data);
-    b := t.proc(ALLOCATE, 100, 0, null, t.data);
+    a := t.proc(.ALLOCATE, 10, 0, null, t.data);
+    b := t.proc(.ALLOCATE, 100, 0, null, t.data);
     printf("%lld bytes occupied\n", context.temporary_storage.occupied);
-    t.proc(FREE_ALL, 0, 0, null, t.data);
+    t.proc(.FREE_ALL, 0, 0, null, t.data);
     printf("%lld after the reset, at most %lld\n", context.temporary_storage.occupied, context.temporary_storage.high_water_mark);
 }
 ```
@@ -188,7 +188,7 @@ It prints:
 0 after the reset, at most 116
 ```
 
-`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `RESIZE` copies with, and so do the resizable arrays' helpers that move or copy elements (below); it's not for programs.
+`__memmove` is C's `memmove` under Preload's own name, which the temporary allocator's `.RESIZE` copies with, and so do the resizable arrays' helpers that move or copy elements (below); it's not for programs.
 
 ### Resizable arrays
 
@@ -211,8 +211,8 @@ It checks the result of those that grow. The helpers check none of these. They'r
 
 - **The allocator.** A zeroed array's allocator has a null procedure. When the array first grows, it takes the caller's `context.allocator` and keeps it, even when that gives no memory, so it grows and goes back to that allocator wherever it's used later. Setting `.allocator` before the first growth chooses another; changing it while the array holds memory is a memory error no check catches (spec 8.6).
 - **Growth.** Adding or inserting into a full array, its count at least `allocated`, grows it to the larger of 8 and twice `allocated`, so `n` elements added one at a time are moved about `n` times in all; past half of `int`'s largest, to `int`'s largest. `array_reserve` and `array_resize` grow to exactly the count they're given, or to the array's count when that is more, as for an array whose `data` and `count` a program set by hand. Room whose bytes pass `int`'s largest asks for `int`'s largest bytes, which no allocator gives.
-- **Asking for memory.** An array that owns none is given it with `ALLOCATE`, copying the elements whose `data` and `count` a program set by hand, which stay where they were; one that owns some has it resized with `RESIZE`, from `allocated` elements' bytes. An allocator's null leaves the array as it was, and the built-in stops the program with `the array's allocator has no memory to give`.
-- **Giving back.** `array_free` gives the memory with `FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them. The array is then empty, `data` null and `allocated` 0, and keeps its allocator. It gives nothing back for an array that owns no memory.
+- **Asking for memory.** An array that owns none is given it with `.ALLOCATE`, copying the elements whose `data` and `count` a program set by hand, which stay where they were; one that owns some has it resized with `.RESIZE`, from `allocated` elements' bytes. An allocator's null leaves the array as it was, and the built-in stops the program with `the array's allocator has no memory to give`.
+- **Giving back.** `array_free` gives the memory with `.FREE` and its size, `allocated` elements' bytes, so an allocator that records sizes gets them. The array is then empty, `data` null and `allocated` 0, and keeps its allocator. It gives nothing back for an array that owns no memory.
 - **The place.** While `__array_grow` and `__array_free` call the allocator, `context.allocation_location` is the place they were given, and the one before is put back after, as Basic's `alloc` and `free` do: an allocator reads the program's line where the built-in was called, not Preload's (spec 7.10). The place has no default, since the compiler always passes it; a program that calls a helper by hand passes one too, `.{}` for no place.
 - **Elements of no size** (`[..]Empty`, for a struct with no fields) take no memory: growing asks for nothing, and `data` becomes `__array_no_bytes`'s address, so indexing and `for` find it not null. It's an `int`, for its 8-byte alignment, which an element of 0 bytes can still need (a struct holding a `[0]int`).
 
@@ -229,5 +229,4 @@ A zeroed `Source_Code_Location`, `file` empty and `line` 0, is no place. The con
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.
-- The allocator's modes are constants, from before Rig had enums.
 - No `using`, so each kind's type information struct holds its `Type_Info` as a field, `info`, and reads it as `t.info.size`.

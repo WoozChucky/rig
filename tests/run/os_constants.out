@@ -1,5 +1,5 @@
 OS is Windows or Linux
-OS_WINDOWS is 1, OS_LINUX is 2
+WINDOWS is 1, LINUX is 2
 #run sees the same OS
-OS is an untyped integer
+a constant the #if decided with is OS's type
 a local hides OS

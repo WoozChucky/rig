@@ -1721,7 +1721,7 @@ TEST(if_decides_between_loading_and_checking) {
     // branch's procedure joins the tree, and the #if is decided.
     Arena a = arena_make();
     String dir = load_test_directory(&a, "if_decides_between_loading_and_checking");
-    const char *text = "#if OS == OS_WINDOWS { w :: () {} } else { l :: () {} }\n";
+    const char *text = "#if OS == .WINDOWS { w :: () {} } else { l :: () {} }\n";
     const System systems[2] = {SYSTEM_WINDOWS, SYSTEM_LINUX};
     const char *names[2] = {"w", "l"};
     for (s64 i = 0; i < 2; i++) {
@@ -2160,7 +2160,7 @@ TEST(stdin_for_loaded_only_in_a_branch_not_taken) {
     write_source(&a, dir, "x.rig", "#load \"l.rig\";\n");
     write_source(&a, dir, "sub/a.rig", "#if false { #load \"../l.rig\"; }\n");
     CHECK(!os_file_exists(str(in_directory(&a, dir, "l.rig"))));
-    const char *by_os = "#if OS == OS_WINDOWS { #load \"w.rig\"; } else { #load \"l.rig\"; }\n";
+    const char *by_os = "#if OS == .WINDOWS { #load \"w.rig\"; } else { #load \"l.rig\"; }\n";
     const Not_Taken_Case cases[] = {
         {by_os, SYSTEM_WINDOWS, false, true, false, 0},
         {by_os, SYSTEM_LINUX, true, false, false, 0},

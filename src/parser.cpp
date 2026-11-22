@@ -1028,7 +1028,7 @@ static Ast_Block *parse_top_level_block(Parser *p);
 // chain may have thousands of arms. `else if` would make an if statement,
 // compiled whatever the conditions, the else part, which is never what's
 // meant: it's "an #if's else is a block or another #if, as in else #if OS
-// == OS_LINUX { ... }", at the `if`. Anything else after the else is
+// == .LINUX { ... }", at the `if`. Anything else after the else is
 // "expected '{'", from the block.
 static Ast *parse_if_directive(Parser *p, bool top_level) {
     Ast_If_Directive *first = nullptr;
@@ -1048,7 +1048,7 @@ static Ast *parse_if_directive(Parser *p, bool top_level) {
         advance(p);
         if (peek(p)->kind == TOKEN_IF) {
             diag_error(p->diag, peek(p)->pos,
-                       "an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }");
+                       "an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }");
             return nullptr;
         }
         if (!is_directive(peek(p), "if")) break;  // else { ... }, the chain's end

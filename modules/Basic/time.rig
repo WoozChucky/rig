@@ -221,7 +221,7 @@ format_time :: (calendar: Calendar, buffer: []u8) -> string {
 // is up, it gives -1 and writes the time left, which is slept in turn.
 sleep_milliseconds :: (ms: int) {
     if ms <= 0 { return; }
-    #if OS == OS_WINDOWS {
+    #if OS == .WINDOWS {
         MOST :: 2147483647; // the most milliseconds one call is given
         left := ms;
         while left > 0 {

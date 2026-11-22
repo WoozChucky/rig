@@ -8,16 +8,16 @@
 #import "Basic";
 
 // The heap, saying what the arrays ask of it.
-printing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { print("allocate {}\n", size); }
-    if mode == RESIZE { print("resize {} to {}\n", old_size, size); }
-    if mode == FREE { print("free {}\n", old_size); }
+printing_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { print("allocate {}\n", size); }
+    if mode == .RESIZE { print("resize {} to {}\n", old_size, size); }
+    if mode == .FREE { print("free {}\n", old_size); }
     return heap_allocator_proc(mode, size, old_size, old_memory, data);
 }
 
-// The heap, but for RESIZE, which it refuses.
-refusing_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == RESIZE { print("refuse {} to {}\n", old_size, size); return null; }
+// The heap, but for .RESIZE, which it refuses.
+refusing_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .RESIZE { print("refuse {} to {}\n", old_size, size); return null; }
     return printing_proc(mode, size, old_size, old_memory, data);
 }
 
@@ -59,8 +59,8 @@ main :: () {
     __array_free(r, 8, .{});
     print("{} {} {}\n", a.data == null, a.allocated, a.allocator.proc == printing_proc);
 
-    // Resizing past allocated grows to exactly the count, by ALLOCATE and
-    // then by RESIZE, zeroing every element it adds, those in the memory
+    // Resizing past allocated grows to exactly the count, by .ALLOCATE and
+    // then by .RESIZE, zeroing every element it adds, those in the memory
     // the array had as well as those in the memory it was given.
     z : [..]int;
     z.allocator = printing;
@@ -140,7 +140,7 @@ main :: () {
     }
     __array_free(rf, 8, .{});
 
-    // Growth past int's range asks for int's largest bytes, with ALLOCATE
+    // Growth past int's range asks for int's largest bytes, with .ALLOCATE
     // while the array owns no memory, which the heap doesn't give. The
     // allocator the first growth took from the context stays. A count of
     // int's largest has no room for one more: the add is false without

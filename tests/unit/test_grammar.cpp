@@ -407,9 +407,9 @@ static void grammar_out_types(Array<u8> *out, const Grammar_Tables *t) {
     }
 }
 
-// The predeclared constants' names as a regex's alternatives, OS|OS_WINDOWS,
-// in the checker's order. Names are letters, digits and '_', so nothing
-// needs escaping.
+// The predeclared constants' names as a regex's alternatives, OS|CPU, in
+// the checker's order (OS alone, today). Names are letters, digits and '_',
+// so nothing needs escaping.
 static void grammar_out_predeclared(Array<u8> *out, const Grammar_Tables *t) {
     for (s64 i = 0; i < t->predeclared_count; i++) {
         if (i > 0) grammar_out(out, "|");
@@ -709,8 +709,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
         {"<", OPERATORS_COMPARISON}, {"..", OPERATORS_RANGE}, {"(", OPERATORS_NONE}, {"<<", OPERATORS_BITWISE}};
     static Type *const named_types[] = {&type_int};
     static const char *const reserved_types[] = {"Any"};
-    static const Predeclared_Constant predeclared[] = {{"OS", SYSTEM_NONE, "the system"},
-                                                       {"OS_LINUX", SYSTEM_LINUX, "Linux"}};
+    static const Predeclared_Constant predeclared[] = {{"OS", "the system"}, {"CPU", "the processor"}};
     Grammar_Tables tables = {
         keywords,    GRAMMAR_COUNT(keywords),    keyword_scopes,  GRAMMAR_COUNT(keyword_scopes),
         punctuation, GRAMMAR_COUNT(punctuation), operator_scopes, GRAMMAR_COUNT(operator_scopes),
@@ -737,7 +736,7 @@ TEST(vscode_grammar_fills_in_the_placeholders) {
               "{\n"
               "    \"keywords\": \"if|while true\",\n"
               "    \"types\": \"int|Any\",\n"
-              "    \"constants\": \"OS|OS_LINUX\",\n"
+              "    \"constants\": \"OS|CPU\",\n"
               "    \"operators\": {\n"
               "        \"match\": \"(\\\\.\\\\.)|(<<)|(<)\",\n"
               "        \"captures\": {\n"

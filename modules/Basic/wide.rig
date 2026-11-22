@@ -41,7 +41,7 @@
 #load "string.rig";
 #load "allocators.rig";
 
-#if OS == OS_WINDOWS {
+#if OS == .WINDOWS {
     // s in UTF-16, followed by a zero unit, for kernel32's wide calls, in
     // one allocation from allocator at loc, which the caller gives back
     // with free(wide, allocator, loc). The empty string is a lone zero

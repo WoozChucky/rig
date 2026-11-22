@@ -10,8 +10,8 @@ main :: () {
     printf("hello from %.*s\n", cast(s32) label.count, label.data);
 
     // A workspace's Preload: its heap, at run time.
-    copy := cast(*u8) HEAP_ALLOCATOR.proc(ALLOCATE, label.count, 0, null, HEAP_ALLOCATOR.data);
+    copy := cast(*u8) HEAP_ALLOCATOR.proc(.ALLOCATE, label.count, 0, null, HEAP_ALLOCATOR.data);
     for i: 0..label.count - 1 { copy[i] = label.data[i]; }
     printf("%.*s, from the heap\n", cast(s32) label.count, copy);
-    HEAP_ALLOCATOR.proc(FREE, 0, 0, copy, HEAP_ALLOCATOR.data);
+    HEAP_ALLOCATOR.proc(.FREE, 0, 0, copy, HEAP_ALLOCATOR.data);
 }

@@ -182,11 +182,11 @@
 //   or not, so a debugger shows each by its name, as C's debuggers show an
 //   enum's values. A constant naming a procedure isn't one (the debugger
 //   knows the procedure by its own name) unless it hides a name a debugger
-//   shows, and neither are the predeclared OS, OS_WINDOWS and OS_LINUX,
-//   which the program doesn't declare, nor one in a nested block once the
-//   code around it can't go on (its IR block has ended, as after a return,
-//   a break or a continue, or a block or an if that always ends in one),
-//   whose scope has no code for a debugger to stop in (lower.cpp's
+//   shows, and neither is the predeclared OS, which the program doesn't
+//   declare, nor one in a nested block once the code around it can't go on
+//   (its IR block has ended, as after a return, a break or a continue, or
+//   a block or an if that always ends in one), whose scope has no code for
+//   a debugger to stop in (lower.cpp's
 //   lower_statements), nor one that hides a name, after such code in its
 //   own block, which would hide it only where there's no code. Each is an
 //   Ir_Var: a top-level one in Ir_Module.constants, a body's in its

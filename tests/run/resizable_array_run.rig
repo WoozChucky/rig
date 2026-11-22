@@ -31,12 +31,12 @@ fill :: () -> int {
 
 seen_count :: () -> int { return seen.count + seen[1]; }
 
-// The bytes the last ALLOCATE asked for.
+// The bytes the last .ALLOCATE asked for.
 asked := 0;
 
-// The heap, remembering the bytes each ALLOCATE asks for.
-counting_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE { asked = size; }
+// The heap, remembering the bytes each .ALLOCATE asks for.
+counting_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE { asked = size; }
     return heap_allocator_proc(mode, size, old_size, old_memory, data);
 }
 

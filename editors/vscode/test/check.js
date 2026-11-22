@@ -1089,14 +1089,15 @@ check('the grammar\'s other rules still colour as they did', () => {
     assertScopes('x := a @ b;', { '@': 'invalid.illegal.character.rig' });
     assertScopes('#load "load/shapes.rig";', { '#load': 'keyword.other.directive.rig' });
     assertScopes('defer free(p);', { defer: 'keyword.control.rig', free: 'entity.name.function.call.rig' });
-    // The predeclared constants (issue #147), from the checker's table; a
-    // name that only ends in one is the program's own.
-    assertScopes('#if OS == OS_WINDOWS {', {
+    // The predeclared constant OS (issues #147, #221), from the checker's
+    // table; a name that only ends in it is the program's own, and so is a
+    // member of its enum written after a '.'.
+    assertScopes('#if OS == .WINDOWS {', {
         '#if': 'keyword.other.directive.rig',
         OS: 'support.constant.rig',
-        OS_WINDOWS: 'support.constant.rig',
+        WINDOWS: null,
     });
-    assertScopes('MY_OS := OS_LINUX;', { MY_OS: null, OS_LINUX: 'support.constant.rig' });
+    assertScopes('MY_OS := OS;', { MY_OS: null, OS: 'support.constant.rig' });
 });
 
 // An enum's name is a type's, as a struct's is, after either keyword
@@ -1126,8 +1127,9 @@ check('the grammar colours the types in every program of tests/run and tests/bui
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
     // The structs and enums a program may name: its own, Preload's, which
-    // every program imports (modules/Preload's Allocator, say), and those of
-    // the modules a program #imports or #loads.
+    // every program imports (modules/Preload's Allocator, say), those of
+    // the modules a program #imports or #loads, and the predeclared enum
+    // Operating_System, which no file declares (spec 2.5).
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;
@@ -1138,7 +1140,7 @@ check('the grammar colours the types in every program of tests/run and tests/bui
         }
     };
     walkModules(path.join(root, 'modules'));
-    const structs = new Set();
+    const structs = new Set(['Operating_System']);
     for (const source of [...sources.values(), ...modules]) {
         for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|enum|enum_flags)\b/g)) structs.add(m[1]);
     }

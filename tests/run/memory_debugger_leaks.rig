@@ -21,7 +21,7 @@
 // What watching_allocator_proc saw of the last call it was given: its mode
 // and its old_size.
 Watched :: struct {
-    mode: int;
+    mode: Allocator_Mode;
     old_size: int;
 }
 
@@ -33,11 +33,11 @@ Watched :: struct {
 // gives its old entries, 16 of 80 bytes, back to the heap; the junk then
 // takes that memory again and fills it with 255s, so a debugger that read
 // its record there after the resize would read junk, not the record.
-watching_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+watching_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     watched := cast(*Watched) data;
     watched.mode = mode;
     watched.old_size = old_size;
-    if mode == RESIZE && old_memory != null && size > 0 {
+    if mode == .RESIZE && old_memory != null && size > 0 {
         notes : [16]*void;
         for 0..15 { notes[it] = alloc(1); }
         for 0..15 { free(notes[it]); }
@@ -77,16 +77,16 @@ main :: () {
     builder_init(*builder);
     append_string(*builder, "text");             // 23, 64 bytes
     d := context.allocator;
-    none := d.proc(ALLOCATE, 0, 0, null, d.data);       // no allocation
+    none := d.proc(.ALLOCATE, 0, 0, null, d.data);       // no allocation
     over : Memory_Debugger;
     memory_debugger_init(*over, d);
     e := memory_debugger_allocator(*over);
-    grown := e.proc(RESIZE, 8, 0, null, e.data);        // 24
-    gone := e.proc(RESIZE, 0, 0, grown, e.data);        // a free of 24
+    grown := e.proc(.RESIZE, 8, 0, null, e.data);        // 24
+    gone := e.proc(.RESIZE, 0, 0, grown, e.data);        // a free of 24
     print("{}\n", memory_debugger_report(*over));
     memory_debugger_free(*over);
-    d.proc(FREE, 0, 0, null, d.data);                   // nothing
-    loose := d.proc(ALLOCATE, 8, 0, null, d.data);      // 25, no place
+    d.proc(.FREE, 0, 0, null, d.data);                   // nothing
+    loose := d.proc(.ALLOCATE, 8, 0, null, d.data);      // 25, no place
     print("{} {}\n", none == null, gone == null);
     print("{}\n", memory_debugger_report(*debugger));
     free(loose);
@@ -118,12 +118,12 @@ main :: () {
     moved := alloc(16);                          // 1
     moved = resize(moved, 16, 32);               // still 1, after 2 to 17
     print("{}\n", memory_debugger_report(*debugger));
-    watched.mode = 0;
-    gone = d.proc(RESIZE, 0, 0, moved, d.data);         // a free of 1
-    print("{} {}\n", gone == null, watched.mode == FREE);
+    watched.mode = .ALLOCATE;
+    gone = d.proc(.RESIZE, 0, 0, moved, d.data);         // a free of 1
+    print("{} {}\n", gone == null, watched.mode == .FREE);
     numbers : [..]int;
     array_add(*numbers, 1);                      // 18
     bytes := numbers.allocated * size_of(int);
     array_free(*numbers);
-    print("{} {} {}\n", watched.mode == FREE, watched.old_size == bytes, bytes > 0);
+    print("{} {} {}\n", watched.mode == .FREE, watched.old_size == bytes, bytes > 0);
 }

@@ -2625,22 +2625,24 @@ bool check_proc_signature(Checker *c, Ast_Proc *proc) {
     return resolve_signature(c, proc);
 }
 
-// The predeclared constants (spec 2.5): the systems a program can be built
-// for, and the one it is. Each is an untyped integer constant, visible
-// everywhere as the program's own constants are, so OS == OS_WINDOWS is a
-// constant bool that folds. The VS Code grammar lists their names from this
-// table too (tests/unit/test_grammar.cpp).
+// The predeclared constant (spec 2.5): OS, the system the program is built
+// for, a constant of the predeclared enum Operating_System (below), visible
+// everywhere as the program's own constants are, so OS == .WINDOWS is a
+// constant bool that folds. The VS Code grammar lists the names of this
+// table (tests/unit/test_grammar.cpp).
 struct Predeclared_Constant {
     const char *name;
-    System value;         // SYSTEM_NONE for OS, whose value is the program's (Ast_File.system)
     const char *meaning;  // what the refusal of a top-level declaration says it is
 };
 
 static const Predeclared_Constant PREDECLARED_CONSTANTS[] = {
-    {"OS", SYSTEM_NONE, "the system the program is built for"},
-    {"OS_WINDOWS", SYSTEM_WINDOWS, "Windows, one of the systems OS may be"},
-    {"OS_LINUX", SYSTEM_LINUX, "Linux, one of the systems OS may be"},
+    {"OS", "the system the program is built for"},
 };
+
+// The predeclared enum (spec 2.5, 3.18), OS's type: the systems a program can
+// be built for, each member numbered as System is.
+static const char *const OPERATING_SYSTEM = "Operating_System";
+static const char *const OPERATING_SYSTEM_MEANING = "the systems a program can be built for";
 
 // The resizable arrays' procedures (spec 3.17), built into the language,
 // since Rig has no generics to write them in: no Rig procedure's parameter
@@ -2665,44 +2667,91 @@ const Builtin_Procedure BUILTIN_PROCEDURES[BUILTIN_ARRAY_COUNT] = {
 };
 
 // What a predeclared name is, as the refusal of a top-level declaration of
-// it says: a predeclared constant's meaning, or a built-in procedure's;
-// null for any other name.
+// it says: a predeclared constant's meaning, Operating_System's, or a
+// built-in procedure's; null for any other name.
 static const char *predeclared_meaning(String name) {
     for (const Predeclared_Constant &constant : PREDECLARED_CONSTANTS) {
         if (string_eq(name, str(constant.name))) return constant.meaning;
     }
+    if (string_eq(name, str(OPERATING_SYSTEM))) return OPERATING_SYSTEM_MEANING;
     for (const Builtin_Procedure &builtin : BUILTIN_PROCEDURES) {
         if (string_eq(name, str(builtin.name))) return "built into the language, for resizable arrays";
     }
     return nullptr;
 }
 
-// Puts the predeclared names in c->top_level, before the program's. Each
-// predeclared constant is an Ast_Const as a checked `NAME :: 2;` would be:
-// untyped, folded, done, its value an integer literal of the same number
-// (so #run's walk, which reaches a constant's value, finds one). OS's
-// value is the program's system, the host's when the tree names none. Each
-// built-in procedure is an Ast_Builtin, which only a call's callee may
-// name (check_expr.cpp's check_callee). Both are written nowhere: their
-// position is 0:0.
+// A member of the predeclared Operating_System: an Ast_Const as a member a
+// program writes is once its enum is resolved (check_enum_members), of
+// int, done, its value an integer literal of its number, written nowhere.
+static Ast_Const *operating_system_member(Arena *a, const char *name, System value) {
+    Ast_Int *number = ast_new<Ast_Int>(a, AST_INT, {0, 0, 0});
+    number->value = value;
+    number->type = &type_int;
+    number->is_constant = true;
+    number->constant = value;
+    Ast_Const *member = ast_new<Ast_Const>(a, AST_CONST, {0, 0, 0});
+    member->name = str(name);
+    member->value = number;
+    member->type = &type_int;
+    member->is_constant = true;
+    member->constant = value;
+    member->resolve = RESOLVE_DONE;
+    return member;
+}
+
+// The tree's predeclared Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }
+// (spec 2.5): made the first time, resolved, its Type made as
+// declare_top_level makes an enum's, and kept on the tree, so every checker
+// of the tree, a decider's and check()'s, has the one type, and a constant
+// a decider resolved as OS compares with check()'s OS. It's in the arena
+// the tree's nodes are in, which the decider and the checker share.
+static Ast_Enum *operating_system(Checker *c, Ast_File *file) {
+    if (file->operating_system) return file->operating_system;
+    Ast_Enum *e = ast_new<Ast_Enum>(c->arena, AST_ENUM, {0, 0, 0});
+    e->name = str(OPERATING_SYSTEM);
+    array_add(&e->members, operating_system_member(c->arena, "WINDOWS", SYSTEM_WINDOWS));
+    array_add(&e->members, operating_system_member(c->arena, "LINUX", SYSTEM_LINUX));
+    e->resolve = RESOLVE_DONE;
+    Type *t = arena_new<Type>(c->arena);
+    t->kind = TYPE_ENUM;
+    t->name = e->name;
+    t->size = type_int.size;
+    t->align = type_int.align;
+    t->is_signed = type_int.is_signed;
+    t->underlying = &type_int;
+    t->enum_decl = e;
+    t->arena = c->arena;  // as a program's enum's (declare_top_level)
+    e->declared = t;
+    file->operating_system = e;
+    return e;
+}
+
+// Puts the predeclared names in c->top_level, before the program's: the
+// enum Operating_System, and OS, an Ast_Const as a checked
+// `OS :: Operating_System.LINUX;` would be: of the enum, folded, done, its
+// value an integer literal of the same number, typed as the enum (so #run's
+// walk, which reaches a constant's value, finds one). OS's value is the
+// program's system, the host's when the tree names none. Each built-in
+// procedure is an Ast_Builtin, which only a call's callee may name
+// (check_expr.cpp's check_callee). All are written nowhere: their position
+// is 0:0.
 static void declare_predeclared(Checker *c, Ast_File *file) {
-    for (const Predeclared_Constant &entry : PREDECLARED_CONSTANTS) {
-        System value = entry.value;
-        if (value == SYSTEM_NONE) value = file->system ? file->system : host_system();
-        Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, {0, 0, 0});
-        number->value = value;
-        number->type = &type_untyped_int;
-        number->is_constant = true;
-        number->constant = value;
-        Ast_Const *constant = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
-        constant->name = str(entry.name);
-        constant->value = number;
-        constant->type = &type_untyped_int;
-        constant->is_constant = true;
-        constant->constant = value;
-        constant->resolve = RESOLVE_DONE;
-        table_put(&c->top_level, constant->name, (Ast *)constant);
-    }
+    Ast_Enum *system = operating_system(c, file);
+    table_put(&c->top_level, system->name, (Ast *)system);
+    System value = file->system ? file->system : host_system();
+    Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, {0, 0, 0});
+    number->value = value;
+    number->type = system->declared;
+    number->is_constant = true;
+    number->constant = value;
+    Ast_Const *os = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
+    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry
+    os->value = number;
+    os->type = system->declared;
+    os->is_constant = true;
+    os->constant = value;
+    os->resolve = RESOLVE_DONE;
+    table_put(&c->top_level, os->name, (Ast *)os);
     for (const Builtin_Procedure &entry : BUILTIN_PROCEDURES) {
         // check_builtin_call and lowering index the table by Array_Builtin.
         RIG_ASSERT(&BUILTIN_PROCEDURES[entry.builtin] == &entry);
@@ -2727,8 +2776,8 @@ static String declared_name(Ast *decl) {
 
 // The top level's names, so procedures, globals, constants, structs and
 // enums can be used before they're declared. They share one table: a global can't
-// have a procedure's name. The predeclared names, the constants and the
-// built-in procedures, come first (declare_predeclared): a top-level
+// have a procedure's name. The predeclared names, Operating_System, OS and
+// the built-in procedures, come first (declare_predeclared): a top-level
 // declaration of one of their names is refused, at its name, and isn't
 // declared, so every use means the predeclared one. (A local may hide one,
 // as it may any of the top level's names.)
@@ -2878,7 +2927,7 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
     // checked against the whole declaration, wherever it is. One with no
     // name could have declared anything, main included. One with a
     // predeclared name isn't declared either, silently: the name is the
-    // predeclared constant's or built-in's.
+    // predeclared enum's, constant's or built-in's.
     bool lost_a_name = false;
     for (s64 i = 0; i < declarations.count; i++) {
         if (declarations[i]->kind != AST_PROC) continue;

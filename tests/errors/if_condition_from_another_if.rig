@@ -2,9 +2,9 @@
 // top-level #if declares, directly (LEVEL) or through a constant declared
 // outside every #if (DEBUG, through DEPTH): it isn't known before the #ifs
 // are decided. Its message is at the use.
-#if OS == OS_WINDOWS { LEVEL :: 2; } else { LEVEL :: 3; }
+#if OS == .WINDOWS { LEVEL :: 2; } else { LEVEL :: 3; }
 DEBUG :: DEPTH > 1;
 #if LEVEL > 1 { }
-#if OS == OS_WINDOWS { DEPTH :: 2; } else { DEPTH :: 3; }
+#if OS == .WINDOWS { DEPTH :: 2; } else { DEPTH :: 3; }
 #if DEBUG { }
 main :: () {}

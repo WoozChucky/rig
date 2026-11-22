@@ -8,8 +8,8 @@
 LARGEST :: 9223372036854775807; // int's largest value
 
 // Prints the size of each allocation asked for, and gives none.
-refusing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
-    if mode == ALLOCATE || mode == RESIZE {
+refusing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+    if mode == .ALLOCATE || mode == .RESIZE {
         print_string("asked for ");
         print_int(size);
         print_byte(10);

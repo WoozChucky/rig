@@ -3072,12 +3072,12 @@ TEST(parse_if_directive_at_the_top_level) {
     // order, and nothing of them is in the file's lists: the #if itself is
     // in Ast_File.ifs, the loader's to decide.
     Arena a = arena_make();
-    Token_List *list = src("#if OS == OS_WINDOWS {\n    f :: () {}\n    N :: 1;\n    #load \"w.rig\";\n} else {\n"
+    Token_List *list = src("#if OS == .WINDOWS {\n    f :: () {}\n    N :: 1;\n    #load \"w.rig\";\n} else {\n"
                            "    g : int;\n}\nmain :: () {}\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK_STR(ast_dump(&a, file),
-              "(#if (binary == (name OS) (name OS_WINDOWS)) (block (proc f (params) (block)) (const N (int 1)) "
+              "(#if (binary == (name OS) (dot WINDOWS)) (block (proc f (params) (block)) (const N (int 1)) "
               "(load \"w.rig\")) (block (var g int)))\n"
               "(proc main (params) (block))\n");
     CHECK_EQ(file->ifs.count, 1);
@@ -3183,9 +3183,9 @@ TEST(parse_else_if_after_if_directive_is_refused) {
     String errors;
     CHECK_STR(parse_src(&a, "#if A {} else if B {}\nmain :: () {}\n", &errors),
               "(broken)\n(proc main (params) (block))\n");
-    CHECK_STR(errors, "1:15: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }\n");
+    CHECK_STR(errors, "1:15: an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }\n");
     body_dump(&a, "#if A {} else if B {}", &errors);
-    CHECK_STR(errors, "2:19: an #if's else is a block or another #if, as in else #if OS == OS_LINUX { ... }\n");
+    CHECK_STR(errors, "2:19: an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }\n");
     arena_free(&a);
 }
 

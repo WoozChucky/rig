@@ -1571,7 +1571,7 @@ static String command_input_test(Arena *a, String rig, String unit_tests) {
     String text = str("#import \"Basic\";\n"
                       "main :: () {\n"
                       "    print_line(\"before the command\");\n"
-                      "    #if OS == OS_WINDOWS {\n"
+                      "    #if OS == .WINDOWS {\n"
                       "        status := run_command(\"set /p LINE=& call echo [%LINE%]\", HEAP_ALLOCATOR);\n"
                       "    } else {\n"
                       "        status := run_command(\"read line; echo \\\"[$line]\\\"\", HEAP_ALLOCATOR);\n"

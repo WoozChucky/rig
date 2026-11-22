@@ -1,7 +1,7 @@
 // Resizable arrays growing from Preload's temporary allocator and from
 // Basic's Arena (issue #158, spec 3.17), a line of output per case:
 // - temporary: an array whose allocator is TEMPORARY_ALLOCATOR, the only
-//   allocation since a reset, is its storage's last, so each RESIZE grows
+//   allocation since a reset, is its storage's last, so each .RESIZE grows
 //   it in place while the first block holds it: its data stays where it
 //   was through 4096 elements, the block's 32768 bytes, all of them
 //   occupied. Past that, it moves to pages the storage asks of the heap,
@@ -9,7 +9,7 @@
 //   should be, in 16384 elements of room.
 // - pushed: an array that first grows in a push_context whose allocator is
 //   the temporary one keeps it.
-// - arena: an array whose allocator is an Arena's, whose RESIZE always
+// - arena: an array whose allocator is an Arena's, whose .RESIZE always
 //   allocates anew and copies, from blocks of 64 bytes, smaller than most
 //   of its growths: its 1001 elements, 0 to 1000, are all where they should
 //   be, in 1024 elements of room.

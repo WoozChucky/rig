@@ -2210,7 +2210,7 @@ TEST(llvm_constants_in_deferred_code) {
                                 "    i := 0;\n"
                                 "    defer { K :: 3; D :: int.[1, 2]; i = K + D[i]; }\n"
                                 "    if i == 0 { return; }\n"
-                                "    #if OS == OS_WINDOWS { W :: 1; } else { W :: 1; }\n"
+                                "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);

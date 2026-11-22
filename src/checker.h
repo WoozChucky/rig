@@ -26,14 +26,19 @@
 //   nowhere, "unknown type 'foo'". A built-in type's name always means the
 //   built-in type, so a struct or an enum can't take one: "'u8' is a
 //   built-in type", at its name.
-// - Three constants are predeclared (spec 2.5), untyped integers visible
-//   everywhere: OS_WINDOWS (1), OS_LINUX (2), and OS, the system the
-//   program is built for (Ast_File.system, else the host's), so
-//   OS == OS_WINDOWS is a constant bool. A top-level declaration can't take
-//   one of their names: "'OS' is predeclared: it's the system the program
-//   is built for", at its name, and it isn't declared. A broken entry
-//   (below) of one of their names isn't declared either, and says nothing.
-//   A local may hide one, as it may any of the top level's names.
+// - An enum and a constant are predeclared (spec 2.5), visible everywhere:
+//   Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }, the systems a
+//   program can be built for, and OS, the one it is (Ast_File.system, else
+//   the host's), a constant of it, so OS == .WINDOWS is a constant bool.
+//   The enum is made once per tree (Ast_File.operating_system), so a
+//   constant a decider resolved as OS has check()'s OS's type. A top-level
+//   declaration can't take one of their names: "'OS' is predeclared: it's
+//   the system the program is built for" ("'Operating_System' is
+//   predeclared: it's the systems a program can be built for"), at its
+//   name, and it isn't declared. A broken entry (below) of one of their
+//   names isn't declared either, and says nothing. A local may hide one,
+//   as it may any of the top level's names. The members' names, WINDOWS
+//   and LINUX, are in no scope, as any enum's (spec 3.18).
 // - So are the nine procedures of the resizable arrays (spec 3.17;
 //   Resizable arrays, below), array_add and the others, the same way:
 //   "'array_add' is predeclared: it's built into the language, for
@@ -807,7 +812,7 @@
 // - A top-level #if is decided before anything else is checked, by a
 //   decider (check_decider_new) the loader makes once every file outside
 //   every #if is read: a checker that knows those files' declarations, the
-//   base, and the predeclared constants, nothing else. It decides each chain
+//   base, and the predeclared names, nothing else. It decides each chain
 //   as decide_if does a body's, with the same two messages about the
 //   condition, and has two limits of its own. A name declared in a branch of
 //   a top-level #if read so far (any branch, taken or not, decided or not, at
@@ -1045,7 +1050,7 @@
 // The checker also runs after syntax errors, so they and the type errors in
 // the rest of the program are reported together. A declaration the parser
 // gave up on is a broken entry (parser.h): its name is declared (unless
-// it's a predeclared constant's, which keeps meaning the constant), with an
+// it's a predeclared name, which keeps meaning the predeclared one), with an
 // unknown type, and nothing is reported about it or about its uses (a call
 // to it may pass anything). Its body isn't checked: there is none. The
 // checker runs after a #load failed too (load.h), or one that named no
@@ -1078,7 +1083,7 @@ struct Checker;
 // A checker for deciding the top-level #ifs of `file` (spec 4.9), which the
 // loader makes once every file outside every #if is read: it knows those
 // files' declarations (the base: the procs and globals file has now) and the
-// predeclared constants, and nothing else. It says nothing about them as it
+// predeclared names, and nothing else. It says nothing about them as it
 // declares them (check() does, later).
 Checker *check_decider_new(Ast_File *file, Arena *a, Diagnostics *d);
 

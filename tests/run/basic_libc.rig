@@ -14,14 +14,14 @@ FILE_NAME :: ".build/tests/basic_libc.bin";
 Counter :: struct { last_size: int; }
 
 // Passes every call on to the heap, keeping the size of each allocation.
-counting_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+counting_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     counter := cast(*Counter) data;
-    if mode == ALLOCATE { counter.last_size = size; }
+    if mode == .ALLOCATE { counter.last_size = size; }
     return HEAP_ALLOCATOR.proc(mode, size, old_size, old_memory, HEAP_ALLOCATOR.data);
 }
 
 // Gives no memory, as an allocator that has run out would.
-failing_allocator_proc :: (mode: int, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
+failing_allocator_proc :: (mode: Allocator_Mode, size: int, old_size: int, old_memory: *void, data: *void) -> *void {
     return null;
 }
 
