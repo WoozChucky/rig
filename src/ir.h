@@ -184,38 +184,37 @@
 //   knows the procedure by its own name) unless it hides a name a debugger
 //   shows, and neither is the predeclared OS, which the program doesn't
 //   declare, nor one in a nested block once the code around it can't go on
-//   (its IR block has ended, as after a return, a break or a continue, or
-//   a block or an if that always ends in one), whose scope has no code for
-//   a debugger to stop in (lower.cpp's
-//   lower_statements), nor one that hides a name, after such code in its
-//   own block, which would hide it only where there's no code. Each is an
-//   Ir_Var: a top-level one in Ir_Module.constants, a body's in its
-//   procedure's vars, with its variables, in the scope of the block that
-//   declares it. A number, a bool or null is IR_VAR_CONSTANT, its bits, no
-//   storage: a debugger knows its value, and nothing in memory holds it. A
-//   constant holding data (a string, a struct, an array, a #run's view), a
-//   pointer to a string literal, or a procedure (a hiding one) is
-//   IR_VAR_GLOBAL, its read-only const.N, which a debugger reads as it
-//   reads a global: the one its uses read at run time, or, when no code
-//   reads it, one made for the debugger alone, after every body (a
-//   pointer's or a procedure's is 8 bytes holding its literal's or the
-//   procedure's address, since CodeView can't give an address as a
-//   constant's value; a foreign procedure's address is null there when the
-//   program doesn't otherwise use that procedure, call it or take its
-//   address: lower.cpp's used_foreign, so the program needs no C function
-//   it didn't already). Its type is the one a debugger shows: an untyped
-//   integer's int (spec 3.12's default, which every untyped integer
-//   constant fits), an untyped float's float64 (its value is a double's: as
-//   a float32, 0.1 would show 0.100000001), null's *void. Now that
-//   constants are shown, a body's constant that hides a name a debugger
-//   shows starts a scope of its own, as a variable that hides one does
-//   (above), and so does a variable that hides a constant or a procedure;
-//   one that hides nothing stays in its block's scope, even after such a
-//   declaration, since it needs no code where it's declared, and the scope
-//   a hiding declaration starts may have none (so a constant that hides a
-//   name, with no code after it in its block, is in a scope no debugger
-//   stops in). A compile-time module (lower.cpp's "Lowering on demand")
-//   records none: it is never compiled.
+//   (its IR block has ended, as after a return, a break or a continue, or a
+//   block or an if that always ends in one), whose scope has no code for a
+//   debugger to stop in (lower.cpp's lower_statements), nor one that hides
+//   a name, after such code in its own block, which would hide it only
+//   where there's no code. Each is an Ir_Var: a top-level one in
+//   Ir_Module.constants, a body's in its procedure's vars, with its
+//   variables, in the scope of the block that declares it. A number, an
+//   enum's value, a bool or null is IR_VAR_CONSTANT, its bits, no storage:
+//   a debugger knows its value, and nothing in memory holds it. A constant
+//   holding data (a string, a struct, an array, a #run's view), a pointer
+//   to a string literal, or a procedure (a hiding one) is IR_VAR_GLOBAL,
+//   its read-only const.N, which a debugger reads as it reads a global: the
+//   one its uses read at run time, or, when no code reads it, one made for
+//   the debugger alone, after every body (a pointer's or a procedure's is 8
+//   bytes holding its literal's or the procedure's address, since CodeView
+//   can't give an address as a constant's value; a foreign procedure's
+//   address is null there when the program doesn't otherwise use that
+//   procedure, call it or take its address: lower.cpp's used_foreign, so
+//   the program needs no C function it didn't already). Its type is the one
+//   a debugger shows: an untyped integer's int (spec 3.12's default, which
+//   every untyped integer constant fits), an untyped float's float64 (its
+//   value is a double's: as a float32, 0.1 would show 0.100000001), null's
+//   *void. Now that constants are shown, a body's constant that hides a
+//   name a debugger shows starts a scope of its own, as a variable that
+//   hides one does (above), and so does a variable that hides a constant or
+//   a procedure; one that hides nothing stays in its block's scope, even
+//   after such a declaration, since it needs no code where it's declared,
+//   and the scope a hiding declaration starts may have none (so a constant
+//   that hides a name, with no code after it in its block, is in a scope no
+//   debugger stops in). A compile-time module (lower.cpp's "Lowering on
+//   demand") records none: it is never compiled.
 // - Globals keep their Rig type (Ir_Global.rig_type) and position; the
 //   module, each source file's absolute path and MD5 (Ir_Module.sources,
 //   indexed by Position.file) and the directory rig ran in, so a debugger
@@ -406,8 +405,8 @@ struct Ir_Global {
 // clang does with C's _Bool: the backend marks it by its type.)
 enum Ir_Ext : u8 {
     IR_EXT_NONE,  // not an i8 or i16
-    IR_EXT_SIGN,  // s8, s16
-    IR_EXT_ZERO,  // u8, u16
+    IR_EXT_SIGN,  // s8, s16, and an enum over one
+    IR_EXT_ZERO,  // u8, u16, and an enum over one
 };
 
 struct Ir_Param {

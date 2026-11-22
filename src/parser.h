@@ -8,7 +8,7 @@
 //   top_level   = IDENT '::' procedure
 //               | IDENT '::' 'struct' '{' {IDENT ':' type ';'} '}'   a struct and its fields
 //               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
-//                                                                  an enum: its integer type, its members
+//                                                                   an enum: its integer type, its members
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant

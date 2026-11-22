@@ -3464,12 +3464,12 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // description, laid out as the Preload struct its kind is described by
 // (types.h's TYPE_INFO_* constants): a read-only global, type_info.N,
 // numbered in the order they're made, of that struct's size, aligned to 8,
-// with no rig_type (the compiler makes it). What a description points at
-// is a relocation: another type's description, a name's bytes (a str.N of
-// its own, add_bytes), or a read-only array of its own, type_info.N.members
-// for a struct, type_info.N.parameters and .results for a procedure type,
-// type_info.N.names and .values for an enum, made only when not empty (an empty view is zeros). Names with a '.' are
-// no Rig global's.
+// with no rig_type (the compiler makes it). What a description points at is
+// a relocation: another type's description, a name's bytes (a str.N of its
+// own, add_bytes), or a read-only array of its own, type_info.N.members for
+// a struct, type_info.N.parameters and .results for a procedure type,
+// type_info.N.names and .values for an enum, made only when not empty (an
+// empty view is zeros). Names with a '.' are no Rig global's.
 //
 // Descriptions point at each other, in cycles too (a struct holding a
 // pointer to itself), so a description is made empty first, cached by its
@@ -3479,12 +3479,12 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // takes no recursion in C++, and every description is whole when it
 // returns.
 
-// The tag of the description of a type of t's kind: integers, floats,
-// bool, string, pointers, procedure types, void, structs, arrays, views
-// and resizable arrays (spec 3.17), which share one, and enums (spec
-// 3.18), enum_flags too. The checker gave every
-// value a type of its own before lowering, so the untyped types, null's and
-// a literal's without its type never get here.
+// The tag of the description of a type of t's kind: integers, floats, bool,
+// string, pointers, procedure types, void, structs, arrays, views and
+// resizable arrays (spec 3.17), which share one, and enums (spec 3.18),
+// enum_flags too. The checker gave every value a type of its own before
+// lowering, so the untyped types, null's and a literal's without its type
+// never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
     RIG_ASSERT(!type_is_untyped(t));
     switch (t->kind) {
@@ -3649,15 +3649,16 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // alignment (void's 0 and 1), and what its kind adds: an integer's sign; a
 // pointer's pointee's description (a *void's, void's); an array's, a view's
 // or a resizable array's element's description, its kind and its count (-1
-// for a view or a resizable array, whose count is its value's); a
-// struct's name and members; a procedure type's parameters' and results'
+// for a view or a resizable array, whose count is its value's); a struct's
+// name and members; a procedure type's parameters' and results'
 // descriptions (a ..T parameter's []T), #c_call and whether its last
 // parameter is a ..T; an enum's name, its integer type's description,
-// whether it's an enum_flags, and its members' names and values. Its names' str.N and its arrays' globals are made
-// first; the descriptions it points at are asked for through
-// type_info_global, which only queues them. The relocations go in
-// increasing offset, as the backend wants. The bytes are put in the global
-// last, through its index: the globals array may move while they're made.
+// whether it's an enum_flags, and its members' names and values. Its names'
+// str.N and its arrays' globals are made first; the descriptions it points
+// at are asked for through type_info_global, which only queues them. The
+// relocations go in increasing offset, as the backend wants. The bytes are
+// put in the global last, through its index: the globals array may move
+// while they're made.
 static void describe_type(Lowering *l, s32 global, Type *t) {
     String name = l->module->globals[global].name;
     s64 size = l->module->globals[global].size;

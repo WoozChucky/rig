@@ -14,13 +14,13 @@ struct Checker {
     Diagnostics *diag;
     Compile_Time *world;         // where expression #runs run (run.h): check()'s caller's, or one of
                                  // check()'s own
-    Table<Ast *> top_level;      // every procedure, global variable, top-level constant, struct
-                                 // and enum, by name: visible everywhere (Ast_Proc, Ast_Var,
-                                 // Ast_Const, Ast_Struct, Ast_Enum); and the predeclared names, put first
-                                 // (checker.cpp's declare_predeclared): the enum
-                                 // Operating_System, an Ast_Enum, and the constant OS
-                                 // (spec 2.5), an Ast_Const, and the resizable arrays'
-                                 // procedures (spec 3.17), each an Ast_Builtin
+    Table<Ast *> top_level;      // every procedure, global variable, top-level constant, struct and
+                                 // enum, by name: visible everywhere (Ast_Proc, Ast_Var, Ast_Const,
+                                 // Ast_Struct, Ast_Enum); and the predeclared names, put first
+                                 // (checker.cpp's declare_predeclared): the enum Operating_System,
+                                 // an Ast_Enum, and the constant OS (spec 2.5), an Ast_Const, and
+                                 // the resizable arrays' procedures (spec 3.17), each an
+                                 // Ast_Builtin
     Array<Table<Ast *>> scopes;  // the blocks being checked, innermost last: the names
                                  // declared in each so far (Ast_Var, Ast_Const, Ast_Param); only the
                                  // innermost body's, a body checked on demand and a declaration
@@ -215,12 +215,12 @@ Type *check_operand(Checker *c, Ast *e);
 // 'int'" for any other, also counted as converting); .[...] an array type,
 // or a view type, becoming then an array of its own count; .FREE the enum
 // type `to`, as its member ("'.FREE' needs an enum type, not 'int'" for any
-// other, counted as converting too), and the untyped 0 a flags type. Any value
-// converts to Preload's Any (spec 3.16), keeping its own type: Ast.to_any
-// says whether the Any holds the value's own address or a copy's, and a
-// literal without its type is reported, as check_default_type reports it.
-// True also when either type is unknown (null): the error was reported
-// already.
+// other, counted as converting too), and the untyped 0 a flags type. Any
+// value converts to Preload's Any (spec 3.16), keeping its own type:
+// Ast.to_any says whether the Any holds the value's own address or a
+// copy's, and a literal without its type is reported, as check_default_type
+// reports it. True also when either type is unknown (null): the error was
+// reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.

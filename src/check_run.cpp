@@ -15,12 +15,13 @@
 // helper of Preload's a built-in procedure's call calls (spec 3.17), and
 // Preload's __runtime_init, which every run's procedure calls first (spec
 // 7.10), so whatever the #run's code is lowered with is checked, whether or
-// not it runs. A type's description (type_info(T), a value converted to Any) is
-// lowered with every type it reaches, so the walk follows those too, behind
-// pointers as well (walk_described). And it fails where lowering couldn't
-// go on: a value, a parameter or a result with no type, a #run with no
-// value, a procedure that is broken or had errors, a struct still being
-// laid out, a struct field whose type is still unknown.
+// not it runs. A type's description (type_info(T), a value converted to
+// Any) is lowered with every type it reaches, so the walk follows those
+// too, behind pointers as well (walk_described). And it fails where
+// lowering couldn't go on: a value, a parameter or a result with no type, a
+// #run with no value, a procedure that is broken or had errors, a struct
+// still being laid out, a struct field whose type is still unknown, an enum
+// described with a member whose value is unknown.
 
 #include "check.h"
 
@@ -75,8 +76,9 @@ static void reach_described(Reach *r, Type *t) {
 // array and index, a literal's values. Nothing for a name, a number, a
 // string, a bool, null, size_of, type_info, context, a default
 // #caller_location, a #run, whose operand was checked as it was, or an
-// enum's member, Mode.FREE or .FREE: a constant, whose enum's name (no
-// value, so no type) is nothing to walk.
+// enum's member, Mode.FREE (Ast_Member.of_enum) or .FREE: a constant,
+// whose enum's name in Mode.FREE (no value, so no type) is nothing to
+// walk, and .FREE has no operand.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {

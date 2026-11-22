@@ -9,13 +9,13 @@
 // floats, bools, null, operators, casts, addresses and dereferences,
 // size_of, type_info, fields (e.x), struct literals (Vec2.{1, 2}),
 // elements (a[i]) and array literals (int.[1, 2]), spreads (..xs, a view
-// passed as a '..T' parameter's arguments), and code run while compiling
-// (#run e).
-// And structs, declared at the top level, the files a program loads
-// (#load "PATH";), named there too, and the code it runs while compiling
-// for its effect (#run e; and #run { ... }), there too. And code compiled
-// for one system and not another (#if c { ... } else { ... }), at the top
-// level and in a body.
+// passed as a '..T' parameter's arguments), members without their enum
+// (.FREE), and code run while compiling (#run e).
+// And structs and enums, declared at the top level, the files a program
+// loads (#load "PATH";), named there too, and the code it runs while
+// compiling for its effect (#run e; and #run { ... }), there too. And code
+// compiled for one system and not another (#if c { ... } else { ... }), at
+// the top level and in a body.
 // Each node kind is a struct that starts with Ast, so a pointer to any node
 // is also an Ast *, and `kind` says which it is.
 //
@@ -370,12 +370,12 @@ struct Ast_Type_Info : Ast {
 // 3.18). A postfix operator, as .* is. pos is the field's name, where a
 // null pointer's runtime error points; start is e's.
 struct Ast_Member : Ast {
-    Ast *operand;      // e
-    String name;       // x
-    s32 index;         // the field's index in its struct's type, set by the checker; -1 for an
-                       // array's, a view's or a string's .count and .data, which lowering knows by
-                       // name; for an enum's member, the member's index in Ast_Enum.members
-    Ast_Enum *of_enum; // e.x names member x of the enum e (Mode.FREE): a constant; null otherwise
+    Ast *operand;       // e
+    String name;        // x
+    s32 index;          // the field's index in its struct's type, set by the checker; -1 for an
+                        // array's, a view's or a string's .count and .data, which lowering knows
+                        // by name; for an enum's member, the member's index in Ast_Enum.members
+    Ast_Enum *of_enum;  // e.x names member x of the enum e (Mode.FREE): a constant; null otherwise
 };
 
 // A literal of a struct (Jai's): `T.{a, b}` gives T's fields in order,
@@ -718,7 +718,7 @@ struct Ast_File {
     Ast_Enum *operating_system;
 };
 
-/// Whether node e was written in parentheses, (e): they leave no node, but
+// Whether node e was written in parentheses, (e): they leave no node, but
 // move its start to the outermost '(' (parser.cpp's parse_primary). A type
 // in parentheses is no type, so (Vec2).{1} is no literal (the parser's
 // parse_postfix), and an enum's name in them is no enum's, so (Mode).FREE

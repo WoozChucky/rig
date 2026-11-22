@@ -2744,11 +2744,10 @@ static Ast_Enum *operating_system(Checker *c, Ast_File *file) {
 // `OS :: Operating_System.LINUX;` would be: of the enum, folded, done. Its
 // value, though, isn't that one's member access but an integer literal of
 // the same number, typed as the enum (so #run's walk, which reaches a
-// constant's value, finds one). OS's value is the
-// program's system, the host's when the tree names none. Each built-in
-// procedure is an Ast_Builtin, which only a call's callee may name
-// (check_expr.cpp's check_callee). All are written nowhere: their position
-// is 0:0.
+// constant's value, finds one). OS's value is the program's system, the
+// host's when the tree names none. Each built-in procedure is an
+// Ast_Builtin, which only a call's callee may name (check_expr.cpp's
+// check_callee). All are written nowhere: their position is 0:0.
 static void declare_predeclared(Checker *c, Ast_File *file) {
     Ast_Enum *system = operating_system(c, file);
     table_put(&c->top_level, system->name, (Ast *)system);
@@ -2759,7 +2758,7 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
     number->is_constant = true;
     number->constant = value;
     Ast_Const *os = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
-    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry (asserted by its side)
+    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry, as its static_assert says
     os->value = number;
     os->type = system->declared;
     os->is_constant = true;
@@ -2789,20 +2788,20 @@ static String declared_name(Ast *decl) {
 }
 
 // The top level's names, so procedures, globals, constants, structs and
-// enums can be used before they're declared. They share one table: a global can't
-// have a procedure's name. The predeclared names, Operating_System, OS and
-// the built-in procedures, come first (declare_predeclared): a top-level
-// declaration of one of their names is refused, at its name, and isn't
-// declared, so every use means the predeclared one. (A local may hide one,
-// as it may any of the top level's names.)
+// enums can be used before they're declared. They share one table: a global
+// can't have a procedure's name. The predeclared names, Operating_System,
+// OS and the built-in procedures, come first (declare_predeclared): a
+// top-level declaration of one of their names is refused, at its name, and
+// isn't declared, so every use means the predeclared one. (A local may hide
+// one, as it may any of the top level's names.)
 // Then the whole declarations of `declarations`, in order: a name declared
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
 // without its layout, so a pointer can name it from anywhere; one a decider
 // found in a circle, or too big, is done, and keeps having none. Each enum
 // gets its Type here too, once, with its size from the start. Then the
-// broken entries' names. With report, check()'s, the mistakes are said
-// (a built-in type's name, a predeclared name, a name already declared);
+// broken entries' names. With report, check()'s, the mistakes are said (a
+// built-in type's name, a predeclared name, a name already declared);
 // without, a decider's, the first of a name wins, silently: check() says
 // them once, later. Returns whether a broken entry lost its name (check()'s
 // main rule).

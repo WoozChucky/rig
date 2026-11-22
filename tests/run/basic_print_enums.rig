@@ -1,10 +1,10 @@
-// Basic's print of enums (issue #221, spec 3.18): a member by its name,
-// the first of two sharing a value, a value with no member by its
-// number, read at each width and sign (values that need all of their
-// type's bytes), flags by their names joined by " | " with leftover bits
-// last, unsigned at the type's width, skipping a member of 0 and one whose bits aren't all among those
-// not yet written (written already, or only some in the value), enums in
-// structs and arrays, and enums formatted into a string by sprint.
+// Basic's print of enums (issue #221, spec 3.18): a member by its name, the
+// first of two sharing a value, a value with no member by its number, read
+// at each width and sign (values that need all of their type's bytes),
+// flags by their names joined by " | " with leftover bits last, unsigned at
+// the type's width, skipping a member of 0 and one whose bits aren't all
+// among those not yet written (written already, or only some in the value),
+// enums in structs and arrays, and enums formatted into a string by sprint.
 #import "Basic";
 
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }

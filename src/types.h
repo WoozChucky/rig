@@ -13,18 +13,19 @@
 //
 // Every type has a size and an alignment, C's (spec 5): s8 u8 bool 1, s16
 // u16 2, s32 u32 float32 4, s64 u64 int float64, pointers and procedure
-// types 8 (a procedure value is the address of its code). A value of
-// the type sits in memory at an address that is a multiple of its alignment,
-// and takes its size in bytes. A struct's are worked out from its fields as
-// C does (checker.cpp's lay_out): each field at the next offset that is a
-// multiple of its alignment, the struct's alignment its largest field's (1
-// when it has none), its size rounded up to a multiple of that, so an array
-// of them keeps every one aligned. An array, [N]T, is N T's one after
-// another: N times T's size, aligned as a T. A view, []T, is a struct of
-// its own, { count: int; data: *T; } (spec 6.5: Jai's order, count first):
-// 16 bytes, aligned to 8. A string is a view of bytes, laid out as []u8.
-// A resizable array, [..]T, starts as a view, then has allocated, an int,
-// and its allocator, Preload's Allocator (spec 3.17): 40 bytes, aligned to 8.
+// types 8 (a procedure value is the address of its code), and an enum its
+// integer type's. A value of the type sits in memory at an address that is
+// a multiple of its alignment, and takes its size in bytes. A struct's are
+// worked out from its fields as C does (checker.cpp's lay_out): each field
+// at the next offset that is a multiple of its alignment, the struct's
+// alignment its largest field's (1 when it has none), its size rounded up
+// to a multiple of that, so an array of them keeps every one aligned. An
+// array, [N]T, is N T's one after another: N times T's size, aligned as a
+// T. A view, []T, is a struct of its own, { count: int; data: *T; } (spec
+// 6.5: Jai's order, count first): 16 bytes, aligned to 8. A string is a
+// view of bytes, laid out as []u8. A resizable array, [..]T, starts as a
+// view, then has allocated, an int, and its allocator, Preload's Allocator
+// (spec 3.17): 40 bytes, aligned to 8.
 
 #pragma once
 
@@ -143,7 +144,8 @@ enum Type_Info_Tag : s64 {
 // an array, [N]T, a view, []T, or a resizable array, [..]T (spec 3.17), in
 // Jai's order.
 const s64 ARRAY_FIXED = 0, ARRAY_VIEW = 1, ARRAY_RESIZABLE = 2;
-// Type_Info: tag, size and alignment, each an int.
+// Type_Info: tag, a Type_Info_Tag (an enum over int), then size and
+// alignment, ints.
 const s64 TYPE_INFO_TAG_OFFSET = 0, TYPE_INFO_SIZE_OFFSET = 8, TYPE_INFO_ALIGNMENT_OFFSET = 16;
 const s64 TYPE_INFO_SIZE = 24;            // a plain Type_Info: a float, bool, string, void
 // Type_Info_Integer: info, then signed, a bool.
@@ -160,11 +162,12 @@ const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_S
 // Type_Info_Struct_Member: name, a string; type, a *Type_Info; offset, an int.
 const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, TYPE_INFO_MEMBER_OFFSET_OFFSET = 24,
           TYPE_INFO_MEMBER_SIZE = 32;
-// Type_Info_Array: info, element_type, a *Type_Info, then the ints
-// array_kind and count (N, or -1 for a view or a resizable array).
+// Type_Info_Array: info, element_type, a *Type_Info, then array_kind, an
+// Array_Kind (an enum over int), and count, an int (N, or -1 for a view or
+// a resizable array).
 const s64 TYPE_INFO_ELEMENT_OFFSET = 24, TYPE_INFO_ARRAY_KIND_OFFSET = 32, TYPE_INFO_COUNT_OFFSET = 40,
           TYPE_INFO_ARRAY_SIZE = 48;
-// Type_Info_Enum (spec 3.18): info, name, a string, underlying, the
+// Type_Info_Enum (spec 3.16, 3.18): info, name, a string, underlying, the
 // *Type_Info of its integer type, is_flags, a bool, then its members, the
 // views names, of string, and values, of s64, each a member's value as 64
 // bits (sign-extended from a signed integer type, zero-extended from an
@@ -331,9 +334,10 @@ extern Type type_untyped_literal;
 // the member takes the enum of what it's given to, or of the other side of
 // == or != from an enum value, or of the other operand of | & ^ from a
 // flags value, and is that enum's member then (check_convert). `.A | .B`,
-// `.A | 0` (or any untyped integer) and `~.A` have this type too, waiting
-// for one together. Meeting none, it's an error (check_default_type), so
-// messages never name it.
+// `.A | 0` (or any untyped constant, `.A | 1.5` too, which the flags type
+// then refuses) and `~.A` have this type too, waiting for one together.
+// Meeting none, it's an error (check_default_type), so messages never name
+// it.
 extern Type type_untyped_member;
 
 // Whether t is the type of an untyped constant, integer or float.

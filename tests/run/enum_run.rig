@@ -1,7 +1,7 @@
 // Enums while compiling (issue #221, spec 3.18, 7.8): a #run's enum
 // result baked as a constant of its enum, one inside a struct and an
 // array of them, enums declared after the #runs that use them, and a
-// body's #if on a baked member, alone or an array's element.
+// body's #if on a baked enum value, alone or an array's element.
 #import "Basic";
 
 PICKED :: #run pick(3);

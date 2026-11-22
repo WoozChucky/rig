@@ -122,17 +122,17 @@ Type_Info_Tag :: enum {
 // alone: a float's size says which it is.
 Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
-// .INTEGER: s8 to u64, and int. int and s64 are two types with
-// two descriptions, the same in all but their addresses.
+// .INTEGER: s8 to u64, and int. int and s64 are two types with two
+// descriptions, the same in all but their addresses.
 Type_Info_Integer :: struct { info: Type_Info; signed: bool; }
 
-// .POINTER: *T, and the description of the T it points at
-// (void's for a *void).
+// .POINTER: *T, and the description of the T it points at (void's for a
+// *void).
 Type_Info_Pointer :: struct { info: Type_Info; pointer_to: *Type_Info; }
 
-// .PROCEDURE: a procedure type, its parameters' types and its
-// results', in order, whether it's called as C calls (#c_call), and whether
-// its last parameter is a ..T, whose type is then described as []T.
+// .PROCEDURE: a procedure type, its parameters' types and its results', in
+// order, whether it's called as C calls (#c_call), and whether its last
+// parameter is a ..T, whose type is then described as []T.
 Type_Info_Procedure :: struct {
     info: Type_Info;
     parameter_types: []*Type_Info;
@@ -141,10 +141,10 @@ Type_Info_Procedure :: struct {
     is_variadic: bool;
 }
 
-// .STRUCT: a struct, by its declared name, and its fields in
-// order, none for a struct with none. A struct that holds a pointer to
-// itself is described by pointing back at its own description: the data is
-// cyclic, not infinite.
+// .STRUCT: a struct, by its declared name, and its fields in order, none
+// for a struct with none. A struct that holds a pointer to itself is
+// described by pointing back at its own description: the data is cyclic,
+// not infinite.
 Type_Info_Struct :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member; }
 
 // One field of a struct: its name, its type's description, and where it is

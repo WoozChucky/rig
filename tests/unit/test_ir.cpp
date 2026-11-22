@@ -3215,7 +3215,7 @@ TEST(constants_in_deferred_code_and_an_if_directive) {
                                                 "    i := 0;\n"                                           // 4
                                                 "    defer { K :: 3; D :: int.[1, 2]; i = K + D[i]; }\n"  // 5
                                                 "    if i == 0 { return; }\n"                             // 6
-                                                "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
+                                                "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"   // 7
                                                 "}\n"));
     CHECK(contains(ir, "; const C int constant 7 at 2:1\n"));
     String main = proc_ir(ir, "main");
@@ -3283,8 +3283,8 @@ TEST(a_constant_after_a_return_is_recorded) {
                                                           "    if x > 0 { return; } else { return; }\n"               // 4
                                                           "    LIMIT :: 3;\n"                                         // 5
                                                           "    NAME :: \"late\";\n"                                   // 6
-                                                          "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"  // 7
-                                                          "    { INNER :: 5; }\n"                                    // 8
+                                                          "    #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"     // 7
+                                                          "    { INNER :: 5; }\n"                                     // 8
                                                           "}\n")),
                           "main");
     CHECK(!contains(main, "; var LIMIT "));
@@ -3305,7 +3305,7 @@ TEST(a_constant_after_a_block_that_returns_is_recorded) {
     String main = proc_ir(ir_print_debug(&a, lower_source(&a,
                                                           "LIMIT :: 12;\n"                                       // 1
                                                           "OP :: 5;\n"                                           // 2
-                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"  // 3
+                                                          "add :: (a: int, b: int) -> int { return a + b; }\n"   // 3
                                                           "main :: () {\n"                                       // 4
                                                           "    x := 1;\n"                                        // 5
                                                           "    { x += 1; return; }\n"                            // 6
@@ -3337,7 +3337,7 @@ TEST(a_constant_after_a_hiding_one_is_in_its_blocks_scope) {
                                                           "        LIMIT :: 99;\n"                                        // 6
                                                           "        STEP :: 2;\n"                                          // 7
                                                           "        NAME :: \"tail\";\n"                                   // 8
-                                                          "        #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"  // 9
+                                                          "        #if OS == .WINDOWS { W :: 1; } else { W :: 1; }\n"     // 9
                                                           "    }\n"
                                                           "}\n")),
                           "main");

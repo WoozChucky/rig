@@ -65,11 +65,10 @@ FILE_PIECE_MAX :: 1073741824;
 // (missing, when reading, or not allowed), and for a directory.
 //
 // On Windows a mode is CreateFileW's access and disposition: .READ reads a
-// file that is there, .WRITE writes one made or emptied, and .APPEND
-// writes at the end of one, made when it isn't there, every write landing
-// at the end. Others may read and write the file while it is
-// open, as C's fopen lets them, but not delete it. A directory doesn't
-// open, in any mode.
+// file that is there, .WRITE writes one made or emptied, and .APPEND writes
+// at the end of one, made when it isn't there, every write landing at the
+// end. Others may read and write the file while it is open, as C's fopen
+// lets them, but not delete it. A directory doesn't open, in any mode.
 //
 // On Linux, to tell a directory from a file when reading, one byte is read
 // and then the position set back to the start, where it was before: a

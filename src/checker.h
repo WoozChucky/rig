@@ -8,8 +8,11 @@
 // Ast_Call.builtin with a callee_type made for the call, which lowering and
 // the #run walk look at first; Ast_Member.index (-1 for an array's, a
 // view's or a string's .count and .data, and a resizable array's four
-// members); and each struct's type and layout, Ast_Struct.declared), so the
-// stages after it never look anything up again. checker.cpp checks
+// members) and, for an enum's member, Ast_Member.of_enum; each struct's
+// type and layout, Ast_Struct.declared; and each enum's members' values,
+// its type being Ast_Enum.declared), so the stages after it never look
+// anything up again. A member without its enum, .FREE, gets its enum's
+// type and the member's value, as a constant does. checker.cpp checks
 // declarations and statements, check_expr.cpp expressions, check_run.cpp
 // #run and what it reaches; check.h is what they share.
 //
@@ -17,9 +20,9 @@
 //
 // Names.
 // - The program's procedures, global variables, top-level constants,
-//   structs and enums are visible everywhere, in any order. They share one set of
-//   names: a global can't take a procedure's ("'x' is already declared at
-//   PATH:L:C").
+//   structs and enums are visible everywhere, in any order. They share one
+//   set of names: a global can't take a procedure's ("'x' is already
+//   declared at PATH:L:C").
 // - A struct's name is a type, and so is an enum's: used as a value, it's
 //   "'Vec2' is a type, not a value". A name declared as anything else,
 //   written where a type goes, is "'foo' is not a type"; a name declared
@@ -483,17 +486,16 @@
 //   argument, but 0 were given"), each converted as any argument is. Each
 //   argument after them keeps its own type: a number, an enum (as its
 //   integer type), a bool or a pointer, which C receives after its default
-//   argument promotions (lowering applies them: types.h's
-//   type_c_promoted). An untyped integer becomes an int, an untyped float
-//   a float64 (C's double, which a float32 would
-//   become anyway, so it isn't rounded to a float32 first), null a *void,
-//   and a string literal (or constant data holding one: a constant, or a
-//   string field or element of one) is passed as a C string, its bytes'
-//   address, as it is to a *u8 parameter. A struct, an array, a view or
-//   any other string is "argument 2 of 'printf' has type 'Vec2', which C's
-//   '...' can't take; pass a pointer to it" (an array's or a view's: "pass
-//   its .data"; a string's: "pass its .data, which may not end with a zero,
-//   or a literal").
+//   argument promotions (lowering applies them: types.h's type_c_promoted).
+//   An untyped integer becomes an int, an untyped float a float64 (C's
+//   double, which a float32 would become anyway, so it isn't rounded to a
+//   float32 first), null a *void, and a string literal (or constant data
+//   holding one: a constant, or a string field or element of one) is passed
+//   as a C string, its bytes' address, as it is to a *u8 parameter. A
+//   struct, an array, a view or any other string is "argument 2 of 'printf'
+//   has type 'Vec2', which C's '...' can't take; pass a pointer to it" (an
+//   array's or a view's: "pass its .data"; a string's: "pass its .data,
+//   which may not end with a zero, or a literal").
 //
 // Variadic Rig procedures (issue #150, spec 7.2, 5.10).
 // - A procedure's parameter written `name: ..T` (the parser makes sure it
@@ -722,14 +724,15 @@
 //   globals and constants it names, and the struct types of what it
 //   reaches. A type it describes (type_info(T), a value converted to Any)
 //   has every struct its description reaches laid out, behind pointers too,
-//   and their late fields made: the #run's lowering writes the
-//   descriptions, which the interpreter then holds in its own memory, so a
-//   #run describes a struct declared after it as compiled code does (spec
-//   3.16, 10.8). An error anywhere there stops it, saying nothing new: the
-//   error was said where it is. The #run keeps its type but has no value,
-//   and what needs that value (an array's count, a constant, a global) says
-//   nothing more either. Each body, global and constant records whether its
-//   own check had errors (Ast_Proc.had_errors, Ast_Var.had_errors,
+//   and their late fields made, and every enum's members' values worked
+//   out: the #run's lowering writes the descriptions, which the interpreter
+//   then holds in its own memory, so a #run describes a struct or an enum
+//   declared after it as compiled code does (spec 3.16, 10.8). An error
+//   anywhere there stops it, saying nothing new: the error was said where
+//   it is. The #run keeps its type but has no value, and what needs that
+//   value (an array's count, a constant, a global) says nothing more
+//   either. Each body, global and constant records whether its own check
+//   had errors (Ast_Proc.had_errors, Ast_Var.had_errors,
 //   Ast_Const.had_errors).
 // - It runs in the compilation's one compile-time world (run.h), and its
 //   result is baked into the tree, a typed constant (run.cpp): a number, a
@@ -990,8 +993,8 @@
 //   itself", at the enum, every member then unknown.
 // - Mode.FREE, a name declaring an enum then a member's name, is the
 //   member, a constant of the enum ("'Mode' has no member 'FRE'", at the
-//   name): Ast_Member.of_enum. It's no place: "can't assign to 'Mode.FREE':
-//   it's an enum's member" ("can't take the address of ...").
+//   member's name): Ast_Member.of_enum. It's no place: "can't assign to
+//   'Mode.FREE': it's an enum's member" ("can't take the address of ...").
 // - .FREE alone (Ast_Dot_Name) has type_untyped_member until it meets a
 //   type, as .{...} does (check_convert): a declaration's type, an
 //   assignment's target, an argument and a default, a return, a field or an

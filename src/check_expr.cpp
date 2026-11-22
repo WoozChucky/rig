@@ -460,7 +460,9 @@ static void convert_array_literal(Checker *c, Ast_Literal *literal, Type *to) {
 // goes takes its default one first: an untyped constant an int or a
 // float32, null a *void. A literal without its type has none to take
 // ("this literal's type isn't known; write it before the '.', as in
-// Vec2.{1, 2}", check_default_type), and is left with no type.
+// Vec2.{1, 2}", check_default_type), nor has a member without its enum,
+// .FREE ("this member's enum isn't known; write it with its enum, as in
+// Mode.FREE"): each is left with no type.
 static void convert_to_any(Checker *c, Ast *e) {
     if (e->type == &type_null) e->type = type_pointer_to(&type_void);
     check_default_type(c, e);
@@ -529,12 +531,12 @@ static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at
 // e, of type_untyped_member, meeting type `to` (check_convert): a .NAME
 // becomes the member of that name of enum `to`, a constant of it; .A | .B
 // (& ^ too, and .A | 0) and ~.A, which waited for a flags type, convert
-// their operands and fold. Meeting a type that isn't an enum, "'.FREE' needs an enum type,
-// not 'int'", at the first .NAME in e; an operator meeting an enum that
-// isn't flags, its own message, at the operator ("'|' needs integers, not
-// 'Mode'", "'~' needs an integer, not 'Mode'"), as for two values of it;
-// .A | 1 meeting a flags type, a mismatch at the operator, as f | 1 is.
-// After any of these, e has no type.
+// their operands and fold. Meeting a type that isn't an enum, "'.FREE'
+// needs an enum type, not 'int'", at the first .NAME in e; an operator
+// meeting an enum that isn't flags, its own message, at the operator ("'|'
+// needs integers, not 'Mode'", "'~' needs an integer, not 'Mode'"), as for
+// two values of it; .A | 1 meeting a flags type, a mismatch at the
+// operator, as f | 1 is. After any of these, e has no type.
 static void convert_member(Checker *c, Ast *e, Type *to) {
     if (to->kind != TYPE_ENUM) {
         Ast_Dot_Name *first = first_dot_name(e);
@@ -922,14 +924,14 @@ static void give_extra_argument_a_type(Checker *c, Ast *arg) {
 // it keeps its own, or takes a default (give_extra_argument_a_type), which
 // must be one C can take: a number, an enum (as its integer type, spec
 // 3.18), a bool or a pointer, which lowering passes after C's default
-// argument promotions (type_c_promoted). A string
-// literal goes as a C string, its bytes' address, as it does to a *u8
-// (lowering looks at the literal, whose type stays string), and so does
-// constant data holding one (is_literal_string): a constant, or a string
-// field or element of one. C passes structs by rules Rig doesn't follow, and
-// has no views or other Rig strings: each is refused, with what to pass
-// instead. So is a compound literal without its type: being told to write
-// its type would only lead to the same refusal.
+// argument promotions (type_c_promoted). A string literal goes as a C
+// string, its bytes' address, as it does to a *u8 (lowering looks at the
+// literal, whose type stays string), and so does constant data holding one
+// (is_literal_string): a constant, or a string field or element of one. C
+// passes structs by rules Rig doesn't follow, and has no views or other Rig
+// strings: each is refused, with what to pass instead. So is a compound
+// literal without its type: being told to write its type would only lead to
+// the same refusal.
 static void check_extra_argument(Checker *c, Ast_Proc *proc, Ast *arg, s64 index) {
     Type *t = arg->type;
     if (!t) return;  // its own mistake, reported already
@@ -1857,10 +1859,10 @@ static bool compare_floats(Token_Kind op, f64 left, f64 right) {
 }
 
 // Whether == and != take a value of type t: a number, a bool, a pointer
-// (null too), a procedure value, a string or an enum. Not a struct: two of them could differ only in
-// their padding, bytes no field owns, so comparing their bytes wouldn't say
-// whether their fields are equal, and comparing field by field is a
-// procedure's job (spec 6.5).
+// (null too), a procedure value, a string or an enum. Not a struct: two of
+// them could differ only in their padding, bytes no field owns, so
+// comparing their bytes wouldn't say whether their fields are equal, and
+// comparing field by field is a procedure's job (spec 6.5).
 static bool takes_equality(Type *t) {
     return type_is_number(t) || t == &type_bool || type_is_pointer(t) || t == &type_null || t == &type_string ||
            t->kind == TYPE_PROC || t->kind == TYPE_ENUM;

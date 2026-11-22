@@ -1003,10 +1003,11 @@ static LLVMMetadataRef debug_pointer(Backend *b, LLVMMetadataRef to) {
 // unsigned when the integer type is (so u64's largest is
 // 18446744073709551615, not -1). That's the width clang gives C's: cdb
 // looks a value up by its bits at the enum's size, so an s8's -2 stored as
-// 64 bits would be no member's. An enum_flags is the same: how a debugger shows a value of several members
-// is its own (gdb writes (A | B) when every member is a bit of its own). Two
-// levels, the enum and its base type, which holds no other type: no cycle
-// leads through it, and it's never cut.
+// 64 bits would be no member's. An enum_flags is the same: how a debugger
+// shows a value of several members is its own (gdb writes (A | B) when
+// every member is a bit of its own). Two levels, the enum and its base
+// type, which holds no other type: no cycle leads through it, and it's
+// never cut.
 static Debug_Type debug_enum(Backend *b, Type *t) {
     Ast_Enum *e = t->enum_decl;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, e->members.count ? e->members.count : 1);
