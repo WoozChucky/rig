@@ -42,4 +42,8 @@ main :: () {
     if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; }
     if #complete m == { case .ALLOCATE; case; }
     if #complete s == { case .ALSO_FIRST; case .SECOND; }
+    if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; case .FRE; }
+    if #complete s == { case .SECOND; }
+    if 2.5 == { }
+    if 1e300 == { }
 }

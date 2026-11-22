@@ -9985,16 +9985,50 @@ TEST(a_complete_switch_covers_values_not_names) {
     arena_free(&a);
 }
 
+TEST(each_case_is_a_scope_of_its_own) {
+    // Each case's statements are a block and a scope (spec 6.14, 4.7): two
+    // cases may declare one name, each its own local, and neither is seen
+    // past the switch.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "main :: () {\n"
+                              "    n := 1;\n"
+                              "    if n == { case 1; a := 1; case 2; a := \"two\"; }\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Switch *s = switch_at(&c, 1);
+    CHECK(s);
+    if (s && s->cases.count == 2) {
+        Ast *first = find_local(s->cases[0]->block, "a");
+        Ast *second = find_local(s->cases[1]->block, "a");
+        CHECK(first && second && first != second);
+        if (first) CHECK_STR(type_name(&a, first->type), "int");
+        if (second) CHECK_STR(type_name(&a, second->type), "string");
+        CHECK(find_local(c.file->procs[0]->body, "a") == first);
+    }
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "main :: () {\n"
+                               "    n := 1;\n"
+                               "    if n == { case 1; a := 1; case 2; a := 2; }\n"
+                               "    a = 3;\n"
+                               "}\n"),
+              "4:5: unknown identifier 'a'\n");
+    arena_free(&a);
+}
+
 TEST(switches_reach_their_end_as_spec_6_11_says) {
-    // tests/errors/switch_reaching_the_end.rig's procedures: the four that
-    // get past their switch to their '}' are reported there, and only they.
+    // tests/errors/switch_reaching_the_end.rig's procedures: the five that
+    // get past their switch to their '}' are reported there, and only they;
+    // the two whose switch is failed get only the switch's own message.
     Arena a = arena_make();
     String text;
     CHECK(os_read_file(&a, str("tests/errors/switch_reaching_the_end.rig"), &text));
     CHECK_STR(check_source(&a, string_cstr(&a, text)),
-              "14:1: 'no_default' must return a value on every path, and this one reaches its end\n"
-              "21:1: 'default_reaches' must return a value on every path, and this one reaches its end\n"
-              "42:1: 'bool_both' must return a value on every path, and this one reaches its end\n"
-              "51:1: 'loop_break' must return a value on every path, and this one reaches its end\n");
+              "17:1: 'no_default' must return a value on every path, and this one reaches its end\n"
+              "24:1: 'default_reaches' must return a value on every path, and this one reaches its end\n"
+              "45:1: 'bool_both' must return a value on every path, and this one reaches its end\n"
+              "54:1: 'loop_break' must return a value on every path, and this one reaches its end\n"
+              "61:1: 'middle_reaches' must return a value on every path, and this one reaches its end\n"
+              "64:8: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'\n"
+              "70:8: this switch is #complete, but 'Mode.B' has no case\n");
     arena_free(&a);
 }

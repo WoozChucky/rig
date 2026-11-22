@@ -4183,6 +4183,11 @@ TEST(the_equals_before_a_brace_ends_any_expression) {
     CHECK_STR(errors, "2:11: expected ')', found '=='\n");
     body_dump(&a, "while x == { }", &errors);
     CHECK_STR(errors, "2:13: expected '{', found '=='\n");
+    // A name before it in a for was no iterator missing its ':'.
+    body_dump(&a, "for n == { }", &errors);
+    CHECK_STR(errors, "2:11: expected '..' or the loop's '{', found '=='\n");
+    body_dump(&a, "for (n) == { }", &errors);
+    CHECK_STR(errors, "2:13: expected '..' or the loop's '{', found '=='\n");
     arena_free(&a);
 }
 
@@ -4212,5 +4217,44 @@ TEST(switch_syntax_mistakes) {
     CHECK_STR(errors, "2:11: expected '{', found '=='\n");
     body_dump(&a, "if x == { case 1 x += 1; }", &errors);
     CHECK_STR(errors, "2:22: expected ';', found identifier 'x'\n");
+    // A #load before the first case is misplaced, as anywhere in a body.
+    body_dump(&a, "if x == { #load \"x.rig\"; case 1; }", &errors);
+    CHECK_STR(errors, "2:15: #load can only be at the top level\n");
+    arena_free(&a);
+}
+
+TEST(a_switch_never_closed_ends_before_a_declaration) {
+    // A procedure's declaration in column 1, or the end of the file, where
+    // a 'case' or the switch's '}' should be (before the first case, in a
+    // case's statements, or after a #through) means the braces were never
+    // closed, as in a block: "expected '}'", and the top level resumes
+    // there, main parsed as its own.
+    Arena a = arena_make();
+    String errors;
+    const char *insides[] = {"", "        case 1;\n", "        case 1; x += 1;\n", "        case 1; #through;\n"};
+    for (s64 i = 0; i < 4; i++) {
+        String text = string_printf(&a, "f :: (x: int) {\n    if x == {\n%smain :: () {}\n", insides[i]);
+        CHECK_STR(parse_src(&a, string_cstr(&a, text), &errors), "(broken f)\n(proc main (params) (block))\n");
+        CHECK_STR(errors, i == 0 ? "3:1: expected '}', found identifier 'main'\n"
+                                 : "4:1: expected '}', found identifier 'main'\n");
+        text = string_printf(&a, "f :: (x: int) {\n    if x == {\n%s", insides[i]);
+        CHECK_STR(parse_src(&a, string_cstr(&a, text), &errors), "(broken f)\n");
+        CHECK_STR(errors, i == 0 ? "3:1: expected '}', found end of file\n" : "4:1: expected '}', found end of file\n");
+    }
+    arena_free(&a);
+}
+
+TEST(switches_nest_up_to_a_thousand_levels) {
+    // A switch's braces are one level of the blocks' limit (spec 6.14),
+    // each case's block inside it, as an if's is: with 999 switches inside
+    // the body, blocks nest 1000 deep; one more is one message, at the
+    // '{' of the 1001st level.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 999, "y = 2;", " }",
+                                             "\n}\n")),
+              "");
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 1000, "y = 2;", " }",
+                                             "\n}\n")),
+              "3:16992: blocks are nested too deeply (more than 1000 levels)\n");
     arena_free(&a);
 }

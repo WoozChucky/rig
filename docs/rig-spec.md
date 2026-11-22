@@ -1197,7 +1197,7 @@ Every top-level declaration is visible everywhere in the program, in every one o
 
 ### 4.7 Scope
 
-A **block** is a sequence of statements in braces (section 6.1). A procedure's body is a block, and so is each body of an `if`, `else`, `while` and `for`, and a `push_context`'s (section 6.13). A `defer`'s statement is a scope of its own too, even when it isn't written in braces (section 6.12). An `#if`'s branch is written as a block but makes no scope: in a body, the taken branch's statements are the enclosing block's (section 4.9), which is the deferred statement's when the `#if` is one (`defer #if c { x := 1; }`).
+A **block** is a sequence of statements in braces (section 6.1). A procedure's body is a block, and so is each body of an `if`, `else`, `while` and `for`, and a `push_context`'s (section 6.13). A `defer`'s statement is a scope of its own too, even when it isn't written in braces (section 6.12). So are a switch's case's statements, up to the next case or the switch's `}` (section 6.14). An `#if`'s branch is written as a block but makes no scope: in a body, the taken branch's statements are the enclosing block's (section 4.9), which is the deferred statement's when the `#if` is one (`defer #if c { x := 1; }`).
 
 - A name declared in a block, a local variable or a local constant, is visible from the end of its declaration to the end of the block, including in blocks nested inside it.
 - A procedure's parameters are declared in its body's block. They are in scope in its default values too, hiding the top level's names of theirs there as in the body, but can't be used (section 7.2).
@@ -1718,7 +1718,7 @@ Statement = VarDecl | ConstDecl | MultiVarDecl | Assignment | MultiAssignment
           | "break" ";" | "continue" ";" | DeferStmt | PushContextStmt | Expression ";" .
 ```
 
-Statements appear only in procedure bodies, and run in order. Every statement that does not end with a block ends with `;`. An `IfDirective`, `#if`, is decided while compiling, and its taken branch's statements are the enclosing block's (section 4.9).
+Statements appear only in procedure bodies, and run in order. Every statement that does not end with a block or with a switch's `}` ends with `;`. An `IfDirective`, `#if`, is decided while compiling, and its taken branch's statements are the enclosing block's (section 4.9).
 
 ### 6.1 Blocks
 
@@ -1726,7 +1726,7 @@ Statements appear only in procedure bodies, and run in order. Every statement th
 Block = "{" { Statement } "}" .
 ```
 
-A block is a sequence of statements in braces, and a scope (section 4.7). An `#if`'s branch is written as a block but makes no scope: its statements are the enclosing block's (section 4.9). A block may stand on its own as a statement, giving its declarations a scope of their own. When a block is left, by any way out, its deferred statements run (section 6.12).
+A block is a sequence of statements in braces, and a scope (section 4.7). An `#if`'s branch is written as a block but makes no scope: its statements are the enclosing block's (section 4.9). A block may stand on its own as a statement, giving its declarations a scope of their own. A switch's case's statements are a block and a scope too, though not written in braces (section 6.14). When a block is left, by any way out, its deferred statements run (section 6.12).
 
 ### 6.2 Declaration statements
 
@@ -1885,7 +1885,7 @@ A block reaches its end unless its last statement is one of:
 - a block that does not reach its own end, or a `push_context` whose block does not (section 6.13);
 - an `if` with an `else`, neither of whose blocks reaches its end;
 - an `#if` whose taken branch does not reach its end (section 4.9): one that took no branch reaches it;
-- a switch in which every value finds a case, since it has a `case;` or is `#complete` with a case for every member's value, and none of whose cases reaches its end, but one ending with `#through`, which goes on into the next case, judged in its turn (section 6.14). Only `case;` and `#complete` count: a `bool`'s switch with a case for each value and no `case;` reaches its end;
+- a switch past which no value goes on without a case, since it has a `case;`, or is `#complete` with a case for every member's value (a value no member has stops the program, section 6.14), and none of whose cases reaches its end, but one ending with `#through`, which goes on into the next case, judged in its turn (section 6.14). Only `case;` and `#complete` count: a `bool`'s switch with a case for each value and no `case;` reaches its end;
 - a `while` whose condition is the constant `true` and that has no `break` of its own.
 
 An `if`, an `#if` or a `while` whose condition has an error is taken not to reach its end, so the condition's message is the only one; so is a switch whose switched expression has an error, or that is `#complete` and doesn't cover every value, its message said. A `defer` changes nothing here: deferred code can't return (section 6.12), so a block that ends with a `defer` reaches its end, and one that ends with a `return` after a `defer` doesn't.

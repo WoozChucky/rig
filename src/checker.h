@@ -1029,7 +1029,7 @@
 //
 // The switch (issue #222, spec 6.14).
 // - `if x == { case 1; ... case; ... }` checks x once, as an operand, an
-//   untyped constant given its default type: an integer, an enum, a bool,
+//   untyped integer given its default type: an integer, an enum, a bool,
 //   a string or a pointer, or "a switch needs an integer, an enum, a bool,
 //   a string or a pointer, not 'float64'" (checker.cpp's check_switch).
 // - Each case's value converts to x's type as an assignment's value does,
@@ -1048,8 +1048,11 @@
 //   or continue in one acts on the loop around the switch. The switch
 //   reaches its end as spec 6.11 says (goes_past).
 // - What lowering may rely on: x's type is one of the five; every case's
-//   value but `case;`'s is a constant of x's type (is_constant, its bits in
-//   Ast.constant), or for a string constant data (constant_data), a string
+//   value but `case;`'s is a constant whose value is one of x's type's
+//   (is_constant, its bits in Ast.constant as 64 bits): its type is x's,
+//   or one that widens to it (a u8 constant in an int's switch, a *int
+//   null in a *void's), so lowering takes the width from x's type, not
+//   the case's; or for a string constant data (constant_data), a string
 //   literal's bytes, or none, a field a literal leaves out, the empty
 //   string; no two cases have one
 //   value, and at most one is `case;`, Ast_Switch.default_case;

@@ -61,3 +61,15 @@ tests/errors/switch_cases.rig:42:8: error: this switch is #complete, but 'Mode.F
 tests/errors/switch_cases.rig:43:8: error: this switch is #complete, but 'Mode.RESIZE', 'Mode.FREE' and 'Mode.FREE_ALL' have no case
         if #complete m == { case .ALLOCATE; case; }
            ^
+tests/errors/switch_cases.rig:45:73: error: 'Mode' has no member 'FRE'
+        if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; case .FRE; }
+                                                                            ^
+tests/errors/switch_cases.rig:46:8: error: this switch is #complete, but 'Shared.FIRST' has no case
+        if #complete s == { case .SECOND; }
+           ^
+tests/errors/switch_cases.rig:47:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
+        if 2.5 == { }
+           ^
+tests/errors/switch_cases.rig:48:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
+        if 1e300 == { }
+           ^

@@ -993,7 +993,12 @@ static bool parse_statements(Parser *p, Ast_Block *block, bool in_case);
 // last case: there's no case after it", both at the '#through'. Anywhere
 // else, a block inside a case included, parse_statement refuses it, and a
 // 'case' too. Before the first case only a 'case' or the '}' may come:
-// anything else is "expected 'case'".
+// anything else is "expected 'case'", or a #load misplaced
+// (error_expected_or_load). The end of the file, or a declaration only
+// the top level has at the start of a line (starts_declaration), where a
+// 'case' or the '}' should be, before the first case or after a #through,
+// means the braces were never closed: "expected '}'", and the top level
+// resumes there, as in a block (parse_block_rest).
 //
 // The braces are one block level (MAX_DEPTH), counted at the '{' as
 // parse_block counts; each case's block is inside that level, as an if's
@@ -1024,7 +1029,7 @@ static Ast_Switch *parse_switch(Parser *p, Token *keyword, Token *complete, Ast 
                 error_expected(p, token_kind_name(TOKEN_RBRACE));
                 p->resume = p->next;
             } else {
-                error_expected(p, "'case'");
+                error_expected_or_load(p, "'case'");
             }
             fine = false;
             break;
@@ -1048,7 +1053,12 @@ static Ast_Switch *parse_switch(Parser *p, Token *keyword, Token *complete, Ast 
             Token *through = advance(p);
             k->through = through->pos;
             fine = expect(p, TOKEN_SEMICOLON) != nullptr;
-            if (fine && peek(p)->kind == TOKEN_RBRACE) {
+            if (fine && (peek(p)->kind == TOKEN_EOF || starts_declaration(p))) {
+                // The braces were never closed, as before a case above.
+                error_expected(p, token_kind_name(TOKEN_RBRACE));
+                p->resume = p->next;
+                fine = false;
+            } else if (fine && peek(p)->kind == TOKEN_RBRACE) {
                 diag_error(p->diag, through->pos, "#through can't end the last case: there's no case after it");
                 fine = false;
             } else if (fine && peek(p)->kind != TOKEN_CASE) {
@@ -1209,10 +1219,10 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
 // - '..': a range, whose last end follows;
 // - the body's '{': what the loop goes over, its sequence (an array, a
 //   view or a string; the checker says whether it is one);
-// - with no iterator named, a name and then anything else but a #load
-//   (`for i 0..9`, `for x in 0..9`): the name was meant as the iterator's,
-//   and its ':' is missing: "expected ':' after the iterator's name, as in
-//   for i: 0..9", at what came instead;
+// - with no iterator named, a name and then anything else but a #load or
+//   an '==' before a '{' (`for i 0..9`, `for x in 0..9`): the name was
+//   meant as the iterator's, and its ':' is missing: "expected ':' after
+//   the iterator's name, as in for i: 0..9", at what came instead;
 // - otherwise, "expected '..' or the loop's '{'", or a #load misplaced
 //   (error_expected_or_load).
 // A '*' right after 'for' makes the iterator a pointer to each element
@@ -1244,7 +1254,8 @@ static Ast *parse_for(Parser *p) {
     }
     if (after->kind != TOKEN_DOT_DOT) {
         if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
-        if (!named_iterator && loop->first->kind == AST_NAME && !is_load_or_import(after)) {
+        bool switch_braces = after->kind == TOKEN_EQUAL_EQUAL && peek(p, 1)->kind == TOKEN_LBRACE;
+        if (!named_iterator && loop->first->kind == AST_NAME && !is_load_or_import(after) && !switch_braces) {
             diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
         } else {
             error_expected_or_load(p, "'..' or the loop's '{'");

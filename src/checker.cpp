@@ -1952,12 +1952,15 @@ static bool same_case_value(Type *t, Ast *a, Ast *b) {
 // if x == { case 1; ... } and if #complete x == { ... } (spec 6.14).
 //
 // x is checked once, as an operand (so .FREE and .{...} alone are
-// reported), an untyped constant given its default type: `if 3 == {` is on
-// an int. It must be is_switchable: "a switch needs an integer, an enum, a
-// bool, a string or a pointer, not 'float64'", at it; the cases' values are
-// then checked against nothing but their own types (check_value, so a
-// .FREE among them says nothing more), and the switch is `failed`, as one
-// whose x had an error.
+// reported), an untyped integer constant given its default type:
+// `if 3 == {` is on an int. It must be is_switchable: "a switch needs an
+// integer, an enum, a bool, a string or a pointer, not 'float64'", at it.
+// An untyped float isn't given its type first, so one too large for a
+// float32 gets only that message, naming 'float32', as an if's condition
+// does (check_condition). When x isn't switchable, the cases' values are
+// checked against nothing but their own types (check_value, so a .FREE
+// among them says nothing more), and the switch is `failed`, as one whose
+// x had an error.
 //
 // Each case's value converts to x's type as an assignment's value does
 // (check_convert: .FREE takes the enum, an untyped constant the integer
@@ -1997,8 +2000,8 @@ static bool same_case_value(Type *t, Ast *a, Ast *b) {
 // (check_jump).
 static void check_switch(Checker *c, Ast_Switch *s) {
     Type *t = check_operand(c, s->value);
-    if (t && type_is_untyped(t)) {
-        check_default_type(c, s->value);  // an untyped float too large for a float32 is said
+    if (t == &type_untyped_int) {
+        check_default_type(c, s->value);
         t = s->value->type;
     }
     if (t == &type_null) {
@@ -2203,8 +2206,8 @@ static bool reaches_end(Ast_Block *block);
 //   #through goes on into the next case, which is judged in its turn.
 // A break or continue leaves the block too, but goes on elsewhere in its
 // loop; the rule is only asked about statements outside any loop body (a
-// procedure's body, and the blocks, ifs, #ifs and pushes that end it) or
-// about whole loops, so it never sees one.
+// procedure's body, and the blocks, ifs, #ifs, pushes and switches' cases
+// that end it) or about whole loops, so it never sees one.
 // An if or a while whose condition was an error (its type unknown, or not
 // bool), which check_condition reported, is taken not to go past, whatever
 // its branches do; so is an #if any of whose chain's conditions failed
