@@ -17,7 +17,10 @@
 # The script is served to the children by a small HTTP server on localhost,
 # as GitHub Pages serves it: as application/octet-stream, which
 # Invoke-RestMethod must still hand to Invoke-Expression as text. The same
-# server has a release whose archive doesn't match its SHA256SUMS.
+# server has a release whose archive doesn't match its SHA256SUMS, and two
+# stand-in releases 9.0.0, one with Rig's runtime and one without, whose
+# rig.exe is a Rig program built by the repository's bin\rig.exe (build.bat
+# makes it first).
 #
 # What it checks:
 #   - A script cut short anywhere, its last line included, runs nothing.
@@ -27,6 +30,11 @@
 #   - -Help, and each failure: an unknown option, a release that doesn't
 #     exist, a checksum that doesn't match, no network. Each stops with its
 #     message, before anything is installed.
+#   - The hello world check's message when the build fails, with the
+#     build's output: the requirements' for a release without Rig's runtime
+#     (0.3.0 and before), a bug to report for one with it, and the
+#     requirements' again for the release without it installed over the one
+#     with it, which leaves the newer rig_runtime.lib in the folder.
 #   - Installing the latest release: rig.exe and lld-link.exe in
 #     %LOCALAPPDATA%\Programs\rig, hello world built and run (Visual
 #     Studio's C++ tools must be installed), the extension installed.
@@ -42,6 +50,8 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $repo 'site\public\install.ps1'
 if (-not (Test-Path -LiteralPath $script)) { throw "test_install.ps1: $script is missing" }
+$repoRig = Join-Path $repo 'bin\rig.exe'
+if (-not (Test-Path -LiteralPath $repoRig)) { throw "test_install.ps1: $repoRig is missing: run build.bat first" }
 $shell = (Get-Process -Id $PID).Path
 $work = Join-Path ([IO.Path]::GetTempPath()) ('rig-test-install-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $work > $null
@@ -161,6 +171,44 @@ try {
     Copy-Item -LiteralPath $script -Destination $site
     [IO.File]::WriteAllText((Join-Path $bad 'rig-windows-x64.zip'), "not Rig`n")
     [IO.File]::WriteAllText((Join-Path $bad 'SHA256SUMS'), ('0' * 64) + "  rig-windows-x64.zip`n")
+
+    # The stand-in releases 9.0.0, under fake/ and fake-runtime/, whose
+    # rig.exe says what it is to `rig version`, and to anything else,
+    # `rig build` included, prints a linker's error and exits with 1. The
+    # archive under fake-runtime/ also holds rig_runtime.lib (empty), as
+    # every release after 0.3.0 does: that rig links with its own files, so
+    # a build that fails is a bug to report, not a missing requirement.
+    $standIn = Join-Path $work 'standin'
+    New-Item -ItemType Directory -Path $standIn > $null
+    [IO.File]::WriteAllText((Join-Path $standIn 'standin.rig'), @'
+puts :: (s: *u8) -> s32 #foreign libc;
+exit :: (status: s32) #foreign libc;
+main :: () {
+    args := __command_line_arguments;
+    if args.count > 1 && args[1] == "version" {
+        puts("rig 9.0.0 (a stand-in)");
+        return;
+    }
+    puts("lld-link: error: could not open 'stand-in.lib': no such file or directory");
+    exit(1);
+}
+'@)
+    Push-Location -LiteralPath $standIn
+    try { & $repoRig build standin.rig -o rig.exe --quiet } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { Fail "$repoRig couldn't build the stand-in rig.exe" }
+    $fakeRig = Join-Path $work 'fakerig'
+    New-Item -ItemType Directory -Path $fakeRig > $null
+    Copy-Item -LiteralPath (Join-Path $standIn 'rig.exe') -Destination $fakeRig
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    foreach ($release in 'fake', 'fake-runtime') {
+        if ($release -eq 'fake-runtime') { [IO.File]::WriteAllText((Join-Path $fakeRig 'rig_runtime.lib'), '') }
+        $folder = Join-Path $site "$release\download\v9.0.0"
+        New-Item -ItemType Directory -Path $folder > $null
+        $zip = Join-Path $folder 'rig-windows-x64.zip'
+        [IO.Compression.ZipFile]::CreateFromDirectory($fakeRig, $zip)
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+        [IO.File]::WriteAllText((Join-Path $folder 'SHA256SUMS'), "$hash  rig-windows-x64.zip`n")
+    }
     # A port picked at random may be taken, or in a range Windows keeps for
     # itself (Hyper-V's): another is tried.
     for ($try = 1; -not $listener; $try++) {
@@ -290,6 +338,47 @@ try {
     Assert-NothingInstalled 'no network' $output
     Assert-SessionKept 'irm | iex' $output
     Pass 'no network stops it; irm | iex leaves the session as it was'
+
+    # --- The hello world check, with the stand-in releases ------------------
+
+    $failedBuild = [regex]::Escape("could not open 'stand-in.lib'")
+    $requirements = 'Linking a program needs Visual Studio'
+    $bug = 'please report it'
+    Reset-AppData
+    $env:RIG_INSTALL_BASE_URL = "http://localhost:$port/fake"
+    $output = Invoke-Child "& ([scriptblock]::Create((irm $url))) -Version 9.0.0 -NoModifyPath -NoVSCode"
+    $env:RIG_INSTALL_BASE_URL = $null
+    if ($output -match 'THROWN') { Fail 'a failing hello world build failed the install' $output }
+    if ($output -notmatch "Rig is installed, but it couldn't build hello world") { Fail "a failing build's message" $output }
+    if ($output -notmatch $failedBuild) { Fail "a failing build's message doesn't show the build's output" $output }
+    if ($output -notmatch $requirements) { Fail "a failing build doesn't get the requirements message" $output }
+    if ($output -match $bug) { Fail "a failing build of a release without Rig's runtime got the bug message" $output }
+    Pass "a hello world that doesn't build gets the requirements message, and the build's output"
+
+    Reset-AppData
+    $env:RIG_INSTALL_BASE_URL = "http://localhost:$port/fake-runtime"
+    $output = Invoke-Child "& ([scriptblock]::Create((irm $url))) -Version 9.0.0 -NoModifyPath -NoVSCode"
+    $env:RIG_INSTALL_BASE_URL = $null
+    if ($output -match 'THROWN') { Fail "a failing hello world build of a release with Rig's runtime failed the install" $output }
+    if ($output -notmatch $bug) { Fail "a failing build of a release with Rig's runtime doesn't get the bug message" $output }
+    if ($output -notmatch [regex]::Escape('https://github.com/WoozChucky/rig/issues')) { Fail "the bug message doesn't say where to report it" $output }
+    if ($output -notmatch $failedBuild) { Fail "a failing build of a release with Rig's runtime: the message doesn't show the build's output" $output }
+    if ($output -match $requirements) { Fail "a failing build of a release with Rig's runtime got the requirements message" $output }
+    Pass "a release with Rig's runtime whose hello world doesn't build gets the bug message, and the build's output"
+
+    # The release without the runtime installed over the one with it, as
+    # -Version 0.3.0 over a newer release: install.ps1 copies the archive's
+    # files over the old ones and leaves the rest, so the newer
+    # rig_runtime.lib stays in the folder, and whether the release has the
+    # runtime must be read from its archive, not from the folder.
+    $env:RIG_INSTALL_BASE_URL = "http://localhost:$port/fake"
+    $output = Invoke-Child "& ([scriptblock]::Create((irm $url))) -Version 9.0.0 -NoModifyPath -NoVSCode"
+    $env:RIG_INSTALL_BASE_URL = $null
+    if ($output -match 'THROWN') { Fail 'a failing hello world build of an older release over a newer one failed the install' $output }
+    if (-not (Test-Path -LiteralPath (Join-Path $appData 'Programs\rig\rig_runtime.lib'))) { Fail "installing an older release over a newer one didn't leave the newer rig_runtime.lib behind" $output }
+    if ($output -notmatch $requirements) { Fail "a failing build of an older release over a newer one doesn't get the requirements message" $output }
+    if ($output -match $bug) { Fail 'a failing build of an older release over a newer one got the bug message' $output }
+    Pass "an older release without Rig's runtime, over a newer one with it, gets the requirements message"
 
     # --- Installing ---------------------------------------------------------
 
