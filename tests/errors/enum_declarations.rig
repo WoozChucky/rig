@@ -1,7 +1,8 @@
 // An enum's declaration's mistakes (issue #221, spec 3.18), one a line: an
 // integer type that isn't one, or isn't known; a member twice; a value
 // past the integer type's range, counted up to (past u8's, u64's and s8's,
-// a signed flags type's values read as unsigned) or set; a value not known
+// a signed flags type's values read as unsigned, the members after it
+// unknown too and saying nothing more) or set; a value not known
 // while compiling; a struct as the integer type; a value of another type
 // (a string, a float, a member without its enum, another enum's member);
 // an enum named as a built-in type; and an enum's name used as a value.
@@ -9,8 +10,8 @@
 Bad :: enum float32 { A; }
 Unknown :: enum Nope { A; }
 Twice :: enum { A; A; }
-Full :: enum u8 { A :: 255; B; }
-Bits :: enum_flags u8 { A :: 128; B; }
+Full :: enum u8 { A :: 255; B; C; }
+Bits :: enum_flags u8 { A :: 128; B; C; }
 Wide :: enum u64 { A :: 0xFFFF_FFFF_FFFF_FFFF; B; }
 Top :: enum_flags u64 { A :: 0x8000_0000_0000_0000; B; }
 Signed :: enum s8 { A :: 127; B; }

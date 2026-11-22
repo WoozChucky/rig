@@ -1,54 +1,54 @@
-tests/errors/enum_declarations.rig:9:13: error: an enum's type must be an integer type, not 'float32'
+tests/errors/enum_declarations.rig:10:13: error: an enum's type must be an integer type, not 'float32'
     Bad :: enum float32 { A; }
                 ^
-tests/errors/enum_declarations.rig:10:17: error: unknown type 'Nope'
+tests/errors/enum_declarations.rig:11:17: error: unknown type 'Nope'
     Unknown :: enum Nope { A; }
                     ^
-tests/errors/enum_declarations.rig:11:20: error: 'A' is already declared at tests/errors/enum_declarations.rig:11:17
+tests/errors/enum_declarations.rig:12:20: error: 'A' is already declared at tests/errors/enum_declarations.rig:12:17
     Twice :: enum { A; A; }
                        ^
-tests/errors/enum_declarations.rig:12:29: error: 256 doesn't fit in 'u8'
-    Full :: enum u8 { A :: 255; B; }
+tests/errors/enum_declarations.rig:13:29: error: 256 doesn't fit in 'u8'
+    Full :: enum u8 { A :: 255; B; C; }
                                 ^
-tests/errors/enum_declarations.rig:13:35: error: 256 doesn't fit in 'u8'
-    Bits :: enum_flags u8 { A :: 128; B; }
+tests/errors/enum_declarations.rig:14:35: error: 256 doesn't fit in 'u8'
+    Bits :: enum_flags u8 { A :: 128; B; C; }
                                       ^
-tests/errors/enum_declarations.rig:14:48: error: 18446744073709551616 doesn't fit in 'u64'
+tests/errors/enum_declarations.rig:15:48: error: 18446744073709551616 doesn't fit in 'u64'
     Wide :: enum u64 { A :: 0xFFFF_FFFF_FFFF_FFFF; B; }
                                                    ^
-tests/errors/enum_declarations.rig:15:53: error: 18446744073709551616 doesn't fit in 'u64'
+tests/errors/enum_declarations.rig:16:53: error: 18446744073709551616 doesn't fit in 'u64'
     Top :: enum_flags u64 { A :: 0x8000_0000_0000_0000; B; }
                                                         ^
-tests/errors/enum_declarations.rig:16:31: error: 128 doesn't fit in 's8'
+tests/errors/enum_declarations.rig:17:31: error: 128 doesn't fit in 's8'
     Signed :: enum s8 { A :: 127; B; }
                                   ^
-tests/errors/enum_declarations.rig:17:38: error: 256 doesn't fit in 's8'
+tests/errors/enum_declarations.rig:18:38: error: 256 doesn't fit in 's8'
     Negative :: enum_flags s8 { A :: -1; B; }
                                          ^
-tests/errors/enum_declarations.rig:18:24: error: 300 doesn't fit in 's8'
+tests/errors/enum_declarations.rig:19:24: error: 300 doesn't fit in 's8'
     Over :: enum s8 { A :: 300; }
                            ^
-tests/errors/enum_declarations.rig:20:21: error: the value of constant 'X' isn't known while compiling
+tests/errors/enum_declarations.rig:21:21: error: the value of constant 'X' isn't known while compiling
     Late :: enum { X :: counter; }
                         ^
-tests/errors/enum_declarations.rig:22:20: error: an enum's type must be an integer type, not 'S'
+tests/errors/enum_declarations.rig:23:20: error: an enum's type must be an integer type, not 'S'
     OverStruct :: enum S { A; }
                        ^
-tests/errors/enum_declarations.rig:23:21: error: a value of type 'string' doesn't convert to 'int' implicitly
+tests/errors/enum_declarations.rig:24:21: error: a value of type 'string' doesn't convert to 'int' implicitly
     Text :: enum { A :: "x"; }
                         ^
-tests/errors/enum_declarations.rig:24:21: error: a value of type 'float32' doesn't convert to 'int' implicitly
+tests/errors/enum_declarations.rig:25:21: error: a value of type 'float32' doesn't convert to 'int' implicitly
     Real :: enum { A :: 1.5; }
                         ^
-tests/errors/enum_declarations.rig:25:23: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/enum_declarations.rig:26:23: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
     Dotted :: enum { A :: .Q; }
                           ^
-tests/errors/enum_declarations.rig:26:22: error: a value of type 'Mode' doesn't convert to 'int' implicitly
+tests/errors/enum_declarations.rig:27:22: error: a value of type 'Mode' doesn't convert to 'int' implicitly
     Other :: enum { A :: Mode.A; }
                          ^
-tests/errors/enum_declarations.rig:27:1: error: 'u8' is a built-in type
+tests/errors/enum_declarations.rig:28:1: error: 'u8' is a built-in type
     u8 :: enum { A; }
     ^
-tests/errors/enum_declarations.rig:29:19: error: 'Mode' is a type, not a value
+tests/errors/enum_declarations.rig:30:19: error: 'Mode' is a type, not a value
     main :: () { m := Mode; b := cast(int) Bad.A; u : Unknown = .A; }
                       ^

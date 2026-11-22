@@ -4197,6 +4197,16 @@ TEST(declarations_needed_inside_others_nest_at_most_max_depth) {
     CHECK_STR(check_source(&a, joined(&a, "main :: () { v : S1001; }\n", chain_of(&a, holds, 1001, 1, -1), last)),
               needed_too_deeply(&a, 1003, "S0"));
     CHECK(builds(&a, joined(&a, last, chain_of(&a, holds, 1, 3000, -1), "main :: () { v : S3000; }\n")));
+    // Enums, each member's value needing the next enum's: an enum's levels
+    // are its deepest member's, here A's two (the cast, and the member .A
+    // in it), not Z's or Y's none. So E0 is at 0, E1 at 3, ..., E333 at
+    // 999, where a member with no value fits; E333 :: enum { ... E334.A ... }
+    // reaches 1001, so it is the one too many.
+    const char *enums = "E%lld :: enum { Z; A :: cast(int) E%lld.A; Y :: 1; }\n";
+    const char *main_e = "main :: () { x := E0.A; }\n";
+    CHECK(builds(&a, joined(&a, main_e, chain_of(&a, enums, 0, 332, 1), "E333 :: enum { A; }\n")));
+    CHECK_STR(check_source(&a, joined(&a, main_e, chain_of(&a, enums, 0, 333, 1), "E334 :: enum { A; }\n")),
+              needed_too_deeply(&a, 335, "E333"));
     // A circle longer than the limit is too deep before it's found to be
     // one: still one message, and no crash.
     CHECK_STR(check_source(&a, joined(&a, main_a, chain_of(&a, "A%lld :: A%lld;\n", 0, 1999, 1), "A2000 :: A0;\n")),
@@ -9584,8 +9594,11 @@ TEST(enum_values_count_up) {
     // An earlier member hides an outer name of the same in the values
     // after it (Hide's NEXT), and outside the body it's no name at all
     // (OUTSIDE is the outer LIMIT). ~ on a flags constant wraps at its
-    // integer type's width (NOT_ALL). Values count up from a negative one
-    // too (N8's, as their bits).
+    // integer type's width (NOT_ALL), as ~ on a member waiting for its
+    // flags type does once it meets it (NOT_P). Values count up from a
+    // negative one too (N8's, as their bits). A member without a value
+    // after one whose value is unknown is unknown too, and says nothing
+    // more (Full's C, F's B).
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { A; B; C :: 10; D; }\n"
                               "Small :: enum u8 { X :: 250; Y; LAST :: Y + 3; }\n"
@@ -9595,6 +9608,7 @@ TEST(enum_values_count_up) {
                               "Hide :: enum { FIRST :: LIMIT; LIMIT :: 3; NEXT :: LIMIT + 1; }\n"
                               "OUTSIDE :: LIMIT;\n"
                               "NOT_ALL :: ~Look.ALL;\n"
+                              "NOT_P :: cast(Look) ~.P;\n"
                               "main :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     const u64 hide[] = {10, 3, 4};
@@ -9606,6 +9620,10 @@ TEST(enum_values_count_up) {
     CHECK_STR(type_name(&a, not_all->type), "Look");
     CHECK(not_all->is_constant);
     CHECK_EQ(not_all->constant, 204);
+    Ast *not_p = top_level_named(c.file, "NOT_P");
+    CHECK_STR(type_name(&a, not_p->type), "Look");
+    CHECK(not_p->is_constant);
+    CHECK_EQ(not_p->constant, 254);
     const u64 mode[] = {0, 1, 10, 11};
     check_enum_values_are(&a, top_level_named(c.file, "Mode"), "int", false, mode, 4);
     const u64 small[] = {250, 251, 254};
@@ -9621,6 +9639,15 @@ TEST(enum_values_count_up) {
     CHECK_EQ(small_type->size, 1);
     CHECK(!small_type->is_signed);
     token_list_free(c.list);
+    Checked unknown = check_src(&a, "Full :: enum u8 { A :: 255; B; C; }\n"
+                                    "F :: enum_flags u8 { A :: 300; B; }\n"
+                                    "main :: () { }\n");
+    CHECK_STR(messages(&a, &unknown.list->diag),
+              "1:29: 256 doesn't fit in 'u8'\n"
+              "2:27: 300 doesn't fit in 'u8'\n");
+    CHECK(!((Ast_Enum *)top_level_named(unknown.file, "Full"))->members[2]->is_constant);
+    CHECK(!((Ast_Enum *)top_level_named(unknown.file, "F"))->members[1]->is_constant);
+    token_list_free(unknown.list);
     CHECK_STR(check_source(&a, "Mode :: enum { A; }\n"
                                "main :: () { x := A; }\n"),
               "2:19: unknown identifier 'A'\n");
