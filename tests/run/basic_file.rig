@@ -117,6 +117,20 @@ main :: () {
     print_line("");
     free(data.data, HEAP_ALLOCATOR);
 
+    // A full disk: Linux's /dev/full opens, and takes a write into C's
+    // buffer, so only c_fclose, writing that out, reports the error, and
+    // write_entire_file and append_to_file are false through it alone.
+    // Windows has no such file: the line is false false without asking.
+    print_string("full disk:");
+    #if OS == OS_LINUX {
+        show_bool(write_entire_file("/dev/full", "x"));
+        show_bool(append_to_file("/dev/full", "x"));
+    } else {
+        show_bool(false);
+        show_bool(false);
+    }
+    print_line("");
+
     // An allocator with no memory for the file's bytes gives the zeroed
     // string and false.
     data, ok = read_entire_file(A, Allocator.{failing_allocator_proc, null});

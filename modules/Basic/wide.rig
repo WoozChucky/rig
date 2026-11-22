@@ -20,15 +20,16 @@
 // _wremove's or the commands': _wremove and _wsystem give no FILE *, and
 // _wpopen's could be read with its own runtime's _fileno and _read, as
 // _popen's was. Basic takes DeleteFileW and CreateProcessW for them so
-// that its files, its commands and its environment reach only kernel32.
-// _wremove, _wsystem and _wpopen would be ucrtbase.dll's both ways, but
-// compiled that is the C runtime the program's other C calls go to, and
-// interpreted a second one, sharing no state (its streams, heap, errno)
-// with the compiler's own copy of C, which the program's standard C calls
-// (stdio, malloc, errno and the rest of C17) go to there. kernel32's calls
-// are the same functions, with the same state, both ways: every program
-// links kernel32, and the interpreter looks them up in kernel32.dll (spec
-// 10.6, 10.8).
+// that its files, its commands and its environment reach the system only
+// through kernel32. _wremove, _wsystem and _wpopen would be ucrtbase.dll's
+// both ways, but compiled that is the C runtime the program's other C
+// calls go to, and interpreted a second one, sharing no state (its
+// streams, heap, errno) with the compiler's own copy of C, which the
+// program's calls of C17's stdio.h, stdlib.h, string.h, math.h, ctype.h
+// and time.h go to there (spec 10.8). kernel32's calls are the same
+// functions, with the same state, both ways: every program links
+// kernel32, and the interpreter looks them up in kernel32.dll (spec 10.6,
+// 10.8).
 //
 // Each copy comes from the allocator the caller gives, at loc, the place
 // of the call unless given (#caller_location, spec 7.2), and the caller
