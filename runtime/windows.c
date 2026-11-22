@@ -235,7 +235,9 @@ _onexit_t _onexit(_onexit_t function) {
 // msvcrt.lib's aliases: names a C program has always had for functions
 // the Universal C Runtime exports under others, _stat for _stat32 and its
 // kind. Each is a weak name for its target, which the linker takes when
-// nothing defines the name itself; the directive goes into this object,
+// nothing defines the name itself. ucrtbase.dll exports _mbsdup itself, so
+// that one is never taken, its export linked instead, as with msvcrt.lib:
+// it is kept as msvcrt.lib has it. The directive goes into this object,
 // which every program links, mainCRTStartup being its entry point. (The
 // time functions' C names, time for _time64 and the like, are the
 // compiler's own: ir.cpp's ir_windows_c_name.)

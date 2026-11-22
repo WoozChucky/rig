@@ -3,6 +3,10 @@
 
 #include "test.h"
 
+#ifdef _WIN32
+#include <direct.h>  // _rmdir, for remove_directory_with
+#endif
+
 // An Array<String> of C strings, for building expected argv lists:
 // strings({"a", "b"}).
 template<s64 N>
@@ -33,6 +37,7 @@ TEST(windows_link_command) {
         "/DEBUG:FULL",
         "/PDB:my hello.pdb",
         "/NODEFAULTLIB",
+        "/lldignoreenv",
         "/ENTRY:mainCRTStartup",
         ".build\\hello world.obj",
         "extra.obj",
@@ -98,6 +103,17 @@ static String directory_with(Arena *a, const char *name, const char *const (&fil
     return dir;
 }
 
+// Removes a directory directory_with made, and what it wrote there.
+static void remove_directory_with(Arena *a, String dir) {
+    const char *libraries[] = {"libc.so.6", "libm.so.6"};
+    for (const char *file : libraries) remove(string_cstr(a, string_printf(a, STR_FMT "/%s", STR_ARG(dir), file)));
+#ifdef _WIN32
+    _rmdir(string_cstr(a, dir));
+#else
+    rmdir(string_cstr(a, dir));
+#endif
+}
+
 TEST(missing_libc_says_what_rig_needs) {
     // Issue #125 (spec 10.6): a directory with libc.so.6 but no libm.so.6
     // won't do, and the message names every directory looked in.
@@ -114,6 +130,7 @@ TEST(missing_libc_says_what_rig_needs) {
     CHECK_STR(error, "glibc's libc.so.6 and libm.so.6 weren't found side by side in .build/libc-only-libc, "
                      "/nonexistent/lib64 or /nonexistent/lib; Rig links programs against glibc, the C library of "
                      "most Linux systems");
+    remove_directory_with(&a, candidates[0]);
     array_free(&candidates);
     arena_free(&a);
 }
@@ -129,6 +146,7 @@ TEST(libc_directory_is_the_first_with_both) {
     String dir = {}, error = {};
     CHECK(find_libc_directory(&a, candidates, &dir, &error));
     CHECK_STR(dir, ".build/libc-both");
+    for (s64 i = 0; i < candidates.count; i++) remove_directory_with(&a, candidates[i]);
     array_free(&candidates);
     arena_free(&a);
 }
@@ -146,6 +164,19 @@ TEST(linux_looks_for_its_files_where_they_are) {
     array_free(&candidates);
     Array<String> files = linux_rig_files(&a, str("/opt/rig/bin"));
     CHECK_STR(joined(&a, files), "[/opt/rig/bin/ld.lld][/opt/rig/bin/rig_runtime.o]");
+    array_free(&files);
+    arena_free(&a);
+}
+
+TEST(windows_looks_for_its_files_beside_rig) {
+    // rig's own files on Windows, beside rig.exe, checked before linking, so
+    // a missing one gets check_rig_files' sentence rather than lld-link's:
+    // the linker, Rig's runtime, and the import libraries of the two DLLs a
+    // program imports (spec 10.6).
+    Arena a = arena_make();
+    Array<String> files = windows_rig_files(&a, str("C:\\Rig"));
+    CHECK_STR(joined(&a, files),
+              "[C:\\Rig\\lld-link.exe][C:\\Rig\\rig_runtime.lib][C:\\Rig\\ucrtbase.lib][C:\\Rig\\kernel32.lib]");
     array_free(&files);
     arena_free(&a);
 }
@@ -181,9 +212,7 @@ TEST(finds_this_machines_runtime) {
     String dir = os_executable_directory(&a);
     String error = {};
 #ifdef _WIN32
-    Array<String> paths = {};
-    const char *files[] = {"lld-link.exe", "rig_runtime.lib", "ucrtbase.lib", "kernel32.lib"};
-    for (const char *file : files) array_add(&paths, string_printf(&a, STR_FMT "\\%s", STR_ARG(dir), file));
+    Array<String> paths = windows_rig_files(&a, dir);
     bool ok = check_rig_files(&a, paths, "build.bat", &error);
     CHECK(ok);
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
@@ -683,7 +712,8 @@ TEST(windows_msvcrt_libs_other_names_link) {
     // (runtime/windows.c), each linked as program_linking links a name: its
     // 20 aliases, whose targets the linker looks for only when a program
     // names the alias, so a target misspelt fails here and not first in a
-    // user's program, and the exit handlers' wrappers.
+    // user's program (but _mbsdup's: ucrtbase.dll exports _mbsdup itself,
+    // so its alias is never taken), and the exit handlers' wrappers.
     static const char *const names[] = {
         "_findfirst", "_findfirsti64", "_findnext", "_findnexti64", "_fstat", "_fstati64", "_getdcwd_nolock",
         "_mbscat", "_mbscpy", "_mbsdup", "_stat", "_stati64", "_strcmpi", "_wfindfirst", "_wfindfirsti64",
@@ -961,12 +991,37 @@ TEST(windows_programs_import_only_ucrtbase_and_kernel32) {
     arena_free(&a);
 }
 
+TEST(windows_links_the_same_whatever_link_and_link_say) {
+    // Issue #125 (spec 10.6): lld-link, like Microsoft's link.exe, reads
+    // options from the environment unless told not to (/lldignoreenv): those
+    // in LINK before its command line's, those in _LINK_ after them. A user
+    // who has them set, as some build setups do, would get another program,
+    // or none. Here each names a symbol that nothing defines, which /INCLUDE
+    // makes the linker look for, and hello world still links and runs. What
+    // the two held before is put back.
+    const wchar_t *names[] = {L"LINK", L"_LINK_"};
+    wchar_t saved[2][4096];
+    bool had[2];
+    for (int i = 0; i < 2; i++) {
+        DWORD length = GetEnvironmentVariableW(names[i], saved[i], 4096);
+        had[i] = length > 0 && length < 4096;
+    }
+    SetEnvironmentVariableW(L"LINK", L"/INCLUDE:no_symbol_from_link");
+    SetEnvironmentVariableW(L"_LINK_", L"/INCLUDE:no_symbol_from_underscored_link");
+    Arena a = arena_make();
+    Process_Result result = run_module(&a, lower_tokens(&a, HELLO), "link-environment-test");
+    for (int i = 0; i < 2; i++) SetEnvironmentVariableW(names[i], had[i] ? saved[i] : nullptr);
+    CHECK_EQ(result.exit_code, 0);
+    CHECK_STR(result.out, "Hello, World!\r\n");
+    arena_free(&a);
+}
+
 TEST(windows_links_with_rigs_files_alone) {
     // Issue #125 (spec 10.6): lld-link reads the program's object and the
     // files beside rig, and nothing else: no library of Visual Studio's or
     // of the Windows SDK's, which it finds by itself when a link names one
     // without a path (/NODEFAULTLIB, and every library by path, keep it from
-    // looking). /VERBOSE has it say each file it reads, by the path it was
+    // reading one). /VERBOSE has it say each file it reads, by the path it was
     // given, and then each archive member it reads, as NAME(MEMBER), NAME
     // being the archive's file name alone: here one of the three libraries
     // beside rig. The object, the program and its PDB are removed at the

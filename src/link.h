@@ -36,8 +36,14 @@ bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String
 // and /lib64 (spec 10.6).
 Array<String> linux_libc_candidates();
 
+// The files rig links with on Windows, which build.bat puts in
+// runtime_dir, rig.exe's directory: lld-link.exe, rig_runtime.lib,
+// ucrtbase.lib and kernel32.lib, lld-link.exe first, for check_rig_files.
+Array<String> windows_rig_files(Arena *a, String runtime_dir);
+
 // The files rig links with on Linux, which build.sh puts in runtime_dir,
-// rig's directory: ld.lld and rig_runtime.o, for check_rig_files.
+// rig's directory: ld.lld and rig_runtime.o, ld.lld first, for
+// check_rig_files.
 Array<String> linux_rig_files(Arena *a, String runtime_dir);
 
 // True when every one of `paths`, files rig links with, exists. False at
@@ -49,7 +55,7 @@ bool check_rig_files(Arena *a, Array<String> paths, const char *build_script, St
 // lld-link's arguments, argv[0] included:
 //   LLD_LINK /NOLOGO /INCREMENTAL:NO /SUBSYSTEM:CONSOLE /MACHINE:X64
 //            /OUT:OUTPUT /DEBUG:FULL /PDB:OUTPUT_WITHOUT_EXE.pdb
-//            /NODEFAULTLIB /ENTRY:mainCRTStartup OBJECTS...
+//            /NODEFAULTLIB /lldignoreenv /ENTRY:mainCRTStartup OBJECTS...
 //            DIR\rig_runtime.lib DIR\ucrtbase.lib DIR\kernel32.lib
 // DIR being the directory of Rig's runtime, rig.exe's. The PDB, the
 // program's debug information, is written beside it: hello.exe's is

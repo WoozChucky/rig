@@ -6,8 +6,8 @@
 bool link_executable(Arena *a, Target t, Array<String> objects, String output, String *error) {
     RIG_ASSERT(t == TARGET_LINUX_X64);  // no cross-linking yet
     String dir = os_executable_directory(a);
-    String ld_lld = string_printf(a, STR_FMT "/ld.lld", STR_ARG(dir));
     Array<String> files = linux_rig_files(a, dir);
+    String ld_lld = files[0];
     bool there = check_rig_files(a, files, "build.sh", error);
     array_free(&files);
     if (!there) return false;

@@ -155,7 +155,11 @@
 // says there's no module 'Preload', alone on stderr (not that the program
 // doesn't load the --stdin-for file), exit 1, and the build makes nothing,
 // and rig check by such a copy of a main file that isn't there says that
-// file can't be read instead (no_preload_test), the command line's
+// file can't be read instead (no_preload_test), rig build of
+// tests/run/hello.rig by a copy of rig in .build/tests/no-runtime/bin with
+// Preload beside it but not the linker nor Rig's runtime: it names the
+// missing linker and says how to get it back, then that linking failed,
+// exit 1, and makes no program (no_runtime_test), the command line's
 // mistakes, and rig version's output, by its shape (version_test: it names
 // the commit rig was built from).
 //
@@ -2015,6 +2019,72 @@ static String no_preload_test(Arena *a, String rig, String unit_tests, const cha
     for (String path : made) {
         if (os_file_exists(path)) return string_printf(a, STR_FMT " made " STR_FMT, STR_ARG(what), STR_ARG(path));
     }
+    return {};
+}
+
+// rig build of tests/run/hello.rig by a copy of rig in
+// .build/tests/no-runtime/bin, with Preload's module.rig in modules/ beside
+// it but neither the linker nor Rig's runtime: a broken installation, or a
+// build that didn't finish. rig checks for its own files before linking
+// (link.cpp's check_rig_files), so it names the linker, the first of them,
+// by its path in the copy's directory, and says how to get it back, where
+// the linker's own error would be that it couldn't run; then that linking
+// failed. Status 1, nothing on stdout, and no program made.
+static String no_runtime_test(Arena *a, String rig) {
+    String dir = str(".build/tests/no-runtime");
+    String bin = string_printf(a, STR_FMT "/bin", STR_ARG(dir));
+    String copy = string_printf(a, STR_FMT "/rig%s", STR_ARG(bin), EXE);
+    String preload = string_printf(a, STR_FMT "/modules/Preload", STR_ARG(bin));
+    os_make_directory(dir);
+    os_make_directory(bin);
+    os_make_directory(string_printf(a, STR_FMT "/modules", STR_ARG(bin)));
+    os_make_directory(preload);
+    if (!copy_program(a, rig, copy)) {
+        return string_printf(a, "couldn't copy rig to " STR_FMT ": " STR_FMT, STR_ARG(copy), STR_ARG(os_error_message(a)));
+    }
+    String modules = {}, bin_modules = {};
+    module_places_of(a, rig, &modules, &bin_modules);
+    String text = {};
+    String from = string_printf(a, STR_FMT "/Preload/module.rig", STR_ARG(modules));
+    if (!os_read_file(a, from, &text) || !os_write_file(string_printf(a, STR_FMT "/module.rig", STR_ARG(preload)), text)) {
+        return string_printf(a, "couldn't copy " STR_FMT ": " STR_FMT, STR_ARG(from), STR_ARG(os_error_message(a)));
+    }
+    String program = string_printf(a, STR_FMT "/hello%s", STR_ARG(dir), EXE);
+    remove(string_cstr(a, program));
+    if (os_file_exists(program)) return string_printf(a, "couldn't remove " STR_FMT, STR_ARG(program));
+    if (!remove_nested_build(a, dir)) return str("couldn't remove the last run's .build/");
+
+    Array<String> argv = {};
+    array_add(&argv, copy);
+    array_add(&argv, str("build"));
+    array_add(&argv, str("../../../tests/run/hello.rig"));
+    Process_Result r = {};
+    String why = {};
+    bool started = run(a, argv, dir, &r, &why);
+    array_free(&argv);
+    if (!started) return why;
+    // The copy's directory, as rig has it: its module places' (the
+    // runner's own copy of them, as no_preload_test reads them) without
+    // their last name, modules.
+    module_places_of(a, copy, &modules, &bin_modules);
+    String copy_dir = string_slice(bin_modules, 0, bin_modules.count - (s64)strlen("/modules"));
+#ifdef _WIN32
+    const char *linker = "\\lld-link.exe", *script = "build.bat";
+#else
+    const char *linker = "/ld.lld", *script = "build.sh";
+#endif
+    String expected = string_printf(a,
+                                    STR_FMT "%s wasn't found; rebuild Rig with %s, which puts it beside rig, or "
+                                            "install Rig again\nrig: error: linking failed\n",
+                                    STR_ARG(copy_dir), linker, script);
+    if (r.exit_code != 1) {
+        return with_stderr(
+            a, string_printf(a, "rig build exited with " STR_FMT ", expected 1", STR_ARG(exit_code_text(a, r.exit_code))),
+            r.err);
+    }
+    if (r.out.count) return string_printf(a, "rig build wrote to stdout: \"" STR_FMT "\"", STR_ARG(r.out));
+    if (!string_eq(r.err, expected)) return first_difference(a, "stderr", expected, r.err);
+    if (os_file_exists(program)) return string_printf(a, "rig build made " STR_FMT, STR_ARG(program));
     return {};
 }
 
@@ -4119,6 +4189,8 @@ int main(int argc, char **argv) {
            no_preload_test(&a, rig, unit_tests, "interpret"), &passed, &failed);
     report("rig check of a missing file without modules/Preload beside it: the file said, not Preload",
            no_preload_test(&a, rig, unit_tests, "missing"), &passed, &failed);
+    report("rig build without its linker and runtime beside it: the missing linker said, no program made",
+           no_runtime_test(&a, rig), &passed, &failed);
     for (const Command_Case &c : COMMAND_CASES) {
         report(string_cstr(&a, string_printf(&a, "rig: %s", c.what)), command_test(&a, rig, &c), &passed, &failed);
     }

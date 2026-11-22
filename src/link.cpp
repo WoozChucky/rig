@@ -52,6 +52,15 @@ Array<String> linux_libc_candidates() {
     return candidates;
 }
 
+Array<String> windows_rig_files(Arena *a, String runtime_dir) {
+    Array<String> files = {};
+    array_add(&files, string_printf(a, STR_FMT "\\lld-link.exe", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "\\rig_runtime.lib", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "\\ucrtbase.lib", STR_ARG(runtime_dir)));
+    array_add(&files, string_printf(a, STR_FMT "\\kernel32.lib", STR_ARG(runtime_dir)));
+    return files;
+}
+
 Array<String> linux_rig_files(Arena *a, String runtime_dir) {
     Array<String> files = {};
     array_add(&files, string_printf(a, STR_FMT "/ld.lld", STR_ARG(runtime_dir)));
@@ -106,6 +115,12 @@ Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir
     // path, keep it from reading anything of theirs, so a program links the
     // same with them or without.
     array_add(&argv, str("/NODEFAULTLIB"));
+    // Nothing from the environment either: without /lldignoreenv, lld-link
+    // adds the options in LINK before its command line's and those in
+    // _LINK_ after them, as link.exe does, and looks for libraries in LIB's
+    // directories, so a user with one of them set would get another
+    // program, or none.
+    array_add(&argv, str("/lldignoreenv"));
     // The start-up, Rig's runtime's (runtime/windows.c). Named, as the
     // linker would take mainCRTStartup by default for a console program
     // anyway, so that the object defining it is always linked, and with it
