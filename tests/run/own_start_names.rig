@@ -1,0 +1,23 @@
+// A program may have procedures of its own called mainCRTStartup, _start and
+// __libc_start_main, the names a program's start-up goes by: Rig's runtime's
+// mainCRTStartup, the linker's entry point on Windows, and on Linux its
+// _start, which calls glibc's __libc_start_main (spec 10.6). A Rig
+// procedure's name is the program's own, so the program still starts as
+// any program does, and its procedures are called only by it.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+mainCRTStartup :: () -> int {
+    return 1;
+}
+
+_start :: () -> int {
+    return 2;
+}
+
+__libc_start_main :: () -> int {
+    return 3;
+}
+
+main :: () {
+    printf("own start names: %lld %lld %lld\n", mainCRTStartup(), _start(), __libc_start_main());
+}

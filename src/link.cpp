@@ -32,27 +32,14 @@ bool find_crt_directory(Arena *a, Array<String> candidates, String *dir, String 
     return false;
 }
 
-bool choose_windows_linker(Arena *a, String link_exe, String lld_link, String *chosen, String *error) {
-    if (os_file_exists(link_exe)) {
-        *chosen = link_exe;
-        return true;
+bool check_rig_files(Arena *a, Array<String> paths, const char *build_script, String *error) {
+    for (s64 i = 0; i < paths.count; i++) {
+        if (os_file_exists(paths[i])) continue;
+        *error = string_printf(a, STR_FMT " wasn't found; rebuild Rig with %s, which puts it beside rig, or install Rig again",
+                               STR_ARG(paths[i]), build_script);
+        return false;
     }
-    if (os_file_exists(lld_link)) {
-        *chosen = lld_link;
-        return true;
-    }
-    *error = string_printf(a,
-                           "Visual Studio has no link.exe, and lld-link.exe wasn't found at " STR_FMT
-                           " either; rebuild Rig with build.bat, which copies it there",
-                           STR_ARG(lld_link));
-    return false;
-}
-
-bool check_linux_linker(Arena *a, String path, String *error) {
-    if (os_file_exists(path)) return true;
-    *error = string_printf(a, "the linker wasn't found at " STR_FMT "; rebuild Rig with build.sh, which copies it there",
-                           STR_ARG(path));
-    return false;
+    return true;
 }
 
 // The PDB beside a program: its name with .pdb for its .exe (in any case),
@@ -68,9 +55,9 @@ static String pdb_path(Arena *a, String output) {
     return string_printf(a, STR_FMT ".pdb", STR_ARG(stem));
 }
 
-Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String> objects, String output) {
+Array<String> link_command_windows(Arena *a, String lld_link, String runtime_dir, Array<String> objects, String output) {
     Array<String> argv = {};
-    array_add(&argv, tc->link_exe);
+    array_add(&argv, lld_link);
     array_add(&argv, str("/NOLOGO"));
     array_add(&argv, str("/INCREMENTAL:NO"));
     array_add(&argv, str("/SUBSYSTEM:CONSOLE"));
@@ -81,28 +68,35 @@ Array<String> link_command_windows(Arena *a, Windows_Toolchain *tc, Array<String
     // database beside the program, where debuggers look for it (the program
     // names it, with the PDB's own GUID, so a stale one is refused). FULL
     // copies every record into the PDB, so it's complete without the
-    // objects. Both linkers take both options.
+    // objects.
     array_add(&argv, str("/DEBUG:FULL"));
     array_add(&argv, string_printf(a, "/PDB:" STR_FMT, STR_ARG(pdb_path(a, output))));
-    array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->msvc_lib)));
-    array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->ucrt_lib)));
-    array_add(&argv, string_printf(a, "/LIBPATH:" STR_FMT, STR_ARG(tc->um_lib)));
+    // No library but the three given by path below. lld-link, like
+    // Microsoft's link.exe, also reads the libraries an object names as its
+    // defaults, and finds a library named without a path in Visual
+    // Studio's and the Windows SDK's directories when they're installed,
+    // even with no LIB variable set: /NODEFAULTLIB, and every library by
+    // path, keep it from reading anything of theirs, so a program links the
+    // same with them or without.
+    array_add(&argv, str("/NODEFAULTLIB"));
+    // The start-up, Rig's runtime's (runtime/windows.c). Named, as the
+    // linker would take mainCRTStartup by default for a console program
+    // anyway, so that the object defining it is always linked, and with it
+    // its directives, msvcrt.lib's aliases.
+    array_add(&argv, str("/ENTRY:mainCRTStartup"));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
-    // The C runtime's printf family as functions: the Universal CRT exports
-    // no printf, sprintf, snprintf, fprintf, scanf and the like, only
-    // __stdio_common_vfprintf and its kind, which its headers wrap in inline
-    // functions for C code to call. This static library holds those
-    // wrappers compiled, so a Rig program's #foreign printf finds one
-    // (spec 7.6). The order of the libraries doesn't matter to link.exe or
-    // lld-link, which search them all until nothing more resolves. It goes
-    // first only so that what it calls, the C runtime below, follows it.
-    array_add(&argv, str("legacy_stdio_definitions.lib"));
-    // The C runtime, as DLLs: its startup code and imports, the compiler's
-    // support routines, the Universal CRT (puts and friends), and Windows.
-    array_add(&argv, str("msvcrt.lib"));
-    array_add(&argv, str("vcruntime.lib"));
-    array_add(&argv, str("ucrt.lib"));
-    array_add(&argv, str("kernel32.lib"));
+    // Rig's runtime: the start-up, the stack probe, the printf family as
+    // functions, which the Universal C Runtime doesn't export (spec 7.6),
+    // C's exit handlers. Then the import libraries of the two DLLs a
+    // program imports, made from their exports (spec 10.6): the Universal C
+    // Runtime, ucrtbase.dll, C's library (puts, malloc, memcpy and the
+    // runtime's own entry points), and Windows', kernel32.dll. The order
+    // doesn't matter to lld-link, which searches them all until nothing
+    // more resolves; the runtime goes first only so that what it calls
+    // follows it.
+    array_add(&argv, string_printf(a, STR_FMT "\\rig_runtime.lib", STR_ARG(runtime_dir)));
+    array_add(&argv, string_printf(a, STR_FMT "\\ucrtbase.lib", STR_ARG(runtime_dir)));
+    array_add(&argv, string_printf(a, STR_FMT "\\kernel32.lib", STR_ARG(runtime_dir)));
     return argv;
 }
 
@@ -145,9 +139,10 @@ static bool run_linker(Arena *a, Array<String> argv, String *error) {
         return false;
     }
     if (result.exit_code != 0) {
-        // link.exe writes its errors to stdout, ld.lld to stderr. link.exe
-        // ends its lines with \r\n; rig prints them through the C runtime,
-        // which on Windows turns \n into \r\n itself, so the \r goes.
+        // lld-link writes its errors to stdout, ld.lld to stderr, so both
+        // are taken. A \r before a \n goes: rig prints the text through the
+        // C runtime, which on Windows turns \n into \r\n itself, so a line
+        // a linker ended with \r\n would end in \r\r\n.
         String both = string_printf(a, STR_FMT STR_FMT, STR_ARG(result.out), STR_ARG(result.err));
         u8 *text = (u8 *)arena_alloc(a, both.count ? both.count : 1, 1);
         s64 n = 0;

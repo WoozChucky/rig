@@ -8327,6 +8327,16 @@ TEST(preload_declares_the_command_line) {
     arena_free(&a);
 }
 
+TEST(preload_declares_the_same_names_on_both_systems) {
+    // Issue #125 (spec 10.5): Preload declares nothing of its own on Windows
+    // for the arguments, which Rig's start-up gives main in UTF-8 there, so
+    // a program may use the names it once took, __crt_argv among them, on
+    // both systems.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "__crt_argv :: () -> int { return 0; }\nmain :: () {}\n"), "");
+    arena_free(&a);
+}
+
 TEST(preload_declares_runtime_error) {
     // Issue #157 (spec 8.1, 10.5): the checker finds Preload's
     // __runtime_error as it finds __save_command_line, and keeps it on the

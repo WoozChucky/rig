@@ -21,9 +21,9 @@
 // build program (spec 7.9), which has no main, is refused once it has
 // checked, before its top-level #runs: "unit-tests: error: a build program
 // can't be interpreted", exit status 1. Otherwise it interprets main, given
-// C's argc and argv as a compiled program's C runtime gives them (issue
-// #152, spec 7.4, 10.8): argv[0] FILE as given, then each word after --,
-// so the program's __save_command_line saves them as compiled. And it
+// C's argc and argv as a compiled program's start-up gives them, in UTF-8
+// (issue #152, spec 7.4, 10.8): argv[0] FILE as given, then each word after
+// --, so the program's __save_command_line saves them as compiled. And it
 // exits with main's status, 0, unless the program calls C's exit, which ends
 // the process with its own. A run that fails exits with 101, as a compiled
 // program's runtime error does, after:

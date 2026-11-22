@@ -1,5 +1,5 @@
-// test_link.cpp: the linkers' command lines, finding the toolchain, and
-// linking hello world for real (issue #11).
+// test_link.cpp: the linkers' command lines, finding the files they link
+// with, and linking programs for real (issues #11 and #125).
 
 #include "test.h"
 
@@ -21,15 +21,10 @@ static String joined(Arena *a, Array<String> argv) {
 
 TEST(windows_link_command) {
     Arena a = arena_make();
-    Windows_Toolchain tc = {};
-    tc.link_exe = str("C:\\Program Files\\VS\\link.exe");
-    tc.msvc_lib = str("C:\\Program Files\\VS\\lib\\x64");
-    tc.ucrt_lib = str("C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\ucrt\\x64");
-    tc.um_lib = str("C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\um\\x64");
     Array<String> objects = strings({".build\\hello world.obj", "extra.obj"});
-    Array<String> argv = link_command_windows(&a, &tc, objects, str("my hello.exe"));
+    Array<String> argv = link_command_windows(&a, str("C:\\Rig\\lld-link.exe"), str("C:\\Rig"), objects, str("my hello.exe"));
     Array<String> expected = strings({
-        "C:\\Program Files\\VS\\link.exe",
+        "C:\\Rig\\lld-link.exe",
         "/NOLOGO",
         "/INCREMENTAL:NO",
         "/SUBSYSTEM:CONSOLE",
@@ -37,25 +32,22 @@ TEST(windows_link_command) {
         "/OUT:my hello.exe",
         "/DEBUG:FULL",
         "/PDB:my hello.pdb",
-        "/LIBPATH:C:\\Program Files\\VS\\lib\\x64",
-        "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\ucrt\\x64",
-        "/LIBPATH:C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.1\\um\\x64",
+        "/NODEFAULTLIB",
+        "/ENTRY:mainCRTStartup",
         ".build\\hello world.obj",
         "extra.obj",
-        "legacy_stdio_definitions.lib",
-        "msvcrt.lib",
-        "vcruntime.lib",
-        "ucrt.lib",
-        "kernel32.lib",
+        "C:\\Rig\\rig_runtime.lib",
+        "C:\\Rig\\ucrtbase.lib",
+        "C:\\Rig\\kernel32.lib",
     });
     CHECK_STR(joined(&a, argv), string_cstr(&a, joined(&a, expected)));
     array_free(&argv);
     // The PDB is the program's name with .pdb for its .exe (in any case),
     // or added to a name with another extension.
-    argv = link_command_windows(&a, &tc, objects, str(".build\\tests\\lines.EXE"));
+    argv = link_command_windows(&a, str("C:\\Rig\\lld-link.exe"), str("C:\\Rig"), objects, str(".build\\tests\\lines.EXE"));
     CHECK(contains(joined(&a, argv), "[/PDB:.build\\tests\\lines.pdb]"));
     array_free(&argv);
-    argv = link_command_windows(&a, &tc, objects, str("lines.bin"));
+    argv = link_command_windows(&a, str("C:\\Rig\\lld-link.exe"), str("C:\\Rig"), objects, str("lines.bin"));
     CHECK(contains(joined(&a, argv), "[/PDB:lines.bin.pdb]"));
     array_free(&objects);
     array_free(&expected);
@@ -136,34 +128,44 @@ TEST(crt_directory_is_the_first_with_all_three) {
     arena_free(&a);
 }
 
-TEST(missing_linker_says_where_it_looked) {
+TEST(missing_rig_files_say_how_to_get_them) {
+    // The files rig links with, which its build script puts beside it: the
+    // first that isn't there is named, with how to get it.
     Arena a = arena_make();
-    String error = {};
-    CHECK(!check_linux_linker(&a, str("/nonexistent/ld.lld"), &error));
-    CHECK_STR(error, "the linker wasn't found at /nonexistent/ld.lld; rebuild Rig with build.sh, which copies it there");
     os_make_directory(str(".build"));
-    os_write_file(str(".build/fake-ld.lld"), str(""));
-    CHECK(check_linux_linker(&a, str(".build/fake-ld.lld"), &error));
+    os_write_file(str(".build/fake-rig-file"), str(""));
+    Array<String> paths = strings({".build/fake-rig-file", "/nonexistent/rig_runtime.o"});
+    String error = {};
+    CHECK(!check_rig_files(&a, paths, "build.sh", &error));
+    CHECK_STR(error, "/nonexistent/rig_runtime.o wasn't found; rebuild Rig with build.sh, which puts it beside rig, "
+                     "or install Rig again");
+    array_free(&paths);
+    paths = strings({".build/fake-rig-file"});
+    CHECK(check_rig_files(&a, paths, "build.sh", &error));
+    array_free(&paths);
+    remove(".build/fake-rig-file");
     arena_free(&a);
 }
 
-TEST(finds_this_machines_toolchain) {
+TEST(finds_this_machines_runtime) {
+    // What this build of rig links with is beside it, as build.bat or
+    // build.sh put it there.
     Arena a = arena_make();
-#ifdef _WIN32
-    Windows_Toolchain tc = {};
+    String dir = os_executable_directory(&a);
     String error = {};
-    bool ok = find_windows_toolchain(&a, &tc, &error);
+#ifdef _WIN32
+    Array<String> paths = {};
+    const char *files[] = {"lld-link.exe", "rig_runtime.lib", "ucrtbase.lib", "kernel32.lib"};
+    for (const char *file : files) array_add(&paths, string_printf(&a, STR_FMT "\\%s", STR_ARG(dir), file));
+    bool ok = check_rig_files(&a, paths, "build.bat", &error);
     CHECK(ok);
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
-    CHECK(os_file_exists(tc.link_exe));
-    CHECK(os_file_exists(string_printf(&a, STR_FMT "\\msvcrt.lib", STR_ARG(tc.msvc_lib))));
-    CHECK(os_file_exists(string_printf(&a, STR_FMT "\\legacy_stdio_definitions.lib", STR_ARG(tc.msvc_lib))));
-    CHECK(os_file_exists(string_printf(&a, STR_FMT "\\ucrt.lib", STR_ARG(tc.ucrt_lib))));
-    CHECK(os_file_exists(string_printf(&a, STR_FMT "\\kernel32.lib", STR_ARG(tc.um_lib))));
+    array_free(&paths);
 #else
+    (void)dir;
     Array<String> candidates = strings({"/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib"});
-    String dir = {}, error = {};
-    bool ok = find_crt_directory(&a, candidates, &dir, &error);
+    String crt = {};
+    bool ok = find_crt_directory(&a, candidates, &crt, &error);
     CHECK(ok);
     if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
     array_free(&candidates);
@@ -288,6 +290,46 @@ TEST(byte_globals_and_memory_run) {
     arena_free(&a);
 }
 
+TEST(atexit_and_at_quick_exit_handlers_run) {
+    // C's exit handlers, which a program links from Rig's runtime (spec
+    // 10.6): atexit's run when main returns, after its output, the last
+    // registered first; at_quick_exit's when the program calls quick_exit,
+    // whose status is the program's.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "atexit :: (f: () #c_call) -> s32 #foreign libc;\n"
+                                    "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                    "first :: () #c_call { printf(\"first\\n\"); }\n"
+                                    "second :: () #c_call { printf(\"second\\n\"); }\n"
+                                    "main :: () {\n"
+                                    "    atexit(first);\n"
+                                    "    atexit(second);\n"
+                                    "    printf(\"main\\n\");\n"
+                                    "}\n");
+    Process_Result result = run_module(&a, m, "atexit-test");
+    CHECK_STR(without_cr(&a, result.out), "main\nsecond\nfirst\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    m = lower_source(&a, "at_quick_exit :: (f: () #c_call) -> s32 #foreign libc;\n"
+                         "quick_exit :: (status: s32) #foreign libc;\n"
+                         "fflush :: (stream: *void) -> s32 #foreign libc;\n"
+                         "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                         "handler :: () #c_call {\n"
+                         "    printf(\"quick_exit handler\\n\");\n"
+                         "    fflush(null);\n"
+                         "}\n"
+                         "main :: () {\n"
+                         "    at_quick_exit(handler);\n"
+                         "    printf(\"quick_exit next\\n\");\n"
+                         "    fflush(null);\n"
+                         "    quick_exit(7);\n"
+                         "}\n");
+    result = run_module(&a, m, "at-quick-exit-test");
+    CHECK_STR(without_cr(&a, result.out), "quick_exit next\nquick_exit handler\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 7);
+    arena_free(&a);
+}
+
 #ifdef _WIN32
 TEST(windows_time_functions_link_and_run_as_the_64_bit_ones) {
     // Issue #161: Microsoft's time functions, and C11's bounds-checked ones,
@@ -392,6 +434,148 @@ TEST(windows_hypotf_links_and_runs_as_the_ucrts_hypotf) {
                                 "}\n");
     Process_Result result = run_module(&a, m, "hypotf-test");
     CHECK_STR(without_cr(&a, result.out), "hypotf: 5.0000 1.4142 13.0000\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    arena_free(&a);
+}
+
+TEST(windows_c_runtime_extras_link_and_run) {
+    // What C code gets from Visual Studio's C runtime and a Rig program from
+    // Rig's runtime (spec 10.6), the same: the printf family's options as a
+    // C program has them, standard rounding (%.0f of 0.5, 1.5 and 2.5 gives
+    // 0 2 2) and the legacy wide specifiers (_snwprintf's %s of a UTF-16 hi
+    // is wide); _snprintf leaving out the terminator when the text fills its
+    // size (the eight x's after abcd stay), and snprintf, which C defines,
+    // keeping it; the bounds-checked sprintf_s and sscanf_s, which takes a
+    // size after a %s's buffer (too fits in 4); _scprintf's count, and
+    // swprintf's; msvcrt.lib's aliases, _strcmpi for _stricmp and _stat for
+    // _stat32; and _onexit, whose handler runs when main returns.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "_snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
+                                "snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
+                                "sprintf_s :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
+                                "_scprintf :: (format: *u8, ..) -> s32 #foreign libc;\n"
+                                "_snwprintf :: (buffer: *u16, size: u64, format: *u16, ..) -> s32 #foreign libc;\n"
+                                "swprintf :: (buffer: *u16, size: u64, format: *u16, ..) -> s32 #foreign libc;\n"
+                                "sscanf_s :: (s: *u8, format: *u8, ..) -> s32 #foreign libc;\n"
+                                "_strcmpi :: (a: *u8, b: *u8) -> s32 #foreign libc;\n"
+                                "_stat :: (path: *u8, buffer: *u8) -> s32 #foreign libc;\n"
+                                "_onexit :: (f: () -> s32 #c_call) -> () -> s32 #c_call #foreign libc;\n"
+                                "on_exit :: () -> s32 #c_call {\n"
+                                "    printf(\"onexit handler\\n\");\n"
+                                "    return 0;\n"
+                                "}\n"
+                                "main :: () {\n"
+                                "    printf(\"rounding: %.0f %.0f %.0f %e\\n\", 0.5, 1.5, 2.5, 12345.678);\n"
+                                "    b : [8]u8;\n"
+                                "    for 0..7 { b[it] = 120; }\n"
+                                "    n := _snprintf(b.data, 4, \"%s\", \"abcdef\");\n"
+                                "    printf(\"_snprintf: %d %.8s\\n\", n, b.data);\n"
+                                "    for 0..7 { b[it] = 120; }\n"
+                                "    n = snprintf(b.data, 4, \"%s\", \"abcdef\");\n"
+                                "    printf(\"snprintf: %d %s\\n\", n, b.data);\n"
+                                "    n = sprintf_s(b.data, 8, \"%d\", cast(s32) 1234);\n"
+                                "    printf(\"sprintf_s: %d %s\\n\", n, b.data);\n"
+                                "    printf(\"_scprintf: %d\\n\", _scprintf(\"%s%d\", \"ab\", cast(s32) 123));\n"
+                                "    format := u16.[37, 115, 0];\n"
+                                "    hi := u16.[104, 105, 0];\n"
+                                "    w : [8]u16;\n"
+                                "    n = _snwprintf(w.data, 8, format.data, hi.data);\n"
+                                "    printf(\"_snwprintf: %d %d %d %d\\n\", n, w[0], w[1], w[2]);\n"
+                                "    n = swprintf(w.data, 8, format.data, hi.data);\n"
+                                "    printf(\"swprintf: %d %d %d\\n\", n, w[0], w[1]);\n"
+                                "    x : s32;\n"
+                                "    word : [4]u8;\n"
+                                "    n = sscanf_s(\"42 toolong\", \"%d %3s\", *x, word.data, cast(u32) 4);\n"
+                                "    printf(\"sscanf_s: %d %d %s\\n\", n, x, word.data);\n"
+                                "    st : [64]u8;\n"
+                                "    printf(\"_strcmpi: %d _stat: %d\\n\", _strcmpi(\"RIG\", \"rig\"), "
+                                "_stat(\".build/tests/no-such-file\", st.data));\n"
+                                "    _onexit(on_exit);\n"
+                                "}\n");
+    Process_Result result = run_module(&a, m, "c-runtime-extras-test");
+    CHECK_STR(without_cr(&a, result.out), "rounding: 0 2 2 1.234568e+04\n"
+                                          "_snprintf: -1 abcdxxxx\n"
+                                          "snprintf: 6 abc\n"
+                                          "sprintf_s: 4 1234\n"
+                                          "_scprintf: 5\n"
+                                          "_snwprintf: 2 104 105 0\n"
+                                          "swprintf: 2 104 105\n"
+                                          "sscanf_s: 2 42 too\n"
+                                          "_strcmpi: 0 _stat: -1\n"
+                                          "onexit handler\n");
+    CHECK_STR(without_cr(&a, result.err), "");
+    CHECK_EQ(result.exit_code, 0);
+    arena_free(&a);
+}
+
+// The 219 functions of the C runtime's printf and scanf families that a
+// program links as functions (spec 10.6): the Universal C Runtime exports
+// none of them, only the entry points they call, so a C program has them as
+// its headers' inline functions, and a Rig program from Rig's runtime
+// (runtime/windows_stdio.c).
+static const char *const PRINTF_FAMILY[219] = {
+    "__swprintf_l", "__vswprintf_l", "_cprintf", "_cprintf_l", "_cprintf_p", "_cprintf_p_l", "_cprintf_s",
+    "_cprintf_s_l", "_cscanf", "_cscanf_l", "_cscanf_s", "_cscanf_s_l", "_cwprintf", "_cwprintf_l", "_cwprintf_p",
+    "_cwprintf_p_l", "_cwprintf_s", "_cwprintf_s_l", "_cwscanf", "_cwscanf_l", "_cwscanf_s", "_cwscanf_s_l",
+    "_fprintf_l", "_fprintf_p", "_fprintf_p_l", "_fprintf_s_l", "_fscanf_l", "_fscanf_s_l", "_fwprintf_l",
+    "_fwprintf_p", "_fwprintf_p_l", "_fwprintf_s_l", "_fwscanf_l", "_fwscanf_s_l", "_printf_l", "_printf_p",
+    "_printf_p_l", "_printf_s_l", "_scanf_l", "_scanf_s_l", "_scprintf", "_scprintf_l", "_scprintf_p",
+    "_scprintf_p_l", "_scwprintf", "_scwprintf_l", "_scwprintf_p", "_scwprintf_p_l", "_snprintf", "_snprintf_c",
+    "_snprintf_c_l", "_snprintf_l", "_snprintf_s", "_snprintf_s_l", "_snscanf", "_snscanf_l", "_snscanf_s",
+    "_snscanf_s_l", "_snwprintf", "_snwprintf_l", "_snwprintf_s", "_snwprintf_s_l", "_snwscanf", "_snwscanf_l",
+    "_snwscanf_s", "_snwscanf_s_l", "_sprintf_l", "_sprintf_p", "_sprintf_p_l", "_sprintf_s_l", "_sscanf_l",
+    "_sscanf_s_l", "_swprintf", "_swprintf_c", "_swprintf_c_l", "_swprintf_l", "_swprintf_p", "_swprintf_p_l",
+    "_swprintf_s_l", "_swscanf_l", "_swscanf_s_l", "_vcprintf", "_vcprintf_l", "_vcprintf_p", "_vcprintf_p_l",
+    "_vcprintf_s", "_vcprintf_s_l", "_vcscanf", "_vcscanf_l", "_vcscanf_s", "_vcscanf_s_l", "_vcwprintf",
+    "_vcwprintf_l", "_vcwprintf_p", "_vcwprintf_p_l", "_vcwprintf_s", "_vcwprintf_s_l", "_vcwscanf", "_vcwscanf_l",
+    "_vcwscanf_s", "_vcwscanf_s_l", "_vfprintf_l", "_vfprintf_p", "_vfprintf_p_l", "_vfprintf_s_l", "_vfscanf_l",
+    "_vfscanf_s_l", "_vfwprintf_l", "_vfwprintf_p", "_vfwprintf_p_l", "_vfwprintf_s_l", "_vfwscanf_l",
+    "_vfwscanf_s_l", "_vprintf_l", "_vprintf_p", "_vprintf_p_l", "_vprintf_s_l", "_vscanf_l", "_vscanf_s_l",
+    "_vscprintf", "_vscprintf_l", "_vscprintf_p", "_vscprintf_p_l", "_vscwprintf", "_vscwprintf_l", "_vscwprintf_p",
+    "_vscwprintf_p_l", "_vsnprintf", "_vsnprintf_c", "_vsnprintf_c_l", "_vsnprintf_l", "_vsnprintf_s",
+    "_vsnprintf_s_l", "_vsnwprintf", "_vsnwprintf_l", "_vsnwprintf_s", "_vsnwprintf_s_l", "_vsnwscanf_l",
+    "_vsnwscanf_s_l", "_vsprintf_l", "_vsprintf_p", "_vsprintf_p_l", "_vsprintf_s_l", "_vsscanf_l", "_vsscanf_s_l",
+    "_vswprintf", "_vswprintf_c", "_vswprintf_c_l", "_vswprintf_l", "_vswprintf_p", "_vswprintf_p_l",
+    "_vswprintf_s_l", "_vswscanf_l", "_vswscanf_s_l", "_vwprintf_l", "_vwprintf_p", "_vwprintf_p_l",
+    "_vwprintf_s_l", "_vwscanf_l", "_vwscanf_s_l", "_wprintf_l", "_wprintf_p", "_wprintf_p_l", "_wprintf_s_l",
+    "_wscanf_l", "_wscanf_s_l", "cprintf", "cscanf", "fprintf", "fprintf_s", "fscanf", "fscanf_s", "fwprintf",
+    "fwprintf_s", "fwscanf", "fwscanf_s", "printf", "printf_s", "scanf", "scanf_s", "snprintf", "sprintf",
+    "sprintf_s", "sscanf", "sscanf_s", "swprintf", "swprintf_s", "swscanf", "swscanf_s", "vfprintf", "vfprintf_s",
+    "vfscanf", "vfscanf_s", "vfwprintf", "vfwprintf_s", "vfwscanf", "vfwscanf_s", "vprintf", "vprintf_s", "vscanf",
+    "vscanf_s", "vsnprintf", "vsnprintf_s", "vsprintf", "vsprintf_s", "vsscanf", "vsscanf_s", "vswprintf",
+    "vswprintf_s", "vswscanf", "vswscanf_s", "vwprintf", "vwprintf_s", "vwscanf", "vwscanf_s", "wprintf",
+    "wprintf_s", "wscanf", "wscanf_s",
+};
+
+TEST(windows_the_printf_family_links) {
+    // Each of the 219, declared under its own name, links (the program exits
+    // with 1 + its index when one is null), with the options a C program
+    // reads through __local_stdio_printf_options and
+    // __local_stdio_scanf_options (250 and 251 when they aren't those). They
+    // are only taken as values, which a procedure taking C's '..' can't be,
+    // so each is declared with one parameter: the linker goes by names alone.
+    Arena a = arena_make();
+    String text = string_printf(&a, "exit :: (status: s32) #foreign libc;\n"
+                                    "__local_stdio_printf_options :: () -> *u64 #foreign libc;\n"
+                                    "__local_stdio_scanf_options :: () -> *u64 #foreign libc;\n");
+    for (s64 i = 0; i < 219; i++) {
+        text = string_printf(&a, STR_FMT "%s :: (x: *void) -> s32 #foreign libc;\n", STR_ARG(text), PRINTF_FAMILY[i]);
+    }
+    text = string_printf(&a, STR_FMT "main :: () {\n", STR_ARG(text));
+    for (s64 i = 0; i < 219; i++) {
+        text = string_printf(&a, STR_FMT "    if cast(*void) %s == null { exit(%lld); }\n", STR_ARG(text), PRINTF_FAMILY[i],
+                             (long long)(1 + i));
+    }
+    text = string_printf(&a,
+                         STR_FMT "    if __local_stdio_printf_options().* != 36 { exit(250); }\n"
+                                 "    if __local_stdio_scanf_options().* != 2 { exit(251); }\n"
+                                 "}\n",
+                         STR_ARG(text));
+    Process_Result result = run_module(&a, lower_source(&a, string_cstr(&a, text)), "printf-family-test");
+    CHECK_STR(without_cr(&a, result.out), "");
     CHECK_STR(without_cr(&a, result.err), "");
     CHECK_EQ(result.exit_code, 0);
     arena_free(&a);
@@ -512,17 +696,18 @@ static const char WIDE_ARGUMENTS[] =
     "}\n";
 
 TEST(windows_arguments_reach_main_in_utf8) {
-    // Issue #152 (spec 10.6): the C runtime gives main its argv in the ANSI
-    // code page, where Wörld's ö is one byte, F6, and 日本 is ??, so
-    // Preload's __save_command_line takes the C runtime's wide arguments in
-    // its place, converted to UTF-8. An unpaired surrogate, which no UTF-8
-    // holds, becomes U+FFFD, EF BF BD, the rest of its argument kept; an
-    // empty argument stays one, and \" inside quotes is a quote, both split
-    // as the C runtime splits them; and *, unquoted, stays *, no wildcard
-    // expanded, as in the narrow argv (the test runs in a directory with
-    // files, which an expanding split would list, so the count would be
-    // wrong). The command line is UTF-16, given to CreateProcessW as it is,
-    // so the surrogates reach the program.
+    // Issues #152 and #125 (spec 10.6): the C runtime's argv is in the ANSI
+    // code page, where Wörld's ö is one byte, F6, and 日本 is ??, so Rig's
+    // start-up (runtime/windows.c) gives main the C runtime's wide arguments
+    // in its place, converted to UTF-8, and Preload's __save_command_line
+    // saves those. An unpaired surrogate, which no UTF-8 holds, becomes
+    // U+FFFD, EF BF BD, the rest of its argument kept; an empty argument
+    // stays one, and \" inside quotes is a quote, both split as the C
+    // runtime splits them; and *, unquoted, stays *, no wildcard expanded,
+    // as in the narrow argv (the test runs in a directory with files, which
+    // an expanding split would list, so the count would be wrong). The
+    // command line is UTF-16, given to CreateProcessW as it is, so the
+    // surrogates reach the program.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
     String program = link_module(&a, m, "wide-arguments-test");
@@ -543,26 +728,27 @@ TEST(windows_arguments_reach_main_in_utf8) {
     arena_free(&a);
 }
 
-TEST(windows_a_hand_call_given_the_c_runtimes_argv_saves_all_its_arguments) {
-    // Issue #152 (spec 10.5): when argv is the C runtime's own __argv,
-    // __save_command_line saves as many wide arguments as the C runtime
-    // counted, whatever the argc it is given. A compiled main's prologue
-    // always passes __argc with __argv, so only a hand call can tell the
-    // two apart. The program first saves no arguments, so that what the
-    // prologue saved is gone (it exits with 12 if any are left), then
-    // passes 1 with __argv, and exits with 10 unless that call saved all
-    // three arguments, its name and two more, and with 11 unless the last
-    // is Wörld in UTF-8.
+TEST(windows_a_hand_call_saves_the_argv_it_is_given) {
+    // Issue #125 (spec 10.5): __save_command_line saves the argv it is
+    // given, on Windows too, where the start-up has made main's UTF-8
+    // already: even the C runtime's own __argv, which a hand call passes
+    // here, is saved as it is, as many arguments as the argc given, each
+    // viewing the C runtime's own bytes, no wide copy taken. The program
+    // first saves no arguments, so that what main's prologue saved is gone
+    // (it exits with 12 if any are left), then passes 1 with __argv, and
+    // exits with 10 unless that call saved one argument, and with 11 unless
+    // it views __argv's first string.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a,
                                       "exit :: (status: s32) #foreign libc;\n"
+                                      "crt_argv :: () -> ***u8 #foreign libc \"__p___argv\";\n"
                                       "main :: () {\n"
                                       "    none : [1]*u8;\n"
                                       "    __save_command_line(0, *none[0]);\n"
                                       "    if __command_line_arguments.count != 0 { exit(12); }\n"
-                                      "    __save_command_line(1, __crt_argv().*);\n"
-                                      "    if __command_line_arguments.count != 3 { exit(10); }\n"
-                                      "    if __command_line_arguments[2] != \"W\xC3\xB6rld\" { exit(11); }\n"
+                                      "    __save_command_line(1, crt_argv().*);\n"
+                                      "    if __command_line_arguments.count != 1 { exit(10); }\n"
+                                      "    if __command_line_arguments[0].data != crt_argv().*[0] { exit(11); }\n"
                                       "}\n");
     String program = link_module(&a, m, "hand-saved-arguments-test");
     if (program.count) {
@@ -582,23 +768,25 @@ TEST(windows_a_hand_call_given_the_c_runtimes_argv_saves_all_its_arguments) {
 }
 
 TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
-    // Issue #152 (spec 10.6): _configure_wide_argv sets the C runtime's
-    // __argc to the wide arguments' count, and the narrow ones, split from
-    // the command line in the ANSI code page, may be fewer: U+FF02, a
-    // fullwidth quote, is " in code page 1252, so a＂ b is one narrow
-    // argument, a b, and two wide ones. __save_command_line puts the narrow
-    // count back, so C code that walks __argv up to __argc reads no null.
-    // The program exits with 10 unless __argc counts __argv's elements up
-    // to its null, and with 11 to 13 unless its own arguments are still the
-    // wide ones, its name, a＂ in UTF-8 and b.
+    // Issues #152 and #125 (spec 10.6): _configure_wide_argv sets the C
+    // runtime's __argc to the wide arguments' count, and the narrow ones,
+    // split from the command line in the ANSI code page, may be fewer:
+    // U+FF02, a fullwidth quote, is " in code page 1252, so a＂ b is one
+    // narrow argument, a b, and two wide ones. Rig's start-up puts the
+    // narrow count back, so C code that walks __argv up to __argc reads no
+    // null. The program exits with 10 unless __argc counts __argv's elements
+    // up to its null, and with 11 to 13 unless its own arguments are still
+    // the wide ones, its name, a＂ in UTF-8 and b.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a,
                                       "exit :: (status: s32) #foreign libc;\n"
+                                      "crt_argc :: () -> *s32 #foreign libc \"__p___argc\";\n"
+                                      "crt_argv :: () -> ***u8 #foreign libc \"__p___argv\";\n"
                                       "main :: () {\n"
-                                      "    narrow := __crt_argv().*;\n"
+                                      "    narrow := crt_argv().*;\n"
                                       "    count : s32 = 0;\n"
                                       "    while narrow[count] != null { count += 1; }\n"
-                                      "    if __crt_argc().* != count { exit(10); }\n"
+                                      "    if crt_argc().* != count { exit(10); }\n"
                                       "    args := __command_line_arguments;\n"
                                       "    if args.count != 3 { exit(11); }\n"
                                       "    if args[1] != \"a\xEF\xBC\x82\" { exit(12); }\n"
@@ -621,31 +809,86 @@ TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
     arena_free(&a);
 }
 
-TEST(windows_programs_import_only_the_c_runtime_and_kernel32) {
-    // Issue #152: reading the arguments in UTF-8 costs a program no DLL it
-    // didn't import before: the C runtime's wide arguments come from the
-    // Universal C Runtime's api-ms-win-crt-runtime set, WideCharToMultiByte
-    // from KERNEL32.dll, which every program imports already. shell32.dll's
-    // CommandLineToArgvW would fail this. Issue #125's own startup code
-    // makes it exactly ucrtbase.dll and kernel32.dll.
+TEST(windows_programs_import_only_ucrtbase_and_kernel32) {
+    // Issue #125 (spec 10.6): a program, its arguments read in UTF-8
+    // included, imports the Universal C Runtime's ucrtbase.dll and
+    // kernel32.dll, which every Windows has, and nothing else: no
+    // VCRUNTIME140.dll, which only Visual Studio's redistributable
+    // installs, and no shell32.dll, which CommandLineToArgvW would add.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
     String program = link_module(&a, m, "imports-test");
     Array<String> dlls = imported_dlls(&a, program);
-    bool kernel32 = false, runtime = false;
+    bool ucrtbase = false, kernel32 = false;
     for (s64 i = 0; i < dlls.count; i++) {
         const char *name = string_cstr(&a, dlls[i]);
-        bool known = _stricmp(name, "KERNEL32.dll") == 0 || _stricmp(name, "VCRUNTIME140.dll") == 0 ||
-                     (_strnicmp(name, "api-ms-win-crt-", 15) == 0 && dlls[i].count > 19 &&
-                      _stricmp(name + dlls[i].count - 4, ".dll") == 0);
-        if (!known) fprintf(stderr, "  imports %s\n", name);
-        CHECK(known);
-        if (_stricmp(name, "KERNEL32.dll") == 0) kernel32 = true;
-        if (_stricmp(name, "api-ms-win-crt-runtime-l1-1-0.dll") == 0) runtime = true;
+        if (_stricmp(name, "ucrtbase.dll") == 0) {
+            ucrtbase = true;
+        } else if (_stricmp(name, "kernel32.dll") == 0) {
+            kernel32 = true;
+        } else {
+            fprintf(stderr, "  imports %s\n", name);
+        }
     }
+    CHECK_EQ(dlls.count, 2);
+    CHECK(ucrtbase);
     CHECK(kernel32);
-    CHECK(runtime);
     array_free(&dlls);
+    arena_free(&a);
+}
+
+TEST(windows_links_with_rigs_files_alone) {
+    // Issue #125 (spec 10.6): lld-link reads the program's object and the
+    // files beside rig, and nothing else: no library of Visual Studio's or
+    // of the Windows SDK's, which it finds by itself when a link names one
+    // without a path (/NODEFAULTLIB, and every library by path, keep it from
+    // looking). /VERBOSE has it say each file it reads, by the path it was
+    // given, and then each archive member it reads, as NAME(MEMBER), NAME
+    // being the archive's file name alone: here one of the three libraries
+    // beside rig.
+    Arena a = arena_make();
+    os_make_directory(str(".build"));
+    String object = str(".build/verbose-link-test.obj");
+    String error = {};
+    bool emitted = llvm_emit_object(lower_tokens(&a, HELLO), target_host(), object, false, &a, &error);
+    if (!emitted) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
+    CHECK(emitted);
+    String dir = os_executable_directory(&a);
+    Array<String> objects = {};
+    array_add(&objects, object);
+    Array<String> argv = link_command_windows(&a, string_printf(&a, STR_FMT "\\lld-link.exe", STR_ARG(dir)), dir,
+                                              objects, str(".build/verbose-link-test.exe"));
+    array_add(&argv, str("/VERBOSE"));
+    Process_Result result = {};
+    bool ran = emitted && os_run(&a, argv, &result);
+    CHECK(ran);
+    CHECK_EQ(result.exit_code, 0);
+    // Each line of what it said, without its \r.
+    String both = string_printf(&a, STR_FMT STR_FMT, STR_ARG(result.out), STR_ARG(result.err));
+    s64 reads = 0;
+    for (s64 start = 0; start < both.count;) {
+        s64 end = start;
+        while (end < both.count && both.data[end] != '\n') end++;
+        String line = string_slice(both, start, end - start);
+        if (line.count && line.data[line.count - 1] == '\r') line.count--;
+        if (starts_with(line, "lld-link: Reading ")) {
+            String path = string_slice(line, 18, line.count - 18);
+            bool ours = string_eq(path, object) ||
+                        (path.count > dir.count && string_eq(string_slice(path, 0, dir.count), dir) &&
+                         path.data[dir.count] == '\\') ||
+                        starts_with(path, "rig_runtime.lib(") || starts_with(path, "ucrtbase.lib(") ||
+                        starts_with(path, "kernel32.lib(");
+            if (!ours) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(line));
+            CHECK(ours);
+            reads++;
+        }
+        CHECK(!contains(line, "Microsoft Visual Studio"));
+        CHECK(!contains(line, "Windows Kits"));
+        start = end + 1;
+    }
+    CHECK(ran == (reads > 0));
+    array_free(&argv);
+    array_free(&objects);
     arena_free(&a);
 }
 #endif
@@ -676,27 +919,9 @@ TEST(linux_arguments_are_the_bytes_given) {
 }
 #endif
 
-TEST(windows_linker_falls_back_to_lld_link) {
-    // link.exe when Visual Studio has it; otherwise the lld-link.exe
-    // build.bat copied beside rig; otherwise a sentence.
-    Arena a = arena_make();
-    os_make_directory(str(".build"));
-    os_write_file(str(".build/fake-link.exe"), str(""));
-    os_write_file(str(".build/fake-lld-link.exe"), str(""));
-    String chosen = {}, error = {};
-    CHECK(choose_windows_linker(&a, str(".build/fake-link.exe"), str(".build/fake-lld-link.exe"), &chosen, &error));
-    CHECK_STR(chosen, ".build/fake-link.exe");
-    CHECK(choose_windows_linker(&a, str(".build/no-link.exe"), str(".build/fake-lld-link.exe"), &chosen, &error));
-    CHECK_STR(chosen, ".build/fake-lld-link.exe");
-    CHECK(!choose_windows_linker(&a, str(".build/no-link.exe"), str(".build/no-lld-link.exe"), &chosen, &error));
-    CHECK_STR(error, "Visual Studio has no link.exe, and lld-link.exe wasn't found at .build/no-lld-link.exe either; "
-                     "rebuild Rig with build.bat, which copies it there");
-    arena_free(&a);
-}
-
 TEST(linker_failure_gives_its_output) {
-    // What the linker said, with plain \n line ends (link.exe writes \r\n,
-    // which rig's own stderr would turn into \r\r\n on Windows).
+    // What the linker said, with plain \n line ends (a line it ended with
+    // \r\n would end in \r\r\n through rig's own stderr on Windows).
     Arena a = arena_make();
     Array<String> objects = {};
     array_add(&objects, str(".build/no-such-object.o"));

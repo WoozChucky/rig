@@ -376,9 +376,10 @@ static void declare_memory_functions(Backend *b) {
 // is bigger than a page (mark_definition), with its own convention: the
 // frame's size in rax, nothing else touched. Taking the name here, as
 // declare_memory_functions takes memset's, makes a program's own __chkstk
-// the one LLVM renames (__chkstk.1), so the probe still reaches the C
-// runtime's. Nothing calls the declaration, so an object that has no big
-// frame doesn't name it. (Linux's probes are inline: the name is free there.)
+// the one LLVM renames (__chkstk.1), so the probe still reaches Rig's
+// runtime's (runtime/windows.c). Nothing calls the declaration, so an
+// object that has no big frame doesn't name it. (Linux's probes are
+// inline: the name is free there.)
 static void declare_stack_probe(Backend *b) {
     if (b->target != TARGET_WINDOWS_X64) return;
     LLVMAddFunction(b->module, "__chkstk", LLVMFunctionType(LLVMVoidTypeInContext(b->context), nullptr, 0, 0));

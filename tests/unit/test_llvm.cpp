@@ -556,8 +556,8 @@ TEST(llvm_foreign_c_name_calls_through_each_declaration) {
 TEST(llvm_windows_time_functions_are_the_64_bit_ones) {
     // On Windows the C runtime's time functions are declared under the
     // Universal C Runtime's 64-bit exports, which a C program's headers
-    // call: the UCRT exports none of their names, and msvcrt.lib's time,
-    // _mkgmtime and the rest are the 32-bit versions. _ftime and ftime, and
+    // call: the UCRT exports none of their names, nor does anything a
+    // program links define them (spec 10.6). _ftime and ftime, and
     // _utime and utime, are one function each, as _time64 declared under
     // its own name too is time's. On Linux each stays under its own name
     // (glibc's are 64 bits; it has no Microsoft names, which the linker
