@@ -1,0 +1,22 @@
+21:     took := take(m);
+Mode FREE (0n2)
+Small B (0n-56)
+Look 0n5
+VISIBLE | GLOWING (5) [Type: Look]
+Mode 0n7 (No matching enumerant)
+[Type: Request]
+mode
+: RESIZE (1) [Type: Mode]
+size
+: 8 [Type: __int64]
+Mode FREE_ALL (0n3)
+A = 0n0
+B = 0n200
+Mode m = FREE (0n2)
+Small s = B
+Look f = 0n5
+Mode odd = 0n7
+struct Request r
+26:     return n;
+Mode FREE (0n2)
+!Couldn't resolve error

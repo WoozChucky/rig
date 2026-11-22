@@ -1,0 +1,20 @@
+main () at
+enums.rig:21
+took := take(m);
+$1 = FREE
+$2 = B
+$3 = 200
+$4 = (VISIBLE | GLOWING)
+$5 = 7
+$6 = {mode = RESIZE, size = 8}
+$7 = FREE_ALL
+type = enum Mode {ALLOCATE, RESIZE, FREE, FREE_ALL}
+type = enum Small {A, B = 200}
+take (context=0x
+m=FREE) at
+enums.rig:26
+return n;
+$8 = FREE
+!No symbol
+!Error in sourced command file
+!.debug_names not created by gdb

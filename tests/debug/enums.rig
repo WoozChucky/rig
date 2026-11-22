@@ -1,0 +1,27 @@
+// A debugger's view of enums (bin/run-tests runs it under gdb with
+// enums.gdb and under cdb with enums.cdb; issue #221, spec 10.7): a
+// variable, a field, a parameter and a constant shown by their members'
+// names, an enum_flags value as its flags, a value with no member as its
+// number, and a chosen integer type, each as the debugger shows C's enums
+// of a fixed type: gdb's type is `enum Mode`, and cdb's `??` shows flags as
+// a number (`dx` names them) and an enum u8's 200 as 0n-56 (`dt`: 0n200).
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Small :: enum u8 { A; B :: 200; }
+Look :: enum_flags { VISIBLE; SOLID; GLOWING; }
+Request :: struct { mode: Mode; size: int; }
+
+DEFAULT :: Mode.FREE_ALL;
+
+main :: () {
+    m := Mode.FREE;
+    s := Small.B;
+    f : Look = .VISIBLE | .GLOWING;
+    odd := cast(Mode) 7;
+    r := Request.{.RESIZE, 8};
+    took := take(m);
+}
+
+take :: (m: Mode) -> int {
+    n := cast(int) m;
+    return n;
+}
