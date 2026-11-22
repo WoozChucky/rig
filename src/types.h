@@ -316,8 +316,9 @@ extern Type type_untyped_literal;
 // the member takes the enum of what it's given to, or of the other side of
 // == or != from an enum value, or of the other operand of | & ^ from a
 // flags value, and is that enum's member then (check_convert). `.A | .B`,
-// `.A | 0` and `~.A` have this type too, waiting for one together. Meeting none,
-// it's an error (check_default_type), so messages never name it.
+// `.A | 0` (or any untyped integer) and `~.A` have this type too, waiting
+// for one together. Meeting none, it's an error (check_default_type), so
+// messages never name it.
 extern Type type_untyped_member;
 
 // Whether t is the type of an untyped constant, integer or float.

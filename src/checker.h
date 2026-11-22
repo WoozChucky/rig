@@ -151,8 +151,8 @@
 //   also compare two bools; ordering a bool is "'<' needs numbers, not
 //   'bool'", and a bool with anything else is "mismatched types 'bool' and
 //   'int' for '=='". == and != take nothing but numbers, bools, pointers,
-//   procedure values and strings: "'==' needs numbers, bools, pointers,
-//   procedure values or strings, not 'Vec2'".
+//   procedure values, strings and enums: "'==' needs numbers, bools,
+//   pointers, procedure values, strings or enums, not 'Vec2'".
 // - && || ! take bools and give one: "'&&' needs bools, not 'int'", "'!'
 //   needs a bool, not 'int'". && and || don't evaluate their right operand
 //   when the left one decides.
@@ -379,7 +379,8 @@
 //   cast); nothing else converts to or from either but its own type (and a
 //   [..]T to []T: Resizable arrays, below), and either converts to Any
 //   (Type information and Any, below). No operator takes them ("'==' needs
-//   numbers, bools, pointers, procedure values or strings, not '[3]int'").
+//   numbers, bools, pointers, procedure values, strings or enums, not
+//   '[3]int'").
 // - T.[a, b] is a [2]T, each value converting to T; .[a, b] takes its type
 //   where it's used, as .{...} does: an array type, whose count it must
 //   give ("'[3]int' has 3 elements, but this literal gives 2"), or a view
@@ -988,7 +989,9 @@
 //   assignment's target, an argument and a default, a return, a field or an
 //   element of a literal, a cast; and the other side of == or != from an
 //   enum value, the other operand of | & ^ from a flags value. .A | .B,
-//   .A | 0 and ~.A wait together for a flags type. Meeting an enum, it's the
+//   .A | 0 and ~.A wait together for a flags type, and so does .A | 1, which
+//   the flags type then refuses as it refuses f | 1 ("mismatched types
+//   'Look' and 'int' for '|'; cast one of them"). Meeting an enum, it's the
 //   member; meeting another type, "'.FREE' needs an enum type, not 'int'";
 //   meeting none (x := .FREE;, .A == .B, an operand of anything else, an
 //   Any, C's '...'), "this member's enum isn't known; write it with its

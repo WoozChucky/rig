@@ -471,6 +471,7 @@ static void convert_to_any(Checker *c, Ast *e) {
 // Enums (spec 3.18, checker.h's "Enums").
 
 static u64 fold_typed(Token_Kind op, u64 left, u64 right, Type *t);
+static Type *check_unify_enums(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op);
 
 // The first member without its enum in e, a .NAME or an operator waiting
 // for its flags type over them (.A | .B, ~.A, 0 | .A), in source order:
@@ -482,7 +483,7 @@ static Ast_Dot_Name *first_dot_name(Ast *e) {
             e = ((Ast_Unary *)e)->operand;
         } else {
             Ast_Binary *b = (Ast_Binary *)e;
-            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is the untyped 0
+            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is an untyped integer
         }
     }
 }
@@ -510,7 +511,8 @@ static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at
 // their operands and fold. Meeting a type that isn't an enum, "'.FREE' needs an enum type,
 // not 'int'", at the first .NAME in e; an operator meeting an enum that
 // isn't flags, its own message, at the operator ("'|' needs integers, not
-// 'Mode'", "'~' needs an integer, not 'Mode'"), as for two values of it.
+// 'Mode'", "'~' needs an integer, not 'Mode'"), as for two values of it;
+// .A | 1 meeting a flags type, a mismatch at the operator, as f | 1 is.
 // After any of these, e has no type.
 static void convert_member(Checker *c, Ast *e, Type *to) {
     if (to->kind != TYPE_ENUM) {
@@ -545,11 +547,14 @@ static void convert_member(Checker *c, Ast *e, Type *to) {
         e->constant = wrap_to(~operand->constant, to);
     } else {
         Ast_Binary *b = (Ast_Binary *)e;
-        // An operand that isn't a member is the untyped 0, which converts
-        // to a flags type, its empty set.
-        check_convert(c, b->left, to);
-        check_convert(c, b->right, to);
+        // An operand that isn't a member is an untyped integer, which
+        // converts to a flags type only if it's 0, its empty set: .A | 1
+        // is "mismatched types 'Look' and 'int' for '|'; cast one of
+        // them", as f | 1 is (check_unify_enums).
+        if (b->left->type == &type_untyped_member) convert_member(c, b->left, to);
+        if (b->right->type == &type_untyped_member) convert_member(c, b->right, to);
         if (!b->left->type || !b->right->type) return;
+        if (!check_unify_enums(c, b, b->left->type, b->right->type, token_kind_name(b->op))) return;
         b->operand_type = to;
         e->constant = fold_typed(b->op, b->left->constant, b->right->constant, to);
     }
@@ -1894,8 +1899,8 @@ static Type *check_unify_enums(Checker *c, Ast_Binary *b, Type *left, Type *righ
 // numbers, not '(int) -> int'"). Two values of one enum type compare as
 // numbers of its integer type, with all six (check_unify_enums; spec 3.18),
 // a flags value with 0 too. Anything else isn't compared: "'==' needs
-// numbers, bools, pointers, procedure values or strings, not 'Vec2'", "'<'
-// needs numbers, not 'Vec2'".
+// numbers, bools, pointers, procedure values, strings or enums, not
+// 'Vec2'", "'<' needs numbers, not 'Vec2'".
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
@@ -1903,7 +1908,7 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
     Type *not_equatable = !takes_equality(left) ? left : !takes_equality(right) ? right : nullptr;
     if (equality && not_equatable) {
         diag_error(c->diag, b->pos,
-                   "%s needs numbers, bools, pointers, procedure values or strings, not '" STR_FMT "'", op,
+                   "%s needs numbers, bools, pointers, procedure values, strings or enums, not '" STR_FMT "'", op,
                    STR_ARG(type_name(c->arena, not_equatable)));
         return nullptr;
     }
@@ -1973,8 +1978,9 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // the other operand's type (check_convert says when it can't); with one on
 // each side, .A | .B waits for its type as .A does, as 1 | 2 stays untyped,
 // and .A == .B has none to take, which is said at the left one. .A | 0
-// waits too, the untyped 0 being the empty set of the flags type it meets.
-// Anywhere else, it meets no type.
+// waits too, the untyped 0 being the empty set of the flags type it meets,
+// and so does .A | 1, which that type then refuses as it refuses f | 1
+// (convert_member). Anywhere else, it meets no type.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -1983,8 +1989,8 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     if (!left || !right) return nullptr;
     if (left == &type_untyped_member || right == &type_untyped_member) {
         Ast *other = left == &type_untyped_member ? b->right : b->left;
-        bool zero = other->type == &type_untyped_int && other->is_constant && other->constant == 0;
-        if (left == right || (bitwise && zero)) {
+        bool integer = other->type == &type_untyped_int && other->is_constant;
+        if (left == right || (bitwise && integer)) {
             if (bitwise) return &type_untyped_member;
             check_default_type(c, b->left);
             return nullptr;

@@ -6,7 +6,9 @@
 // through C's '...'; an enum as a condition and as an array's count;
 // members waiting for a flags type met by an enum that isn't flags, or by
 // a type that isn't an enum; an enum's name in parentheses, or called;
-// an enum and 0, or two enum types; and a local hiding an enum's name.
+// an enum and 0, or two enum types; a member into an Any; a member and an
+// integer other than 0 meeting a flags type; and a local hiding an enum's
+// name.
 Mode :: enum { ALLOCATE; RESIZE; FREE; }
 Small :: enum u8 { X; }
 Look :: enum_flags { A; B; }
@@ -46,6 +48,8 @@ main :: () {
     m = 0;
     o := Mode.FREE == Look.A;
     t := cast,trunc(Mode) Small.X;
+    l : Any = .FREE;
+    g : Look = .A | 1;
 }
 
 hidden :: () {

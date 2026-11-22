@@ -40,7 +40,7 @@ tests/errors/resizable_array_refused.rig:29:9: error: a value of type '[3]int' d
 tests/errors/resizable_array_refused.rig:30:10: error: can't cast '[]int' to '[..]int'
         w := cast([..]int) v;
              ^
-tests/errors/resizable_array_refused.rig:31:15: error: '==' needs numbers, bools, pointers, procedure values or strings, not '[..]int'
+tests/errors/resizable_array_refused.rig:31:15: error: '==' needs numbers, bools, pointers, procedure values, strings or enums, not '[..]int'
         same := a == a;
                   ^
 tests/errors/resizable_array_refused.rig:33:9: error: '..' spreads a '[..]u8' into 'values', which needs a '[]int'

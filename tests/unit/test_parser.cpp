@@ -4048,6 +4048,10 @@ TEST(enum_declaration_mistakes) {
     CHECK_STR(parse_src(&a, "E :: enum { #if X { A; } }\nmain :: () {}\n", &errors),
               "(broken E)\n(proc main (params) (block))\n");
     CHECK_STR(errors, "1:13: #if can't be among an enum's members, for now\n");
+    // A #load among the members is said and skipped, as among a struct's
+    // fields.
+    CHECK_STR(parse_src(&a, "E :: enum {\n    A;\n    #load \"x.rig\";\n    B;\n}\n", &errors), "(enum E _ (A) (B))\n");
+    CHECK_STR(errors, "3:5: #load can only be at the top level\n");
     // A branch of a top-level #if may declare one, and so it ends a body
     // never closed before it (branch_declares_top_level), as an enum's own
     // declaration in column 1 does (starts_declaration).

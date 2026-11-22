@@ -2736,9 +2736,9 @@ static String declared_name(Ast *decl) {
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
 // without its layout, so a pointer can name it from anywhere; one a decider
-// found in a circle, or too big, is done, and keeps having none. So does
-// each enum, once, its size known from the start. Then the broken entries'
-// names. With report, check()'s, the mistakes are said
+// found in a circle, or too big, is done, and keeps having none. Each enum
+// gets its Type here too, once, with its size from the start. Then the
+// broken entries' names. With report, check()'s, the mistakes are said
 // (a built-in type's name, a predeclared name, a name already declared);
 // without, a decider's, the first of a name wins, silently: check() says
 // them once, later. Returns whether a broken entry lost its name (check()'s

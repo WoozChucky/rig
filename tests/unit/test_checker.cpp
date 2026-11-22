@@ -3046,14 +3046,14 @@ TEST(structs_arent_compared) {
                            "    a += b;\n"
                            "    while b { }\n"
                            "}\n"),
-              "5:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
-              "6:12: '!=' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
+              "5:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'\n"
+              "6:12: '!=' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'\n"
               "7:12: '<' needs numbers, not 'Vec2'\n"
               "8:12: '+' needs numbers, not 'Vec2'\n"
               "9:8: the condition of 'if' must be a bool, not 'Vec2'\n"
               "10:10: '-' needs a number, not 'Vec2'\n"
               "11:10: '!' needs a bool, not 'Vec2'\n"
-              "12:12: '==' needs numbers, bools, pointers, procedure values or strings, not 'Vec2'\n"
+              "12:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'\n"
               "13:7: '+=' needs numbers, not 'Vec2'\n"
               "14:11: the condition of 'while' must be a bool, not 'Vec2'\n");
     arena_free(&a);
@@ -3730,7 +3730,7 @@ TEST(array_converts_to_view) {
               "6:18: a value of type '[3]int' doesn't convert to '[4]int' implicitly\n"
               "7:17: a value of type '[3]u8' doesn't convert to '[]int' implicitly\n"
               "8:16: a value of type '[3]int' doesn't convert to '*int' implicitly\n"
-              "9:15: '==' needs numbers, bools, pointers, procedure values or strings, not '[3]int'\n"
+              "9:15: '==' needs numbers, bools, pointers, procedure values, strings or enums, not '[3]int'\n"
               "10:10: can't cast '[3]u8' to '[]int'\n");
     arena_free(&a);
 }
@@ -9401,10 +9401,12 @@ TEST(enum_values_count_up) {
     // An earlier member hides an outer name of the same in the values
     // after it (Hide's NEXT), and outside the body it's no name at all
     // (OUTSIDE is the outer LIMIT). ~ on a flags constant wraps at its
-    // integer type's width (NOT_ALL).
+    // integer type's width (NOT_ALL). Values count up from a negative one
+    // too (N8's, as their bits).
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { A; B; C :: 10; D; }\n"
                               "Small :: enum u8 { X :: 250; Y; LAST :: Y + 3; }\n"
+                              "N8 :: enum s8 { A :: -2; B; C; }\n"
                               "Look :: enum_flags u8 { P; Q; R :: 16; S; ALL :: P | Q | R | S; T; }\n"
                               "LIMIT :: 10;\n"
                               "Hide :: enum { FIRST :: LIMIT; LIMIT :: 3; NEXT :: LIMIT + 1; }\n"
@@ -9425,6 +9427,8 @@ TEST(enum_values_count_up) {
     check_enum_values_are(&a, top_level_named(c.file, "Mode"), "int", false, mode, 4);
     const u64 small[] = {250, 251, 254};
     check_enum_values_are(&a, top_level_named(c.file, "Small"), "u8", false, small, 3);
+    const u64 n8[] = {(u64)-2, (u64)-1, 0};
+    check_enum_values_are(&a, top_level_named(c.file, "N8"), "s8", false, n8, 3);
     const u64 look[] = {1, 2, 16, 32, 51, 64};
     check_enum_values_are(&a, top_level_named(c.file, "Look"), "u8", true, look, 6);
     Type *mode_type = ((Ast_Enum *)top_level_named(c.file, "Mode"))->declared;
@@ -9454,16 +9458,17 @@ TEST(an_enums_value_may_not_need_its_enum) {
 
 TEST(members_without_their_enum_take_the_type_they_meet) {
     // .NAME takes the enum it meets, where .{...} would take a struct: a
-    // typed declaration, an assignment, an argument and a default, a
-    // return, a field and an element of a literal, a cast; and the other
-    // side of == or != from an enum value, the other operand of | & ^ from
-    // a flags value (.A | .B and ~.B waiting for the type, as 1 | 2 is
-    // untyped). 0 converts to a flags type.
+    // typed declaration, an assignment, an argument (..T ones too) and a
+    // default, a return, a field and an element of a literal, a cast; and
+    // the other side of == or != from an enum value, the other operand of
+    // | & ^ from a flags value (.A | .B and ~.B waiting for the type, as
+    // 1 | 2 is untyped). 0 converts to a flags type.
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { ALLOCATE; RESIZE; FREE; }\n"
                               "Look :: enum_flags { A; B; C; }\n"
                               "R :: struct { mode: Mode; look: Look; }\n"
                               "take :: (m: Mode, k: Mode = .FREE) -> Mode { return .RESIZE; }\n"
+                              "many :: (ms: ..Mode) -> int { return 0; }\n"
                               "main :: () {\n"
                               "    m : Mode = .FREE;\n"
                               "    m = .ALLOCATE;\n"
@@ -9483,6 +9488,7 @@ TEST(members_without_their_enum_take_the_type_they_meet) {
                               "    h : Look = 0 | .B;\n"
                               "    k : Look = .B | 0;\n"
                               "    lt := m < n;\n"
+                              "    counted := many(.ALLOCATE, .FREE);\n"
                               "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK_STR(type_of(&a, &c, "m"), "Mode");
@@ -9517,6 +9523,14 @@ TEST(members_without_their_enum_take_the_type_they_meet) {
         CHECK_EQ(value->constant, 2);
     }
     CHECK_STR(type_of(&a, &c, "lt"), "bool");
+    // Each of a ..Mode parameter's arguments takes Mode.
+    Ast_Call *call = (Ast_Call *)((Ast_Var *)local_named(&c, "counted"))->value;
+    RIG_ASSERT(call->kind == AST_CALL && call->args.count == 2);
+    for (s64 i = 0; i < 2; i++) {
+        CHECK_STR(type_name(&a, call->args[i]->type), "Mode");
+        CHECK(call->args[i]->is_constant);
+        CHECK_EQ(call->args[i]->constant, (u64)(i * 2));
+    }
     // |= and &= convert their values to f's type, ~.B folded at int's width.
     Array<Ast *> body = c.file->procs[c.file->procs.count - 1]->body->statements;
     RIG_ASSERT(body[6]->kind == AST_ASSIGN && body[7]->kind == AST_ASSIGN);
@@ -9578,11 +9592,16 @@ TEST(enums_cast_to_and_from_integers) {
 }
 
 TEST(enum_members_are_constants) {
-    // A member is a constant of its enum: a constant's value, an #if's
+    // A member is a constant of its enum: a constant's value, a global's
+    // (written with its enum or without, and | of flags ones), an #if's
     // condition, and, cast to an integer, an array's count.
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { A; B :: 4; }\n"
+                              "Look :: enum_flags { A; B; }\n"
                               "DEFAULT :: Mode.B;\n"
+                              "G : Mode = .B;\n"
+                              "H := Mode.B;\n"
+                              "L : Look = .A | .B;\n"
                               "main :: () {\n"
                               "    #if DEFAULT == .B { k := 1; }\n"
                               "    n : [cast(int) Mode.B]u8;\n"
@@ -9592,6 +9611,15 @@ TEST(enum_members_are_constants) {
     CHECK_STR(type_name(&a, defaulted->type), "Mode");
     CHECK(defaulted->is_constant);
     CHECK_EQ(defaulted->constant, 4);
+    const char *globals[] = {"G", "H", "L"};
+    const char *types[] = {"Mode", "Mode", "Look"};
+    const u64 values[] = {4, 4, 3};
+    for (s64 i = 0; i < 3; i++) {
+        Ast *value = ((Ast_Var *)top_level_named(c.file, globals[i]))->value;
+        CHECK_STR(type_name(&a, value->type), types[i]);
+        CHECK(value->is_constant);
+        CHECK_EQ(value->constant, values[i]);
+    }
     CHECK_STR(type_of(&a, &c, "k"), "int");
     CHECK_STR(type_of(&a, &c, "n"), "[4]u8");
     token_list_free(c.list);
