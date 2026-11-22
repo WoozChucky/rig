@@ -3617,8 +3617,9 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, St
 // bytes. A value is the member's constant, its 64 bits as the checker
 // keeps them (sign-extended from a signed integer type, zero-extended from
 // an unsigned one), known by now: the checker worked every enum's values
-// out, and a #run's walk those of each enum it describes
-// (check_enum_values). No members: the empty views, zeros, and no arrays.
+// out, and a #run's walk those of each enum it describes, failing for one
+// with a member without a value (walk_enum). No members: the empty views,
+// zeros, and no arrays.
 static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
     Ast_Enum *e = t->enum_decl;
     s64 count = e->members.count;
@@ -3628,7 +3629,7 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
     Array<Ir_Reloc> name_relocs = {};
     for (s64 i = 0; i < count; i++) {
         Ast_Const *member = e->members[i];
-        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops lowering
+        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops lowering and a #run
         write_bits(names + i * 16 + VIEW_COUNT_OFFSET, (u64)member->name.count, 8);
         array_add(&name_relocs, Ir_Reloc{i * 16 + VIEW_DATA_OFFSET, add_bytes(l, member->name), false});
         write_bits(values + i * 8, member->constant, 8);

@@ -5748,45 +5748,81 @@ TEST(arrays_and_views_are_described) {
     arena_free(&a);
 }
 
+// The name, "@str.N", of the string literal whose bytes are `bytes` in IR
+// printed by ir_print, found by its line ("global @str.N = \"...\\00\""); ""
+// when there's none.
+static const char *str_global(Arena *a, String ir, const char *bytes) {
+    String line = line_with(ir, string_cstr(a, string_printf(a, " = \"%s\\00\"", bytes)));
+    s64 at = index_of(line, "@"), end = index_of(line, " = ");
+    if (at < 0 || end < at) return "";
+    return string_cstr(a, string_slice(line, at, end - at));
+}
+
 TEST(an_enums_description) {
     // An enum's is a Type_Info_Enum (issue #221, spec 3.16, 3.18): the tag
     // TYPE_INFO_ENUM (11), the enum's size and alignment, its integer
     // type's (u8: 1 and 1), its name, its integer type's description,
     // is_flags (false), then its members, two read-only arrays of their
     // own: type_info.0.names, a string per member, each its str.N, and
-    // type_info.0.values, each member's value as 8 bytes.
+    // type_info.0.values, each member's value as 8 bytes. Preload's
+    // messages are str.N before them, so the names' are found by their bytes.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "Small :: enum u8 { A; B :: 5; }\n"
                                                     "main :: () { t := type_info(Small); }\n"));
-    CHECK(contains(ir, "const @type_info.0: 88 align 8 = \""
-                       "\\0B\\00\\00\\00\\00\\00\\00\\00"
-                       "\\01\\00\\00\\00\\00\\00\\00\\00"
-                       "\\01\\00\\00\\00\\00\\00\\00\\00"
-                       "\\05\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\02\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\02\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
-    CHECK(contains(ir, " reloc 40 @type_info.1 reloc 64 @type_info.0.names reloc 80 @type_info.0.values\n"));
+    const char *small = str_global(&a, ir, "Small");
+    const char *name_a = str_global(&a, ir, "A");
+    const char *name_b = str_global(&a, ir, "B");
+    CHECK(small[0] && name_a[0] && name_b[0]);
+    String want = string_printf(&a, "const @type_info.0: 88 align 8 = \""
+                                    "\\0B\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\01\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\01\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\05\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\02\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\02\\00\\00\\00\\00\\00\\00\\00"
+                                    "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 %s reloc 40 @type_info.1"
+                                    " reloc 64 @type_info.0.names reloc 80 @type_info.0.values\n",
+                                    small);
+    CHECK(contains(ir, string_cstr(&a, want)));
     CHECK(contains(ir, "const @type_info.1: 32 align 8 = \""
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\"\n"));
-    CHECK(contains(ir, "const @type_info.0.names: 32 align 8 = \""
-                       "\\01\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\01\\00\\00\\00\\00\\00\\00\\00"
-                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 @str."));
+    want = string_printf(&a, "const @type_info.0.names: 32 align 8 = \""
+                             "\\01\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\01\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 8 %s reloc 24 %s\n",
+                             name_a, name_b);
+    CHECK(contains(ir, string_cstr(&a, want)));
     CHECK(contains(ir, "const @type_info.0.values: 16 align 8 = \""
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\05\\00\\00\\00\\00\\00\\00\\00\"\n"));
-    CHECK(contains(ir, "= \"Small\\00\"\n"));
-    CHECK(contains(ir, "= \"A\\00\"\n"));
-    CHECK(contains(ir, "= \"B\\00\"\n"));
+    // An enum with no members has empty names and values views, zeros from
+    // 56 on with no relocations there, and no arrays of its own.
+    ir = ir_print(&a, lower_with_preload(&a, "Empty :: enum { }\n"
+                                             "main :: () { t := type_info(Empty); }\n"));
+    want = string_printf(&a, "const @type_info.0: 88 align 8 = \""
+                             "\\0B\\00\\00\\00\\00\\00\\00\\00"
+                             "\\08\\00\\00\\00\\00\\00\\00\\00"
+                             "\\08\\00\\00\\00\\00\\00\\00\\00"
+                             "\\05\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00"
+                             "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 %s reloc 40 @type_info.1\n",
+                             str_global(&a, ir, "Empty"));
+    CHECK(contains(ir, string_cstr(&a, want)));
+    CHECK(!contains(ir, ".names"));
+    CHECK(!contains(ir, ".values"));
     arena_free(&a);
 }
 

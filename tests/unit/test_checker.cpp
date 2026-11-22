@@ -7851,6 +7851,35 @@ TEST(a_run_describes_an_enum_declared_after_it) {
     arena_free(&a);
 }
 
+TEST(a_run_doesnt_describe_an_enum_with_an_unknown_member) {
+    // Issue #221: an enum whose member's value had a mistake, declared
+    // before the #run or after it, or whose values were a circle, before a
+    // later #run that describes it, has members without a value, which its
+    // description would need: the #run's walk fails (walk_enum), and only
+    // the enum's own mistake is said.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "Bad :: enum u8 { A :: 300; B; }\n"
+                                 "X :: #run g();\n"
+                                 "g :: () -> int { t := type_info(Bad); return 0; }\n"
+                                 "main :: () { }\n"),
+              "1:23: 300 doesn't fit in 'u8'\n");
+    CHECK_STR(check_with_preload(&a,
+                                 "X :: #run g();\n"
+                                 "g :: () -> int { t := type_info(Bad); return 0; }\n"
+                                 "Bad :: enum u8 { A :: 300; B; }\n"
+                                 "main :: () { }\n"),
+              "3:23: 300 doesn't fit in 'u8'\n");
+    CHECK_STR(check_with_preload(&a,
+                                 "Self :: enum { A :: #run f(); B; }\n"
+                                 "f :: () -> int { t := type_info(*Self); return 1; }\n"
+                                 "X :: #run g();\n"
+                                 "g :: () -> int { t := type_info(Self); return 0; }\n"
+                                 "main :: () { }\n"),
+              "1:1: 'Self' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
 TEST(each_path_of_a_description_lays_out_what_it_reaches) {
     // Each #run here is the first to describe the structs it reaches, all
     // declared after it, so only its own walk lays them out: an Any of a
