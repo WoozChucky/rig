@@ -1924,6 +1924,179 @@ static void check_push_context(Checker *c, Ast_Push_Context *push) {
     c->contextless = outer_contextless;
 }
 
+// Whether a switch can be on a value of type t (spec 6.14): an integer, an
+// enum (flags included), a bool, a string or a pointer, *void included.
+static bool is_switchable(Type *t) {
+    return t->kind == TYPE_INTEGER || t->kind == TYPE_ENUM || t == &type_bool || t == &type_string ||
+           type_is_pointer(t);
+}
+
+// The bytes of a string case's value, constant data (constant_data): a
+// string literal's, or a #run's baked string's, or none when the value is
+// a string field a constant's literal leaves out, the empty string.
+static String case_bytes(Ast *value) {
+    Ast *holder;
+    constant_data(value, &holder);
+    return holder && holder->kind == AST_STRING ? ((Ast_String *)holder)->value : String{};
+}
+
+// Whether two case values of type t, each a checked constant, are the same
+// value: a scalar's 64 bits (Ast.constant, which a converted constant
+// holds as its type's), so `case 1;` and `case ONE;` are, and two members
+// sharing a value; a string's bytes, so `case NAME;` and `case "rig";` are.
+static bool same_case_value(Type *t, Ast *a, Ast *b) {
+    if (t == &type_string) return string_eq(case_bytes(a), case_bytes(b));
+    return a->constant == b->constant;
+}
+
+// if x == { case 1; ... } and if #complete x == { ... } (spec 6.14).
+//
+// x is checked once, as an operand (so .FREE and .{...} alone are
+// reported), an untyped constant given its default type: `if 3 == {` is on
+// an int. It must be is_switchable: "a switch needs an integer, an enum, a
+// bool, a string or a pointer, not 'float64'", at it; the cases' values are
+// then checked against nothing but their own types (check_value, so a
+// .FREE among them says nothing more), and the switch is `failed`, as one
+// whose x had an error.
+//
+// Each case's value converts to x's type as an assignment's value does
+// (check_convert: .FREE takes the enum, an untyped constant the integer
+// type, null the pointer type), and must be known while compiling: an
+// integer's, an enum's or a bool's is_constant; a string's constant data,
+// whose bytes are compared; a pointer's null, the one pointer that's
+// is_constant: a string literal's address has no number until the program
+// is linked, so "a pointer's case can only be null, as in case null;", for
+// any other value of a pointer switch. Any other value is "a case's value
+// must be known while compiling", unless it needs a #run that failed, said
+// already (has_failed_run). Never evaluated at run time.
+//
+// Once a value checked with no error, it's compared with every earlier one
+// that did (same_case_value): the same value twice is "this value already
+// has a case at PATH:L:C", at the later, naming the earlier's start, as a
+// name declared twice is written (declare). A second `case;` is "this
+// switch already has a 'case;' at PATH:L:C", at its 'case'. `case;` may be
+// anywhere.
+//
+// #complete takes an enum: on anything else that a switch takes, it's
+// "#complete needs an enum, not 'int'", at it, and the switch is checked
+// as one without it. On an enum, once its members' values are known and
+// every case's value checked with no error (a case with one would make a
+// second message about the member it meant), each member's value, in
+// declaration order, must be some case's: each value missing is named by
+// the first member that has it, all in one message at the '#complete',
+// "this switch is #complete, but 'Mode.FREE' and 'Mode.FREE_ALL' have no
+// case". covers_every_value is set when none is missing; checks_no_case
+// when there's no `case;`, since a value no member has (cast(Mode) 7) then
+// finds no case, a runtime error (spec 8.1). A #complete switch that
+// doesn't cover every value said why (a member missing, a case's error, an
+// enum's), so it's `failed` too: its message is the only one (spec 6.11).
+//
+// Each case's statements are a block and a scope of their own
+// (check_scoped_block), so two cases may declare one name. The switch is
+// no loop: a break or continue in a case acts on the loop around it
+// (check_jump).
+static void check_switch(Checker *c, Ast_Switch *s) {
+    Type *t = check_operand(c, s->value);
+    if (t && type_is_untyped(t)) {
+        check_default_type(c, s->value);  // an untyped float too large for a float32 is said
+        t = s->value->type;
+    }
+    if (t == &type_null) {
+        report_null_without_a_type(c, s->value);
+        t = nullptr;
+    } else if (t && !is_switchable(t)) {
+        diag_error(c->diag, s->value->start,
+                   "a switch needs an integer, an enum, a bool, a string or a pointer, not '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, t)));
+        t = nullptr;
+    }
+    s->failed = !t;
+    bool complete = s->is_complete && t;
+    if (complete && t->kind != TYPE_ENUM) {
+        diag_error(c->diag, s->complete, "#complete needs an enum, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
+        complete = false;
+    }
+
+    Array<Ast *> values = {};  // the values checked with no error, in source order
+    bool cases_fine = true;    // every case's value checked with no error
+    for (s64 i = 0; i < s->cases.count; i++) {
+        Ast_Case *k = s->cases[i];
+        Ast *value = k->value;
+        if (!value) {
+            if (s->default_case) {
+                Position at = s->default_case->pos;
+                diag_error(c->diag, k->pos, "this switch already has a 'case;' at " STR_FMT ":%d:%d",
+                           STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+            } else {
+                s->default_case = k;
+            }
+        } else if (!t) {
+            check_value(c, value);
+        } else {
+            s64 errors = c->diag->error_count;
+            if (check_value(c, value) && !check_convert(c, value, t)) report_no_conversion(c, value, t);
+            bool fine = value->type && c->diag->error_count == errors;
+            if (fine && type_is_pointer(t) && !value->is_constant) {
+                diag_error(c->diag, value->start, "a pointer's case can only be null, as in case null;");
+                fine = false;
+            }
+            Ast *holder;
+            bool known = t == &type_string ? constant_data(value, &holder) : value->is_constant;
+            if (fine && !known) {
+                if (!has_failed_run(value)) {
+                    diag_error(c->diag, value->start, "a case's value must be known while compiling");
+                }
+                fine = false;
+            }
+            for (s64 j = 0; fine && j < values.count; j++) {
+                if (!same_case_value(t, values[j], value)) continue;
+                Position at = values[j]->start;
+                diag_error(c->diag, value->start, "this value already has a case at " STR_FMT ":%d:%d",
+                           STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+                fine = false;
+            }
+            if (fine) array_add(&values, value);
+            cases_fine &= fine;
+        }
+        check_scoped_block(c, k->block);
+    }
+
+    if (complete) {
+        s->checks_no_case = !s->default_case;
+        Ast_Enum *e = t->enum_decl;
+        bool known = check_enum_values(c, t) && cases_fine;
+        for (s64 i = 0; known && i < e->members.count; i++) {
+            known = e->members[i]->type && e->members[i]->is_constant;
+        }
+        if (known) {
+            // Each member whose value no case has, and no member before
+            // it has: named once, by its first member.
+            Array<Ast_Const *> missing = {};
+            for (s64 i = 0; i < e->members.count; i++) {
+                Ast_Const *member = e->members[i];
+                bool named = false;
+                for (s64 j = 0; j < i && !named; j++) named = e->members[j]->constant == member->constant;
+                for (s64 j = 0; j < values.count && !named; j++) named = values[j]->constant == member->constant;
+                if (!named) array_add(&missing, member);
+            }
+            if (missing.count) {
+                String list = {};
+                for (s64 i = 0; i < missing.count; i++) {
+                    const char *before = i == 0 ? "" : i == missing.count - 1 ? " and " : ", ";
+                    list = string_printf(c->arena, STR_FMT "%s'" STR_FMT "." STR_FMT "'", STR_ARG(list), before,
+                                         STR_ARG(e->name), STR_ARG(missing[i]->name));
+                }
+                diag_error(c->diag, s->complete, "this switch is #complete, but " STR_FMT " %s no case", STR_ARG(list),
+                           missing.count == 1 ? "has" : "have");
+            }
+            s->covers_every_value = missing.count == 0;
+            array_free(&missing);
+        }
+        s->failed |= !s->covers_every_value;
+    }
+    array_free(&values);
+}
+
 static void check_statement(Checker *c, Ast *statement) {
     switch (statement->kind) {
     case AST_VAR: check_var(c, (Ast_Var *)statement); break;
@@ -1940,6 +2113,7 @@ static void check_statement(Checker *c, Ast *statement) {
     case AST_CONTINUE: check_jump(c, (Ast_Jump *)statement); break;
     case AST_DEFER: check_defer(c, (Ast_Defer *)statement); break;
     case AST_PUSH_CONTEXT: check_push_context(c, (Ast_Push_Context *)statement); break;
+    case AST_SWITCH: check_switch(c, (Ast_Switch *)statement); break;
     case AST_RUN:
         // A #run gives a value while compiling (spec 7.8), to be put where a
         // value goes; code run for its effect is a top-level #run. Not
@@ -1994,6 +2168,15 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
     }
     case AST_WHILE: return breaks_out_of(((Ast_While *)s)->body, loop);
     case AST_FOR: return breaks_out_of(((Ast_For *)s)->body, loop);
+    // A switch is no loop (spec 6.14): a break in any of its cases leaves
+    // the loop around it.
+    case AST_SWITCH: {
+        Ast_Switch *sw = (Ast_Switch *)s;
+        for (s64 i = 0; i < sw->cases.count; i++) {
+            if (breaks_out_of(sw->cases[i]->block, loop)) return true;
+        }
+        return false;
+    }
     // A defer too: a break in deferred code is of a loop inside it, or
     // refused (check_jump), so it can't break out of `loop`.
     default: return false;
@@ -2003,8 +2186,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
 static bool reaches_end(Ast_Block *block);
 
 // Whether control can go on past statement s, to what follows it. Not past
-// a return; nor past a block, an if with an else, an #if, a push_context or
-// a loop that can't reach its own end:
+// a return; nor past a block, an if with an else, an #if, a push_context, a
+// switch or a loop that can't reach its own end:
 // - an if with an else, when neither branch reaches its end (else if: the
 //   if that's the else part can't be got past either). Without an else,
 //   the condition may be false, so it always may.
@@ -2013,6 +2196,11 @@ static bool reaches_end(Ast_Block *block);
 //   zero times.
 // - an #if (spec 4.9), when its taken branch can't: the #if is only that
 //   branch's code. One that took none goes past, as an empty block does.
+// - a switch (spec 6.14), when a value may find no case (it has no `case;`
+//   and doesn't cover every value: only `case;` and #complete count, so a
+//   bool's switch with both values and no `case;` goes past too), or when
+//   a case that doesn't end with #through reaches its end. One ending with
+//   #through goes on into the next case, which is judged in its turn.
 // A break or continue leaves the block too, but goes on elsewhere in its
 // loop; the rule is only asked about statements outside any loop body (a
 // procedure's body, and the blocks, ifs, #ifs and pushes that end it) or
@@ -2021,10 +2209,12 @@ static bool reaches_end(Ast_Block *block);
 // bool), which check_condition reported, is taken not to go past, whatever
 // its branches do; so is an #if any of whose chain's conditions failed
 // (Ast_If_Directive.failed), which check_if_condition reported, a condition
-// not known while compiling included. That's a policy, so the condition's
-// message is the only one: for `while 1` (likely meant as `while true`) a
-// missing-return message would be wrong, and for an if a real missing
-// return shows up once the condition is fixed.
+// not known while compiling included; and so is a switch whose switched
+// expression had an error, or that is #complete and doesn't cover every
+// value (Ast_Switch.failed), which check_switch reported. That's a policy,
+// so the condition's message is the only one: for `while 1` (likely meant
+// as `while true`) a missing-return message would be wrong, and for an if
+// a real missing return shows up once the condition is fixed.
 static bool goes_past(Ast *s) {
     switch (s->kind) {
     case AST_RETURN: return false;
@@ -2050,6 +2240,16 @@ static bool goes_past(Ast *s) {
         Ast_If_Directive *first = (Ast_If_Directive *)s;
         if (first->failed) return false;
         return !first->taken || reaches_end(first->taken);
+    }
+    case AST_SWITCH: {
+        Ast_Switch *sw = (Ast_Switch *)s;
+        if (sw->failed) return false;
+        if (!sw->default_case && !sw->covers_every_value) return true;
+        for (s64 i = 0; i < sw->cases.count; i++) {
+            Ast_Case *k = sw->cases[i];
+            if (!k->through.line && reaches_end(k->block)) return true;
+        }
+        return false;
     }
     case AST_WHILE: {
         Ast_While *loop = (Ast_While *)s;

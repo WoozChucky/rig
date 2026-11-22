@@ -351,6 +351,15 @@ static Ast *find_in_statement(Ast *s, const char *name) {
         return find_local(loop->body, name);
     }
     case AST_DEFER: return find_in_statement(((Ast_Defer *)s)->statement, name);
+    case AST_SWITCH: {
+        // Each case's statements are a block of their own (spec 6.14).
+        Ast_Switch *sw = (Ast_Switch *)s;
+        for (s64 i = 0; i < sw->cases.count; i++) {
+            Ast *found = find_local(sw->cases[i]->block, name);
+            if (found) return found;
+        }
+        return nullptr;
+    }
     default: return nullptr;
     }
 }
@@ -9878,5 +9887,114 @@ TEST(enum_members_are_constants) {
     CHECK_STR(type_of(&a, &c, "k"), "int");
     CHECK_STR(type_of(&a, &c, "n"), "[4]u8");
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #222: the switch (spec 6.14).
+
+// The switch that is statement i of the last procedure's body (the tests
+// put main last), or null.
+static Ast_Switch *switch_at(Checked *c, s64 i) {
+    Ast_Block *body = c->file->procs[c->file->procs.count - 1]->body;
+    if (i >= body->statements.count || body->statements[i]->kind != AST_SWITCH) return nullptr;
+    return (Ast_Switch *)body->statements[i];
+}
+
+TEST(a_switchs_cases_take_its_type) {
+    // Each case's value converts to the switched expression's type, as an
+    // assignment's value does: .FREE takes the enum, an untyped constant
+    // the integer type, .A | .B the flags type, 0 its empty set, null the
+    // pointer type. A constant switched on has its default type.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { ALLOCATE; RESIZE; FREE; }\n"
+                              "Look :: enum_flags u8 { A; B; }\n"
+                              "LIMIT :: 3;\n"
+                              "main :: () {\n"
+                              "    m : Mode;\n"
+                              "    f : Look;\n"
+                              "    small : u8;\n"
+                              "    p : *int;\n"
+                              "    if m == { case .FREE; case Mode.RESIZE; }\n"
+                              "    if f == { case .A | .B; case 0; }\n"
+                              "    if small == { case 200; case LIMIT; }\n"
+                              "    if LIMIT == { case 3; }\n"
+                              "    if p == { case null; case; }\n"
+                              "    if true == { case true; case false; }\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(c.ok);
+    const char *types[] = {"Mode", "Look", "u8"};
+    const u64 values[][2] = {{2, 1}, {3, 0}, {200, 3}};
+    for (s64 i = 0; i < 3; i++) {
+        Ast_Switch *s = switch_at(&c, 4 + i);
+        CHECK(s);
+        if (!s) continue;
+        CHECK_EQ(s->cases.count, 2);
+        for (s64 k = 0; k < s->cases.count && k < 2; k++) {
+            Ast *value = s->cases[k]->value;
+            CHECK_STR(type_name(&a, value->type), types[i]);
+            CHECK(value->is_constant);
+            CHECK_EQ(value->constant, values[i][k]);
+        }
+    }
+    Ast_Switch *constant = switch_at(&c, 7);
+    CHECK(constant);
+    if (constant) CHECK_STR(type_name(&a, constant->value->type), "int");
+    Ast_Switch *pointer = switch_at(&c, 8);
+    CHECK(pointer);
+    if (pointer && pointer->cases.count == 2) {
+        CHECK(pointer->default_case == pointer->cases[1]);
+        CHECK_STR(type_name(&a, pointer->cases[0]->value->type), "*int");
+    }
+    for (s64 i = 4; i < 10; i++) {
+        Ast_Switch *s = switch_at(&c, i);
+        CHECK(s);
+        if (s) CHECK(!s->checks_no_case);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_complete_switch_covers_values_not_names) {
+    // FIRST and ALSO_FIRST share a value, which a case of either covers.
+    // Without `case;`, a value no member has is a runtime error, so the
+    // first switch checks for it, and the second, with one, doesn't (its
+    // `case;` covers no member: SECOND still needs a case of its own).
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }\n"
+                              "main :: () {\n"
+                              "    s : Shared;\n"
+                              "    if #complete s == { case .ALSO_FIRST; case .SECOND; }\n"
+                              "    if #complete s == { case .FIRST; case .SECOND; case; }\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Switch *without = switch_at(&c, 1);
+    Ast_Switch *with = switch_at(&c, 2);
+    CHECK(without && with);
+    if (without) {
+        CHECK(without->covers_every_value);
+        CHECK(without->checks_no_case);
+        CHECK(!without->default_case);
+    }
+    if (with) {
+        CHECK(with->covers_every_value);
+        CHECK(!with->checks_no_case);
+        CHECK(with->default_case);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(switches_reach_their_end_as_spec_6_11_says) {
+    // tests/errors/switch_reaching_the_end.rig's procedures: the four that
+    // get past their switch to their '}' are reported there, and only they.
+    Arena a = arena_make();
+    String text;
+    CHECK(os_read_file(&a, str("tests/errors/switch_reaching_the_end.rig"), &text));
+    CHECK_STR(check_source(&a, string_cstr(&a, text)),
+              "14:1: 'no_default' must return a value on every path, and this one reaches its end\n"
+              "21:1: 'default_reaches' must return a value on every path, and this one reaches its end\n"
+              "42:1: 'bool_both' must return a value on every path, and this one reaches its end\n"
+              "51:1: 'loop_break' must return a value on every path, and this one reaches its end\n");
     arena_free(&a);
 }

@@ -7,6 +7,7 @@ static const char *const token_kind_names[TOKEN_KIND_COUNT] = {
 
     "'if'", "'else'", "'while'", "'for'", "'break'", "'continue'", "'return'", "'struct'", "'enum'", "'enum_flags'",
     "'union'", "'cast'", "'defer'", "'using'", "'true'", "'false'", "'null'", "'context'", "'push_context'",
+    "'case'",
 
     "'('", "')'", "'{'", "'}'", "'['", "']'", "','", "';'", "':'", "'::'", "':='", "'='", "'->'", "'.'", "'..'",
     "'---'", "'+'", "'-'", "'*'", "'/'", "'%'", "'&'", "'|'", "'^'", "'~'", "'!'", "'<'", "'>'", "'<='", "'>='",

@@ -1,0 +1,45 @@
+// Mistakes in a switch's expression, its cases and #complete (issue
+// #222, spec 6.14): one a line, each reported once.
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
+Vec2 :: struct { x: float; y: float; }
+ONE :: 1;
+NAME :: "rig";
+LITERAL :: cast(*u8) "x";
+
+main :: () {
+    f : float64;
+    v : Vec2;
+    values : []int;
+    n := 1;
+    small : u8;
+    m : Mode;
+    s : Shared;
+    p : *u8;
+    word := "a";
+    yes := true;
+    if f == { }
+    if v == { }
+    if values == { }
+    if .FREE == { }
+    if n == {
+        case n;
+        case "a";
+        case .FREE;
+        case 1;
+        case ONE;
+        case;
+        case;
+    }
+    if n == { case 5; break; }
+    if small == { case 300; }
+    if m == { case .FRE; }
+    if s == { case .FIRST; case .ALSO_FIRST; }
+    if word == { case NAME; case "rig"; case word; }
+    if yes == { case true; case false; case true; }
+    if p == { case null; case LITERAL; case null; }
+    if #complete n == { case 1; }
+    if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; }
+    if #complete m == { case .ALLOCATE; case; }
+    if #complete s == { case .ALSO_FIRST; case .SECOND; }
+}

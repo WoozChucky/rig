@@ -564,6 +564,35 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ((Ast_Dot_Name *)node)->name);
         out(buffer, ")");
         break;
+    case AST_SWITCH: {
+        // (switch #complete (name m) (case (dot A) (block ...)) ...): the
+        // cases in order, #complete only when written.
+        Ast_Switch *s = (Ast_Switch *)node;
+        out(buffer, s->is_complete ? "(switch #complete " : "(switch ");
+        dump(buffer, s->value);
+        for (s64 i = 0; i < s->cases.count; i++) {
+            out(buffer, " ");
+            dump(buffer, s->cases[i]);
+        }
+        out(buffer, ")");
+        break;
+    }
+    case AST_CASE: {
+        // (case (int 1) (block ...)), _ for `case;`, and #through last
+        // when it ends the case.
+        Ast_Case *k = (Ast_Case *)node;
+        out(buffer, "(case ");
+        if (k->value) {
+            dump(buffer, k->value);
+        } else {
+            out(buffer, "_");
+        }
+        out(buffer, " ");
+        dump(buffer, k->block);
+        if (k->through.line) out(buffer, " #through");
+        out(buffer, ")");
+        break;
+    }
     }
 }
 

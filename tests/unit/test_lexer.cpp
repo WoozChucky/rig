@@ -148,10 +148,10 @@ TEST(operators_need_no_spaces) {
 
 TEST(keywords_are_not_identifiers) {
     Lexed *l = lex_text("if iffy for_each null else while for break continue return struct enum enum_flags union cast "
-                        "defer using true false");
+                        "defer using true false case");
     CHECK_KINDS(l, TOKEN_IF, TOKEN_IDENT, TOKEN_IDENT, TOKEN_NULL, TOKEN_ELSE, TOKEN_WHILE, TOKEN_FOR, TOKEN_BREAK,
                 TOKEN_CONTINUE, TOKEN_RETURN, TOKEN_STRUCT, TOKEN_ENUM, TOKEN_ENUM_FLAGS, TOKEN_UNION, TOKEN_CAST,
-                TOKEN_DEFER, TOKEN_USING, TOKEN_TRUE, TOKEN_FALSE, TOKEN_EOF);
+                TOKEN_DEFER, TOKEN_USING, TOKEN_TRUE, TOKEN_FALSE, TOKEN_CASE, TOKEN_EOF);
     lexed_free(l);
 }
 
@@ -169,6 +169,23 @@ TEST(context_and_push_context_are_keywords) {
     // that starts with one is a name.
     Lexed *l = lex_text("context push_context contexts push_contexts");
     CHECK_KINDS(l, TOKEN_CONTEXT, TOKEN_PUSH_CONTEXT, TOKEN_IDENT, TOKEN_IDENT, TOKEN_EOF);
+    lexed_free(l);
+}
+
+TEST(case_is_one_keyword) {
+    // Issue #222: case starts each case of a switch (spec 2.6, 6.14), a
+    // keyword read whole as any word is, so a longer name that has it in
+    // it is a name. #complete and #through are directives (spec 2.7), the
+    // lexer's TOKEN_DIRECTIVE as any other, their text the name alone.
+    Lexed *l = lex_text("case cases _case casey");
+    CHECK_KINDS(l, TOKEN_CASE, TOKEN_IDENT, TOKEN_IDENT, TOKEN_IDENT, TOKEN_EOF);
+    lexed_free(l);
+    l = lex_text("#complete #through");
+    CHECK_KINDS(l, TOKEN_DIRECTIVE, TOKEN_DIRECTIVE, TOKEN_EOF);
+    if (l->tokens.count == 3) {
+        CHECK_STR(l->tokens[0].text, "complete");
+        CHECK_STR(l->tokens[1].text, "through");
+    }
     lexed_free(l);
 }
 

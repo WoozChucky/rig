@@ -1,0 +1,12 @@
+tests/errors/switch_reaching_the_end.rig:14:1: error: 'no_default' must return a value on every path, and this one reaches its end
+    }
+    ^
+tests/errors/switch_reaching_the_end.rig:21:1: error: 'default_reaches' must return a value on every path, and this one reaches its end
+    }
+    ^
+tests/errors/switch_reaching_the_end.rig:42:1: error: 'bool_both' must return a value on every path, and this one reaches its end
+    }
+    ^
+tests/errors/switch_reaching_the_end.rig:51:1: error: 'loop_break' must return a value on every path, and this one reaches its end
+    }
+    ^

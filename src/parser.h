@@ -42,6 +42,12 @@
 //               | expression ',' expression {',' expression} '=' expression ';'
 //   return      = 'return' [expression {',' expression}] ';'
 //   if          = 'if' expression block ['else' (block | if)]
+//               | switch                                         (a switch takes no else)
+//   switch      = 'if' ['#complete'] expression '==' '{' case* '}' (an '==' before a '{' ends any
+//                                                                  expression: never a comparison)
+//   case        = 'case' [expression] ';' statement* ['#through' ';']
+//                                                                  (the statements up to the next 'case'
+//                                                                  or the '}'; no #through in the last)
 //   while       = 'while' expression block
 //   for         = 'for' ['*'] [IDENT ':'] expression ['..' expression] block
 //   defer       = 'defer' statement                                (any statement but a declaration)

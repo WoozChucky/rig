@@ -1,0 +1,67 @@
+// Mistakes in how a switch is written (issue #222, spec 6.14), one a
+// procedure, each given up there: a case outside a switch's braces, or
+// anything before its first case; #through anywhere but as the last
+// statement of a case that has one after it; an else after a switch;
+// #complete on an if; a compile-time switch, which there isn't; and a
+// case's value without its ';'.
+outside :: () {
+    case 1;
+}
+
+before_any_case :: (x: int) {
+    if x == {
+        a := 1;
+        case 1;
+    }
+}
+
+not_last :: (x: int) {
+    if x == {
+        case 1; #through; x += 1;
+        case 2;
+    }
+}
+
+last_case :: (x: int) {
+    if x == {
+        case 1;
+        case 2; #through;
+    }
+}
+
+in_a_block :: (x: int) {
+    if x == {
+        case 1; { #through; }
+        case 2;
+    }
+}
+
+no_switch :: () {
+    #through;
+}
+
+an_else :: (x: int) {
+    if x == {
+        case 1;
+    } else {
+    }
+}
+
+complete_if :: (x: bool) {
+    if #complete x {
+    }
+}
+
+complete_directive :: (x: int) {
+    #if x == {
+        case 1;
+    }
+}
+
+missing_semicolon :: (x: int) {
+    if x == {
+        case 1 x += 1;
+    }
+}
+
+main :: () {}

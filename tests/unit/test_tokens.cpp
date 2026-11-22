@@ -10,6 +10,7 @@ TEST(token_kind_names_for_messages) {
     CHECK_STR(token_kind_name(TOKEN_NULL), "'null'");
     CHECK_STR(token_kind_name(TOKEN_CONTEXT), "'context'");
     CHECK_STR(token_kind_name(TOKEN_PUSH_CONTEXT), "'push_context'");
+    CHECK_STR(token_kind_name(TOKEN_CASE), "'case'");
     CHECK_STR(token_kind_name(TOKEN_LPAREN), "'('");
     CHECK_STR(token_kind_name(TOKEN_COLON_COLON), "'::'");
     CHECK_STR(token_kind_name(TOKEN_TRIPLE_DASH), "'---'");

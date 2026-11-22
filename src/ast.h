@@ -85,6 +85,8 @@ enum Ast_Kind : u8 {
     AST_BUILTIN,       // Ast_Builtin: a predeclared procedure of the resizable arrays (spec 3.17)
     AST_ENUM,          // Ast_Enum: Mode :: enum { A; B :: 5; }  Look :: enum_flags u8 { ... }
     AST_DOT_NAME,      // Ast_Dot_Name: .FREE, a member without its enum (spec 3.18)
+    AST_SWITCH,        // Ast_Switch: if x == { case 1; ... }  if #complete m == { ... } (spec 6.14)
+    AST_CASE,          // Ast_Case: case 1; statements  case; statements
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -503,6 +505,39 @@ struct Ast_If : Ast {
     Ast *condition;
     Ast_Block *then_block;
     Ast *else_part;  // an Ast_Block, an Ast_If (else if), or null (no else)
+};
+
+// A switch's case (spec 6.14): `case VALUE;` or `case;`, the default,
+// then the statements up to the next case or the switch's '}', and an
+// optional `#through;` last, which goes on into the next case's statements
+// without comparing its value. The statements are a block of their own,
+// and a scope (checker.cpp's check_switch); the #through isn't one of them.
+// pos is the 'case'.
+struct Ast_Case : Ast {
+    Ast *value;         // null for `case;`, the default
+    Ast_Block *block;   // its statements; pos the 'case', end the switch's '}', where the jump out of
+                        // the case is (spec 10.7)
+    Position through;   // the '#through' that ends it; line 0 when none
+};
+
+// if x == { case 1; ... } or if #complete x == { ... }: a switch (spec
+// 6.14). x is worked out once, and the case whose value equals it runs, or
+// the default, `case;`, or none. pos is the 'if'. A switch is a statement
+// of its own; `else if x == {` makes it the one statement of the else's
+// block (parser.cpp's parse_if).
+struct Ast_Switch : Ast {
+    Ast *value;               // the switched expression, worked out once
+    Position equals;          // its '==': a string comparison's null check is there
+    bool is_complete;         // #complete
+    Position complete;        // the '#complete', when is_complete
+    Array<Ast_Case *> cases;  // in source order, `case;` among them
+    Position end;             // the '}'
+    // The checker's (checker.cpp's check_switch):
+    Ast_Case *default_case;   // the `case;`, or null
+    bool checks_no_case;      // a value no case has stops the program (#complete without case;)
+    bool covers_every_value;  // #complete, checked cleanly, every member's value has a case
+    bool failed;              // the switched expression had an error, or a #complete switch doesn't
+                              // cover every value (said): taken not to go past (spec 6.11)
 };
 
 // while condition { ... }; pos is the 'while'.
