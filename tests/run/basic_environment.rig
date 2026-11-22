@@ -1,6 +1,6 @@
 // Basic's environment (issues #145 and #209): four variables bin/run-tests
-// sets for every program it runs, so this test passes only under the
-// runner, RIG_BASIC_TEST, RIG_BASIC_TEST_EMPTY, which is set to "",
+// sets for every program it runs (so this test passes only under the
+// runner): RIG_BASIC_TEST, RIG_BASIC_TEST_EMPTY, which is set to "",
 // RIG_BASIC_TEST_UTF8, whose value is outside ASCII, and
 // RIG_BASIC_TEST_日本, whose name is, all four read as the same UTF-8 on
 // both systems; PATH, which every system sets, read without printing it;

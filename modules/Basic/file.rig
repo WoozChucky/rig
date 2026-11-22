@@ -169,8 +169,8 @@ file_read :: (file: File, buffer: []u8) -> int {
 // 1 GiB, each going on where the last stopped, and a piece that fails, or
 // writes nothing, is false. On Linux what is written may stay in C's
 // buffer until the file is closed, which is when an error writing it out
-// shows: c_fclose gives it, which write_entire_file and append_to_file
-// read, and file_close doesn't.
+// shows: c_fclose gives it, which write_file_in_mode reads for
+// write_entire_file and append_to_file, and file_close doesn't.
 file_write :: (file: File, data: string) -> bool {
     if file.handle == null { return false; }
     if data.count <= 0 { return true; }
