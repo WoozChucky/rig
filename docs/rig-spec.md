@@ -3262,7 +3262,7 @@ ld.lld -o OUTPUT --eh-frame-hdr -m elf_x86_64
        LIBC/libm.so.6
 ```
 
-where `DIR` is the compiler's own directory and `LIBC` that directory of glibc's. Between the two, glibc's dynamic loader is linked as `libc.so`, a linker script, links it too, for the few names only the loader exports, such as `__tls_get_addr`: a program needs the loader as a library only when it uses one of them. `rig_runtime.o` is compiled by the build from the C of the repository's `runtime/linux.c`: what a C program has from glibc's development files, `crt1.o` and `libc_nonshared.a` (which `libc.so` adds to every link):
+where `DIR` is the compiler's own directory and `LIBC` that directory of glibc's. Between the two, glibc's dynamic loader is linked too, as `libc.so`'s linker script links it, for the few names only the loader exports, such as `__tls_get_addr`: a program needs the loader as a library only when it uses one of them. `rig_runtime.o` is compiled by the build from the C of the repository's `runtime/linux.c`: what a C program has from glibc's development files, `crt1.o` and `libc_nonshared.a` (which `libc.so` adds to every link):
 
 - `_start`, the program's entry point, as glibc's own: it calls glibc's `__libc_start_main` with `main` and the arguments and environment the system gives, which starts the C library, runs the program's initialisers, calls `main`, and calls `exit` with what `main` returns.
 - `atexit`, `at_quick_exit` and `pthread_atfork`, over glibc's `__cxa_atexit`, `__cxa_at_quick_exit` and `__register_atfork`, which `libc.so.6` exports in their place.
