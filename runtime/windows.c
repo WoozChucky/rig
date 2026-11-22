@@ -126,8 +126,10 @@ static char **utf8_arguments(int *count) {
 // app type, which says where the C runtime's own error messages go; the
 // narrow argv, which C code reads as __argv; and the narrow environment,
 // which getenv reads (main gets none: Rig's main takes no envp, and Basic
-// reads the environment wide, through GetEnvironmentVariableW). Either of
-// the last two failing (memory) ends the program at once, as there. Then
+// reads the environment wide, through GetEnvironmentVariableW). The narrow
+// argv failing (memory) ends the program at once, as there; so does the
+// narrow environment failing, which is Rig's own choice: Visual Studio's
+// start-up ignores that result and goes on without it. Then
 // main, with the arguments in UTF-8 when they can be had, and the narrow
 // ones as given when they can't; and exit with main's result, which runs
 // the exit handlers and flushes C's streams. A program's own procedure

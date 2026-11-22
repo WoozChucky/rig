@@ -7,7 +7,8 @@
 // static libraries gave a program), and the import libraries of the
 // Universal C Runtime, ucrtbase.dll, and of kernel32.dll, made from the
 // names they export. build.bat puts all four beside rig.exe; a program
-// imports the two DLLs, which every Windows has, and nothing else.
+// imports the two DLLs, which every Windows 10 and later has, and nothing
+// else.
 //
 // Linux: ld.lld, copied beside rig by build.sh, with glibc's C runtime
 // files (crt1.o, crti.o, crtn.o), libc and libm, dynamically linked.

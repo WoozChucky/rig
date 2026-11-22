@@ -43,7 +43,10 @@ typedef struct __crt_locale_pointers *_locale_t;
 
 // The options a C program has (corecrt_stdio_config.h's
 // _CRT_INTERNAL_PRINTF_* and _CRT_INTERNAL_SCANF_*, printf's without
-// their PRINTF_). Visual Studio's start-up code (msvcrt.lib's) sets
+// their PRINTF_, and three shortened further: LEGACY_TERMINATION is the
+// SDK's LEGACY_VSPRINTF_NULL_TERMINATION, STANDARD_SNPRINTF its
+// STANDARD_SNPRINTF_BEHAVIOR and SCANF_SECURE its SCANF_SECURECRT).
+// Visual Studio's start-up code (msvcrt.lib's) sets
 // printf's to LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING and scanf's to
 // SCANF_LEGACY_WIDE_SPECIFIERS, so these start so: a %s in a wide format,
 // wprintf's or swscanf's, is a UTF-16 string, as Microsoft's C has always

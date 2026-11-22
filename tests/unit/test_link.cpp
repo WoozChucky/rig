@@ -457,11 +457,17 @@ TEST(windows_c_runtime_extras_link_and_run) {
     // size would read all six letters and give 2); _scprintf's count, and
     // swprintf's; msvcrt.lib's aliases, _strcmpi for _stricmp and _stat for
     // _stat32; and _onexit, which gives back the handler it registers, and
-    // whose handler runs when main returns.
+    // whose handler runs when main returns. _stat of a 5-byte file, into a
+    // buffer filled with 170s, writes the size at offset 20 and nothing past
+    // 36 bytes, _stat32's size: _stat64i32 is 48 bytes and _stat64 56, so an
+    // alias to either would write over some of the 28 170s after it.
     Arena a = arena_make();
+    remove(".build/stat-test-file");
+    os_make_directory(str(".build"));
+    CHECK(os_write_file(str(".build/stat-test-file"), str("hello")));
     Ir_Module *m = lower_source(&a,
                                 "printf :: (format: *u8, ..) -> s32 #foreign libc;\n"
-                                "_snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
+                                "_snprintf ::(buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
                                 "snprintf :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
                                 "sprintf_s :: (buffer: *u8, size: u64, format: *u8, ..) -> s32 #foreign libc;\n"
                                 "_scprintf :: (format: *u8, ..) -> s32 #foreign libc;\n"
@@ -500,8 +506,13 @@ TEST(windows_c_runtime_extras_link_and_run) {
                                 "    n = sscanf_s(\"42 abcdef\", \"%d %s\", *x, word.data, cast(u32) 4);\n"
                                 "    printf(\"sscanf_s: %d %d [%.8s]\\n\", n, x, word.data);\n"
                                 "    st : [64]u8;\n"
-                                "    printf(\"_strcmpi: %d _stat: %d\\n\", _strcmpi(\"RIG\", \"rig\"), "
-                                "_stat(\".build/tests/no-such-file\", st.data));\n"
+                                "    for 0..63 { st[it] = 170; }\n"
+                                "    found := _stat(\".build/stat-test-file\", st.data);\n"
+                                "    kept : s32 = 0;\n"
+                                "    for 36..63 { if st[it] == 170 { kept += 1; } }\n"
+                                "    printf(\"_strcmpi: %d _stat: %d size %d %d %d %d, %d kept\\n\", "
+                                "_strcmpi(\"RIG\", \"rig\"), found, cast(s32) st[20], cast(s32) st[21], "
+                                "cast(s32) st[22], cast(s32) st[23], kept);\n"
                                 "    if cast(*void) _onexit(on_exit) == cast(*void) on_exit {\n"
                                 "        printf(\"_onexit: the handler\\n\");\n"
                                 "    } else {\n"
@@ -517,11 +528,12 @@ TEST(windows_c_runtime_extras_link_and_run) {
                                           "_snwprintf: 2 104 105 0\n"
                                           "swprintf: 2 104 105\n"
                                           "sscanf_s: 1 42 []\n"
-                                          "_strcmpi: 0 _stat: -1\n"
+                                          "_strcmpi: 0 _stat: 0 size 5 0 0 0, 28 kept\n"
                                           "_onexit: the handler\n"
                                           "onexit handler\n");
     CHECK_STR(without_cr(&a, result.err), "");
     CHECK_EQ(result.exit_code, 0);
+    remove(".build/stat-test-file");
     arena_free(&a);
 }
 
@@ -897,8 +909,8 @@ TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
 TEST(windows_programs_import_only_ucrtbase_and_kernel32) {
     // Issue #125 (spec 10.6): a program, its arguments read in UTF-8
     // included, imports the Universal C Runtime's ucrtbase.dll and
-    // kernel32.dll, which every Windows has, and nothing else: no
-    // VCRUNTIME140.dll, which only Visual Studio's redistributable
+    // kernel32.dll, which every Windows 10 and later has, and nothing
+    // else: no VCRUNTIME140.dll, which only Visual Studio's redistributable
     // installs, and no shell32.dll, which CommandLineToArgvW would add.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a, WIDE_ARGUMENTS);
@@ -930,8 +942,11 @@ TEST(windows_links_with_rigs_files_alone) {
     // looking). /VERBOSE has it say each file it reads, by the path it was
     // given, and then each archive member it reads, as NAME(MEMBER), NAME
     // being the archive's file name alone: here one of the three libraries
-    // beside rig.
+    // beside rig. The object, the program and its PDB are removed at the
+    // end, and at the start too, for what a stopped run left.
     Arena a = arena_make();
+    const char *made[] = {".build/verbose-link-test.obj", ".build/verbose-link-test.exe", ".build/verbose-link-test.pdb"};
+    for (const char *path : made) remove(path);
     os_make_directory(str(".build"));
     String object = str(".build/verbose-link-test.obj");
     String error = {};
@@ -972,6 +987,7 @@ TEST(windows_links_with_rigs_files_alone) {
         start = end + 1;
     }
     CHECK(ran == (reads > 0));
+    for (const char *path : made) remove(path);
     array_free(&argv);
     array_free(&objects);
     arena_free(&a);
