@@ -1,6 +1,7 @@
 break enums.rig:21
 run
 print m
+print (int) m
 print s
 print (int) s
 print f
@@ -12,3 +13,4 @@ ptype enum Small
 break enums.rig:26
 continue
 print m
+print (int) m
