@@ -16,7 +16,7 @@
 
 - **Repository rules:**
   - C-style C++23, no STL; `-Wall -Wextra` with no warnings, in debug and `release` builds, on both hosts. The runtime's C is built with `-Wall -Wextra` too. No source file is added.
-  - Code is study material. Each changed piece says what it does and why, in the style of the comments around it. Comments wrap as their neighbours do: at most 76 columns in `runtime/*.c`, `src/link.h`, `src/link.cpp` and `scripts/get_llvm.bat`'s header, about 76 to 78 elsewhere; code lines at most 120.
+  - Code is study material. Each changed piece says what it does and why, in the style of the comments around it. Comments wrap as their neighbours do: at most 77 columns in `runtime/*.c`, `src/link.h`, `src/link.cpp` and `scripts/get_llvm.bat`'s header (most lines 76 or fewer; `link.cpp`, `windows.c` and `get_llvm.bat` have a few of 77), about 76 to 78 elsewhere; code lines at most 120.
   - The spec is `docs/rig-spec.md`; this plan doesn't change it. The old design doc is no longer updated.
   - The root `README.md` stays concise and is not touched (nothing in it uses the changed wording). Feature details go in the spec and `site/features.md`.
   - No attribution of any tool: never name an assistant, the company that makes one, or the kind of tool it is, anywhere in the repository (code, comments, tests, docs, commit messages, the PR), and no trailers or session links.
@@ -85,10 +85,10 @@
 - Modify: `src/link.h` (`39-47`, `55-76`), `src/link.cpp` (`94-96`, `139-141`, `145-148`, `162`), `src/link_windows.cpp` (`9-20`), `src/link_linux.cpp` (`7-24`)
 - Modify: `runtime/windows.c` (`152`)
 - Modify: `build.sh` (after `43`; `126-130`), `build.bat` (`54-55`, `116`)
-- Test: `tests/unit/test_link.cpp` (`26-61`, `63-87`, `392-394`, `526`, `1297-1356`, `1550-1607`, `1635-1708`)
+- Test: `tests/unit/test_link.cpp` (`26-61`, `63-90`, `392-394`, `526`, `1297-1356`, `1550-1607`, `1635-1711`)
 
 **Interfaces:**
-- Produces: `Array<String> link_command_windows(Arena *a, Array<String> rig_files, Array<String> objects, String output);` and `Array<String> link_command_linux(Arena *a, Array<String> rig_files, String libc_dir, Array<String> objects, String output);` (split before `String output` as today, to stay under 120 columns). Test-only: `static u64 le_u16(String bytes, u64 at)`, `le_u32`, `[[maybe_unused]] static u64 le_u64`, `static String zero_ended_string(String bytes, u64 at)`.
+- Produces: `Array<String> link_command_windows(Arena *a, Array<String> rig_files, Array<String> objects, String output);` and `Array<String> link_command_linux(Arena *a, Array<String> rig_files, String libc_dir, Array<String> objects, String output);` (Linux's split before `String output` as today, to stay under 120 columns; Windows' fits on one line, 109 columns in `link.cpp`). Test-only: `static u64 le_u16(String bytes, u64 at)`, `le_u32`, `[[maybe_unused]] static u64 le_u64`, `static String zero_ended_string(String bytes, u64 at)`.
 
 - [ ] **Step 1: Baseline.** Build and run everything on both hosts in the worktree; all pass. These tests must pass unchanged in their expectations; no new test (nothing rig does changes, and the expected argv arrays are the proof).
 - [ ] **Step 2: The file names once** (Decision 2).
@@ -285,7 +285,7 @@ Line numbers are `main`'s; Task 1 moved some in `link.cpp`, `link.h` and `test_l
   - `site/install.md:206`: "Then save hello world as `hello.rig`, in a folder of your own:" becomes "To check that Rig works, whatever its release, save hello world as `hello.rig`, in a folder of your own:".
   - `site/features.md:21` and `site/index.md:28`: "linked by Rig's own linker and runtime against" becomes "linked by the linker and runtime that ship with Rig against".
   - `CONTRIBUTING.md:11`: "it links programs with its own linker and runtime (spec 10.6)." becomes "it links programs with the linker and runtime that ship with Rig, which `build.bat` puts beside it (spec 10.6)."
-- [ ] **Step 7: Checks.** `grep -rn "own linker" site/*.md CONTRIBUTING.md README.md` and `grep -rn "check_requirements\|what Rig needs" site/public` find nothing; `grep -n "C runtime calls\|C runtime that calls\|C runtime always passes" src/lower.cpp src/llvm_backend.cpp` finds nothing; `grep -n "ucrt.lib" src/ir.cpp` finds nothing; `awk 'FNR<=30 && length>76' runtime/linux.c` and `awk 'FNR>=105 && FNR<=135 && length>76' src/link.cpp` print nothing; Fact 3's grep still finds nothing.
+- [ ] **Step 7: Checks.** `grep -rn "own linker" site/*.md CONTRIBUTING.md README.md` and `grep -rn "check_requirements\|what Rig needs" site/public` find nothing; `grep -n "C runtime calls\|C runtime that calls\|C runtime always passes" src/lower.cpp src/llvm_backend.cpp` finds nothing; `grep -n "ucrt.lib" src/ir.cpp` finds nothing; `awk 'FNR<=30 && /\/\// && length>76' runtime/linux.c` and `awk 'FNR>=105 && FNR<=135 && /\/\// && length>76' src/link.cpp` print nothing (comment lines only: `link.cpp:109`, the `/PDB:` line, is code of 86 columns); Fact 3's grep still finds nothing.
 - [ ] **Step 8: Run all tests** on both hosts, `check.js` included; `scripts/test_install.sh` in WSL and `scripts\test_install.ps1` on Windows pass; `cd site && npm ci && npm run docs:build` builds. Build `release` on both and run both test programs.
 - [ ] **Step 9: Commit** `Polish the wording left by linking without Visual Studio or libc6-dev`. Then run the independent review, fixing its findings as the work flow says. The PR stays a draft.
 
