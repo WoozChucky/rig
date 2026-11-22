@@ -57,8 +57,8 @@ settings() {
 
 usage() {
     cat <<'EOF'
-Installs Rig for your user, on Linux x86-64: the compiler, its linker and the
-modules that ship with it.
+Installs Rig for your user, on Linux x86-64: the compiler, its linker, Rig's
+runtime and the modules that ship with it.
 
   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh
   curl -fsSL https://woozchucky.github.io/rig/install.sh | sh -s -- OPTIONS
@@ -67,8 +67,8 @@ It downloads the latest release of Rig, checks its SHA-256, unpacks it into
 ~/.local/share/rig and links ~/.local/bin/rig to it, puts ~/.local/bin on
 your PATH (a line added to ~/.profile and ~/.bashrc, and ~/.zshrc if you
 have one) unless it is there already, installs the VS Code extension when
-`code` is on your PATH, and builds hello world to check that your system has
-what Rig needs. Run it again to upgrade.
+`code` is on your PATH, and builds hello world to check that Rig works. Run
+it again to upgrade.
 
 Options:
   --version VERSION  install that release (such as 0.2.0) instead of the latest
@@ -272,7 +272,7 @@ remove_path_lines() {
 # system has, so a failed build is a bug to report. An older one, 0.3.0
 # or before, links with glibc's development files, and works once they
 # are installed: it says to install them.
-check_requirements() {
+check_hello_world() {
     hello_dir="$work/hello"
     mkdir "$hello_dir" || die "couldn't make $hello_dir"
     cat > "$hello_dir/hello.rig" <<'EOF'
@@ -374,7 +374,7 @@ install_rig() {
     mkdir "$work/unpacked" || die "couldn't make $work/unpacked"
     tar -xzf "$work/$archive" -C "$work/unpacked" || die "couldn't unpack $archive"
     [ -x "$work/unpacked/rig" ] || die "$archive has no rig in it"
-    # Whether this release carries Rig's runtime, for check_requirements:
+    # Whether this release carries Rig's runtime, for check_hello_world:
     # noted here, from the archive, and not from the installed folder,
     # where the files are moved over the old ones and none is deleted: an
     # older release installed over a newer one leaves the newer one's
@@ -416,8 +416,8 @@ install_rig() {
         fi
     fi
 
-    # 7. Check the requirements, then say how it went.
-    check_requirements
+    # 7. Check that it builds a program, then say how it went.
+    check_hello_world
     say "$("$share_dir/rig" version)"
     say ""
     # The shell files are read when a shell starts: this terminal hasn't

@@ -109,11 +109,11 @@ Array<String> link_command_windows(Arena *a, Array<String> rig_files, Array<Stri
     array_add(&argv, string_printf(a, "/PDB:" STR_FMT, STR_ARG(pdb_path(a, output))));
     // No library but the three given by path below. lld-link, like
     // Microsoft's link.exe, also reads the libraries an object names as its
-    // defaults, and finds a library named without a path in Visual
-    // Studio's and the Windows SDK's directories when they're installed,
-    // even with no LIB variable set: /NODEFAULTLIB, and every library by
-    // path, keep it from reading anything of theirs, so a program links the
-    // same with them or without.
+    // defaults; and lld-link, unlike link.exe, finds a library named
+    // without a path in Visual Studio's and the Windows SDK's directories
+    // when they're installed, even with no LIB variable set. /NODEFAULTLIB,
+    // and every library by path, keep it from reading anything of theirs,
+    // so a program links the same with them or without.
     array_add(&argv, str("/NODEFAULTLIB"));
     // Nothing from the environment either: without /lldignoreenv, lld-link
     // adds the options in LINK before its command line's and those in
@@ -121,10 +121,12 @@ Array<String> link_command_windows(Arena *a, Array<String> rig_files, Array<Stri
     // directories, so a user with one of them set would get another
     // program, or none.
     array_add(&argv, str("/lldignoreenv"));
-    // The start-up, Rig's runtime's (runtime/windows.c). Named, as the
-    // linker would take mainCRTStartup by default for a console program
-    // anyway, so that the object defining it is always linked, and with it
-    // its directives, msvcrt.lib's aliases.
+    // The start-up, Rig's runtime's (runtime/windows.c). Named so that the
+    // command line says where the program starts, whatever the linker's
+    // default; lld-link would infer mainCRTStartup anyway for a console
+    // program that defines main, as every Rig program does, so the object
+    // defining it, and with it its directives, msvcrt.lib's aliases, is
+    // linked either way.
     array_add(&argv, str("/ENTRY:mainCRTStartup"));
     for (s64 i = 0; i < objects.count; i++) array_add(&argv, objects[i]);
     // Rig's runtime: the start-up, the stack probe, the printf family as

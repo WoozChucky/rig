@@ -90,8 +90,8 @@ if ($true) { & {
 
     function Show-Usage {
         Write-Host @'
-Installs Rig for your user, on Windows x64: the compiler, its linker and the
-modules that ship with it.
+Installs Rig for your user, on Windows x64: the compiler, its linker, Rig's
+runtime and the modules that ship with it.
 
   irm https://woozchucky.github.io/rig/install.ps1 | iex
   & ([scriptblock]::Create((irm https://woozchucky.github.io/rig/install.ps1))) OPTIONS
@@ -99,8 +99,7 @@ modules that ship with it.
 It downloads the latest release of Rig, checks its SHA-256, unpacks it into
 %LOCALAPPDATA%\Programs\rig, adds that folder to your user PATH unless it is
 there already, installs the VS Code extension when `code` is on your PATH,
-and builds hello world to check that your computer has what Rig needs. Run
-it again to upgrade.
+and builds hello world to check that Rig works. Run it again to upgrade.
 
 Options:
   -Version VERSION  install that release (such as 0.2.0) instead of the latest

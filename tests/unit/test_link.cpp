@@ -1473,7 +1473,7 @@ TEST(windows_the_c_runtimes_argc_still_counts_its_narrow_argv) {
     // the wide ones, its name, a＂ in UTF-8 and b. __argv stays the narrow
     // array, as a C program has it: the program exits with 14 if __argv's
     // first string is main's, the start-up's UTF-8 copy, and, in code page
-    // 1252, with 15 unless __argv holds the two narrow arguments.
+    // 1252, with 15 unless __argv holds the name and one narrow argument.
     Arena a = arena_make();
     Ir_Module *m = lower_with_preload(&a,
                                       "exit :: (status: s32) #foreign libc;\n"

@@ -28,7 +28,7 @@
 
 // The first candidate directory holding both libc.so.6 and libm.so.6,
 // glibc's shared libraries. False with a sentence naming the candidates.
-// Rig passes linux_libc_candidates (link_linux.cpp).
+// link_linux.cpp passes linux_libc_candidates.
 bool find_libc_directory(Arena *a, Array<String> candidates, String *dir, String *error);
 
 // The directories Rig looks for glibc in, in order:

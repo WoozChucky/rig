@@ -108,7 +108,7 @@ Ir_Instr *ir_emit_call_indirect(Ir_Proc *p, s32 block, s32 callee, Ir_Proc *sign
 // The interpreter calls the compiler's own copies of C17's seven,
 // timespec_get to ctime, which are the headers' inline functions, so the
 // 64-bit ones (interp_c_functions.cpp). The rest it looks up in ucrtbase.dll
-// by their 64-bit names, which ucrtbase.dll exports as ucrt.lib does: a
+// by their 64-bit names, those a compiled program gets from ucrtbase.lib: a
 // program's #run gets the 64-bit functions the compiled program does. It
 // calls the compiler's own hypotf too, the header's inline function over
 // the static _hypotf, and looks a program's own _hypotf up in ucrtbase.dll.

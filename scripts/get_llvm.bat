@@ -5,11 +5,15 @@ rem needs:
 rem   - the C API's headers, the static libraries and llvm-config, which
 rem     Rig's compiler is compiled against and linked with;
 rem   - lld-link, the linker build.bat puts beside rig.exe, with which
-rem     rig.exe links every program;
-rem   - clang, the compiler that builds Rig (build.bat): bin\clang++.exe, the
-rem     one name build.bat runs (it compiles C++ and links C++'s runtime),
-rem     and lib\clang\MAJOR\include, its own headers (stddef.h, stdarg.h,
-rem     the intrinsics...), which it finds from where it's installed
+rem     rig.exe links every program, and which build.bat also runs as
+rem     lld-link /lib, LLVM's lib.exe, to make rig_runtime.lib, ucrtbase.lib
+rem     and kernel32.lib;
+rem   - clang, the compiler that builds Rig and its runtime (build.bat):
+rem     bin\clang++.exe, the one name build.bat runs, for Rig (it compiles
+rem     C++ and links C++'s runtime) and, with -x c, for runtime\windows.c
+rem     and runtime\windows_stdio.c (bin\rig_runtime.lib); and
+rem     lib\clang\MAJOR\include, its own headers (stddef.h, stdarg.h, the
+rem     intrinsics...), which it finds from where it's installed
 rem     (bin\..\lib\clang\MAJOR). The release's clang.exe and clang-cl.exe
 rem     are the same program under other names, but on Windows each is a
 rem     separate copy of it (about 113 MB), not a link, and nothing runs

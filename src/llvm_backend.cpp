@@ -1846,12 +1846,12 @@ static LLVMTypeRef byte_global(LLVMContextRef c, Arena *a, Ir_Module *m, Ir_Glob
 // clash with C names, so the program may well have both (spec 7.6), and
 // the optimiser, which knows C's functions by name, mustn't take the
 // program's for C's (mark_definition). Not every symbol of the program is
-// internal, though: main is exported, the entry point the C runtime calls
-// by that name, and renamed main.1 the program wouldn't link. So the
-// checker refuses main as a C name, and the names starting with __rig_, of
-// the runtime's procedures, which a foreign declaration would take
-// (__rig_panic is defined before this, and the declaration would be the
-// one renamed): check_c_name.
+// internal, though: main is exported, the entry point the program's
+// start-up code calls by that name, and renamed main.1 the program
+// wouldn't link. So the checker refuses main as a C name, and the names
+// starting with __rig_, of the runtime's procedures, which a foreign
+// declaration would take (__rig_panic is defined before this, and the
+// declaration would be the one renamed): check_c_name.
 //
 // One C function is one declaration. A C name declared already, by the
 // runtime (exit, say) or by another foreign procedure (free :: (p: *void)
