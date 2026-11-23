@@ -1,0 +1,85 @@
+// Edges of the switch (issue #222, spec 6.14), compiled and interpreted:
+// a u64 value above s64's maximum, whose case's bits are negative as an
+// s64's; strings with zero bytes in them, and strings sharing a start but
+// not a count; `case;` written first; a return out of a case, which runs
+// the case's defers and then the procedure's; and a switch in a defer,
+// lowered once for each way out of its block, a #through in it.
+#import "Basic";
+
+huge :: (x: u64) -> string {
+    if x == {
+        case 1;                     return "one";
+        case 0x8000_0000_0000_0001; return "just above s64's maximum";
+        case 0xFFFF_FFFF_FFFF_FFFF; return "u64's maximum";
+        case;                       return "other";
+    }
+}
+
+bytes :: (s: string) -> string {
+    if s == {
+        case "a\0b"; return "a0b";
+        case "a\0c"; return "a0c";
+        case "a";    return "a";
+        case "ab";   return "ab";
+        case "abc";  return "abc";
+        case "\0";   return "zero";
+        case;        return "other";
+    }
+}
+
+default_first :: (n: int) -> string {
+    if n == {
+        case;   return "default";
+        case 1; return "one";
+        case 2; return "two";
+    }
+}
+
+returns :: (n: int) -> int {
+    defer print("the procedure's defer\n");
+    if n == {
+        case 1;
+            defer print("case 1's defer\n");
+            print("returning from case 1\n");
+            return 10;
+        case 2;
+            defer print("case 2's defer\n");
+    }
+    print("after the switch\n");
+    return 0;
+}
+
+deferred :: (n: int, way: int) {
+    defer if n == {
+        case 1; print("deferred 1, "); #through;
+        case 2; print("deferred 2\n");
+        case;   print("deferred default\n");
+    }
+    if way == 0 { print("early: "); return; }
+    for 1..2 {
+        if way == it { print("from a loop: "); return; }
+    }
+    print("at the end: ");
+}
+
+main :: () {
+    big : u64 = 0x8000_0000_0000_0001;
+    print("{} | {} | {} | {}\n", huge(big), huge(0xFFFF_FFFF_FFFF_FFFF), huge(1), huge(0x8000_0000_0000_0000));
+    print("{} {} {} {} {} {} {} {} {}\n", bytes("a\0b"), bytes("a\0c"), bytes("a\0d"), bytes("a"), bytes("ab"),
+          bytes("abc"), bytes("abcd"), bytes("\0"), bytes(""));
+    made : [3]u8;
+    made[0] = 97;
+    made[1] = 0;
+    made[2] = 99;
+    v : string;
+    v.data = *made[0];
+    v.count = 3;
+    print("made at run time: {}\n", bytes(v));
+    print("{} {} {}\n", default_first(1), default_first(2), default_first(7));
+    print("{}\n", returns(1));
+    print("{}\n", returns(2));
+    deferred(1, 0);
+    deferred(2, 1);
+    deferred(1, 2);
+    deferred(9, 5);
+}

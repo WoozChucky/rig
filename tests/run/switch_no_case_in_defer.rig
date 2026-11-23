@@ -1,0 +1,23 @@
+// A #complete switch with no case; in a defer is lowered once for each way
+// out of its block, each copy with its own no-case check: a value no
+// member has stops the program on the way out, at the switch's `if`
+// (issue #222, spec 6.12, 6.14, 8.1). Compiled and interpreted.
+#import "Basic";
+
+Mode :: enum { A; B; }
+
+leave :: (m: Mode, early: bool) {
+    defer if #complete m == {
+        case .A; print("deferred a\n");
+        case .B; print("deferred b\n");
+    }
+    if early { print("early\n"); return; }
+    print("at the end\n");
+}
+
+main :: () {
+    leave(.A, true);
+    leave(.B, false);
+    leave(cast(Mode) 5, false);
+    print("never\n");
+}
