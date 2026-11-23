@@ -1,7 +1,10 @@
 // Mistakes in a switch's expression, its cases and #complete (issue
-// #222, spec 6.14): one a line, each reported once.
+// #222, spec 6.14), each reported once; a line may hold more than one.
+// The #complete switch on Shared that names ALSO_FIRST for FIRST has
+// none: a case of either covers their one value.
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
+Look :: enum_flags u8 { A; B; }
 Vec2 :: struct { x: float; y: float; }
 ONE :: 1;
 NAME :: "rig";
@@ -15,6 +18,7 @@ main :: () {
     small : u8;
     m : Mode;
     s : Shared;
+    look : Look;
     p : *u8;
     word := "a";
     yes := true;
@@ -37,13 +41,15 @@ main :: () {
     if s == { case .FIRST; case .ALSO_FIRST; }
     if word == { case NAME; case "rig"; case word; }
     if yes == { case true; case false; case true; }
-    if p == { case null; case LITERAL; case null; }
+    if p == { case null; case LITERAL; case p; case null; }
     if #complete n == { case 1; }
     if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; }
     if #complete m == { case .ALLOCATE; case; }
     if #complete s == { case .ALSO_FIRST; case .SECOND; }
     if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; case .FRE; }
     if #complete s == { case .SECOND; }
+    if #complete look == { case .A; }
     if 2.5 == { }
     if 1e300 == { }
+    if null == { }
 }

@@ -9904,11 +9904,13 @@ TEST(a_switchs_cases_take_its_type) {
     // Each case's value converts to the switched expression's type, as an
     // assignment's value does: .FREE takes the enum, an untyped constant
     // the integer type, .A | .B the flags type, 0 its empty set, null the
-    // pointer type. A constant switched on has its default type.
+    // pointer type, a string constant the string. A constant switched on
+    // has its default type.
     Arena a = arena_make();
     Checked c = check_src(&a, "Mode :: enum { ALLOCATE; RESIZE; FREE; }\n"
                               "Look :: enum_flags u8 { A; B; }\n"
                               "LIMIT :: 3;\n"
+                              "NAME :: \"rig\";\n"
                               "main :: () {\n"
                               "    m : Mode;\n"
                               "    f : Look;\n"
@@ -9920,6 +9922,8 @@ TEST(a_switchs_cases_take_its_type) {
                               "    if LIMIT == { case 3; }\n"
                               "    if p == { case null; case; }\n"
                               "    if true == { case true; case false; }\n"
+                              "    word : string;\n"
+                              "    if word == { case \"\"; case NAME; case \"other\"; case; }\n"
                               "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK(c.ok);
@@ -9945,6 +9949,12 @@ TEST(a_switchs_cases_take_its_type) {
     if (pointer && pointer->cases.count == 2) {
         CHECK(pointer->default_case == pointer->cases[1]);
         CHECK_STR(type_name(&a, pointer->cases[0]->value->type), "*int");
+    }
+    Ast_Switch *text = switch_at(&c, 11);
+    CHECK(text);
+    if (text && text->cases.count == 4) {
+        for (s64 k = 0; k < 3; k++) CHECK_STR(type_name(&a, text->cases[k]->value->type), "string");
+        CHECK(text->default_case == text->cases[3]);
     }
     for (s64 i = 4; i < 10; i++) {
         Ast_Switch *s = switch_at(&c, i);
@@ -10018,9 +10028,9 @@ TEST(each_case_is_a_scope_of_its_own) {
 TEST(switches_reach_their_end_as_spec_6_11_says) {
     // tests/errors/switch_reaching_the_end.rig's procedures: the five that
     // get past their switch to their '}' are reported there, and only they;
-    // the two whose switch is failed get only the switch's own message.
+    // the three whose switch is failed get only the switch's own message.
     Arena a = arena_make();
-    String text;
+    String text = {};
     CHECK(os_read_file(&a, str("tests/errors/switch_reaching_the_end.rig"), &text));
     CHECK_STR(check_source(&a, string_cstr(&a, text)),
               "17:1: 'no_default' must return a value on every path, and this one reaches its end\n"
@@ -10029,6 +10039,7 @@ TEST(switches_reach_their_end_as_spec_6_11_says) {
               "54:1: 'loop_break' must return a value on every path, and this one reaches its end\n"
               "61:1: 'middle_reaches' must return a value on every path, and this one reaches its end\n"
               "64:8: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'\n"
-              "70:8: this switch is #complete, but 'Mode.B' has no case\n");
+              "70:8: this switch is #complete, but 'Mode.B' has no case\n"
+              "78:15: 'Mode' has no member 'C'\n");
     arena_free(&a);
 }

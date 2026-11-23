@@ -4159,6 +4159,23 @@ TEST(parses_switches) {
         CHECK_EQ(sw->cases.count, 0);
     }
     token_list_free(list);
+    // An else if's switch is wrapped in a block at that 'if', ending at the
+    // switch's '}', where the if chain's jump out of the block is.
+    s = first_body_statement(&a, "if n == 1 { } else if n == { case 2; }", &list);
+    CHECK(s && s->kind == AST_IF);
+    if (s && s->kind == AST_IF) {
+        Ast *part = ((Ast_If *)s)->else_part;
+        CHECK(part && part->kind == AST_BLOCK);
+        if (part && part->kind == AST_BLOCK) {
+            Ast_Block *block = (Ast_Block *)part;
+            CHECK_EQ(block->pos.line, 2);
+            CHECK_EQ(block->pos.col, 24);
+            CHECK_EQ(block->end.line, 2);
+            CHECK_EQ(block->end.col, 42);
+            CHECK(block->statements.count == 1 && block->statements[0]->kind == AST_SWITCH);
+        }
+    }
+    token_list_free(list);
     arena_free(&a);
 }
 

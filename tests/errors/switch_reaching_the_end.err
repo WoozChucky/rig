@@ -19,3 +19,6 @@ tests/errors/switch_reaching_the_end.rig:64:8: error: a switch needs an integer,
 tests/errors/switch_reaching_the_end.rig:70:8: error: this switch is #complete, but 'Mode.B' has no case
         if #complete m == {
            ^
+tests/errors/switch_reaching_the_end.rig:78:15: error: 'Mode' has no member 'C'
+            case .C; return 2;
+                  ^

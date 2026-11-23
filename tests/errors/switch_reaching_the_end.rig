@@ -5,8 +5,8 @@
 // end, the last case or any other; a #through goes on into the next
 // case, which is judged in its turn; and a break in a case leaves the
 // loop around the switch. A switch whose message was said (on a float, or
-// #complete and missing a member) is taken not to get past, so that
-// message is the only one.
+// #complete and missing a member or with a case's error) is taken not to
+// get past, so that message is the only one.
 Mode :: enum { A; B; }
 
 no_default :: (n: int) -> int {
@@ -69,6 +69,13 @@ on_a_float :: (f: float64) -> int {
 incomplete :: (m: Mode) -> int {
     if #complete m == {
         case .A; return 1;
+    }
+}
+
+case_error :: (m: Mode) -> int {
+    if #complete m == {
+        case .A; return 1;
+        case .C; return 2;
     }
 }
 

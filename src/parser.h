@@ -235,13 +235,14 @@
 // a top-level name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
-// 6.1), and a condition needs no parentheses: the body's '{' ends it. A for
-// whose first expression the body's '{' follows, not '..', goes over that
-// expression's elements; with no iterator named, a name and then anything
-// else but a #load (`for i 0..9`, `for x in 0..9`) is "expected ':' after
-// the iterator's name, as in for i: 0..9", at what came instead of the ':';
-// anything else is "expected '..' or the loop's '{'", or a #load misplaced
-// (below).
+// 6.1), and a condition needs no parentheses: the body's '{' ends it, or
+// an '==' right before a '{', which makes the if a switch (parse_switch,
+// spec 6.14). A for whose first expression the body's '{' follows, not
+// '..', goes over that expression's elements; with no iterator named, a
+// name and then anything else but a #load or an '==' before a '{'
+// (`for i 0..9`, `for x in 0..9`) is "expected ':' after the iterator's
+// name, as in for i: 0..9", at what came instead of the ':'; anything else
+// is "expected '..' or the loop's '{'", or a #load misplaced (below).
 //
 // `defer S` (spec 6.12) runs S when the block the defer is written in is
 // left, by any way out; `defer { ... }` runs a block, a block being a

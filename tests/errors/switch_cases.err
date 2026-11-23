@@ -1,75 +1,84 @@
-tests/errors/switch_cases.rig:21:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'
+tests/errors/switch_cases.rig:25:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'
         if f == { }
            ^
-tests/errors/switch_cases.rig:22:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'Vec2'
+tests/errors/switch_cases.rig:26:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'Vec2'
         if v == { }
            ^
-tests/errors/switch_cases.rig:23:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not '[]int'
+tests/errors/switch_cases.rig:27:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not '[]int'
         if values == { }
            ^
-tests/errors/switch_cases.rig:24:8: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/switch_cases.rig:28:8: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         if .FREE == { }
            ^
-tests/errors/switch_cases.rig:26:14: error: a case's value must be known while compiling
+tests/errors/switch_cases.rig:30:14: error: a case's value must be known while compiling
             case n;
                  ^
-tests/errors/switch_cases.rig:27:14: error: a value of type 'string' doesn't convert to 'int' implicitly
+tests/errors/switch_cases.rig:31:14: error: a value of type 'string' doesn't convert to 'int' implicitly
             case "a";
                  ^
-tests/errors/switch_cases.rig:28:14: error: '.FREE' needs an enum type, not 'int'
+tests/errors/switch_cases.rig:32:14: error: '.FREE' needs an enum type, not 'int'
             case .FREE;
                  ^
-tests/errors/switch_cases.rig:30:14: error: this value already has a case at tests/errors/switch_cases.rig:29:14
+tests/errors/switch_cases.rig:34:14: error: this value already has a case at tests/errors/switch_cases.rig:33:14
             case ONE;
                  ^
-tests/errors/switch_cases.rig:32:9: error: this switch already has a 'case;' at tests/errors/switch_cases.rig:31:9
+tests/errors/switch_cases.rig:36:9: error: this switch already has a 'case;' at tests/errors/switch_cases.rig:35:9
             case;
             ^
-tests/errors/switch_cases.rig:34:23: error: 'break' is only allowed inside a loop
+tests/errors/switch_cases.rig:38:23: error: 'break' is only allowed inside a loop
         if n == { case 5; break; }
                           ^
-tests/errors/switch_cases.rig:35:24: error: 300 doesn't fit in 'u8'
+tests/errors/switch_cases.rig:39:24: error: 300 doesn't fit in 'u8'
         if small == { case 300; }
                            ^
-tests/errors/switch_cases.rig:36:21: error: 'Mode' has no member 'FRE'
+tests/errors/switch_cases.rig:40:21: error: 'Mode' has no member 'FRE'
         if m == { case .FRE; }
                         ^
-tests/errors/switch_cases.rig:37:33: error: this value already has a case at tests/errors/switch_cases.rig:37:20
+tests/errors/switch_cases.rig:41:33: error: this value already has a case at tests/errors/switch_cases.rig:41:20
         if s == { case .FIRST; case .ALSO_FIRST; }
                                     ^
-tests/errors/switch_cases.rig:38:34: error: this value already has a case at tests/errors/switch_cases.rig:38:23
+tests/errors/switch_cases.rig:42:34: error: this value already has a case at tests/errors/switch_cases.rig:42:23
         if word == { case NAME; case "rig"; case word; }
                                      ^
-tests/errors/switch_cases.rig:38:46: error: a case's value must be known while compiling
+tests/errors/switch_cases.rig:42:46: error: a case's value must be known while compiling
         if word == { case NAME; case "rig"; case word; }
                                                  ^
-tests/errors/switch_cases.rig:39:45: error: this value already has a case at tests/errors/switch_cases.rig:39:22
+tests/errors/switch_cases.rig:43:45: error: this value already has a case at tests/errors/switch_cases.rig:43:22
         if yes == { case true; case false; case true; }
                                                 ^
-tests/errors/switch_cases.rig:40:31: error: a pointer's case can only be null, as in case null;
-        if p == { case null; case LITERAL; case null; }
+tests/errors/switch_cases.rig:44:31: error: a pointer's case can only be null, as in case null;
+        if p == { case null; case LITERAL; case p; case null; }
                                   ^
-tests/errors/switch_cases.rig:40:45: error: this value already has a case at tests/errors/switch_cases.rig:40:20
-        if p == { case null; case LITERAL; case null; }
+tests/errors/switch_cases.rig:44:45: error: a pointer's case can only be null, as in case null;
+        if p == { case null; case LITERAL; case p; case null; }
                                                 ^
-tests/errors/switch_cases.rig:41:8: error: #complete needs an enum, not 'int'
+tests/errors/switch_cases.rig:44:53: error: this value already has a case at tests/errors/switch_cases.rig:44:20
+        if p == { case null; case LITERAL; case p; case null; }
+                                                        ^
+tests/errors/switch_cases.rig:45:8: error: #complete needs an enum, not 'int'
         if #complete n == { case 1; }
            ^
-tests/errors/switch_cases.rig:42:8: error: this switch is #complete, but 'Mode.FREE_ALL' has no case
+tests/errors/switch_cases.rig:46:8: error: this switch is #complete, but 'Mode.FREE_ALL' has no case
         if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; }
            ^
-tests/errors/switch_cases.rig:43:8: error: this switch is #complete, but 'Mode.RESIZE', 'Mode.FREE' and 'Mode.FREE_ALL' have no case
+tests/errors/switch_cases.rig:47:8: error: this switch is #complete, but 'Mode.RESIZE', 'Mode.FREE' and 'Mode.FREE_ALL' have no case
         if #complete m == { case .ALLOCATE; case; }
            ^
-tests/errors/switch_cases.rig:45:73: error: 'Mode' has no member 'FRE'
+tests/errors/switch_cases.rig:49:73: error: 'Mode' has no member 'FRE'
         if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; case .FRE; }
                                                                             ^
-tests/errors/switch_cases.rig:46:8: error: this switch is #complete, but 'Shared.FIRST' has no case
+tests/errors/switch_cases.rig:50:8: error: this switch is #complete, but 'Shared.FIRST' has no case
         if #complete s == { case .SECOND; }
            ^
-tests/errors/switch_cases.rig:47:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
+tests/errors/switch_cases.rig:51:8: error: this switch is #complete, but 'Look.B' has no case
+        if #complete look == { case .A; }
+           ^
+tests/errors/switch_cases.rig:52:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
         if 2.5 == { }
            ^
-tests/errors/switch_cases.rig:48:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
+tests/errors/switch_cases.rig:53:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
         if 1e300 == { }
+           ^
+tests/errors/switch_cases.rig:54:8: error: null needs a pointer type, as in p : *int = null;
+        if null == { }
            ^
