@@ -4,6 +4,11 @@ $1 = 4
 18	            putchar(51);
 21	    }
 22	    putchar(10);
+No symbol "twice" in current context.
+!11	        case 1;
 !12	            putchar(49);
+!13	        case 2;
+!17	        case 3;
+!19	        case;
 !20	            putchar(48);
 !.debug_names not created by gdb

@@ -7,3 +7,4 @@ next
 next
 next
 next
+print twice
