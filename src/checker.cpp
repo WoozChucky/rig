@@ -1940,13 +1940,16 @@ static String case_bytes(Ast *value) {
     return holder && holder->kind == AST_STRING ? ((Ast_String *)holder)->value : String{};
 }
 
-// Whether two case values of type t, each a checked constant, are the same
-// value: a scalar's 64 bits (Ast.constant, which a converted constant
-// holds as its type's), so `case 1;` and `case ONE;` are, and two members
-// sharing a value; a string's bytes, so `case NAME;` and `case "rig";` are.
-static bool same_case_value(Type *t, Ast *a, Ast *b) {
-    if (t == &type_string) return string_eq(case_bytes(a), case_bytes(b));
-    return a->constant == b->constant;
+// The key of a case's value of type t, a checked constant, in a switch's
+// table of the values it has seen (check_switch): two values are the same
+// when their keys are. A string's is its bytes, so `case NAME;` and `case
+// "rig";` are the same; a scalar's the 8 bytes of its 64 bits
+// (Ast.constant), so `case 1;` and `case ONE;` are, and two members
+// sharing a value. Either way the bytes are the tree's, which outlasts
+// the table.
+static String case_key(Type *t, Ast *value) {
+    if (t == &type_string) return case_bytes(value);
+    return {(const u8 *)&value->constant, (s64)sizeof value->constant};
 }
 
 // if x == { case 1; ... } and if #complete x == { ... } (spec 6.14).
@@ -1973,26 +1976,32 @@ static bool same_case_value(Type *t, Ast *a, Ast *b) {
 // must be known while compiling", unless it needs a #run that failed, said
 // already (has_failed_run). Never evaluated at run time.
 //
-// Once a value checked with no error, it's compared with every earlier one
-// that did (same_case_value): the same value twice is "this value already
-// has a case at PATH:L:C", at the later, naming the earlier's start, as a
-// name declared twice is written (declare). A second `case;` is "this
-// switch already has a 'case;' at PATH:L:C", at its 'case'. `case;` may be
-// anywhere.
+// Once a value checked with no error, it's looked up in a table of the
+// values that did before it (case_key), each the first case to have it, so
+// a switch of many cases checks in time that grows with their count, not
+// its square: the same value twice is "this value already has a case at
+// PATH:L:C", at the later, naming the first's start, as a name declared
+// twice is written (declare). A second `case;` is "this switch already has
+// a 'case;' at PATH:L:C", at its 'case'. `case;` may be anywhere.
 //
-// #complete takes an enum: on anything else that a switch takes, it's
-// "#complete needs an enum, not 'int'", at it, and the switch is checked
-// as one without it. On an enum, once its members' values are known and
-// every case's value checked with no error (a case with one would make a
-// second message about the member it meant), each member's value, in
-// declaration order, must be some case's: each value missing is named by
-// the first member that has it, all in one message at the '#complete',
-// "this switch is #complete, but 'Mode.FREE' and 'Mode.FREE_ALL' have no
-// case". covers_every_value is set when none is missing; checks_no_case
-// when there's no `case;`, since a value no member has (cast(Mode) 7) then
-// finds no case, a runtime error (spec 8.1). A #complete switch that
-// doesn't cover every value said why (a member missing, a case's error, an
-// enum's), so it's `failed` too: its message is the only one (spec 6.11).
+// #complete takes an enum, but not an enum_flags, whose values are mostly
+// combinations of its members, and 0, which no list of members names: on
+// anything else that a switch takes, it's "#complete needs an enum, not
+// 'int'" ("not the enum_flags 'Look'"), at it, and the switch is checked
+// as one without it.
+// On an enum, once its members' values are known and every case's value
+// checked with no error (a case with one would make a second message about
+// the member it meant), each member's value, in declaration order, must be
+// some case's: each value missing is named by the first member that has
+// it, all in one message at the '#complete', "this switch is #complete,
+// but 'Mode.FREE' and 'Mode.FREE_ALL' have no case". The members are
+// looked up in the cases' table, each missing one put in it, so a later
+// member sharing its value isn't named again. covers_every_value is set
+// when none is missing; checks_no_case when there's no `case;`, since a
+// value no member has (cast(Mode) 7) then finds no case, a runtime error
+// (spec 8.1). A #complete switch that doesn't cover every value said why
+// (a member missing, a case's error, an enum's), so it's `failed` too: its
+// message is the only one (spec 6.11).
 //
 // Each case's statements are a block and a scope of their own
 // (check_scoped_block), so two cases may declare one name. The switch is
@@ -2018,10 +2027,14 @@ static void check_switch(Checker *c, Ast_Switch *s) {
     if (complete && t->kind != TYPE_ENUM) {
         diag_error(c->diag, s->complete, "#complete needs an enum, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
         complete = false;
+    } else if (complete && t->is_flags) {
+        diag_error(c->diag, s->complete, "#complete needs an enum, not the enum_flags '" STR_FMT "'",
+                   STR_ARG(type_name(c->arena, t)));
+        complete = false;
     }
 
-    Array<Ast *> values = {};  // the values checked with no error, in source order
-    bool cases_fine = true;    // every case's value checked with no error
+    Table<Ast *> seen = {};  // each value checked with no error, by case_key: its first case's
+    bool cases_fine = true;  // every case's value checked with no error
     for (s64 i = 0; i < s->cases.count; i++) {
         Ast_Case *k = s->cases[i];
         Ast *value = k->value;
@@ -2051,14 +2064,17 @@ static void check_switch(Checker *c, Ast_Switch *s) {
                 }
                 fine = false;
             }
-            for (s64 j = 0; fine && j < values.count; j++) {
-                if (!same_case_value(t, values[j], value)) continue;
-                Position at = values[j]->start;
-                diag_error(c->diag, value->start, "this value already has a case at " STR_FMT ":%d:%d",
-                           STR_ARG(c->diag->files[at.file].path), at.line, at.col);
-                fine = false;
+            if (fine) {
+                String key = case_key(t, value);
+                if (Ast **first = table_get(&seen, key)) {
+                    Position at = (*first)->start;
+                    diag_error(c->diag, value->start, "this value already has a case at " STR_FMT ":%d:%d",
+                               STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+                    fine = false;
+                } else {
+                    table_put(&seen, key, value);
+                }
             }
-            if (fine) array_add(&values, value);
             cases_fine &= fine;
         }
         check_scoped_block(c, k->block);
@@ -2073,31 +2089,37 @@ static void check_switch(Checker *c, Ast_Switch *s) {
         }
         if (known) {
             // Each member whose value no case has, and no member before
-            // it has: named once, by its first member.
+            // it has: named once, by its first member, which goes in the
+            // table so the members after it that share its value find it.
             Array<Ast_Const *> missing = {};
             for (s64 i = 0; i < e->members.count; i++) {
                 Ast_Const *member = e->members[i];
-                bool named = false;
-                for (s64 j = 0; j < i && !named; j++) named = e->members[j]->constant == member->constant;
-                for (s64 j = 0; j < values.count && !named; j++) named = values[j]->constant == member->constant;
-                if (!named) array_add(&missing, member);
+                String key = case_key(t, member);
+                if (table_get(&seen, key)) continue;
+                table_put(&seen, key, member);
+                array_add(&missing, member);
             }
             if (missing.count) {
-                String list = {};
+                // Written into one buffer, not printed again for each
+                // name, so a list of many takes time that grows with it.
+                Array<u8> list = {};
                 for (s64 i = 0; i < missing.count; i++) {
-                    const char *before = i == 0 ? "" : i == missing.count - 1 ? " and " : ", ";
-                    list = string_printf(c->arena, STR_FMT "%s'" STR_FMT "." STR_FMT "'", STR_ARG(list), before,
-                                         STR_ARG(e->name), STR_ARG(missing[i]->name));
+                    String before = str(i == 0 ? "" : i == missing.count - 1 ? " and " : ", ");
+                    String parts[] = {before, str("'"), e->name, str("."), missing[i]->name, str("'")};
+                    for (String part : parts) {
+                        for (s64 j = 0; j < part.count; j++) array_add(&list, part.data[j]);
+                    }
                 }
-                diag_error(c->diag, s->complete, "this switch is #complete, but " STR_FMT " %s no case", STR_ARG(list),
-                           missing.count == 1 ? "has" : "have");
+                diag_error(c->diag, s->complete, "this switch is #complete, but " STR_FMT " %s no case",
+                           (int)list.count, (const char *)list.data, missing.count == 1 ? "has" : "have");
+                array_free(&list);
             }
             s->covers_every_value = missing.count == 0;
             array_free(&missing);
         }
         s->failed |= !s->covers_every_value;
     }
-    array_free(&values);
+    table_free(&seen);
 }
 
 static void check_statement(Checker *c, Ast *statement) {
@@ -2180,8 +2202,8 @@ static bool breaks_out_of(Ast *s, Ast *loop) {
         }
         return false;
     }
-    // A defer too: a break in deferred code is of a loop inside it, or
-    // refused (check_jump), so it can't break out of `loop`.
+    // No other statement holds a break of `loop`, a defer included: a break
+    // in deferred code is of a loop inside it, or refused (check_jump).
     default: return false;
     }
 }

@@ -1040,10 +1040,11 @@
 //   by its bits or its bytes, are "this value already has a case at
 //   PATH:L:C", and two `case;`s "this switch already has a 'case;' at
 //   PATH:L:C".
-// - #complete takes an enum ("#complete needs an enum, not 'int'"), whose
-//   every member's value must have a case, `case;` or not: "this switch is
-//   #complete, but 'Mode.FREE_ALL' has no case", the missing values named
-//   by their first members, in one message.
+// - #complete takes an enum ("#complete needs an enum, not 'int'"), not
+//   an enum_flags ("... not the enum_flags 'Look'"), whose every member's
+//   value must have a case, `case;` or not: "this switch is #complete, but
+//   'Mode.FREE_ALL' has no case", the missing values named by their first
+//   members, in one message.
 // - Each case's statements are a block and a scope of their own. A break
 //   or continue in one acts on the loop around the switch. The switch
 //   reaches its end as spec 6.11 says (goes_past).
@@ -1054,12 +1055,11 @@
 //   null in a *void's), so lowering takes the width from x's type, not
 //   the case's; or for a string constant data (constant_data), a string
 //   literal's bytes, or none, a field a literal leaves out, the empty
-//   string; no two cases have one
-//   value, and at most one is `case;`, Ast_Switch.default_case;
-//   checks_no_case is set for a #complete switch on an enum without
-//   `case;`, where a value no case has stops the program;
-//   covers_every_value when every member's value has a case. A case's
-//   value is never worked out at run time.
+//   string; no two cases have one value, and at most one is `case;`,
+//   Ast_Switch.default_case; checks_no_case is set for a #complete switch
+//   on an enum without `case;`, where a value no case has stops the
+//   program; covers_every_value when every member's value has a case. A
+//   case's value is never worked out at run time.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

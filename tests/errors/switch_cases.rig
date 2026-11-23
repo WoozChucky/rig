@@ -1,7 +1,8 @@
 // Mistakes in a switch's expression, its cases and #complete (issue
 // #222, spec 6.14), each reported once; a line may hold more than one.
 // The #complete switch on Shared that names ALSO_FIRST for FIRST has
-// none: a case of either covers their one value.
+// none: a case of either covers their one value. One on an enum_flags is
+// refused, though its cases name every member.
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
 Look :: enum_flags u8 { A; B; }
@@ -50,7 +51,7 @@ main :: () {
     if #complete s == { case .ALSO_FIRST; case .SECOND; }
     if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; case .FRE; }
     if #complete s == { case .SECOND; }
-    if #complete look == { case .A; }
+    if #complete look == { case .A; case .B; }
     if 2.5 == { }
     if 1e300 == { }
     if null == { }
