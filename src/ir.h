@@ -111,22 +111,22 @@
 //   after it has none: lower.cpp's header). Line 0 is no position. The
 //   procedures the compiler makes itself (__rig_bounds_failed,
 //   __rig_string_equal, __rig_no_case) have none, and no source, so a
-//   debugger steps over them. In a procedure of the source, only the prologue's work has none:
-//   each scalar parameter's slot and the store into it, and the context's
-//   slot and what it's given (spec 7.10: the hidden parameter; or, in main
-//   and a run's procedure, the call of Preload's __runtime_init, in main
-//   then the call of __save_command_line with C's argc and argv (spec 7.4),
-//   then default_context's address), before the body's first line (a
-//   debugger's breakpoint on the procedure stops at the first instruction
-//   with a line, once they're done). __runtime_init and
-//   __save_command_line themselves have no debug information
-//   (Ir_Proc.no_debug_info), as the procedures the compiler makes have
-//   none: located at line 0, a call would be given main's own line, and
-//   `break main` would stop there before the call ran; with no location,
-//   LLVM refuses a call of a procedure that has debug information. So they
-//   have none, the calls have no location, and `break main` stops at main's
-//   first line with the context set up and the arguments saved, and a
-//   debugger steps over the calls.
+//   debugger steps over them. In a procedure of the source, only the
+//   prologue's work has none: each scalar parameter's slot and the store
+//   into it, and the context's slot and what it's given (spec 7.10: the
+//   hidden parameter; or, in main and a run's procedure, the call of
+//   Preload's __runtime_init, in main then the call of __save_command_line
+//   with C's argc and argv (spec 7.4), then default_context's address),
+//   before the body's first line (a debugger's breakpoint on the procedure
+//   stops at the first instruction with a line, once they're done).
+//   __runtime_init and __save_command_line themselves have no debug
+//   information (Ir_Proc.no_debug_info), as the procedures the compiler
+//   makes have none: located at line 0, a call would be given main's own
+//   line, and `break main` would stop there before the call ran; with no
+//   location, LLVM refuses a call of a procedure that has debug
+//   information. So they have none, the calls have no location, and `break
+//   main` stops at main's first line with the context set up and the
+//   arguments saved, and a debugger steps over the calls.
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
 //   once, in the procedure's debug scope, and each line in it. So a call's
@@ -281,7 +281,7 @@ enum Ir_Op : u8 {
                                      // value is %a's, else to bD (`target`); T an integer type or i1, each
                                      // V T's bits as IR_CONST's, no two the same (`cases`, a switch's
                                      // cases in source order: issue #222, spec 6.14)
-    IR_RET,                         // ret [%a, ...]         one value per result
+    IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
                                      // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
                                      // From a check, the text is "PATH:L:C: runtime error: MESSAGE\n",
@@ -634,11 +634,11 @@ struct Lowering;
 // always on (#no_abc still holds). __rig_bounds_failed (index 0),
 // __rig_string_equal (index 1) and __rig_no_case (index 2) are made at
 // once, whole: the bounds buffer is sized for the longest path among d's
-// files. `file` is the
-// checked tree, whose Preload declarations of the context (Ast_File's
-// context_type, default_context, runtime_init) the procedures lowered use;
-// null, or a tree without Preload, gives no context. d and the tree must
-// outlive the lowering; m and what it holds live in `a`.
+// files. `file` is the checked tree, whose Preload declarations of the
+// context (Ast_File's context_type, default_context, runtime_init) the
+// procedures lowered use; null, or a tree without Preload, gives no
+// context. d and the tree must outlive the lowering; m and what it holds
+// live in `a`.
 Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file);
 
 // The procedure `run` runs, run.N in l's module, and everything it reaches,

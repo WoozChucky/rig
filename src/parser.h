@@ -42,7 +42,7 @@
 //               | expression ',' expression {',' expression} '=' expression ';'
 //   return      = 'return' [expression {',' expression}] ';'
 //   if          = 'if' expression block ['else' (block | if)]
-//               | switch                                         (a switch takes no else)
+//               | switch                                           (a switch takes no else)
 //   switch      = 'if' ['#complete'] expression '==' '{' case* '}' (an '==' before a '{' ends any
 //                                                                  expression: never a comparison)
 //   case        = 'case' [expression] ';' statement* ['#through' ';']

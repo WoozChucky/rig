@@ -294,16 +294,15 @@
 //   written in another file. While compiling, a failure in them is at its
 //   own place still (fail_in_place). Each block that's a scope adds an
 //   Ir_Scope (lower_scoped_block, lower_push_context, the loops, which are
-//   one, and a switch's cases), and so does a
-//   declaration that hides a name a debugger shows, for the rest of its
-//   block (lower_statement). Each local variable (an iterator and
-//   it_index too) and parameter adds an Ir_Var (add_local_var, and the
-//   parameters in lower_body; a global is an Ir_Global instead), and so
-//   does each constant a debugger shows (add_constant), a top-level one in
-//   the module's constants (ir_lower): not one naming a procedure, unless
-//   it hides a name a debugger shows, nor one in a block no debugger can
-//   stop in, or hiding a name after code that can't go on
-//   (lower_statements, lower_statement).
+//   one, and a switch's cases), and so does a declaration that hides a
+//   name a debugger shows, for the rest of its block (lower_statement).
+//   Each local variable (an iterator and it_index too) and parameter adds
+//   an Ir_Var (add_local_var, and the parameters in lower_body; a global
+//   is an Ir_Global instead), and so does each constant a debugger shows
+//   (add_constant), a top-level one in the module's constants (ir_lower):
+//   not one naming a procedure, unless it hides a name a debugger shows,
+//   nor one in a block no debugger can stop in, or hiding a name after
+//   code that can't go on (lower_statements, lower_statement).
 //   So does the context, an artificial one: the hidden parameter, arg 1, or
 //   main's and a run's slot, a local (lower_body), or a push_context's
 //   slot, a local of its block's scope at its keyword (lower_push_context).
@@ -2956,12 +2955,12 @@ static s32 no_case_proc(Lowering *l);
 // returns:
 //
 //   fail:
-//     %b = local N align 1      the message's buffer
-//     %w = addr @str.N          "PATH:L:C: runtime error: "
+//     %b = local N align 1          the message's buffer
+//     %w = addr @str.N              "PATH:L:C: runtime error: "
 //     %wl = const i64 LENGTH
-//     %v = sext i8 %value to i64     (or zext, by the enum's sign; none for an i64)
+//     %v = sext i8 %value to i64    (or zext, by the enum's sign; none for an i64)
 //     %s = const i1 SIGNED
-//     %t = addr @str.M          " of 'Mode'\n"
+//     %t = addr @str.M              " of 'Mode'\n"
 //     %tl = const i64 LENGTH
 //     call @__rig_no_case(%b, %w, %wl, %v, %s, %t, %tl)
 //     unreachable
@@ -3007,9 +3006,11 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, s32 value) {
 // (lower_value), and the dispatch follows it there:
 // - an integer, an enum, a bool or a pointer: one IR_SWITCH on x's value
 //   (a pointer's address, an i64, null's 0), each case's value, its
-//   constant's bits at x's type (the checker made each case's constant a
-//   value of x's type), to its case's block, and every other value to the
-//   default's, `case;`, or to the no-case block, or to `after`;
+//   constant's 64 bits cut to x's type's width, to its case's block, and
+//   every other value to the default's, `case;`, or to the no-case block,
+//   or to `after`. A case's constant may keep a type of its own, one that
+//   widens to x's (a u8 in an int's switch), but the checker made its
+//   value one of x's type's, so the bits cut are that value's;
 // - a string: its count and data loaded once, then case by case in source
 //   order the comparison == makes (emit_string_equal, its null check at the
 //   switch's `==`), to the case's block when it's equal, else on to the
@@ -3090,7 +3091,10 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
         for (s64 i = 0; i < s->cases.count; i++) {
             Ast *case_value = s->cases[i]->value;
             if (!case_value) continue;
-            u64 bits = case_value->constant;  // zero-extended from the type's width, as IR_CONST's
+            // Ast.constant is extended to 64 bits by the sign of the
+            // constant's type; cut to the switch type's width, the bits are
+            // zero-extended from it, as IR_CONST's are.
+            u64 bits = case_value->constant;
             if (ir_bits(type) < 64) bits &= ((u64)1 << ir_bits(type)) - 1;
             array_add(&dispatch->cases, Ir_Case{bits, -1});
         }
