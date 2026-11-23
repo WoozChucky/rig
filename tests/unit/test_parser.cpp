@@ -4264,12 +4264,10 @@ TEST(a_switch_never_closed_ends_before_a_declaration) {
 TEST(switches_nest_up_to_a_thousand_levels) {
     // A switch's braces are one level of the blocks' limit (spec 6.14),
     // each case's block inside it, as an if's is: with 999 switches inside
-    // the body, blocks nest 1000 deep; one more is one message, at the
-    // '{' of the 1001st level.
+    // the body, blocks nest 1000 deep, and build; one more is one message,
+    // at the '{' of the 1001st level.
     Arena a = arena_make();
-    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 999, "y = 2;", " }",
-                                             "\n}\n")),
-              "");
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 999, "y = 2;", " }", "\n}\n")));
     CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 1000, "y = 2;", " }",
                                              "\n}\n")),
               "3:16992: blocks are nested too deeply (more than 1000 levels)\n");

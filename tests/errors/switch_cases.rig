@@ -9,6 +9,8 @@ Vec2 :: struct { x: float; y: float; }
 ONE :: 1;
 NAME :: "rig";
 LITERAL :: cast(*u8) "x";
+broken :: () -> int { x : int = "s"; return 1; }
+broken_word :: () -> string { x : int = "s"; return "a"; }
 
 main :: () {
     f : float64;
@@ -22,7 +24,7 @@ main :: () {
     p : *u8;
     word := "a";
     yes := true;
-    if f == { }
+    if f == { case .FREE; }
     if v == { }
     if values == { }
     if .FREE == { }
@@ -52,4 +54,9 @@ main :: () {
     if 2.5 == { }
     if 1e300 == { }
     if null == { }
+    // A case whose #run reaches code whose error was said already, broken's
+    // and broken_word's, has nothing more said, an integer's and a
+    // string's alike.
+    if n == { case #run broken(); case 2; }
+    if word == { case #run broken_word(); case "b"; }
 }
