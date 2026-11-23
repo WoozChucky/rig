@@ -14,3 +14,8 @@ null
 else if, a switch
 a constant switched on
 nested 200 2
+minus 300
+tiny b, minus 2
+before a lone default
+the lone default
+after no case at all

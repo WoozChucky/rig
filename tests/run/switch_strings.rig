@@ -1,7 +1,8 @@
 // A switch on strings (issue #222, spec 6.14): each case compared as ==
 // compares strings, in order; a constant's string and a #run's as
-// cases; the empty string; and strings that differ only in length or
-// in case.
+// cases; the empty string; strings that differ only in length or in case;
+// and a switch whose only case is the default, and one with no case at
+// all.
 #import "Basic";
 
 GREETING :: "hello";
@@ -28,4 +29,11 @@ main :: () {
         }
     }
     print("\n");
+    word := "x";
+    print("before a lone default\n");
+    if word == {
+        case; print("the lone default\n");
+    }
+    if word == { }
+    print("after no case at all\n");
 }

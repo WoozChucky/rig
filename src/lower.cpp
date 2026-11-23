@@ -469,7 +469,8 @@ struct Lowering {
     s32 string_copy_count;    // the string.N globals made so far: the bytes of its own a global holding
                               // a baked string gets (string_copy_global)
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
-                              // needs it; -1 (on demand, 1 from the start)
+                              // or a switch on a string needs it; -1 (on demand, 1 from the
+                              // start)
     s32 no_case;              // __rig_no_case's index in module->procs, once a #complete switch
                               // without `case;` needs it; -1 (on demand, 2 from the start)
     // Types' descriptions (spec 3.16), type_info.N, each made the first time
@@ -2799,11 +2800,11 @@ static void leave_block(Lowering *l, s64 mark, Ast_Proc *source) {
 }
 
 // A block that's a scope of its own (ir.h's "Debug information"): a block
-// statement, or an if's or an else's. Its statements run in a new scope
-// inside the current one, starting at its '{' (and in those its hiding
-// declarations start inside it: lower_statement); then its defers, if
-// control gets to its end (leave_block); then the current scope is the one
-// around it again.
+// statement, an if's or an else's, or a switch's case. Its statements run
+// in a new scope inside the current one, starting at its '{', a case's at
+// its `case` (and in those its hiding declarations start inside it:
+// lower_statement); then its defers, if control gets to its end
+// (leave_block); then the current scope is the one around it again.
 static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     s32 outer = l->scope;
     s64 mark = l->defers.count;
@@ -4382,8 +4383,9 @@ static void lower_bounds_failed(Lowering *l) {
 }
 
 // __rig_string_equal(i64 count_a, ptr data_a, i64 count_b, ptr data_b) ->
-// i1: what == on strings calls (lower_string_comparison). Made the first
-// time a comparison needs it, with no body yet (lower_string_equal makes
+// i1: what == on strings and a switch on a string call (emit_string_equal,
+// for lower_string_comparison and lower_switch). Made the first time a
+// comparison needs it, with no body yet (lower_string_equal makes
 // it, once every procedure's is); its index in the module's procedures,
 // after the program's. On demand, it is made second, body and all
 // (ir_lowering_new).
@@ -4881,9 +4883,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
 
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
-    // calls it, and __rig_no_case, if a #complete switch without `case;`
-    // does. None comes from the source: they have no scopes, and their
-    // instructions no position (line 0) and no scope (-1).
+    // or a switch on a string calls it, and __rig_no_case, if a #complete
+    // switch without `case;` does. None comes from the source: they have no
+    // scopes, and their instructions no position (line 0) and no scope (-1).
     place(&l, {}, -1);
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);

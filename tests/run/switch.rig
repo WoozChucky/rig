@@ -2,12 +2,15 @@
 // integers, enums with and without their name, bools and pointers; a
 // default anywhere; no case and no default doing nothing; #through into
 // the next case and into the default; the switched expression worked out
-// once; a constant switched on; else if x == {; a nested switch; and
-// #complete, covered by either of two members sharing a value.
+// once; a constant switched on; else if x == {; a nested switch;
+// #complete, covered by either of two members sharing a value; a negative
+// case of a type narrower than 64 bits; and a switch whose only case is
+// the default, and one with no case at all.
 #import "Basic";
 
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 Shared :: enum u8 { FIRST; ALSO_FIRST :: 0; SECOND; }
+Tiny :: enum s8 { A :: 1; B :: -2; }
 
 LIMIT :: 3;
 
@@ -95,4 +98,21 @@ main :: () {
                 case 2; print("nested 200 2\n");
             }
     }
+    minus : s16 = -300;
+    if minus == {
+        case 300;  print("plus 300\n");
+        case -300; print("minus 300\n");
+        case;      print("other\n");
+    }
+    tiny := Tiny.B;
+    if #complete tiny == {
+        case .A; print("tiny a\n");
+        case .B; print("tiny b, minus 2\n");
+    }
+    print("before a lone default\n");
+    if n == {
+        case; print("the lone default\n");
+    }
+    if n == { }
+    print("after no case at all\n");
 }

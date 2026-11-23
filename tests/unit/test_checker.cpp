@@ -8951,6 +8951,37 @@ TEST(a_run_reaches_through_a_push) {
     arena_free(&a);
 }
 
+TEST(a_run_reaches_through_a_switch) {
+    // X's run calls f, whose switch works out g(n) and runs h in a case:
+    // the walk reaches the switched expression and the case's block
+    // (check_run.cpp's walk_node), so g's and h's bodies are checked before
+    // the run is lowered, in the declarations pass. f's switch on a string
+    // has a case naming PICKED, a later run's string, done when f's body is
+    // checked, and matched; the run gives 105.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "X :: #run f(2, \"picked\");\n"
+                                 "f :: (n: int, s: string) -> int {\n"
+                                 "    total := 0;\n"
+                                 "    if g(n) == { case 2; total += h(); }\n"
+                                 "    if s == { case PICKED; total += 100; }\n"
+                                 "    return total;\n"
+                                 "}\n"
+                                 "g :: (n: int) -> int { return n; }\n"
+                                 "h :: () -> int { return 5; }\n"
+                                 "PICKED :: #run picked();\n"
+                                 "picked :: () -> string { return \"picked\"; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    Ast *x = top_level_named(tree, "X");
+    CHECK_EQ(x->kind, AST_CONST);
+    CHECK(x->is_constant);
+    CHECK_EQ(x->constant, 105);
+    arena_free(&a);
+}
+
 TEST(the_temporary_allocator_while_compiling) {
     // Preload's temporary allocator, run by the compile-time world's #runs,
     // which share its storage, in declaration order: a resize of the last

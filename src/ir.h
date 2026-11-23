@@ -522,11 +522,12 @@ struct Ir_Module {
     Array<Ir_Global> globals;
     Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
                              // __rig_bounds_failed when a bounds check calls it,
-                             // __rig_string_equal when == on strings does and __rig_no_case
-                             // when a #complete switch without `case;` does (lower.cpp, in the
-                             // order first needed); a compile-time module lowered on demand
-                             // has the three helpers first, then the runs' procedures and what
-                             // they reach, in the order needed (ir_lower_run)
+                             // __rig_string_equal when == on strings or a switch on a string
+                             // does and __rig_no_case when a #complete switch without `case;`
+                             // does (lower.cpp, in the order first needed); a compile-time
+                             // module lowered on demand has the three helpers first, then the
+                             // runs' procedures and what they reach, in the order needed
+                             // (ir_lower_run)
     // The source files, for a debugger. A module built by hand has none,
     // and gets no debug information.
     Array<Ir_Source> sources;  // indexed by Position.file

@@ -7348,18 +7348,26 @@ TEST(a_switch_lowers_its_value_once) {
 TEST(a_complete_switch_without_a_default_calls_no_case) {
     // A #complete switch with no `case;` sends a value no member has to a
     // block of its own, at the `if`, that calls __rig_no_case with the
-    // value widened to an i64 by the enum's sign, then is unreachable; with
-    // bounds checks off too, since it's no bounds check. __rig_no_case is
-    // the compiler's, after the program's procedures. A `case;` takes
-    // every other value, and nothing calls it.
-    const char *source = "Small :: enum s8 { A; B; }\n"
-                         "main :: () {\n"
-                         "    s : Small;\n"
-                         "    if #complete s == { case .A; case .B; }\n"
-                         "}\n";
+    // value widened to an i64 by the enum's sign, sign-extended for an s8
+    // and zero-extended for a u8, then is unreachable; with bounds checks
+    // off too, since it's no bounds check. The message's buffer fits it:
+    // "test.rig:4:5: runtime error: " is 29 bytes, " of 'Small'\n" 12, and
+    // 38 more. __rig_no_case is the compiler's, after the program's
+    // procedures. A `case;` takes every other value, and nothing calls it.
+    const char *sources[] = {"Small :: enum s8 { A; B; }\n"
+                             "main :: () {\n"
+                             "    s : Small;\n"
+                             "    if #complete s == { case .A; case .B; }\n"
+                             "}\n",
+                             "Small :: enum u8 { A; B; }\n"
+                             "main :: () {\n"
+                             "    s : Small;\n"
+                             "    if #complete s == { case .A; case .B; }\n"
+                             "}\n"};
     Arena a = arena_make();
-    for (int checks = 0; checks < 2; checks++) {
-        Ir_Module *m = lower_file(&a, "test.rig", source, checks == 1);
+    for (int run = 0; run < 4; run++) {
+        bool checks = run % 2 == 1, signed_enum = run < 2;
+        Ir_Module *m = lower_file(&a, "test.rig", sources[signed_enum ? 0 : 1], checks);
         Ir_Proc *main = nullptr;
         for (s64 i = 0; i < m->procs.count; i++) {
             if (string_eq(m->procs[i]->name, str("main"))) main = m->procs[i];
@@ -7378,18 +7386,27 @@ TEST(a_complete_switch_without_a_default_calls_no_case) {
         CHECK_EQ(dispatch->type, IR_I8);
         CHECK_EQ(dispatch->cases.count, 2);
         Ir_Block *fail = main->blocks[dispatch->target];
-        bool widened = false, is_signed = false;
-        Ir_Instr *call = nullptr;
+        Ir_Op widen = signed_enum ? IR_SEXT : IR_ZEXT;
+        bool widened = false, sign_passed = false;
+        Ir_Instr *buffer = nullptr, *call = nullptr;
         for (s64 n = 0; n < fail->instrs.count; n++) {
             Ir_Instr *instr = &fail->instrs[n];
-            if (instr->op == IR_SEXT && instr->from == IR_I8 && instr->type == IR_I64 && instr->a == dispatch->a) {
+            if (instr->op == widen && instr->from == IR_I8 && instr->type == IR_I64 && instr->a == dispatch->a) {
                 widened = true;
             }
-            if (instr->op == IR_CONST && instr->type == IR_I1 && instr->constant == 1) is_signed = true;
+            if (instr->op == IR_CONST && instr->type == IR_I1 && instr->constant == (signed_enum ? 1u : 0u)) {
+                sign_passed = true;
+            }
+            if (instr->op == IR_LOCAL && !buffer) buffer = instr;
             if (instr->op == IR_CALL) call = instr;
         }
         CHECK(widened);
-        CHECK(is_signed);
+        CHECK(sign_passed);
+        CHECK(buffer);
+        if (buffer) {
+            CHECK_EQ(buffer->constant, 79);
+            CHECK_EQ(buffer->align, 1);
+        }
         CHECK(call);
         if (call) {
             CHECK_STR(m->procs[call->target]->name, "__rig_no_case");

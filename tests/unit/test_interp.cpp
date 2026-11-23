@@ -1840,6 +1840,40 @@ TEST(interp_bounds_checks_are_on_at_compile_time) {
     arena_free(&a);
 }
 
+TEST(interp_a_run_meeting_no_case) {
+    // A run whose #complete switch meets a value no case has stops with the
+    // no-case message alone, its "PATH:L:C: runtime error: " left out (the
+    // panic's c), and frames in the source's procedures only, pick at the
+    // switch's `if` and #run at its `#run`: __rig_no_case, the compiler's, is
+    // left out of them.
+    Arena a = arena_make();
+    Lowered_Runs lowered = lower_runs_of(&a,
+                                         "Mode :: enum s8 { ALLOCATE; FREE :: -2; }\n"
+                                         "pick :: (m: Mode) {\n"
+                                         "    if #complete m == { case .ALLOCATE; case .FREE; }\n"
+                                         "}\n"
+                                         "#run pick(cast(Mode) -7);\n"
+                                         "main :: () { }\n");
+    Interp *in = interp_new(lowered.module);
+    Interp_Result r = {};
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[0]), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "no case for value -7 of 'Mode'");
+    CHECK_EQ(r.frames.count, 2);
+    if (r.frames.count == 2) {
+        CHECK_STR(r.frames[0].proc, "pick");
+        CHECK_EQ(r.frames[0].pos.line, 3);
+        CHECK_EQ(r.frames[0].pos.col, 5);
+        CHECK_STR(r.frames[1].proc, "#run");
+        CHECK_EQ(r.frames[1].pos.line, 5);
+        CHECK_EQ(r.frames[1].pos.col, 1);
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    lowered_runs_free(&lowered);
+    arena_free(&a);
+}
+
 // ---------------------------------------------------------------------------
 // The call thunks (thunk.h): C functions called with canonical values laid
 // out by the host's convention, as the interpreter calls C.
