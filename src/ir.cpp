@@ -27,6 +27,7 @@ static bool is_terminator(Ir_Op op) {
     switch (op) {
     case IR_JUMP:
     case IR_BRANCH:
+    case IR_SWITCH:
     case IR_RET:
     case IR_PANIC:
     case IR_UNREACHABLE: return true;
@@ -232,6 +233,7 @@ static const char *ir_op_name(Ir_Op op) {
     case IR_ZERO: return "zero";
     case IR_JUMP: return "jump";
     case IR_BRANCH: return "branch";
+    case IR_SWITCH: return "switch";
     case IR_RET: return "ret";
     case IR_PANIC: return "panic";
     case IR_UNREACHABLE: return "unreachable";
@@ -394,6 +396,14 @@ static void out_instr(Printer *p, Ir_Module *m, Ir_Instr *instr, bool debug) {
     case IR_SELECT: out(p, "%s %s %%%d, %%%d, %%%d", op, type, instr->c, instr->a, instr->b); break;
     case IR_JUMP: out(p, "%s b%d", op, instr->target); break;
     case IR_BRANCH: out(p, "%s %%%d, b%d, b%d", op, instr->c, instr->target, instr->target2); break;
+    case IR_SWITCH:
+        // The cases' values as IR_CONST prints them, unsigned.
+        out(p, "%s %s %%%d, b%d [", op, type, instr->a, instr->target);
+        for (s64 i = 0; i < instr->cases.count; i++) {
+            out(p, "%s%llu: b%d", i ? ", " : "", (unsigned long long)instr->cases[i].value, instr->cases[i].block);
+        }
+        out(p, "]");
+        break;
     case IR_RET:
         out(p, "%s", op);
         if (instr->args.count) out(p, " ");

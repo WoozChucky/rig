@@ -272,7 +272,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.rig",
-                    "match": "\\b(?:if|else|while|for|break|continue|return|defer|push_context)\\b"
+                    "match": "\\b(?:if|else|while|for|break|continue|return|defer|push_context|case)\\b"
                 },
                 {
                     "name": "storage.type.rig",

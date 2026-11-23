@@ -1,0 +1,16 @@
+just above s64's maximum | u64's maximum | one | other
+a0b a0c other a ab abc other zero other
+made at run time: a0c
+one two default
+returning from case 1
+case 1's defer
+the procedure's defer
+10
+case 2's defer
+after the switch
+the procedure's defer
+0
+early: deferred 1, deferred 2
+from a loop: deferred 2
+from a loop: deferred 1, deferred 2
+at the end: deferred default

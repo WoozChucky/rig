@@ -1,0 +1,30 @@
+tests/errors/switch_syntax.rig:8:5: error: 'case' can only be right inside a switch's braces, as in if x == { case 1; a(); }
+        case 1;
+        ^
+tests/errors/switch_syntax.rig:13:9: error: expected 'case', found identifier 'a'
+            a := 1;
+            ^
+tests/errors/switch_syntax.rig:20:17: error: #through must be its case's last statement
+            case 1; #through; x += 1;
+                    ^
+tests/errors/switch_syntax.rig:28:17: error: #through can't end the last case: there's no case after it
+            case 2; #through;
+                    ^
+tests/errors/switch_syntax.rig:34:19: error: #through can only end a switch's case, as in case 1; a(); #through;
+            case 1; { #through; }
+                      ^
+tests/errors/switch_syntax.rig:40:5: error: #through can only end a switch's case, as in case 1; a(); #through;
+        #through;
+        ^
+tests/errors/switch_syntax.rig:46:7: error: a switch takes no else; its 'case;' runs when no case does
+        } else {
+          ^
+tests/errors/switch_syntax.rig:51:8: error: #complete is for a switch, as in if #complete x == { ... }
+        if #complete x {
+           ^
+tests/errors/switch_syntax.rig:56:11: error: expected '{', found '=='
+        #if x == {
+              ^
+tests/errors/switch_syntax.rig:63:16: error: expected ';', found identifier 'x'
+            case 1 x += 1;
+                   ^

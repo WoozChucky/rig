@@ -4071,3 +4071,213 @@ TEST(enum_declaration_mistakes) {
     CHECK_STR(errors, "3:1: expected '}', found identifier 'E'\n");
     arena_free(&a);
 }
+
+// Issue #222: the switch (spec 6.14).
+
+// The first statement of f's body when `body` is its inside (as body_dump
+// writes it), parsed into `a`; null when f doesn't parse. The caller frees
+// *list.
+static Ast *first_body_statement(Arena *a, const char *body, Token_List **list) {
+    String text = string_printf(a, "f :: () {\n    %s\n}\n", body);
+    *list = src(string_cstr(a, text));
+    Ast_File *file = parse((*list)->tokens, a, &(*list)->diag);
+    if (file->procs.count != 1 || !file->procs[0]->body || !file->procs[0]->body->statements.count) return nullptr;
+    return file->procs[0]->body->statements[0];
+}
+
+TEST(parses_switches) {
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "if x == { case 1; a(); case; b(); #through; case .FREE; }", &errors),
+              "(block (switch (name x) (case (int 1) (block (call a))) (case _ (block (call b)) #through) "
+              "(case (dot FREE) (block))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "if #complete m == { }", &errors), "(block (switch #complete (name m)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "if (x) == { case 1; }", &errors), "(block (switch (name x) (case (int 1) (block))))");
+    CHECK_STR(errors, "");
+    // The == that ends the expression is never inside it: the switch is on
+    // all of what's before it.
+    CHECK_STR(body_dump(&a, "if a && b == { }", &errors), "(block (switch (binary && (name a) (name b))))");
+    CHECK_STR(errors, "");
+    // else if x == { is the switch as the one statement of the else's block.
+    CHECK_STR(body_dump(&a, "if n == 1 { } else if n == { case 2; }", &errors),
+              "(block (if (binary == (name n) (int 1)) (block) (block (switch (name n) (case (int 2) (block))))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "if x == { case 1; if y == { case 2; } case 3; }", &errors),
+              "(block (switch (name x) (case (int 1) (block (switch (name y) (case (int 2) (block))))) "
+              "(case (int 3) (block))))");
+    CHECK_STR(errors, "");
+
+    // The switch is at the 'if', its equals at the '==', each case at its
+    // 'case', and each case's block at its 'case' too, ending at the
+    // switch's '}', where the jump out of it is.
+    Token_List *list;
+    Ast *s = first_body_statement(&a, "if x == { case 1; a(); case; b(); #through; case .FREE; }", &list);
+    CHECK(s && s->kind == AST_SWITCH);
+    if (s && s->kind == AST_SWITCH) {
+        Ast_Switch *sw = (Ast_Switch *)s;
+        CHECK_EQ(sw->pos.line, 2);
+        CHECK_EQ(sw->pos.col, 5);
+        CHECK_EQ(sw->equals.line, 2);
+        CHECK_EQ(sw->equals.col, 10);
+        CHECK_EQ(sw->end.col, 61);
+        CHECK(!sw->is_complete);
+        CHECK_EQ(sw->cases.count, 3);
+        const s32 case_cols[] = {15, 28, 49};
+        for (s64 i = 0; i < sw->cases.count && i < 3; i++) {
+            Ast_Case *k = sw->cases[i];
+            CHECK(k->kind == AST_CASE);
+            CHECK_EQ(k->pos.line, 2);
+            CHECK_EQ(k->pos.col, case_cols[i]);
+            CHECK_EQ(k->block->pos.col, case_cols[i]);
+            CHECK_EQ(k->block->end.line, 2);
+            CHECK_EQ(k->block->end.col, 61);
+        }
+        if (sw->cases.count == 3) {
+            CHECK(!sw->cases[1]->value);
+            CHECK_EQ(sw->cases[0]->through.line, 0);
+            CHECK_EQ(sw->cases[1]->through.line, 2);
+            CHECK_EQ(sw->cases[1]->through.col, 39);
+        }
+    }
+    token_list_free(list);
+    s = first_body_statement(&a, "if (x) == { case 1; }", &list);
+    CHECK(s && s->kind == AST_SWITCH);
+    if (s && s->kind == AST_SWITCH) {
+        Ast_Switch *sw = (Ast_Switch *)s;
+        CHECK_EQ(sw->value->start.col, 8);
+        CHECK_EQ(sw->equals.col, 12);
+    }
+    token_list_free(list);
+    s = first_body_statement(&a, "if #complete m == { }", &list);
+    CHECK(s && s->kind == AST_SWITCH);
+    if (s && s->kind == AST_SWITCH) {
+        Ast_Switch *sw = (Ast_Switch *)s;
+        CHECK(sw->is_complete);
+        CHECK_EQ(sw->complete.col, 8);
+        CHECK_EQ(sw->cases.count, 0);
+    }
+    token_list_free(list);
+    // An else if's switch is wrapped in a block at that 'if', ending at the
+    // switch's '}', where the if chain's jump out of the block is.
+    s = first_body_statement(&a, "if n == 1 { } else if n == { case 2; }", &list);
+    CHECK(s && s->kind == AST_IF);
+    if (s && s->kind == AST_IF) {
+        Ast *part = ((Ast_If *)s)->else_part;
+        CHECK(part && part->kind == AST_BLOCK);
+        if (part && part->kind == AST_BLOCK) {
+            Ast_Block *block = (Ast_Block *)part;
+            CHECK_EQ(block->pos.line, 2);
+            CHECK_EQ(block->pos.col, 24);
+            CHECK_EQ(block->end.line, 2);
+            CHECK_EQ(block->end.col, 42);
+            CHECK(block->statements.count == 1 && block->statements[0]->kind == AST_SWITCH);
+        }
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(the_equals_before_a_brace_ends_any_expression) {
+    // A '{' starts no expression, so an '==' right before one is never a
+    // comparison: it ends the expression, however deep, and only an if
+    // reads it, as a switch. Each of these was an if, and stays one.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "if a == b { }", &errors), "(block (if (binary == (name a) (name b)) (block)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "if (a == b) { }", &errors), "(block (if (binary == (name a) (name b)) (block)))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "if x == .{1, 2} { }", &errors),
+              "(block (if (binary == (name x) (literal _ (int 1) (int 2))) (block)))");
+    CHECK_STR(errors, "");
+    // Anywhere else, the expression ends there, and what was expected
+    // after it is found to be '=='.
+    body_dump(&a, "x := a == { };", &errors);
+    CHECK_STR(errors, "2:12: expected ';', found '=='\n");
+    body_dump(&a, "if (x == { }", &errors);
+    CHECK_STR(errors, "2:11: expected ')', found '=='\n");
+    body_dump(&a, "while x == { }", &errors);
+    CHECK_STR(errors, "2:13: expected '{', found '=='\n");
+    // A name before it in a for was no iterator missing its ':'.
+    body_dump(&a, "for n == { }", &errors);
+    CHECK_STR(errors, "2:11: expected '..' or the loop's '{', found '=='\n");
+    body_dump(&a, "for (n) == { }", &errors);
+    CHECK_STR(errors, "2:13: expected '..' or the loop's '{', found '=='\n");
+    arena_free(&a);
+}
+
+TEST(switch_syntax_mistakes) {
+    // As tests/errors/switch_syntax has them, each alone in a body.
+    Arena a = arena_make();
+    String errors;
+    body_dump(&a, "case 1;", &errors);
+    CHECK_STR(errors, "2:5: 'case' can only be right inside a switch's braces, as in if x == { case 1; a(); }\n");
+    body_dump(&a, "if x == { a := 1; case 1; }", &errors);
+    CHECK_STR(errors, "2:15: expected 'case', found identifier 'a'\n");
+    body_dump(&a, "if x == { case 1; #through; x += 1; case 2; }", &errors);
+    CHECK_STR(errors, "2:23: #through must be its case's last statement\n");
+    body_dump(&a, "if x == { case 1; case 2; #through; }", &errors);
+    CHECK_STR(errors, "2:31: #through can't end the last case: there's no case after it\n");
+    body_dump(&a, "if x == { case 1; { #through; } case 2; }", &errors);
+    CHECK_STR(errors, "2:25: #through can only end a switch's case, as in case 1; a(); #through;\n");
+    body_dump(&a, "#through;", &errors);
+    CHECK_STR(errors, "2:5: #through can only end a switch's case, as in case 1; a(); #through;\n");
+    body_dump(&a, "if x == { case 1; } else { }", &errors);
+    CHECK_STR(errors, "2:25: a switch takes no else; its 'case;' runs when no case does\n");
+    body_dump(&a, "if x == { case 1; } else if y { }", &errors);
+    CHECK_STR(errors, "2:25: a switch takes no else; its 'case;' runs when no case does\n");
+    body_dump(&a, "if #complete x { }", &errors);
+    CHECK_STR(errors, "2:8: #complete is for a switch, as in if #complete x == { ... }\n");
+    body_dump(&a, "#if x == { case 1; }", &errors);
+    CHECK_STR(errors, "2:11: expected '{', found '=='\n");
+    body_dump(&a, "if x == { case 1 x += 1; }", &errors);
+    CHECK_STR(errors, "2:22: expected ';', found identifier 'x'\n");
+    // A #load before the first case is misplaced, as anywhere in a body.
+    body_dump(&a, "if x == { #load \"x.rig\"; case 1; }", &errors);
+    CHECK_STR(errors, "2:15: #load can only be at the top level\n");
+    // After a signature, a switch's directives are where the body should
+    // be, as a #run is there, never unknown directives (spec 2.7).
+    parse_src(&a, "f :: () #through { }\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    parse_src(&a, "f :: () -> int #complete { return 1; }\n", &errors);
+    CHECK_STR(errors, "1:16: expected '{', found directive\n");
+    parse_src(&a, "f :: () #c_call #through { }\n", &errors);
+    CHECK_STR(errors, "1:17: expected '{', found directive\n");
+    arena_free(&a);
+}
+
+TEST(a_switch_never_closed_ends_before_a_declaration) {
+    // A procedure's declaration in column 1, or the end of the file, where
+    // a 'case' or the switch's '}' should be (before the first case, in a
+    // case's statements, or after a #through) means the braces were never
+    // closed, as in a block: "expected '}'", and the top level resumes
+    // there, main parsed as its own.
+    Arena a = arena_make();
+    String errors;
+    const char *insides[] = {"", "        case 1;\n", "        case 1; x += 1;\n", "        case 1; #through;\n"};
+    for (s64 i = 0; i < 4; i++) {
+        String text = string_printf(&a, "f :: (x: int) {\n    if x == {\n%smain :: () {}\n", insides[i]);
+        CHECK_STR(parse_src(&a, string_cstr(&a, text), &errors), "(broken f)\n(proc main (params) (block))\n");
+        CHECK_STR(errors, i == 0 ? "3:1: expected '}', found identifier 'main'\n"
+                                 : "4:1: expected '}', found identifier 'main'\n");
+        text = string_printf(&a, "f :: (x: int) {\n    if x == {\n%s", insides[i]);
+        CHECK_STR(parse_src(&a, string_cstr(&a, text), &errors), "(broken f)\n");
+        CHECK_STR(errors, i == 0 ? "3:1: expected '}', found end of file\n" : "4:1: expected '}', found end of file\n");
+    }
+    arena_free(&a);
+}
+
+TEST(switches_nest_up_to_a_thousand_levels) {
+    // A switch's braces are one level of the blocks' limit (spec 6.14),
+    // each case's block inside it, as an if's is: with 999 switches inside
+    // the body, blocks nest 1000 deep, and build; one more is one message,
+    // at the '{' of the 1001st level.
+    Arena a = arena_make();
+    CHECK(builds(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 999, "y = 2;", " }", "\n}\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n", "if y == { case 1;", 1000, "y = 2;", " }",
+                                             "\n}\n")),
+              "3:16992: blocks are nested too deeply (more than 1000 levels)\n");
+    arena_free(&a);
+}

@@ -1,0 +1,1 @@
+tests/run/switch_no_case_unsigned.rig:12:5: runtime error: no case for value 201 of 'Level'

@@ -1,0 +1,17 @@
+// A #complete switch on an unsigned enum narrower than 64 bits that meets a
+// value no member has writes the value zero-extended, as a u8 reads it,
+// not sign-extended (issue #222, spec 6.14, 8.1): here 201, which an s8
+// would read as -55. Compiled and interpreted.
+#import "Basic";
+
+Level :: enum u8 { LOW; HIGH :: 200; }
+
+main :: () {
+    print("before\n");
+    v := cast(Level) 201;
+    if #complete v == {
+        case .LOW;  print("low\n");
+        case .HIGH; print("high\n");
+    }
+    print("after\n");
+}

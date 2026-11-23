@@ -1113,6 +1113,13 @@ check('the grammar colours enum declarations', () => {
     assertScopes('Mode :: enum {', { Mode: TYPE, enum: 'storage.type.rig' });
 });
 
+// The switch (issue #222): case is a keyword of control, as if is; #complete
+// and #through are directives, which one rule colours, whatever their name.
+check('the grammar colours a switch', () => {
+    assertScopes('if #complete m == {', { if: 'keyword.control.rig', '#complete': 'keyword.other.directive.rig' });
+    assertScopes('case .FREE; #through;', { case: 'keyword.control.rig', '#through': 'keyword.other.directive.rig' });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and

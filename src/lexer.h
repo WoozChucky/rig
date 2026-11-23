@@ -40,6 +40,7 @@ enum Token_Kind : u8 {
     TOKEN_NULL,
     TOKEN_CONTEXT,       // context: the current context (spec 7.10)
     TOKEN_PUSH_CONTEXT,  // push_context: a block run with another context (spec 6.13)
+    TOKEN_CASE,          // case: a switch's case (spec 6.14)
 
     // Punctuation and operators.
     TOKEN_LPAREN,             // (

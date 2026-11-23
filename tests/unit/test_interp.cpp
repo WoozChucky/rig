@@ -239,6 +239,40 @@ TEST(interp_signed_division_by_minus_one) {
     arena_free(&a);
 }
 
+TEST(interp_switch_by_hand) {
+    // A switch goes to the block of the case whose value is its operand's,
+    // compared as the type's bits (255 is an i8's -1), or to its default.
+    // Issue #222.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "pick", IR_I64);
+    s32 x = ir_add_param(p, IR_I8, IR_EXT_NONE);
+    s32 b0 = ir_new_block(&a, p), b1 = ir_new_block(&a, p), b2 = ir_new_block(&a, p), b3 = ir_new_block(&a, p);
+    Ir_Instr *dispatch = ir_emit(p, b0, IR_SWITCH, IR_I8);
+    dispatch->a = x;
+    dispatch->target = b3;
+    array_add(&dispatch->cases, Ir_Case{1, b1});
+    array_add(&dispatch->cases, Ir_Case{255, b2});
+    emit_ret(p, b1, emit_const(p, b1, IR_I64, 10));
+    emit_ret(p, b2, emit_const(p, b2, IR_I64, 20));
+    emit_ret(p, b3, emit_const(p, b3, IR_I64, 30));
+    Interp *in = interp_new(m);
+    u64 picks[3][2] = {{1, 10}, {255, 20}, {7, 30}};
+    for (s64 i = 0; i < 3; i++) {
+        Array<u64> args = {};
+        array_add(&args, picks[i][0]);
+        Interp_Result r = {};
+        interp_run(in, interp_test_proc(m, "pick"), args, &a, &r);
+        CHECK(r.ok);
+        CHECK_EQ(r.results.count, 1);
+        if (r.results.count == 1) CHECK_EQ(r.results[0], picks[i][1]);
+        array_free(&args);
+        interp_test_free(&r);
+    }
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_shifts_mask_their_amount) {
     // Lowering masks every shift's amount to the width; the interpreter
     // does too, rather than shift by the width or more, which C++ leaves
@@ -1799,6 +1833,40 @@ TEST(interp_bounds_checks_are_on_at_compile_time) {
         CHECK_STR(r.frames[0].proc, "#run");
         CHECK_EQ(r.frames[0].pos.line, 1);
         CHECK_EQ(r.frames[0].pos.col, 34);
+    }
+    interp_test_free(&r);
+    interp_free(in);
+    lowered_runs_free(&lowered);
+    arena_free(&a);
+}
+
+TEST(interp_a_run_meeting_no_case) {
+    // A run whose #complete switch meets a value no case has stops with the
+    // no-case message alone, its "PATH:L:C: runtime error: " left out (the
+    // panic's c), and frames in the source's procedures only, pick at the
+    // switch's `if` and #run at its `#run`: __rig_no_case, the compiler's, is
+    // left out of them.
+    Arena a = arena_make();
+    Lowered_Runs lowered = lower_runs_of(&a,
+                                         "Mode :: enum s8 { ALLOCATE; FREE :: -2; }\n"
+                                         "pick :: (m: Mode) {\n"
+                                         "    if #complete m == { case .ALLOCATE; case .FREE; }\n"
+                                         "}\n"
+                                         "#run pick(cast(Mode) -7);\n"
+                                         "main :: () { }\n");
+    Interp *in = interp_new(lowered.module);
+    Interp_Result r = {};
+    interp_run(in, ir_lower_run(lowered.lowering, lowered.file->runs[0]), {}, &a, &r);
+    CHECK(!r.ok);
+    CHECK_STR(r.message, "no case for value -7 of 'Mode'");
+    CHECK_EQ(r.frames.count, 2);
+    if (r.frames.count == 2) {
+        CHECK_STR(r.frames[0].proc, "pick");
+        CHECK_EQ(r.frames[0].pos.line, 3);
+        CHECK_EQ(r.frames[0].pos.col, 5);
+        CHECK_STR(r.frames[1].proc, "#run");
+        CHECK_EQ(r.frames[1].pos.line, 5);
+        CHECK_EQ(r.frames[1].pos.col, 1);
     }
     interp_test_free(&r);
     interp_free(in);

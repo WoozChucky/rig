@@ -693,6 +693,14 @@ static int binary_precedence(Token_Kind kind) {
 // Each binary node is a level above both its operands (MAX_DEPTH): the
 // right operand is read a level down, and the node's height is one more
 // than the higher of the two.
+//
+// An '==' right before a '{' is no operator: it ends the expression, at
+// every level, since each inner call stops at it and returns to the loop
+// of the one around, which then stops at it too. It's what starts a
+// switch, `if x == {` (spec 6.14), which parse_if reads; a '{' starts no
+// expression, so no comparison ever had one there. Anywhere else, what was
+// expected after the expression is found to be '==': `x := a == {` is
+// "expected ';', found '=='".
 static Ast *parse_expression(Parser *p, int min_precedence) {
     if (p->levels == 0) p->expression_start = peek(p)->pos;  // the outermost expression
     Ast *left = parse_unary(p);
@@ -701,6 +709,7 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
         Token *op = peek(p);
         int precedence = binary_precedence(op->kind);
         if (precedence == 0 || precedence < min_precedence) break;
+        if (op->kind == TOKEN_EQUAL_EQUAL && peek(p, 1)->kind == TOKEN_LBRACE) break;
         advance(p);
         if (!open_level(p)) return nullptr;
         Ast *right = parse_expression(p, precedence + 1);
@@ -966,14 +975,126 @@ static bool is_assignment_operator(Token_Kind kind) {
 }
 
 static Ast_Block *parse_block(Parser *p);
+static bool parse_statements(Parser *p, Ast_Block *block, bool in_case);
+
+// switch = 'if' ['#complete'] expression '==' '{' {case} '}'
+// case   = 'case' [expression] ';' statement* ['#through' ';']
+//
+// A switch (spec 6.14), from its '==' on: parse_if has read the 'if', the
+// '#complete' if any (`complete`, or null) and the switched expression
+// (`value`), which the '==' before the '{' ended (parse_expression).
+//
+// Each case's statements run up to the next 'case' or the '}'; they're read
+// as a block's are (parse_statements, with the same recovery), into a block
+// of their own at the 'case'. Its end is the switch's '}', where the jump
+// out of the case is (spec 10.7). A `#through;` is taken only as a case's
+// last statement: anything but a 'case' or the '}' after it is "#through
+// must be its case's last statement", and the '}' "#through can't end the
+// last case: there's no case after it", both at the '#through'. Anywhere
+// else, a block inside a case included, parse_statement refuses it, and a
+// 'case' too. Before the first case only a 'case' or the '}' may come:
+// anything else is "expected 'case'", or a #load misplaced
+// (error_expected_or_load). The end of the file, or a declaration only
+// the top level has at the start of a line (starts_declaration), where a
+// 'case' or the '}' should be, before the first case or after a #through,
+// means the braces were never closed: "expected '}'", and the top level
+// resumes there, as in a block (parse_block_rest).
+//
+// The braces are one block level (MAX_DEPTH), counted at the '{' as
+// parse_block counts; each case's block is inside that level, as an if's
+// block is.
+static Ast_Switch *parse_switch(Parser *p, Token *keyword, Token *complete, Ast *value) {
+    Token *equals = advance(p);  // the '=='
+    Token *open = advance(p);    // the '{'
+    if (p->blocks == MAX_DEPTH) {
+        diag_error(p->diag, open->pos, "blocks are nested too deeply (more than %d levels)", MAX_DEPTH);
+        return nullptr;
+    }
+    Ast_Switch *s = ast_new<Ast_Switch>(p->arena, AST_SWITCH, keyword->pos);
+    s->value = value;
+    s->equals = equals->pos;
+    if (complete) {
+        s->is_complete = true;
+        s->complete = complete->pos;
+    }
+    p->blocks++;
+    reach_in_body(p, body_blocks(p));
+    bool fine = true;
+    while (fine && peek(p)->kind != TOKEN_RBRACE) {
+        if (peek(p)->kind != TOKEN_CASE) {
+            // The end of the file, or a procedure's declaration at the
+            // start of a line, means the braces were never closed, as in
+            // a block (parse_block_rest): the top level resumes there.
+            if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
+                error_expected(p, token_kind_name(TOKEN_RBRACE));
+                p->resume = p->next;
+            } else {
+                error_expected_or_load(p, "'case'");
+            }
+            fine = false;
+            break;
+        }
+        Token *word = advance(p);  // the 'case'
+        Ast_Case *k = ast_new<Ast_Case>(p->arena, AST_CASE, word->pos);
+        if (peek(p)->kind != TOKEN_SEMICOLON) {
+            k->value = parse_expression(p, 1);
+            if (!k->value) {
+                fine = false;
+                break;
+            }
+        }
+        if (!expect(p, TOKEN_SEMICOLON)) {
+            fine = false;
+            break;
+        }
+        k->block = ast_new<Ast_Block>(p->arena, AST_BLOCK, word->pos);
+        fine = parse_statements(p, k->block, true);
+        if (fine && is_directive(peek(p), "through")) {
+            Token *through = advance(p);
+            k->through = through->pos;
+            fine = expect(p, TOKEN_SEMICOLON) != nullptr;
+            if (fine && (peek(p)->kind == TOKEN_EOF || starts_declaration(p))) {
+                // The braces were never closed, as before a case above.
+                error_expected(p, token_kind_name(TOKEN_RBRACE));
+                p->resume = p->next;
+                fine = false;
+            } else if (fine && peek(p)->kind == TOKEN_RBRACE) {
+                diag_error(p->diag, through->pos, "#through can't end the last case: there's no case after it");
+                fine = false;
+            } else if (fine && peek(p)->kind != TOKEN_CASE) {
+                diag_error(p->diag, through->pos, "#through must be its case's last statement");
+                fine = false;
+            }
+        }
+        array_add(&s->cases, k);
+    }
+    p->blocks--;
+    if (!fine) return nullptr;
+    s->end = advance(p)->pos;
+    for (s64 i = 0; i < s->cases.count; i++) s->cases[i]->block->end = s->end;
+    return s;
+}
 
 // if = 'if' expression block ['else' (block | if)]
+//    | switch
 //
 // The condition is any expression. Parentheses around it are allowed, as a
 // parenthesised expression, but not needed: the body's '{' ends the
 // expression, since no expression goes on with a '{'. The bodies are always
 // blocks, so no else can dangle: `else if` is an if as the whole else part,
 // and a chain of them nests to the right.
+//
+// When the expression is followed by '==' and '{', which ended it
+// (parse_expression), it's a switch on the whole expression (parse_switch):
+// `if a && b == {` switches on a && b. A '#complete' after the 'if' is only
+// a switch's: one whose expression is followed by anything else is
+// "#complete is for a switch, as in if #complete x == { ... }", at it. A
+// switch takes no else, its default being `case;`: an else after its '}'
+// is "a switch takes no else; its 'case;' runs when no case does", at the
+// else. `else if x == {` is fine: the switch is then the one statement of
+// a block at its 'if', ending at its '}', which is the arm before's else
+// part, so whatever follows an else-if chain sees a block there, as after
+// `else { ... }`.
 //
 // A chain has no limit to its length, unlike the nesting MAX_DEPTH limits:
 // a generated one (a state machine's states, a table written as code) can
@@ -988,12 +1109,32 @@ static Ast *parse_if(Parser *p) {
     Ast_If *last = nullptr;  // the arm read last, whose else part comes next
     for (;;) {
         Token *keyword = advance(p);  // the 'if'
+        Token *complete = is_directive(peek(p), "complete") ? advance(p) : nullptr;
+        Ast *condition = parse_expression(p, 1);
+        if (!condition) return nullptr;
+        if (peek(p)->kind == TOKEN_EQUAL_EQUAL && peek(p, 1)->kind == TOKEN_LBRACE) {
+            Ast_Switch *s = parse_switch(p, keyword, complete, condition);
+            if (!s) return nullptr;
+            if (peek(p)->kind == TOKEN_ELSE) {
+                diag_error(p->diag, peek(p)->pos, "a switch takes no else; its 'case;' runs when no case does");
+                return nullptr;
+            }
+            if (!last) return s;
+            Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, keyword->pos);
+            array_add(&block->statements, (Ast *)s);
+            block->end = s->end;
+            last->else_part = block;
+            return first;
+        }
+        if (complete) {
+            diag_error(p->diag, complete->pos, "#complete is for a switch, as in if #complete x == { ... }");
+            return nullptr;
+        }
         Ast_If *branch = ast_new<Ast_If>(p->arena, AST_IF, keyword->pos);
         if (last) last->else_part = branch;
         else first = branch;
         last = branch;
-        branch->condition = parse_expression(p, 1);
-        if (!branch->condition) return nullptr;
+        branch->condition = condition;
         branch->then_block = parse_block(p);
         if (!branch->then_block) return nullptr;
         if (peek(p)->kind != TOKEN_ELSE) return first;
@@ -1078,10 +1219,10 @@ static Ast_Var *loop_variable(Parser *p, String name, Position pos) {
 // - '..': a range, whose last end follows;
 // - the body's '{': what the loop goes over, its sequence (an array, a
 //   view or a string; the checker says whether it is one);
-// - with no iterator named, a name and then anything else but a #load
-//   (`for i 0..9`, `for x in 0..9`): the name was meant as the iterator's,
-//   and its ':' is missing: "expected ':' after the iterator's name, as in
-//   for i: 0..9", at what came instead;
+// - with no iterator named, a name and then anything else but a #load or
+//   an '==' before a '{' (`for i 0..9`, `for x in 0..9`): the name was
+//   meant as the iterator's, and its ':' is missing: "expected ':' after
+//   the iterator's name, as in for i: 0..9", at what came instead;
 // - otherwise, "expected '..' or the loop's '{'", or a #load misplaced
 //   (error_expected_or_load).
 // A '*' right after 'for' makes the iterator a pointer to each element
@@ -1113,7 +1254,8 @@ static Ast *parse_for(Parser *p) {
     }
     if (after->kind != TOKEN_DOT_DOT) {
         if (after->kind == TOKEN_ERROR) return nullptr;  // the lexer said what's wrong
-        if (!named_iterator && loop->first->kind == AST_NAME && !is_load_or_import(after)) {
+        bool switch_braces = after->kind == TOKEN_EQUAL_EQUAL && peek(p, 1)->kind == TOKEN_LBRACE;
+        if (!named_iterator && loop->first->kind == AST_NAME && !is_load_or_import(after) && !switch_braces) {
             diag_error(p->diag, after->pos, "expected ':' after the iterator's name, as in for i: 0..9");
         } else {
             error_expected_or_load(p, "'..' or the loop's '{'");
@@ -1208,8 +1350,22 @@ static Ast *parse_push_context(Parser *p) {
 // take only '='):
 // assignment = expression ('=' | '+=' | ...) expression ';'
 //            | expression ',' expression {',' expression} '=' expression ';'
+//
+// A 'case' or a '#through' only goes right inside a switch's braces, where
+// parse_switch reads it and the statements of a case stop before it
+// (parse_statements). Where a statement starts anywhere else, a block or
+// an #if inside a case included, it's refused (spec 6.14), at it.
 static Ast *parse_statement(Parser *p) {
     Token *t = peek(p);
+    if (t->kind == TOKEN_CASE) {
+        diag_error(p->diag, t->pos,
+                   "'case' can only be right inside a switch's braces, as in if x == { case 1; a(); }");
+        return nullptr;
+    }
+    if (is_directive(t, "through")) {
+        diag_error(p->diag, t->pos, "#through can only end a switch's case, as in case 1; a(); #through;");
+        return nullptr;
+    }
     switch (t->kind) {
     case TOKEN_LBRACE: return parse_block(p);
     case TOKEN_RETURN: return parse_return(p);
@@ -1356,16 +1512,27 @@ static void report_misplaced_loads(Parser *p, Array<Token *> *loads) {
 // is the end itself (starts_declaration).
 static Ast_Block *parse_block_rest(Parser *p, Token *open) {
     Ast_Block *block = ast_new<Ast_Block>(p->arena, AST_BLOCK, open->pos);
+    if (!parse_statements(p, block, false)) return nullptr;
+    block->end = advance(p)->pos;
+    return block;
+}
+
+// The statements of a block, or of a switch's case (`in_case`), into
+// `block`, as parse_block_rest says, up to the '}', which is left for the
+// caller to read. A case's statements stop before a 'case' or a '#through'
+// too (parse_switch). False after an error, said.
+static bool parse_statements(Parser *p, Ast_Block *block, bool in_case) {
     s64 run = -1;               // where the run of column-1 declarations up to here starts, or -1
     Array<Token *> loads = {};  // the run's loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
+        if (in_case && (peek(p)->kind == TOKEN_CASE || is_directive(peek(p), "through"))) break;
         if (peek(p)->kind == TOKEN_EOF || starts_declaration(p)) {
             // The run's loads are the top level's, read again there.
             array_free(&loads);
             if (run >= 0) p->next = run;
             error_expected(p, token_kind_name(TOKEN_RBRACE));
             p->resume = p->next;
-            return nullptr;
+            return false;
         }
         if (!declares_in_column_1(p)) {
             report_misplaced_loads(p, &loads);
@@ -1386,13 +1553,12 @@ static Ast_Block *parse_block_rest(Parser *p, Token *open) {
         p->held_loads = held_loads;
         if (!statement) {
             report_misplaced_loads(p, &loads);
-            return nullptr;
+            return false;
         }
         array_add(&block->statements, statement);
     }
     report_misplaced_loads(p, &loads);
-    block->end = advance(p)->pos;
-    return block;
+    return true;
 }
 
 // block = '{' statement* '}'
@@ -1697,18 +1863,19 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
-// what's missing (error_expected_or_load). A #run, an #if or a
-// #caller_location there is "expected '{'" (on the next line, a #run or an
-// #if is the top-level declaration the recovery resumes at). A
-// string after #foreign's library is the C function's name, when it isn't
-// the procedure's own (c_free :: (p: *void) #foreign libc "free";): the
-// procedure keeps its name in Rig. #compiler, Jai's directive, declares a
-// procedure the compiler does itself, while compiling (spec 7.9), with no
-// body: `create_workspace :: (name: string) -> Workspace #compiler;`. It's
-// no C function, so it takes no #c_call either ("a #compiler procedure is
-// the compiler's: it takes no '#c_call'"), #no_abc before it is "expected
-// '{'", as before #foreign, and the ';' must follow it. Any other
-// directive but these is "unknown directive '#foo'".
+// what's missing (error_expected_or_load). A #run, an #if, a
+// #caller_location, a #complete or a #through there is "expected '{'" (on
+// the next line, a #run or an #if is the top-level declaration the
+// recovery resumes at). A string after #foreign's library is the C
+// function's name, when it isn't the procedure's own (c_free :: (p: *void)
+// #foreign libc "free";): the procedure keeps its name in Rig. #compiler,
+// Jai's directive, declares a procedure the compiler does itself, while
+// compiling (spec 7.9), with no body: `create_workspace :: (name: string)
+// -> Workspace #compiler;`. It's no C function, so it takes no #c_call
+// either ("a #compiler procedure is the compiler's: it takes no
+// '#c_call'"), #no_abc before it is "expected '{'", as before #foreign,
+// and the ';' must follow it. Any other directive but these is "unknown
+// directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, C's bare '..'
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign
@@ -1778,9 +1945,13 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         // Where the '{' should be: parse_block reports it. A #run or an #if
         // starting the next line is where the recovery resumes, as a #load
-        // is. A #caller_location is a value, as a #run is, so it's no
-        // unknown directive here either (spec 2.7).
-        if (is_top_level_directive(t) || is_directive(t, "caller_location")) break;
+        // is. A #caller_location is a value, as a #run is, and a #complete
+        // or a #through is part of a switch, so none is an unknown
+        // directive here either (spec 2.7).
+        if (is_top_level_directive(t) || is_directive(t, "caller_location") || is_directive(t, "complete") ||
+            is_directive(t, "through")) {
+            break;
+        }
         bool compiler = is_directive(t, "compiler");
         if (!compiler && !string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));

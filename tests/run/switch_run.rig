@@ -1,0 +1,41 @@
+// The switch while compiling (issue #222, spec 6.14, 7.8): a #run's code
+// switches on an enum with #complete and #through and on a string with
+// a default, as the compiled program does; a case holds an #if and a
+// #run.
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; }
+
+code :: (m: Mode, word: string) -> int {
+    total := 0;
+    if #complete m == {
+        case .ALLOCATE; total += 1; #through;
+        case .RESIZE;   total += 10;
+        case .FREE;     total += 100;
+    }
+    if word == {
+        case "a"; total += 1000;
+        case;     total += 2000;
+    }
+    return total;
+}
+
+AT_COMPILE :: #run code(.ALLOCATE, "a");
+
+#run {
+    print("{} {}\n", code(.FREE, "b"), AT_COMPILE);
+}
+
+main :: () {
+    print("{} {}\n", code(.FREE, "b"), AT_COMPILE);
+    VERBOSE :: true;
+    for 1..2 {
+        if it == {
+            case 1;
+                #if VERBOSE { print("one, verbose\n"); } else { print("one\n"); }
+            case 2;
+                n := #run code(.RESIZE, "z");
+                print("{}\n", n);
+        }
+    }
+}

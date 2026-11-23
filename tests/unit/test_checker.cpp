@@ -351,6 +351,15 @@ static Ast *find_in_statement(Ast *s, const char *name) {
         return find_local(loop->body, name);
     }
     case AST_DEFER: return find_in_statement(((Ast_Defer *)s)->statement, name);
+    case AST_SWITCH: {
+        // Each case's statements are a block of their own (spec 6.14).
+        Ast_Switch *sw = (Ast_Switch *)s;
+        for (s64 i = 0; i < sw->cases.count; i++) {
+            Ast *found = find_local(sw->cases[i]->block, name);
+            if (found) return found;
+        }
+        return nullptr;
+    }
     default: return nullptr;
     }
 }
@@ -8942,6 +8951,37 @@ TEST(a_run_reaches_through_a_push) {
     arena_free(&a);
 }
 
+TEST(a_run_reaches_through_a_switch) {
+    // X's run calls f, whose switch works out g(n) and runs h in a case:
+    // the walk reaches the switched expression and the case's block
+    // (check_run.cpp's walk_node), so g's and h's bodies are checked before
+    // the run is lowered, in the declarations pass. f's switch on a string
+    // has a case naming PICKED, a later run's string, done when f's body is
+    // checked, and matched; the run gives 105.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "X :: #run f(2, \"picked\");\n"
+                                 "f :: (n: int, s: string) -> int {\n"
+                                 "    total := 0;\n"
+                                 "    if g(n) == { case 2; total += h(); }\n"
+                                 "    if s == { case PICKED; total += 100; }\n"
+                                 "    return total;\n"
+                                 "}\n"
+                                 "g :: (n: int) -> int { return n; }\n"
+                                 "h :: () -> int { return 5; }\n"
+                                 "PICKED :: #run picked();\n"
+                                 "picked :: () -> string { return \"picked\"; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    Ast *x = top_level_named(tree, "X");
+    CHECK_EQ(x->kind, AST_CONST);
+    CHECK(x->is_constant);
+    CHECK_EQ(x->constant, 105);
+    arena_free(&a);
+}
+
 TEST(the_temporary_allocator_while_compiling) {
     // Preload's temporary allocator, run by the compile-time world's #runs,
     // which share its storage, in declaration order: a resize of the last
@@ -9878,5 +9918,237 @@ TEST(enum_members_are_constants) {
     CHECK_STR(type_of(&a, &c, "k"), "int");
     CHECK_STR(type_of(&a, &c, "n"), "[4]u8");
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #222: the switch (spec 6.14).
+
+// The switch that is statement i of the last procedure's body (the tests
+// put main last), or null.
+static Ast_Switch *switch_at(Checked *c, s64 i) {
+    Ast_Block *body = c->file->procs[c->file->procs.count - 1]->body;
+    if (i >= body->statements.count || body->statements[i]->kind != AST_SWITCH) return nullptr;
+    return (Ast_Switch *)body->statements[i];
+}
+
+TEST(a_switchs_cases_take_its_type) {
+    // Each case's value converts to the switched expression's type, as an
+    // assignment's value does: .FREE takes the enum, an untyped constant
+    // the integer type, .A | .B the flags type, 0 its empty set, null the
+    // pointer type, a string constant the string. A constant switched on
+    // has its default type.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Mode :: enum { ALLOCATE; RESIZE; FREE; }\n"
+                              "Look :: enum_flags u8 { A; B; }\n"
+                              "LIMIT :: 3;\n"
+                              "NAME :: \"rig\";\n"
+                              "main :: () {\n"
+                              "    m : Mode;\n"
+                              "    f : Look;\n"
+                              "    small : u8;\n"
+                              "    p : *int;\n"
+                              "    if m == { case .FREE; case Mode.RESIZE; }\n"
+                              "    if f == { case .A | .B; case 0; }\n"
+                              "    if small == { case 200; case LIMIT; }\n"
+                              "    if LIMIT == { case 3; }\n"
+                              "    if p == { case null; case; }\n"
+                              "    if true == { case true; case false; }\n"
+                              "    word : string;\n"
+                              "    if word == { case \"\"; case NAME; case \"other\"; case; }\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(c.ok);
+    const char *types[] = {"Mode", "Look", "u8"};
+    const u64 values[][2] = {{2, 1}, {3, 0}, {200, 3}};
+    for (s64 i = 0; i < 3; i++) {
+        Ast_Switch *s = switch_at(&c, 4 + i);
+        CHECK(s);
+        if (!s) continue;
+        CHECK_EQ(s->cases.count, 2);
+        for (s64 k = 0; k < s->cases.count && k < 2; k++) {
+            Ast *value = s->cases[k]->value;
+            CHECK_STR(type_name(&a, value->type), types[i]);
+            CHECK(value->is_constant);
+            CHECK_EQ(value->constant, values[i][k]);
+        }
+    }
+    Ast_Switch *constant = switch_at(&c, 7);
+    CHECK(constant);
+    if (constant) CHECK_STR(type_name(&a, constant->value->type), "int");
+    Ast_Switch *pointer = switch_at(&c, 8);
+    CHECK(pointer);
+    if (pointer && pointer->cases.count == 2) {
+        CHECK(pointer->default_case == pointer->cases[1]);
+        CHECK_STR(type_name(&a, pointer->cases[0]->value->type), "*int");
+    }
+    Ast_Switch *text = switch_at(&c, 11);
+    CHECK(text);
+    if (text && text->cases.count == 4) {
+        for (s64 k = 0; k < 3; k++) CHECK_STR(type_name(&a, text->cases[k]->value->type), "string");
+        CHECK(text->default_case == text->cases[3]);
+    }
+    for (s64 i = 4; i < 10; i++) {
+        Ast_Switch *s = switch_at(&c, i);
+        CHECK(s);
+        if (s) CHECK(!s->checks_no_case);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_complete_switch_covers_values_not_names) {
+    // FIRST and ALSO_FIRST share a value, which a case of either covers.
+    // Without `case;`, a value no member has is a runtime error, so the
+    // first switch checks for it, and the second, with one, doesn't (its
+    // `case;` covers no member: SECOND still needs a case of its own).
+    Arena a = arena_make();
+    Checked c = check_src(&a, "Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }\n"
+                              "main :: () {\n"
+                              "    s : Shared;\n"
+                              "    if #complete s == { case .ALSO_FIRST; case .SECOND; }\n"
+                              "    if #complete s == { case .FIRST; case .SECOND; case; }\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Switch *without = switch_at(&c, 1);
+    Ast_Switch *with = switch_at(&c, 2);
+    CHECK(without && with);
+    if (without) {
+        CHECK(without->covers_every_value);
+        CHECK(without->checks_no_case);
+        CHECK(!without->default_case);
+    }
+    if (with) {
+        CHECK(with->covers_every_value);
+        CHECK(!with->checks_no_case);
+        CHECK(with->default_case);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Adds s to `text`.
+static void add_case_text(Array<u8> *text, const char *s) {
+    for (const char *c = s; *c; c++) array_add(text, (u8)*c);
+}
+
+// Adds the line printf would make of fmt and its one number to `text`.
+static void add_case_line(Array<u8> *text, const char *fmt, s64 n) {
+    char line[64];
+    snprintf(line, sizeof line, fmt, (long long)n);
+    add_case_text(text, line);
+}
+
+// A program of three switches of `count` cases each, one case to a line:
+// an int's (case 0; up to case count - 1;), a string's ("s0" up) and a
+// #complete one on an enum of `count` members, its cases written as casts
+// (case cast(Many) 0;), not by name: finding a member by its name looks
+// through the members one by one (enum_member_index), which over every
+// case would take time that grows with the count's square, not the
+// switch's. With `mistakes` the first two have case 7 again at their end,
+// and the third has no case for the last two members. Zero-terminated, in
+// the arena.
+static const char *many_cases_program(Arena *a, s64 count, bool mistakes) {
+    Array<u8> text = {};
+    add_case_text(&text, "Many :: enum {");
+    for (s64 i = 0; i < count; i++) add_case_line(&text, " M%lld;", i);
+    add_case_text(&text, " }\nmain :: () {\n    n := 1;\n    if n == {\n");
+    for (s64 i = 0; i < count; i++) add_case_line(&text, "        case %lld;\n", i);
+    if (mistakes) add_case_text(&text, "        case 7;\n");
+    add_case_text(&text, "    }\n    word := \"\";\n    if word == {\n");
+    for (s64 i = 0; i < count; i++) add_case_line(&text, "        case \"s%lld\";\n", i);
+    if (mistakes) add_case_text(&text, "        case \"s7\";\n");
+    add_case_text(&text, "    }\n    m : Many;\n    if #complete m == {\n");
+    for (s64 i = 0; i < count - (mistakes ? 2 : 0); i++) add_case_line(&text, "        case cast(Many) %lld;\n", i);
+    add_case_text(&text, "    }\n}\n");
+    const char *program = string_cstr(a, {text.data, text.count});
+    array_free(&text);
+    return program;
+}
+
+TEST(a_switch_of_many_cases_checks) {
+    // 20,000 cases to a switch, generated, as a program generated by
+    // another might have: each case's value is looked up among the earlier
+    // ones in a table, an int's, a string's and an enum's, and each member
+    // of the #complete switch's enum among the cases', so check_switch
+    // takes time that grows with their count, not its square (which took
+    // seconds). The same value again names the first case to have it; the
+    // members with no case are named in order. Nothing here measures the
+    // time.
+    const s64 N = 20000;
+    Arena a = arena_make();
+    Checked c = check_src(&a, many_cases_program(&a, N, false));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK(c.ok);
+    for (s64 i = 1; i <= 5; i += 2) {
+        Ast_Switch *s = switch_at(&c, i);
+        CHECK(s);
+        if (s) CHECK_EQ(s->cases.count, N);
+    }
+    Ast_Switch *complete = switch_at(&c, 5);
+    if (complete) {
+        CHECK(complete->covers_every_value);
+        CHECK(complete->checks_no_case);
+    }
+    token_list_free(c.list);
+    String expected = string_printf(&a,
+                                    "%lld:14: this value already has a case at test.rig:12:14\n"
+                                    "%lld:14: this value already has a case at test.rig:%lld:14\n"
+                                    "%lld:8: this switch is #complete, but 'Many.M19998' and 'Many.M19999' "
+                                    "have no case\n",
+                                    (long long)(5 + N), (long long)(9 + 2 * N), (long long)(16 + N),
+                                    (long long)(12 + 2 * N));
+    CHECK_STR(check_source(&a, many_cases_program(&a, N, true)), string_cstr(&a, expected));
+    arena_free(&a);
+}
+
+TEST(each_case_is_a_scope_of_its_own) {
+    // Each case's statements are a block and a scope (spec 6.14, 4.7): two
+    // cases may declare one name, each its own local, and neither is seen
+    // past the switch.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "main :: () {\n"
+                              "    n := 1;\n"
+                              "    if n == { case 1; a := 1; case 2; a := \"two\"; }\n"
+                              "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Switch *s = switch_at(&c, 1);
+    CHECK(s);
+    if (s && s->cases.count == 2) {
+        Ast *first = find_local(s->cases[0]->block, "a");
+        Ast *second = find_local(s->cases[1]->block, "a");
+        CHECK(first && second && first != second);
+        if (first) CHECK_STR(type_name(&a, first->type), "int");
+        if (second) CHECK_STR(type_name(&a, second->type), "string");
+        CHECK(find_local(c.file->procs[0]->body, "a") == first);
+    }
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "main :: () {\n"
+                               "    n := 1;\n"
+                               "    if n == { case 1; a := 1; case 2; a := 2; }\n"
+                               "    a = 3;\n"
+                               "}\n"),
+              "4:5: unknown identifier 'a'\n");
+    arena_free(&a);
+}
+
+TEST(switches_reach_their_end_as_spec_6_11_says) {
+    // tests/errors/switch_reaching_the_end.rig's procedures: the five that
+    // get past their switch to their '}' are reported there, and only they;
+    // the five whose switch is failed get only the switch's own message,
+    // a refused #complete's too.
+    Arena a = arena_make();
+    String text = {};
+    CHECK(os_read_file(&a, str("tests/errors/switch_reaching_the_end.rig"), &text));
+    CHECK_STR(check_source(&a, string_cstr(&a, text)),
+              "17:1: 'no_default' must return a value on every path, and this one reaches its end\n"
+              "24:1: 'default_reaches' must return a value on every path, and this one reaches its end\n"
+              "45:1: 'bool_both' must return a value on every path, and this one reaches its end\n"
+              "54:1: 'loop_break' must return a value on every path, and this one reaches its end\n"
+              "61:1: 'middle_reaches' must return a value on every path, and this one reaches its end\n"
+              "64:8: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'\n"
+              "70:8: this switch is #complete, but 'Mode.B' has no case\n"
+              "78:15: 'Mode' has no member 'C'\n"
+              "83:8: #complete needs an enum, not 'int'\n"
+              "89:8: #complete needs an enum, not the enum_flags 'Look'\n");
     arena_free(&a);
 }

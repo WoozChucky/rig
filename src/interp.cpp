@@ -830,6 +830,20 @@ static void interp_loop(Interp *in, Interp_Record *frame, Arena *a, Interp_Resul
             index = 0;
             code = p->blocks.data[block]->instrs.data;
             continue;
+        case IR_SWITCH: {
+            // The value and the cases' are canonical, the type's bits
+            // zero-extended, so they compare as they are.
+            block = instr->target;
+            for (s64 k = 0; k < instr->cases.count; k++) {
+                if (instr->cases.data[k].value == v[instr->a]) {
+                    block = instr->cases.data[k].block;
+                    break;
+                }
+            }
+            index = 0;
+            code = p->blocks.data[block]->instrs.data;
+            continue;
+        }
         case IR_RET: {
             Interp_Record *caller = frame->caller;
             if (!caller) {

@@ -135,7 +135,7 @@ static const Keyword KEYWORDS[] = {
     {"enum_flags", TOKEN_ENUM_FLAGS}, {"union", TOKEN_UNION},   {"cast", TOKEN_CAST},
     {"defer", TOKEN_DEFER},           {"using", TOKEN_USING},   {"true", TOKEN_TRUE},
     {"false", TOKEN_FALSE},           {"null", TOKEN_NULL},     {"context", TOKEN_CONTEXT},
-    {"push_context", TOKEN_PUSH_CONTEXT},
+    {"push_context", TOKEN_PUSH_CONTEXT}, {"case", TOKEN_CASE},
 };
 
 // A name with bytes from 0x80 up in it: UTF-8 letters, as in função, which
@@ -153,7 +153,7 @@ static void lex_non_ascii_name(Lexer *l, Position pos, s64 start) {
 }
 
 // A word is read whole first and only then compared with the keywords, so
-// "iffy" is one identifier, not the keyword "if" followed by "fy". Nineteen
+// "iffy" is one identifier, not the keyword "if" followed by "fy". Twenty
 // short comparisons cost less than hashing; a Table would pay off only with
 // many more keywords.
 static void lex_word(Lexer *l, Position pos, s64 start) {

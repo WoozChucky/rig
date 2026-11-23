@@ -3,8 +3,9 @@
 // A module is a list of globals and procedures. A procedure's body is a list
 // of basic blocks, b0 first (the entry); a block is a straight line of
 // instructions that ends with exactly one terminator (a jump, a branch, a
-// ret, a panic or unreachable), the only way control leaves it. This is the
-// shape LLVM wants too, so the backend maps each IR block to one LLVM block.
+// switch, a ret, a panic or unreachable), the only way control leaves it.
+// This is the shape LLVM wants too, so the backend maps each IR block to one
+// LLVM block.
 //
 // Values. Each instruction that gives a value numbers it, %0, %1, ... in the
 // order the instructions are emitted, per procedure; a procedure's
@@ -109,23 +110,23 @@
 //   when there is an instruction there (a jump to the block laid out right
 //   after it has none: lower.cpp's header). Line 0 is no position. The
 //   procedures the compiler makes itself (__rig_bounds_failed,
-//   __rig_string_equal) have none, and no source, so a debugger steps over
-//   them. In a procedure of the source, only the prologue's work has none:
-//   each scalar parameter's slot and the store into it, and the context's
-//   slot and what it's given (spec 7.10: the hidden parameter; or, in main
-//   and a run's procedure, the call of Preload's __runtime_init, in main
-//   then the call of __save_command_line with C's argc and argv (spec 7.4),
-//   then default_context's address), before the body's first line (a
-//   debugger's breakpoint on the procedure stops at the first instruction
-//   with a line, once they're done). __runtime_init and
-//   __save_command_line themselves have no debug information
-//   (Ir_Proc.no_debug_info), as the procedures the compiler makes have
-//   none: located at line 0, a call would be given main's own line, and
-//   `break main` would stop there before the call ran; with no location,
-//   LLVM refuses a call of a procedure that has debug information. So they
-//   have none, the calls have no location, and `break main` stops at main's
-//   first line with the context set up and the arguments saved, and a
-//   debugger steps over the calls.
+//   __rig_string_equal, __rig_no_case) have none, and no source, so a
+//   debugger steps over them. In a procedure of the source, only the
+//   prologue's work has none: each scalar parameter's slot and the store
+//   into it, and the context's slot and what it's given (spec 7.10: the
+//   hidden parameter; or, in main and a run's procedure, the call of
+//   Preload's __runtime_init, in main then the call of __save_command_line
+//   with C's argc and argv (spec 7.4), then default_context's address),
+//   before the body's first line (a debugger's breakpoint on the procedure
+//   stops at the first instruction with a line, once they're done).
+//   __runtime_init and __save_command_line themselves have no debug
+//   information (Ir_Proc.no_debug_info), as the procedures the compiler
+//   makes have none: located at line 0, a call would be given main's own
+//   line, and `break main` would stop there before the call ran; with no
+//   location, LLVM refuses a call of a procedure that has debug
+//   information. So they have none, the calls have no location, and `break
+//   main` stops at main's first line with the context set up and the
+//   arguments saved, and a debugger steps over the calls.
 //   Every position in a procedure, its scopes' and its variables' too, is
 //   in the procedure's own file (Ir_Proc.pos's): a backend names that file
 //   once, in the procedure's debug scope, and each line in it. So a call's
@@ -276,6 +277,10 @@ enum Ir_Op : u8 {
     // Terminators: the last instruction of every block, and only there.
     IR_JUMP,                         // jump bN
     IR_BRANCH,                       // branch %c, bN, bM     to bN if the i1 %c is 1, else bM
+    IR_SWITCH,                       // switch T %a, bD [V: bN, V: bM, ...]  to the block of the case whose
+                                     // value is %a's, else to bD (`target`); T an integer type or i1, each
+                                     // V T's bits as IR_CONST's, no two the same (`cases`, a switch's
+                                     // cases in source order: issue #222, spec 6.14)
     IR_RET,                          // ret [%a, ...]         one value per result
     IR_PANIC,                        // panic @global: writes the global's bytes but its final zero to stderr, exits 101
                                      // panic %a, %b: the same with the %b bytes (an i64) at the ptr %a
@@ -301,9 +306,16 @@ enum Ir_Pred : u8 {
 
 struct Ir_Proc;
 
+// One case of an IR_SWITCH: the value that goes to its block.
+struct Ir_Case {
+    u64 value;  // the switch type's bits, zero-extended from its width, as IR_CONST's
+    s32 block;
+};
+
 struct Ir_Instr {
     Ir_Op op;
-    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT: the operands'; IR_LOCAL: the slot's
+    Ir_Type type;      // the value's type; IR_STORE, IR_CMP, IR_FCMP, IR_SELECT, IR_SWITCH: the operands';
+                       // IR_LOCAL: the slot's
                        // (IR_VOID: bytes); IR_CALL, IR_CALL_INDIRECT: the first result's;
                        // IR_VOID when none
     Ir_Type from;      // the conversions (IR_SEXT ... IR_TRUNC, IR_FPEXT ... IR_FPTOUI_SAT, IR_PTRTOINT,
@@ -313,7 +325,8 @@ struct Ir_Instr {
     s32 a, b, c;       // operands, value numbers (-1: none); c is IR_SELECT's and IR_BRANCH's condition,
                        // and IR_PANIC's prefix length (an i64) when the message is %a and %b (see `constant`)
     s32 target;        // IR_ADDR, IR_PANIC: a global (IR_PANIC: -1 when the message is %a and %b);
-                       // IR_CALL, IR_PROC_ADDR: a procedure; IR_JUMP, IR_BRANCH: a block (the true one)
+                       // IR_CALL, IR_PROC_ADDR: a procedure; IR_JUMP, IR_BRANCH: a block (the true one);
+                       // IR_SWITCH: the block every value no case has goes to
     s32 target2;       // IR_BRANCH: the false block
     u64 constant;      // IR_CONST: an integer's bits, zero-extended from the type's width; a
                        // float's value as a double's bits (f64_bits), which the backend
@@ -327,6 +340,7 @@ struct Ir_Instr {
                        // in a module built by hand (ir_emit)
     u32 align;         // IR_LOCAL of bytes: its alignment, a power of 2
     Array<s32> args;   // IR_CALL's and IR_CALL_INDIRECT's arguments, IR_RET's values
+    Array<Ir_Case> cases;  // IR_SWITCH's, in source order
     Ir_Proc *signature;  // IR_CALL_INDIRECT: what the procedure called takes and gives, an Ir_Proc
                          // of params, results and source_results only, in no module
     Position pos;      // where it comes from: the statement it was lowered from, or the place
@@ -507,11 +521,13 @@ struct Ir_Source {
 struct Ir_Module {
     Array<Ir_Global> globals;
     Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
-                             // __rig_bounds_failed when a bounds check calls it and
-                             // __rig_string_equal when == on strings does (lower.cpp, in the
-                             // order first needed); a compile-time module lowered on demand
-                             // has the two helpers first, then the runs' procedures and what
-                             // they reach, in the order needed (ir_lower_run)
+                             // __rig_bounds_failed when a bounds check calls it,
+                             // __rig_string_equal when == on strings or a switch on a string
+                             // does and __rig_no_case when a #complete switch without `case;`
+                             // does (lower.cpp, in the order first needed); a compile-time
+                             // module lowered on demand has the three helpers first, then the
+                             // runs' procedures and what they reach, in the order needed
+                             // (ir_lower_run)
     // The source files, for a debugger. A module built by hand has none,
     // and gets no debug information.
     Array<Ir_Source> sources;  // indexed by Position.file
@@ -615,13 +631,14 @@ struct Lowering;
 // A lowering that adds to m, which starts empty, on demand: a procedure is
 // declared the first time something lowered names it, its body lowered
 // after; a global made the first time a body uses it. Bounds checks are
-// always on (#no_abc still holds). __rig_bounds_failed (index 0) and
-// __rig_string_equal (index 1) are made at once, whole: the bounds
-// buffer is sized for the longest path among d's files. `file` is the
-// checked tree, whose Preload declarations of the context (Ast_File's
-// context_type, default_context, runtime_init) the procedures lowered use;
-// null, or a tree without Preload, gives no context. d and the tree must
-// outlive the lowering; m and what it holds live in `a`.
+// always on (#no_abc still holds). __rig_bounds_failed (index 0),
+// __rig_string_equal (index 1) and __rig_no_case (index 2) are made at
+// once, whole: the bounds buffer is sized for the longest path among d's
+// files. `file` is the checked tree, whose Preload declarations of the
+// context (Ast_File's context_type, default_context, runtime_init) the
+// procedures lowered use; null, or a tree without Preload, gives no
+// context. d and the tree must outlive the lowering; m and what it holds
+// live in `a`.
 Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file);
 
 // The procedure `run` runs, run.N in l's module, and everything it reaches,

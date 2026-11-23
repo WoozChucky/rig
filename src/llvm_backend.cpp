@@ -1436,6 +1436,18 @@ static void build_instr(Backend *b, Arena *a, Ir_Module *m, Body *body, Ir_Instr
         LLVMBuildCondBr(builder, value(body, instr->c), llvm_block(body, instr->target),
                         llvm_block(body, instr->target2));
         break;
+    case IR_SWITCH: {
+        // LLVM's switch: the default's block, then each case's value, a
+        // constant of the switch's type, and its block. LLVM lowers it as C's
+        // switch is, to a jump table, a search or a chain of compares.
+        LLVMTypeRef type = llvm_type(c, instr->type);
+        LLVMValueRef sw = LLVMBuildSwitch(builder, value(body, instr->a), llvm_block(body, instr->target),
+                                          (unsigned)instr->cases.count);
+        for (s64 k = 0; k < instr->cases.count; k++) {
+            LLVMAddCase(sw, LLVMConstInt(type, instr->cases[k].value, 0), llvm_block(body, instr->cases[k].block));
+        }
+        break;
+    }
     case IR_RET:
         if (instr->args.count == 0) {
             LLVMBuildRetVoid(builder);

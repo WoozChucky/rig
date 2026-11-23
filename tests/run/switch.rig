@@ -1,0 +1,118 @@
+// The switch (issue #222, spec 6.14), compiled and interpreted:
+// integers, enums with and without their name, bools and pointers; a
+// default anywhere; no case and no default doing nothing; #through into
+// the next case and into the default; the switched expression worked out
+// once; a constant switched on; else if x == {; a nested switch;
+// #complete, covered by either of two members sharing a value; a negative
+// case of a type narrower than 64 bits; and a switch whose only case is
+// the default, and one with no case at all.
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Shared :: enum u8 { FIRST; ALSO_FIRST :: 0; SECOND; }
+Tiny :: enum s8 { A :: 1; B :: -2; }
+
+LIMIT :: 3;
+
+calls := 0;
+counted :: (n: int) -> int { calls += 1; return n; }
+
+name :: (n: int) -> string {
+    if n == {
+        case 1;     return "one";
+        case;       return "many";
+        case 0;     return "zero";
+        case LIMIT; return "limit";
+    }
+}
+
+mode_name :: (m: Mode) -> string {
+    if #complete m == {
+        case .ALLOCATE; return "allocate";
+        case .RESIZE;   return "resize";
+        case Mode.FREE; return "free";
+        case .FREE_ALL; return "free all";
+    }
+}
+
+steps :: (n: int) {
+    if n == {
+        case 1; print("1 "); #through;
+        case 2; print("2 "); #through;
+        case;   print("default "); #through;
+        case 3; print("3");
+    }
+    print("\n");
+}
+
+main :: () {
+    print("{} {} {} {}\n", name(0), name(1), name(3), name(9));
+    print("{} {}\n", mode_name(.FREE), mode_name(Mode.ALLOCATE));
+    steps(1);
+    steps(2);
+    steps(3);
+    steps(7);
+    if counted(2) == {
+        case 1; print("not this\n");
+        case 2; print("two, worked out once\n");
+        case 3; print("nor this\n");
+    }
+    print("calls {}\n", calls);
+    if counted(5) == {
+        case 1; print("no case runs\n");
+    }
+    print("calls {}\n", calls);
+    s := Shared.ALSO_FIRST;
+    if #complete s == {
+        case .FIRST;  print("first or also first\n");
+        case .SECOND; print("second\n");
+    }
+    ok := true;
+    if ok == {
+        case true;  print("true\n");
+        case false; print("false\n");
+    }
+    p : *int = null;
+    x := 5;
+    for 0..1 {
+        if p == {
+            case null; print("null\n");
+            case;      print("{}\n", p.*);
+        }
+        p = *x;
+    }
+    n := 2;
+    if n == 1 {
+        print("an if\n");
+    } else if n == {
+        case 2; print("else if, a switch\n");
+    }
+    if LIMIT == {
+        case 3; print("a constant switched on\n");
+        case 4; print("never\n");
+    }
+    small : u8 = 200;
+    if small == {
+        case 200;
+            if n == {
+                case 2; print("nested 200 2\n");
+            }
+    }
+    minus : s16 = -300;
+    if minus == {
+        case 300;  print("plus 300\n");
+        case -300; print("minus 300\n");
+        case;      print("other\n");
+    }
+    tiny := Tiny.B;
+    if #complete tiny == {
+        case .A; print("tiny a\n");
+        case .B; print("tiny b, minus 2\n");
+    }
+    print("before a lone default\n");
+    if n == {
+        case; print("the lone default\n");
+    }
+    if n == { }
+    print("after no case at all\n");
+}

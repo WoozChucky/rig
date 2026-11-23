@@ -1027,6 +1027,40 @@
 //   and every .NAME that reaches lowering are constants, their values in
 //   Ast.constant; no type_untyped_member survives a program that checks.
 //
+// The switch (issue #222, spec 6.14).
+// - `if x == { case 1; ... case; ... }` checks x once, as an operand, an
+//   untyped integer given its default type: an integer, an enum, a bool,
+//   a string or a pointer, or "a switch needs an integer, an enum, a bool,
+//   a string or a pointer, not 'float64'" (checker.cpp's check_switch).
+// - Each case's value converts to x's type as an assignment's value does,
+//   and must be known while compiling: a constant for an integer, an enum
+//   or a bool; constant data for a string; null for a pointer ("a
+//   pointer's case can only be null, as in case null;"); otherwise "a
+//   case's value must be known while compiling". Two cases of one value,
+//   by its bits or its bytes, are "this value already has a case at
+//   PATH:L:C", and two `case;`s "this switch already has a 'case;' at
+//   PATH:L:C".
+// - #complete takes an enum ("#complete needs an enum, not 'int'"), but
+//   not an enum_flags ("... not the enum_flags 'Look'"). Every value of
+//   the enum's members must have a case, `case;` or not: "this switch is
+//   #complete, but 'Mode.FREE_ALL' has no case", the missing values named
+//   by their first members, in one message.
+// - Each case's statements are a block and a scope of their own. A break
+//   or continue in one acts on the loop around the switch. The switch
+//   reaches its end as spec 6.11 says (goes_past).
+// - What lowering may rely on: x's type is one of the five; every case's
+//   value but `case;`'s is a constant whose value is one of x's type's
+//   (is_constant, its bits in Ast.constant as 64 bits): its type is x's,
+//   or one that widens to it (a u8 constant in an int's switch, a *int
+//   null in a *void's), so lowering takes the width from x's type, not
+//   the case's; or for a string constant data (constant_data), a string
+//   literal's bytes, or none, a field a literal leaves out, the empty
+//   string; no two cases have one value, and at most one is `case;`,
+//   Ast_Switch.default_case; checks_no_case is set for a #complete switch
+//   on an enum without `case;`, where a value no case has stops the
+//   program; covers_every_value when every member's value has a case. A
+//   case's value is never worked out at run time.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

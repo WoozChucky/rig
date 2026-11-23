@@ -1,0 +1,39 @@
+// A switch on strings (issue #222, spec 6.14): each case compared as ==
+// compares strings, in order; a constant's string and a #run's as
+// cases; the empty string; strings that differ only in length or in case;
+// and a switch whose only case is the default, and one with no case at
+// all.
+#import "Basic";
+
+GREETING :: "hello";
+PICKED :: #run picked();
+picked :: () -> string { return "picked"; }
+
+kind :: (s: string) -> int {
+    if s == {
+        case "";       return 0;
+        case GREETING; return 1;
+        case "help";   return 2;
+        case PICKED;   return 3;
+        case;          return -1;
+    }
+}
+
+main :: () {
+    print("{} {} {} {} {} {}\n", kind(""), kind("hello"), kind("help"), kind("picked"), kind("hell"), kind("HELLO"));
+    words := string.["help", "x", "hello"];
+    for words {
+        if it == {
+            case "hello"; print("[hello]");
+            case "help";  print("[help]");
+        }
+    }
+    print("\n");
+    word := "x";
+    print("before a lone default\n");
+    if word == {
+        case; print("the lone default\n");
+    }
+    if word == { }
+    print("after no case at all\n");
+}

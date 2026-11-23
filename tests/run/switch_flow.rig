@@ -1,0 +1,46 @@
+// Control flow through a switch (issue #222, spec 6.14, 6.9, 6.12): a
+// case is a block, so its defers run when it's left, by its end, a
+// #through, a continue or a break, before the loop body's; break and
+// continue in a case act on the loop around the switch; a switch on a
+// comparison; and each case's locals are its own.
+#import "Basic";
+
+first_over :: (values: []int, limit: int) -> int {
+    for values {
+        if it > limit == {
+            case true;  return it;
+            case false; continue;
+        }
+    }
+    return -1;
+}
+
+main :: () {
+    for 1..5 {
+        defer print("| ");
+        if it == {
+            case 1;
+                defer print("left 1 ");
+                print("one ");
+                #through;
+            case 2;
+                print("two ");
+            case 3;
+                defer print("left 3 ");
+                continue;
+            case 4;
+                defer print("left 4 ");
+                break;
+        }
+        print("after ");
+    }
+    print("\n");
+    print("{} {}\n", first_over(int.[1, 5, 9], 4), first_over(int.[1, 2], 4));
+    for 1..2 {
+        if it == {
+            case 1; x := 10; print("{} ", x);
+            case 2; x := "twenty"; print("{} ", x);
+        }
+    }
+    print("\n");
+}

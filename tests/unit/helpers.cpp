@@ -239,8 +239,9 @@ static Ir_Module *lower_tokens(Arena *a, const char *description) {
 
 // `text` parsed and checked, which must be clean, and an on-demand lowering
 // of it into a module of its own, as the compile-time world makes (#115):
-// the module starts with lowering's two helpers, and each ir_lower_run adds
-// a run's procedure and what it reaches. The tokens are kept, since their
+// the module starts with lowering's three helpers (__rig_bounds_failed,
+// __rig_string_equal and __rig_no_case), and each ir_lower_run adds a run's
+// procedure and what it reaches. The tokens are kept, since their
 // Diagnostics hold the paths a runtime error names.
 struct Lowered_Runs {
     Token_List *list;

@@ -3,11 +3,21 @@
 // The checker has given every expression its type and folded every
 // constant, so lowering only translates:
 // - Each procedure's body starts in its entry block, b0: its statements in
-//   order, then a ret if control reaches the end. if, while, for, && and ||
-//   split it into more blocks, joined by branches and jumps (lower_if,
-//   lower_while, lower_for, lower_logical show the shapes). Statements
-//   after a block has ended (a return, a break) can't run, and aren't
-//   lowered.
+//   order, then a ret if control reaches the end. if, a switch, while,
+//   for, && and || split it into more blocks, joined by branches, switches
+//   and jumps (lower_if, lower_switch, lower_while, lower_for, lower_logical
+//   show the shapes). Statements after a block has ended (a return, a
+//   break) can't run, and aren't lowered.
+// - A switch (spec 6.14) works its value out once, then goes to the case
+//   holding it: one IR_SWITCH for an integer, an enum, a bool or a pointer
+//   (its address), the cases' constants its values; for a string, the
+//   comparison == makes with each case's, in source order. Each case is a
+//   scoped block, whose defers run when it's left; one ending in #through
+//   jumps on into the next case's block. A #complete switch without
+//   `case;` sends a value no case has to a call of __rig_no_case, an IR
+//   procedure lowering adds to a module, which writes "PATH:L:C: runtime
+//   error: no case for value V of 'T'" and panics (emit_no_case,
+//   lower_no_case), with bounds checks on or off.
 // - Every local variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
@@ -277,21 +287,22 @@
 //   the statement being lowered (Lowering.pos and scope, emit_in);
 //   lower_statement moves to each statement's first token, a loop or an if
 //   back to its keyword for its own code (but the jumps out of an if's
-//   blocks, at their '}'), a failing check to the check. A call's default
-//   values are all at the statement holding the call, their failing checks
-//   too (emitted_at): a default may be written in another file. While
-//   compiling, a failure in them is at its own place still (fail_in_place).
-//   Each block that's a scope adds an Ir_Scope (lower_scoped_block,
-//   lower_push_context, and the loops, which are one), and so does a
-//   declaration that hides a name a debugger shows, for the rest of its
-//   block (lower_statement). Each local variable (an iterator and
-//   it_index too) and parameter adds an Ir_Var (add_local_var, and the
-//   parameters in lower_body; a global is an Ir_Global instead), and so
-//   does each constant a debugger shows (add_constant), a top-level one in
-//   the module's constants (ir_lower): not one naming a procedure, unless
-//   it hides a name a debugger shows, nor one in a block no debugger can
-//   stop in, or hiding a name after code that can't go on
-//   (lower_statements, lower_statement).
+//   blocks, at their '}'), a switch to its `if` (but the jumps out of its
+//   cases, at its '}', and a #through's, at the #through), a failing check
+//   to the check. A call's default values are all at the statement holding
+//   the call, their failing checks too (emitted_at): a default may be
+//   written in another file. While compiling, a failure in them is at its
+//   own place still (fail_in_place). Each block that's a scope adds an
+//   Ir_Scope (lower_scoped_block, lower_push_context, the loops, which are
+//   one, and a switch's cases), and so does a declaration that hides a
+//   name a debugger shows, for the rest of its block (lower_statement).
+//   Each local variable (an iterator and it_index too) and parameter adds
+//   an Ir_Var (add_local_var, and the parameters in lower_body; a global
+//   is an Ir_Global instead), and so does each constant a debugger shows
+//   (add_constant), a top-level one in the module's constants (ir_lower):
+//   not one naming a procedure, unless it hides a name a debugger shows,
+//   nor one in a block no debugger can stop in, or hiding a name after
+//   code that can't go on (lower_statements, lower_statement).
 //   So does the context, an artificial one: the hidden parameter, arg 1, or
 //   main's and a run's slot, a local (lower_body), or a push_context's
 //   slot, a local of its block's scope at its keyword (lower_push_context).
@@ -332,15 +343,15 @@
 //   procedure, then the waiting bodies, first in, first out, each of which
 //   may queue more: a run's procedure comes with everything it can call,
 //   and a procedure two runs reach is lowered once, its globals shared.
-// - The helpers come first, whole: __rig_bounds_failed (index 0) and
-//   __rig_string_equal (index 1), made by ir_lowering_new, so neither
-//   waits on checks lowered later. The bounds buffer is sized for the
-//   longest prefix any of the program's files can give (all of them are
-//   loaded before the checker, and so any #run, starts): the longest path,
-//   39 bytes for two 10-digit numbers, two ':' and ": runtime error: ",
-//   and the usual 73. Bounds checks are always on: --no-bounds-checks is
-//   the program's build option, but #no_abc, part of what a procedure
-//   means, still holds.
+// - The helpers come first, whole: __rig_bounds_failed (index 0),
+//   __rig_string_equal (index 1) and __rig_no_case (index 2), made by
+//   ir_lowering_new, so none waits on checks lowered later. The bounds
+//   buffer is sized for the longest prefix any of the program's files can
+//   give (all of them are loaded before the checker, and so any #run,
+//   starts): the longest path, 39 bytes for two 10-digit numbers, two ':'
+//   and ": runtime error: ", and the usual 73. Bounds checks are always on:
+//   --no-bounds-checks is the program's build option, but #no_abc, part of
+//   what a procedure means, still holds.
 // - The run's procedure, run.N: an expression #run's returns its operand's
 //   value, as a procedure with that result would; a top-level #run e;
 //   evaluates e; a top-level #run { } is its block, lowered as a body. Its
@@ -457,7 +468,10 @@ struct Lowering {
     s32 string_copy_count;    // the string.N globals made so far: the bytes of its own a global holding
                               // a baked string gets (string_copy_global)
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
-                              // needs it; -1 (on demand, 1 from the start)
+                              // or a switch on a string needs it; -1 (on demand, 1 from the
+                              // start)
+    s32 no_case;              // __rig_no_case's index in module->procs, once a #complete switch
+                              // without `case;` needs it; -1 (on demand, 2 from the start)
     // Types' descriptions (spec 3.16), type_info.N, each made the first time
     // something needs it (type_info_global) and filled by a worklist
     // (describe_type), so a chain or a cycle of types needs no recursion.
@@ -1669,15 +1683,12 @@ static s32 lower_call(Lowering *l, Ast_Call *call);
 
 static s32 string_equal_proc(Lowering *l);
 
-// a == b and a != b on two strings (spec 6.5): a's count and data are loaded
-// before b is worked out (b may be a call that changes a), then b's, and
-// __rig_string_equal compares them; != is its result xor 1. It reads the
-// bytes only when the counts are the same, so that's when the data is
-// checked: the same count, above 0, with either data null is a null
-// dereference, at the operator. Different counts read nothing, and pass.
+// Whether two strings, each its count and data, are equal (spec 6.5), the
+// i1 __rig_string_equal gives. It reads the bytes only when the counts are
+// the same, so that's when the data is checked: the same count, above 0,
+// with either data null is a null dereference, at `at` (an `==`'s, or a
+// switch's: lower_switch). Different counts read nothing, and pass.
 //
-//     %ca = load i64 %a; %da = load ptr (%a + 8)
-//     %cb = load i64 %b; %db = load ptr (%b + 8)
 //     %same = cmp eq i64 %ca, %cb
 //     %some = cmp sgt i64 %ca, 0
 //     %read = and i1 %same, %some
@@ -1686,13 +1697,8 @@ static s32 string_equal_proc(Lowering *l);
 //     branch %fails, fail, ok         (emit_runtime_check)
 //   ok:
 //     %eq = call @__rig_string_equal(%ca, %da, %cb, %db)
-//     %ne = xor i1 %eq, 1             (for !=)
-static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
+static s32 emit_string_equal(Lowering *l, s32 count_a, s32 data_a, s32 count_b, s32 data_b, Position at) {
     Array<s32> args = {};  // the call keeps it
-    s32 left = lower_value(l, b->left, &type_string);
-    s32 count_a = load_view_count(l, left), data_a = load_view_data(l, left);
-    s32 right = lower_value(l, b->right, &type_string);
-    s32 count_b = load_view_count(l, right), data_b = load_view_data(l, right);
     // One instruction per line, so they come in the order written.
     s32 same = emit_compare(l, IR_EQ, IR_I64, count_a, count_b);
     s32 zero = emit_constant(l, IR_I64, 0);
@@ -1702,12 +1708,29 @@ static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
     s32 null_a = emit_compare(l, IR_EQ, IR_PTR, data_a, null);
     s32 null_b = emit_compare(l, IR_EQ, IR_PTR, data_b, null);
     s32 some_null = emit_binary(l, IR_OR, IR_I1, null_a, null_b);
-    emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, read, some_null), b->pos, str("null pointer dereference"));
+    emit_runtime_check(l, emit_binary(l, IR_AND, IR_I1, read, some_null), at, str("null pointer dereference"));
     array_add(&args, count_a);
     array_add(&args, data_a);
     array_add(&args, count_b);
     array_add(&args, data_b);
-    s32 equal = emit_call(l, string_equal_proc(l), args)->result;
+    return emit_call(l, string_equal_proc(l), args)->result;
+}
+
+// a == b and a != b on two strings (spec 6.5): a's count and data are loaded
+// before b is worked out (b may be a call that changes a), then b's, and
+// emit_string_equal compares them, its null check at the operator; != is
+// its result xor 1.
+//
+//     %ca = load i64 %a; %da = load ptr (%a + 8)
+//     %cb = load i64 %b; %db = load ptr (%b + 8)
+//     %eq = ...                       (emit_string_equal)
+//     %ne = xor i1 %eq, 1             (for !=)
+static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
+    s32 left = lower_value(l, b->left, &type_string);
+    s32 count_a = load_view_count(l, left), data_a = load_view_data(l, left);
+    s32 right = lower_value(l, b->right, &type_string);
+    s32 count_b = load_view_count(l, right), data_b = load_view_data(l, right);
+    s32 equal = emit_string_equal(l, count_a, data_a, count_b, data_b, b->pos);
     if (b->op == TOKEN_EQUAL_EQUAL) return equal;
     return emit_binary(l, IR_XOR, IR_I1, equal, emit_constant(l, IR_I1, 1));
 }
@@ -2776,11 +2799,11 @@ static void leave_block(Lowering *l, s64 mark, Ast_Proc *source) {
 }
 
 // A block that's a scope of its own (ir.h's "Debug information"): a block
-// statement, or an if's or an else's. Its statements run in a new scope
-// inside the current one, starting at its '{' (and in those its hiding
-// declarations start inside it: lower_statement); then its defers, if
-// control gets to its end (leave_block); then the current scope is the one
-// around it again.
+// statement, an if's or an else's, or a switch's case. Its statements run
+// in a new scope inside the current one, starting at its '{', a case's at
+// its `case` (and in those its hiding declarations start inside it:
+// lower_statement); then its defers, if control gets to its end
+// (leave_block); then the current scope is the one around it again.
 static void lower_scoped_block(Lowering *l, Ast_Block *block, Ast_Proc *source) {
     s32 outer = l->scope;
     s64 mark = l->defers.count;
@@ -2921,6 +2944,202 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
     }
     place(l, first->pos, outer);
     array_free(&arms);
+}
+
+static s32 no_case_proc(Lowering *l);
+
+// The block a #complete switch without `case;` sends a value no case has
+// to (Ast_Switch.checks_no_case, spec 6.14, 8.1), made here and current
+// after it; its index. It calls __rig_no_case, which writes "PATH:L:C:
+// runtime error: no case for value V of 'T'" and panics, so it never
+// returns:
+//
+//   fail:
+//     %b = local N align 1          the message's buffer
+//     %w = addr @str.N              "PATH:L:C: runtime error: "
+//     %wl = const i64 LENGTH
+//     %v = sext i8 %value to i64    (or zext, by the enum's sign; none for an i64)
+//     %s = const i1 SIGNED
+//     %t = addr @str.M              " of 'Mode'\n"
+//     %tl = const i64 LENGTH
+//     call @__rig_no_case(%b, %w, %wl, %v, %s, %t, %tl)
+//     unreachable
+//
+// The message's start and its end, the enum's name, are this switch's own
+// globals, as a bounds check's start is (emit_bounds_check); only the
+// value is known at run time, and __rig_no_case writes it, signed or
+// unsigned as the enum's integer type is. The buffer is this block's: the
+// two texts and 38 bytes ("no case for value " is 18, a number at most
+// 20), so __rig_no_case needs no size of its own, and is the same for every
+// program. Its instructions are at l->pos, the switch's `if` (a switch is a
+// statement, never in a call's default value, whose code emitted_at puts
+// elsewhere). Neither --no-bounds-checks nor #no_abc leaves it out: it's no
+// bounds check.
+static s32 emit_no_case(Lowering *l, Ast_Switch *s, s32 value) {
+    Type *t = s->value->type;
+    String where = runtime_error_prefix(l, s->pos);
+    String tail = string_printf(l->arena, " of '" STR_FMT "'\n", STR_ARG(type_name(l->arena, t)));
+    s32 fail = new_block(l);
+    l->block = fail;
+    Ir_Instr *buffer = emit(l, IR_LOCAL, IR_VOID);
+    buffer->constant = (u64)(where.count + tail.count + 38);
+    buffer->align = 1;
+    Array<s32> args = {};  // the call keeps it
+    array_add(&args, buffer->result);
+    Ir_Instr *start = emit(l, IR_ADDR, IR_PTR);
+    start->target = add_bytes(l, where);
+    array_add(&args, start->result);
+    array_add(&args, emit_constant(l, IR_I64, (u64)where.count));
+    array_add(&args, resize(l, value, t, IR_I64));
+    array_add(&args, emit_constant(l, IR_I1, t->is_signed ? 1 : 0));
+    Ir_Instr *end = emit(l, IR_ADDR, IR_PTR);
+    end->target = add_bytes(l, tail);
+    array_add(&args, end->result);
+    array_add(&args, emit_constant(l, IR_I64, (u64)tail.count));
+    emit_call(l, no_case_proc(l), args);
+    emit(l, IR_UNREACHABLE, IR_VOID);
+    return fail;
+}
+
+// if x == { case 1; A; case 2; B; #through; case; C; }, a switch (spec
+// 6.14). x is worked out once, at the `if`, in the scope around the switch
+// (lower_value), and the dispatch follows it there:
+// - an integer, an enum, a bool or a pointer: one IR_SWITCH on x's value
+//   (a pointer's address, an i64, null's 0), each case's value, its
+//   constant's 64 bits cut to x's type's width, to its case's block, and
+//   every other value to the default's, `case;`, or to the no-case block,
+//   or to `after`. A case's constant may keep a type of its own, one that
+//   widens to x's (a u8 in an int's switch), but the checker made its
+//   value one of x's type's, so the bits cut are that value's;
+// - a string: its count and data loaded once, then case by case in source
+//   order the comparison == makes (emit_string_equal, its null check at the
+//   switch's `==`), to the case's block when it's equal, else on to the
+//   next comparison; after the last, on to where an integer switch's other
+//   values go.
+//
+//     %x = ...
+//     switch i64 %x, b3 [1: b1, 2: b2]
+//   b1:
+//     A; jump after             (at the switch's '}')
+//   b2:
+//     B; jump b3                (#through: at the #through)
+//   b3:
+//     C; jump after
+//   after:
+//
+// Each case's statements are a block and a scope of their own, at its
+// `case` (lower_scoped_block), whose defers run at its end, before the
+// jump out: to `after`, at the switch's '}', in the scope around, as an if
+// block's jump is at its own '}' (lower_if), so a debugger steps from a
+// case's last line to the '}', then to the code after, never through
+// another case's line; or, ending with #through, into the next case's
+// block, at the #through, a jump to the block laid out right after it,
+// which has no instruction ("What a debugger needs" above). A #complete
+// switch without `case;` sends every other value to a block that stops the
+// program (emit_no_case), after the cases' blocks. `after` is made when a
+// case gets to its end, or some value finds no case and there's neither a
+// `case;` nor a no-case block; otherwise the current block has ended, as
+// after an if that always returns, and nothing after the switch is
+// lowered.
+static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
+    s32 outer = l->scope;
+    place(l, s->pos, outer);
+    Type *t = s->value->type;
+    s32 value = lower_value(l, s->value, t);
+    // The field of the dispatch's terminators that names each case's block,
+    // for the cases with a value, in source order, and the one that names
+    // where every other value goes: filled in as those blocks are made. A
+    // terminator is its block's last instruction, and nothing is added to
+    // the block after it, so the fields stay where they are meanwhile.
+    Array<s32 *> entries = {};
+    s32 *otherwise = nullptr;
+    if (t == &type_string) {
+        s32 count = load_view_count(l, value), data = load_view_data(l, value);
+        s32 *next = nullptr;  // the last comparison's way on, when there's one
+        for (s64 i = 0; i < s->cases.count; i++) {
+            Ast *case_value = s->cases[i]->value;
+            if (!case_value) continue;
+            if (next) {
+                *next = new_block(l);
+                l->block = *next;
+            }
+            // One instruction per line, so they come in the order written.
+            s32 bytes = lower_value(l, case_value, &type_string);
+            s32 case_count = load_view_count(l, bytes);
+            s32 case_data = load_view_data(l, bytes);
+            s32 equal = emit_string_equal(l, count, data, case_count, case_data, s->equals);
+            s32 test = l->block;
+            emit_branch(l, equal, -1, -1);
+            Ir_Instr *branch = terminator_of(l, test);
+            array_add(&entries, &branch->target);
+            next = &branch->target2;
+        }
+        if (!next) {
+            emit_jump(l, l->block, -1);  // no case has a value: every value goes on
+            next = &terminator_of(l, l->block)->target;
+        }
+        otherwise = next;
+    } else {
+        Ir_Type type = ir_type_of(t);
+        s32 operand = value;
+        if (type == IR_PTR) {
+            operand = emit_convert(l, IR_PTRTOINT, IR_PTR, value, IR_I64);
+            type = IR_I64;
+        }
+        Ir_Instr *dispatch = emit(l, IR_SWITCH, type);
+        dispatch->a = operand;
+        for (s64 i = 0; i < s->cases.count; i++) {
+            Ast *case_value = s->cases[i]->value;
+            if (!case_value) continue;
+            // Ast.constant is extended to 64 bits by the sign of the
+            // constant's type; cut to the switch type's width, the bits are
+            // zero-extended from it, as IR_CONST's are.
+            u64 bits = case_value->constant;
+            if (ir_bits(type) < 64) bits &= ((u64)1 << ir_bits(type)) - 1;
+            array_add(&dispatch->cases, Ir_Case{bits, -1});
+        }
+        for (s64 i = 0; i < dispatch->cases.count; i++) array_add(&entries, &dispatch->cases[i].block);
+        otherwise = &dispatch->target;
+    }
+
+    s64 entry = 0;
+    s32 through = -1;      // the block ending in the last case's #through, its jump not yet pointed, or -1
+    Array<s32> ends = {};  // the blocks ending in a jump to `after`
+    for (s64 i = 0; i < s->cases.count; i++) {
+        Ast_Case *k = s->cases[i];
+        s32 block = new_block(l);
+        if (k->value) {
+            *entries[entry++] = block;
+        } else {
+            *otherwise = block;
+        }
+        if (through >= 0) terminator_of(l, through)->target = block;
+        through = -1;
+        l->block = block;
+        lower_scoped_block(l, k->block, source);
+        if (has_ended(l, l->block)) continue;
+        if (k->through.line) {
+            place(l, k->through, outer);
+            through = l->block;
+        } else {
+            place(l, k->block->end, outer);
+            array_add(&ends, l->block);
+        }
+        emit_jump(l, l->block, -1);
+    }
+    RIG_ASSERT(through < 0);  // the parser refused a #through ending the last case
+
+    place(l, s->pos, outer);
+    bool goes_on = !s->default_case && !s->checks_no_case;  // a value with no case goes past the switch
+    if (s->checks_no_case) *otherwise = emit_no_case(l, s, value);
+    if (ends.count > 0 || goes_on) {
+        s32 after = new_block(l);
+        for (s64 i = 0; i < ends.count; i++) terminator_of(l, ends[i])->target = after;
+        if (goes_on) *otherwise = after;
+        l->block = after;
+    }
+    array_free(&ends);
+    array_free(&entries);
 }
 
 // The loop's body, with the loop the innermost one for break and continue;
@@ -3263,7 +3482,8 @@ static Position statement_position(Ast *s) {
     case AST_BREAK:
     case AST_CONTINUE:
     case AST_DEFER:
-    case AST_PUSH_CONTEXT: return s->pos;
+    case AST_PUSH_CONTEXT:
+    case AST_SWITCH: return s->pos;
     default: return s->start;  // an expression
     }
 }
@@ -3417,6 +3637,7 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // code only where its copies are.
     case AST_DEFER: array_add(&l->defers, Deferred{(Ast_Defer *)s, l->scope, l->context, false}); break;
     case AST_PUSH_CONTEXT: lower_push_context(l, (Ast_Push_Context *)s, source); break;
+    case AST_SWITCH: lower_switch(l, (Ast_Switch *)s, source); break;
     default: lower_expr(l, s); break;  // a call, its value ignored
     }
 }
@@ -4166,8 +4387,9 @@ static void lower_bounds_failed(Lowering *l) {
 }
 
 // __rig_string_equal(i64 count_a, ptr data_a, i64 count_b, ptr data_b) ->
-// i1: what == on strings calls (lower_string_comparison). Made the first
-// time a comparison needs it, with no body yet (lower_string_equal makes
+// i1: what == on strings and a switch on a string call (emit_string_equal,
+// for lower_string_comparison and lower_switch). Made the first time a
+// comparison needs it, with no body yet (lower_string_equal makes
 // it, once every procedure's is); its index in the module's procedures,
 // after the program's. On demand, it is made second, body and all
 // (ir_lowering_new).
@@ -4247,6 +4469,57 @@ static void lower_string_equal(Lowering *l) {
     l->block = differ;
     s32 no = emit_constant(l, IR_I1, 0);
     array_add(&emit(l, IR_RET, IR_VOID)->args, no);
+}
+
+// __rig_no_case(ptr buffer, ptr where, i64 where_length, i64 value,
+// i1 value_is_signed, ptr tail, i64 tail_length): what a #complete switch
+// without `case;` calls for a value no case has (emit_no_case). Made the
+// first time a switch needs it, with no body yet (lower_no_case makes it,
+// once every procedure's is, as __rig_string_equal's is); its index in the
+// module's procedures, after the program's. On demand, it is made third,
+// body and all (ir_lowering_new).
+static s32 no_case_proc(Lowering *l) {
+    if (l->no_case < 0) {
+        Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_no_case"));
+        ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        ir_add_param(p, IR_I64, IR_EXT_NONE);
+        ir_add_param(p, IR_I64, IR_EXT_NONE);
+        ir_add_param(p, IR_I1, IR_EXT_NONE);
+        ir_add_param(p, IR_PTR, IR_EXT_NONE);
+        ir_add_param(p, IR_I64, IR_EXT_NONE);
+        l->no_case = (s32)(l->module->procs.count - 1);
+    }
+    return l->no_case;
+}
+
+// __rig_no_case's body: the message written into the caller's buffer, then
+// a panic with it, as __rig_bounds_failed's (the panic flushes the
+// program's output first, writes the bytes to stderr and exits with 101):
+//
+//     WHERE "no case for value " V TAIL
+//
+// WHERE as the switch passed it ("PATH:L:C: runtime error: "), V the value
+// in decimal, signed or unsigned as value_is_signed says (the enum's
+// integer type's sign), TAIL the switch's " of 'Mode'\n". The buffer is the
+// caller's, made to fit (emit_no_case), so this body is the same for every
+// program. WHERE is the message's prefix, so the panic's c is where_length
+// (ir.h).
+static void lower_no_case(Lowering *l) {
+    l->proc = l->module->procs[l->no_case];
+    l->block = ir_new_block(l->arena, l->proc);
+    s32 buffer = 0, where = 1, where_length = 2, value = 3, value_is_signed = 4, tail = 5, tail_length = 6;
+    s32 length = emit(l, IR_LOCAL, IR_I64)->result;
+    emit_store(l, IR_I64, emit_constant(l, IR_I64, 0), length);
+    append_bytes(l, buffer, length, where, where_length);
+    append_text(l, buffer, length, "no case for value ");
+    append_number(l, buffer, length, value, value_is_signed);
+    append_bytes(l, buffer, length, tail, tail_length);
+    s32 total = emit_load(l, IR_I64, length);
+    Ir_Instr *panic = emit(l, IR_PANIC, IR_VOID);
+    panic->a = buffer;
+    panic->b = total;
+    panic->c = where_length;
 }
 
 // Records that module->procs[index] lowers `source`, null for one the
@@ -4547,6 +4820,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.bounds_checks = bounds_checks;
     l.bounds_failed = -1;
     l.string_equal = -1;
+    l.no_case = -1;
     l.module = m;
     l.block = -1;
     // Preload's context, which every procedure with a body but main and a
@@ -4613,11 +4887,13 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
 
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
-    // calls it. Neither comes from the source: they have no scopes, and
-    // their instructions no position (line 0) and no scope (-1).
+    // or a switch on a string calls it, and __rig_no_case, if a #complete
+    // switch without `case;` does. None comes from the source: they have no
+    // scopes, and their instructions no position (line 0) and no scope (-1).
     place(&l, {}, -1);
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);
+    if (l.no_case >= 0) lower_no_case(&l);
 
     release_lowering(&l);
     return m;
@@ -4634,6 +4910,7 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->bounds_checks = true;  // rig build's --no-bounds-checks is the program's, not the compiler's
     l->bounds_failed = -1;
     l->string_equal = -1;
+    l->no_case = -1;
     l->block = -1;
     // The tree's context, and a [..]T's allocator type, as ir_lower takes
     // them; none without a tree. Not __save_command_line: main, which takes
@@ -4662,10 +4939,12 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->longest_where = longest_path + 39;
     bounds_failed_proc(l);
     string_equal_proc(l);
-    RIG_ASSERT(l->bounds_failed == 0 && l->string_equal == 1);
+    no_case_proc(l);
+    RIG_ASSERT(l->bounds_failed == 0 && l->string_equal == 1 && l->no_case == 2);
     place(l, {}, -1);
     lower_bounds_failed(l);
     lower_string_equal(l);
+    lower_no_case(l);
     return l;
 }
 

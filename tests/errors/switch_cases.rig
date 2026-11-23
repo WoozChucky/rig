@@ -1,0 +1,63 @@
+// Mistakes in a switch's expression, its cases and #complete (issue
+// #222, spec 6.14), each reported once; a line may hold more than one.
+// The #complete switch on Shared that names ALSO_FIRST for FIRST has
+// none: a case of either covers their one value. One on an enum_flags is
+// refused, though its cases name every member.
+Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
+Shared :: enum { FIRST; ALSO_FIRST :: 0; SECOND; }
+Look :: enum_flags u8 { A; B; }
+Vec2 :: struct { x: float; y: float; }
+ONE :: 1;
+NAME :: "rig";
+LITERAL :: cast(*u8) "x";
+broken :: () -> int { x : int = "s"; return 1; }
+broken_word :: () -> string { x : int = "s"; return "a"; }
+
+main :: () {
+    f : float64;
+    v : Vec2;
+    values : []int;
+    n := 1;
+    small : u8;
+    m : Mode;
+    s : Shared;
+    look : Look;
+    p : *u8;
+    word := "a";
+    yes := true;
+    if f == { case .FREE; }
+    if v == { }
+    if values == { }
+    if .FREE == { }
+    if n == {
+        case n;
+        case "a";
+        case .FREE;
+        case 1;
+        case ONE;
+        case;
+        case;
+    }
+    if n == { case 5; break; }
+    if small == { case 300; }
+    if m == { case .FRE; }
+    if s == { case .FIRST; case .ALSO_FIRST; }
+    if word == { case NAME; case "rig"; case word; }
+    if yes == { case true; case false; case true; }
+    if p == { case null; case LITERAL; case p; case null; }
+    if #complete n == { case 1; }
+    if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; }
+    if #complete m == { case .ALLOCATE; case; }
+    if #complete s == { case .ALSO_FIRST; case .SECOND; }
+    if #complete m == { case .ALLOCATE; case .RESIZE; case .FREE; case .FRE; }
+    if #complete s == { case .SECOND; }
+    if #complete look == { case .A; case .B; }
+    if 2.5 == { }
+    if 1e300 == { }
+    if null == { }
+    // A case whose #run reaches code whose error was said already, broken's
+    // and broken_word's, has nothing more said, an integer's and a
+    // string's alike.
+    if n == { case #run broken(); case 2; }
+    if word == { case #run broken_word(); case "b"; }
+}

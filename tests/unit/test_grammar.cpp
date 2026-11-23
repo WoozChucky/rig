@@ -78,7 +78,7 @@ static const Keyword_Scope KEYWORD_SCOPES[] = {
     {"enum", KEYWORDS_STORAGE},   {"enum_flags", KEYWORDS_STORAGE}, {"union", KEYWORDS_STORAGE},
     {"cast", KEYWORDS_CAST},      {"using", KEYWORDS_OTHER},        {"true", KEYWORDS_CONSTANT},
     {"false", KEYWORDS_CONSTANT}, {"null", KEYWORDS_CONSTANT},      {"context", KEYWORDS_VARIABLE},
-    {"push_context", KEYWORDS_CONTROL},
+    {"push_context", KEYWORDS_CONTROL}, {"case", KEYWORDS_CONTROL},
 };
 
 // ---------------------------------------------------------------------------

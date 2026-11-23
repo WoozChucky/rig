@@ -1,0 +1,14 @@
+l+t
+l+s
+l+l
+bp `switch.rig:10`
+g
+p
+p
+?? twice
+p
+p
+p
+p
+?? twice
+q

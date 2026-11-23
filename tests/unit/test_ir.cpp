@@ -3773,7 +3773,8 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
             Ir_Proc *p = m->procs[k];
             bool from_source = p->source_name.count > 0;
             bool compiler_made = string_eq(p->name, str("__rig_bounds_failed")) ||
-                                 string_eq(p->name, str("__rig_string_equal"));
+                                 string_eq(p->name, str("__rig_string_equal")) ||
+                                 string_eq(p->name, str("__rig_no_case"));
             if (!p->is_foreign && !p->is_compiler) CHECK(from_source != compiler_made);
             // A procedure of the program's is m->procs[k] for
             // tree->procs[k], whichever file it's in: its lines run from its
@@ -4441,7 +4442,7 @@ static const char *LOWERING_ON_DEMAND_PROGRAM =
     "main :: () { }\n";
 
 TEST(lowering_on_demand_takes_what_a_run_reaches) {
-    // The module starts with the two helpers, whole. Each run's procedure
+    // The module starts with the three helpers, whole. Each run's procedure
     // comes next, then what it reaches, first named first lowered: run.0
     // brings twice, which brings add; run.1 reaches twice again, which is
     // there already, lowered once. N's run, an expression, returns its
@@ -4450,12 +4451,13 @@ TEST(lowering_on_demand_takes_what_a_run_reaches) {
     Arena a = arena_make();
     Lowered_Runs r = lower_runs_of(&a, LOWERING_ON_DEMAND_PROGRAM);
     CHECK_EQ(r.file->runs.count, 2);
-    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[0]), 2);
-    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[1]), 5);
-    CHECK_EQ(ir_lower_run(r.lowering, constant_run(r.file, "N")), 6);
+    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[0]), 3);
+    CHECK_EQ(ir_lower_run(r.lowering, r.file->runs[1]), 6);
+    CHECK_EQ(ir_lower_run(r.lowering, constant_run(r.file, "N")), 7);
     String ir = ir_print(&a, r.module);
-    const char *order[] = {"proc @__rig_bounds_failed(", "proc @__rig_string_equal(", "proc @run.0()",
-                           "proc @twice(", "proc @add(", "proc @run.1()", "proc @run.2() -> i64"};
+    const char *order[] = {"proc @__rig_bounds_failed(", "proc @__rig_string_equal(", "proc @__rig_no_case(",
+                           "proc @run.0()",           "proc @twice(",              "proc @add(",
+                           "proc @run.1()",           "proc @run.2() -> i64"};
     s64 last = -1;
     for (const char *header : order) {
         s64 at = index_of(ir, header);
@@ -4469,10 +4471,12 @@ TEST(lowering_on_demand_takes_what_a_run_reaches) {
     CHECK(!contains(ir, "@other"));
     CHECK(contains(ir, "global @counter: i64 = 5\n"));
     // The bounds buffer fits the longest prefix any file can give:
-    // test.rig's 8, 39 more, and the usual 73. __rig_string_equal has its
-    // body, though no run compares strings.
+    // test.rig's 8, 39 more, and the usual 73. __rig_string_equal and
+    // __rig_no_case have their bodies, though no run compares strings or
+    // switches.
     CHECK(contains(proc_ir(ir, "__rig_bounds_failed"), "local 120 align 1"));
     CHECK(contains(proc_ir(ir, "__rig_string_equal"), "b0:\n"));
+    CHECK(contains(proc_ir(ir, "__rig_no_case"), "b0:\n"));
     Ast_Proc *twice = nullptr, *add = nullptr;
     for (s64 i = 0; i < r.file->procs.count; i++) {
         if (string_eq(r.file->procs[i]->name, str("twice"))) twice = r.file->procs[i];
@@ -4480,12 +4484,13 @@ TEST(lowering_on_demand_takes_what_a_run_reaches) {
     }
     CHECK(twice != nullptr);
     CHECK(add != nullptr);
-    CHECK(ir_lowering_source(r.lowering, 3) == twice);
-    CHECK(ir_lowering_source(r.lowering, 4) == add);
+    CHECK(ir_lowering_source(r.lowering, 4) == twice);
+    CHECK(ir_lowering_source(r.lowering, 5) == add);
     CHECK(ir_lowering_source(r.lowering, 0) == nullptr);
     CHECK(ir_lowering_source(r.lowering, 2) == nullptr);
+    CHECK(ir_lowering_source(r.lowering, 3) == nullptr);
     // run.2, made after the last procedure of the source.
-    CHECK(ir_lowering_source(r.lowering, 6) == nullptr);
+    CHECK(ir_lowering_source(r.lowering, 7) == nullptr);
 
     // The program's own lowering of the same file is whole, and has no runs.
     String program = ir_print(&a, ir_lower(r.file, &r.list->diag, &a, true));
@@ -7249,5 +7254,193 @@ TEST(an_enums_c_parameters_extend_as_its_integer_type) {
                                           "f :: (b: B, s: S) -> W #foreign libc;\n"
                                           "main :: () { f(.X, .Y); }\n"));
     CHECK(contains(ir, "foreign proc @f(i8 zeroext, i8 signext) -> i16 signext\n"));
+    arena_free(&a);
+}
+
+// Issue #222: the switch (spec 6.14).
+
+TEST(a_switch_lowers_to_one_switch_instruction) {
+    // An integer switch is one IR_SWITCH at the `if`: each case's value to
+    // its case's block, every other value to the default's, `case;`. Each
+    // case's block stores its number, then jumps to the one block after
+    // the switch.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "main :: () {\n"
+                                          "    n := 2;\n"
+                                          "    if n == {\n"
+                                          "        case 1; n = 10;\n"
+                                          "        case 2; n = 20;\n"
+                                          "        case; n = 30;\n"
+                                          "    }\n"
+                                          "}\n"));
+    String main = proc_ir(ir, "main");
+    CHECK_EQ(count_of(main, "switch "), 1);
+    CHECK_STR(main,
+              "proc @main() -> i32 {\n"
+              "b0:\n"
+              "  %0 = local i64\n"
+              "  %1 = const i64 2\n"
+              "  store i64 %1, %0\n"
+              "  %2 = load i64 %0\n"
+              "  switch i64 %2, b3 [1: b1, 2: b2]\n"
+              "b1:\n"
+              "  %3 = const i64 10\n"
+              "  store i64 %3, %0\n"
+              "  jump b4\n"
+              "b2:\n"
+              "  %4 = const i64 20\n"
+              "  store i64 %4, %0\n"
+              "  jump b4\n"
+              "b3:\n"
+              "  %5 = const i64 30\n"
+              "  store i64 %5, %0\n"
+              "  jump b4\n"
+              "b4:\n"
+              "  %6 = const i32 0\n"
+              "  ret %6\n"
+              "}\n");
+    arena_free(&a);
+}
+
+TEST(a_switch_lowers_its_value_once) {
+    // The switched expression is worked out once, whatever case matches:
+    // one call of f. A string switch loads the string's count and data
+    // once, then compares them with each case's, in case order, as ==
+    // does: its null check (a count above 0 shared with a case, and null
+    // data) at the switch's `==`, then __rig_string_equal, at the `if`.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: () -> int { return 1; }\n"
+                                          "main :: () {\n"
+                                          "    if f() == { case 1; case 2; case 3; }\n"
+                                          "}\n"));
+    CHECK_EQ(count_of(proc_ir(ir, "main"), "call @f("), 1);
+
+    ir = ir_print_debug(&a, lower_source(&a,
+                                         "main :: () {\n"
+                                         "    s := \"bb\";\n"
+                                         "    if s == { case \"a\"; case \"bb\"; case \"ccc\"; }\n"
+                                         "}\n"));
+    String main = proc_ir(ir, "main");
+    // s is %0, its slot; its data is 8 bytes on.
+    CHECK_EQ(count_of(main, "load i64 %0  "), 1);
+    CHECK_EQ(count_of(main, "ptradd %0, "), 1);
+    CHECK_EQ(count_of(main, "call @__rig_string_equal("), 3);
+    // Each case's literal (its count, 1, 2 or 3, put into its view) is
+    // compared before the next case's is reached.
+    s64 at = 0;
+    const char *order[] = {"= const i64 1  ; 3:5 ", "call @__rig_string_equal(", "= const i64 2  ; 3:5 ",
+                           "call @__rig_string_equal(", "= const i64 3  ; 3:5 ", "call @__rig_string_equal("};
+    for (s64 i = 0; i < 6; i++) {
+        s64 found = index_of(string_slice(main, at, main.count - at), order[i]);
+        CHECK(found >= 0);
+        if (found < 0) break;
+        at += found + 1;
+    }
+    // Each null check's panic is at the `==`, 3:10; each call at the `if`.
+    CHECK_EQ(count_of(main, "panic @str."), 3);
+    CHECK_EQ(count_of(main, "  ; 3:10 s0\n"), 3);
+    CHECK_EQ(count_of(main, ")  ; 3:5 s0\n"), 3);
+    arena_free(&a);
+}
+
+TEST(a_complete_switch_without_a_default_calls_no_case) {
+    // A #complete switch with no `case;` sends a value no member has to a
+    // block of its own, at the `if`, that calls __rig_no_case with the
+    // value widened to an i64 by the enum's sign, sign-extended for an s8
+    // and zero-extended for a u8, then is unreachable; with bounds checks
+    // off too, since it's no bounds check. The message's buffer fits it:
+    // "test.rig:4:5: runtime error: " is 29 bytes, " of 'Small'\n" 12, and
+    // 38 more. __rig_no_case is the compiler's, after the program's
+    // procedures. A `case;` takes every other value, and nothing calls it.
+    const char *sources[] = {"Small :: enum s8 { A; B; }\n"
+                             "main :: () {\n"
+                             "    s : Small;\n"
+                             "    if #complete s == { case .A; case .B; }\n"
+                             "}\n",
+                             "Small :: enum u8 { A; B; }\n"
+                             "main :: () {\n"
+                             "    s : Small;\n"
+                             "    if #complete s == { case .A; case .B; }\n"
+                             "}\n"};
+    Arena a = arena_make();
+    for (int run = 0; run < 4; run++) {
+        bool checks = run % 2 == 1, signed_enum = run < 2;
+        Ir_Module *m = lower_file(&a, "test.rig", sources[signed_enum ? 0 : 1], checks);
+        Ir_Proc *main = nullptr;
+        for (s64 i = 0; i < m->procs.count; i++) {
+            if (string_eq(m->procs[i]->name, str("main"))) main = m->procs[i];
+        }
+        CHECK(main);
+        if (!main) continue;
+        Ir_Instr *dispatch = nullptr;
+        for (s64 k = 0; k < main->blocks.count && !dispatch; k++) {
+            Ir_Block *b = main->blocks[k];
+            if (b->instrs.count && b->instrs[b->instrs.count - 1].op == IR_SWITCH) {
+                dispatch = &b->instrs[b->instrs.count - 1];
+            }
+        }
+        CHECK(dispatch);
+        if (!dispatch) continue;
+        CHECK_EQ(dispatch->type, IR_I8);
+        CHECK_EQ(dispatch->cases.count, 2);
+        Ir_Block *fail = main->blocks[dispatch->target];
+        Ir_Op widen = signed_enum ? IR_SEXT : IR_ZEXT;
+        bool widened = false, sign_passed = false;
+        Ir_Instr *buffer = nullptr, *call = nullptr;
+        for (s64 n = 0; n < fail->instrs.count; n++) {
+            Ir_Instr *instr = &fail->instrs[n];
+            if (instr->op == widen && instr->from == IR_I8 && instr->type == IR_I64 && instr->a == dispatch->a) {
+                widened = true;
+            }
+            if (instr->op == IR_CONST && instr->type == IR_I1 && instr->constant == (signed_enum ? 1u : 0u)) {
+                sign_passed = true;
+            }
+            if (instr->op == IR_LOCAL && !buffer) buffer = instr;
+            if (instr->op == IR_CALL) call = instr;
+        }
+        CHECK(widened);
+        CHECK(sign_passed);
+        CHECK(buffer);
+        if (buffer) {
+            CHECK_EQ(buffer->constant, 79);
+            CHECK_EQ(buffer->align, 1);
+        }
+        CHECK(call);
+        if (call) {
+            CHECK_STR(m->procs[call->target]->name, "__rig_no_case");
+            CHECK_EQ(call->args.count, 7);
+            CHECK_EQ(call->pos.line, 4);
+            CHECK_EQ(call->pos.col, 5);
+        }
+        CHECK_EQ(fail->instrs[fail->instrs.count - 1].op, IR_UNREACHABLE);
+        String ir = ir_print(&a, m);
+        CHECK_EQ(count_of(ir, "proc @__rig_no_case(ptr, ptr, i64, i64, i1, ptr, i64) {"), 1);
+        CHECK(index_of(ir, "proc @main(") < index_of(ir, "proc @__rig_no_case("));
+    }
+    String with_default = ir_print(&a, lower_source(&a,
+                                                    "Small :: enum s8 { A; B; }\n"
+                                                    "main :: () {\n"
+                                                    "    s : Small;\n"
+                                                    "    if #complete s == { case .A; case .B; case; }\n"
+                                                    "}\n"));
+    CHECK(!contains(with_default, "__rig_no_case"));
+    arena_free(&a);
+}
+
+TEST(a_pointer_switch_switches_on_its_address) {
+    // A pointer's switch is on its address, an i64, null's 0.
+    Arena a = arena_make();
+    String main = proc_ir(ir_print(&a, lower_source(&a,
+                                                    "main :: () {\n"
+                                                    "    p : *int;\n"
+                                                    "    if p == { case null; case; }\n"
+                                                    "}\n")),
+                          "main");
+    s64 ptrtoint = index_of(main, "= ptrtoint ptr %");
+    s64 dispatch = index_of(main, "switch i64 %");
+    CHECK(ptrtoint >= 0 && ptrtoint < dispatch);
+    CHECK(contains(main, ", b2 [0: b1]\n"));
     arena_free(&a);
 }
