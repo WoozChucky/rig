@@ -1985,23 +1985,25 @@ static String case_key(Type *t, Ast *value) {
 // a 'case;' at PATH:L:C", at its 'case'. `case;` may be anywhere.
 //
 // #complete takes an enum, but not an enum_flags, whose values are mostly
-// combinations of its members, and 0, which no list of members names: on
-// anything else that a switch takes, it's "#complete needs an enum, not
-// 'int'" ("not the enum_flags 'Look'"), at it, and the switch is checked
-// as one without it.
-// On an enum, once its members' values are known and every case's value
-// checked with no error (a case with one would make a second message about
-// the member it meant), each member's value, in declaration order, must be
-// some case's: each value missing is named by the first member that has
-// it, all in one message at the '#complete', "this switch is #complete,
-// but 'Mode.FREE' and 'Mode.FREE_ALL' have no case". The members are
-// looked up in the cases' table, each missing one put in it, so a later
-// member sharing its value isn't named again. covers_every_value is set
-// when none is missing; checks_no_case when there's no `case;`, since a
-// value no member has (cast(Mode) 7) then finds no case, a runtime error
-// (spec 8.1). A #complete switch that doesn't cover every value said why
-// (a member missing, a case's error, an enum's), so it's `failed` too: its
-// message is the only one (spec 6.11).
+// combinations of its members, and 0, which none of its implicit members
+// has: on anything else that a switch takes, it's "#complete needs an
+// enum, not 'int'" ("not the enum_flags 'Look'"), at it, and the cases are
+// checked as without it, the switch `failed`, so its message is the only
+// one (spec 6.11): a procedure whose cases all return gets no second
+// message that it reaches its end. On an enum, once its members' values
+// are known and every case's value checked with no error (a case with one
+// would make a second message about the member it meant), each member's
+// value, in declaration order, must be some case's: each value missing is
+// named by the first member that has it, all in one message at the
+// '#complete', "this switch is #complete, but 'Mode.FREE' and
+// 'Mode.FREE_ALL' have no case". The members are looked up in the cases'
+// table, each missing one put in it, so a later member sharing its value
+// isn't named again. covers_every_value is set when none is missing;
+// checks_no_case when there's no `case;`, since a value no member has
+// (cast(Mode) 7) then finds no case, a runtime error (spec 8.1). A
+// #complete switch that doesn't cover every value said why (a member
+// missing, a case's error, an enum's), so it's `failed` too: its message
+// is the only one (spec 6.11).
 //
 // Each case's statements are a block and a scope of their own
 // (check_scoped_block), so two cases may declare one name. The switch is
@@ -2027,10 +2029,12 @@ static void check_switch(Checker *c, Ast_Switch *s) {
     if (complete && t->kind != TYPE_ENUM) {
         diag_error(c->diag, s->complete, "#complete needs an enum, not '" STR_FMT "'", STR_ARG(type_name(c->arena, t)));
         complete = false;
+        s->failed = true;
     } else if (complete && t->is_flags) {
         diag_error(c->diag, s->complete, "#complete needs an enum, not the enum_flags '" STR_FMT "'",
                    STR_ARG(type_name(c->arena, t)));
         complete = false;
+        s->failed = true;
     }
 
     Table<Ast *> seen = {};  // each value checked with no error, by case_key: its first case's
@@ -2235,8 +2239,9 @@ static bool reaches_end(Ast_Block *block);
 // its branches do; so is an #if any of whose chain's conditions failed
 // (Ast_If_Directive.failed), which check_if_condition reported, a condition
 // not known while compiling included; and so is a switch whose switched
-// expression had an error, or that is #complete and doesn't cover every
-// value (Ast_Switch.failed), which check_switch reported. That's a policy,
+// expression had an error, whose #complete was refused, or that is
+// #complete and doesn't cover every value (Ast_Switch.failed), which
+// check_switch reported. That's a policy,
 // so the condition's message is the only one: for `while 1` (likely meant
 // as `while true`) a missing-return message would be wrong, and for an if
 // a real missing return shows up once the condition is fixed.

@@ -10134,7 +10134,8 @@ TEST(each_case_is_a_scope_of_its_own) {
 TEST(switches_reach_their_end_as_spec_6_11_says) {
     // tests/errors/switch_reaching_the_end.rig's procedures: the five that
     // get past their switch to their '}' are reported there, and only they;
-    // the three whose switch is failed get only the switch's own message.
+    // the five whose switch is failed get only the switch's own message,
+    // a refused #complete's too.
     Arena a = arena_make();
     String text = {};
     CHECK(os_read_file(&a, str("tests/errors/switch_reaching_the_end.rig"), &text));
@@ -10146,6 +10147,8 @@ TEST(switches_reach_their_end_as_spec_6_11_says) {
               "61:1: 'middle_reaches' must return a value on every path, and this one reaches its end\n"
               "64:8: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'\n"
               "70:8: this switch is #complete, but 'Mode.B' has no case\n"
-              "78:15: 'Mode' has no member 'C'\n");
+              "78:15: 'Mode' has no member 'C'\n"
+              "83:8: #complete needs an enum, not 'int'\n"
+              "89:8: #complete needs an enum, not the enum_flags 'Look'\n");
     arena_free(&a);
 }

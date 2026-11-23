@@ -22,3 +22,9 @@ tests/errors/switch_reaching_the_end.rig:70:8: error: this switch is #complete, 
 tests/errors/switch_reaching_the_end.rig:78:15: error: 'Mode' has no member 'C'
             case .C; return 2;
                   ^
+tests/errors/switch_reaching_the_end.rig:83:8: error: #complete needs an enum, not 'int'
+        if #complete n == {
+           ^
+tests/errors/switch_reaching_the_end.rig:89:8: error: #complete needs an enum, not the enum_flags 'Look'
+        if #complete f == {
+           ^

@@ -536,8 +536,9 @@ struct Ast_Switch : Ast {
     Ast_Case *default_case;   // the `case;`, or null
     bool checks_no_case;      // a value no case has stops the program (#complete without case;)
     bool covers_every_value;  // #complete, checked cleanly, every member's value has a case
-    bool failed;              // the switched expression had an error, or a #complete switch doesn't
-                              // cover every value (said): taken not to go past (spec 6.11)
+    bool failed;              // the switched expression had an error, #complete was refused (not an
+                              // enum, or an enum_flags), or a #complete switch doesn't cover every
+                              // value (said): taken not to go past (spec 6.11)
 };
 
 // while condition { ... }; pos is the 'while'.

@@ -4,9 +4,9 @@
 // are no exception) or a case that doesn't end with #through reaches its
 // end, the last case or any other; a #through goes on into the next
 // case, which is judged in its turn; and a break in a case leaves the
-// loop around the switch. A switch whose message was said (on a float, or
-// #complete and missing a member or with a case's error) is taken not to
-// get past, so that message is the only one.
+// loop around the switch. A switch whose message was said (on a float,
+// #complete refused, missing a member or with a case's error) is taken
+// not to get past, so that message is the only one.
 Mode :: enum { A; B; }
 
 no_default :: (n: int) -> int {
@@ -79,4 +79,19 @@ case_error :: (m: Mode) -> int {
     }
 }
 
+complete_on_an_int :: (n: int) -> int {
+    if #complete n == {
+        case 1; return 1;
+    }
+}
+
+complete_on_flags :: (f: Look) -> int {
+    if #complete f == {
+        case .X; return 1;
+        case .Y; return 2;
+    }
+}
+
 main :: () {}
+
+Look :: enum_flags { X; Y; }

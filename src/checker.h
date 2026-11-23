@@ -1040,11 +1040,11 @@
 //   by its bits or its bytes, are "this value already has a case at
 //   PATH:L:C", and two `case;`s "this switch already has a 'case;' at
 //   PATH:L:C".
-// - #complete takes an enum ("#complete needs an enum, not 'int'"), not
-//   an enum_flags ("... not the enum_flags 'Look'"), whose every member's
-//   value must have a case, `case;` or not: "this switch is #complete, but
-//   'Mode.FREE_ALL' has no case", the missing values named by their first
-//   members, in one message.
+// - #complete takes an enum ("#complete needs an enum, not 'int'"), but
+//   not an enum_flags ("... not the enum_flags 'Look'"). Every value of
+//   the enum's members must have a case, `case;` or not: "this switch is
+//   #complete, but 'Mode.FREE_ALL' has no case", the missing values named
+//   by their first members, in one message.
 // - Each case's statements are a block and a scope of their own. A break
 //   or continue in one acts on the loop around the switch. The switch
 //   reaches its end as spec 6.11 says (goes_past).
