@@ -1863,9 +1863,10 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // #c_call before #foreign is "a foreign procedure is C's already: it takes
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
-// what's missing (error_expected_or_load). A #run, an #if or a
-// #caller_location there is "expected '{'" (on the next line, a #run or an
-// #if is the top-level declaration the recovery resumes at). A
+// what's missing (error_expected_or_load). A #run, an #if, a
+// #caller_location, a #complete or a #through there is "expected '{'" (on
+// the next line, a #run or an #if is the top-level declaration the
+// recovery resumes at). A
 // string after #foreign's library is the C function's name, when it isn't
 // the procedure's own (c_free :: (p: *void) #foreign libc "free";): the
 // procedure keeps its name in Rig. #compiler, Jai's directive, declares a
@@ -1944,9 +1945,13 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         // Where the '{' should be: parse_block reports it. A #run or an #if
         // starting the next line is where the recovery resumes, as a #load
-        // is. A #caller_location is a value, as a #run is, so it's no
-        // unknown directive here either (spec 2.7).
-        if (is_top_level_directive(t) || is_directive(t, "caller_location")) break;
+        // is. A #caller_location is a value, as a #run is, and a #complete
+        // or a #through is part of a switch, so none is an unknown
+        // directive here either (spec 2.7).
+        if (is_top_level_directive(t) || is_directive(t, "caller_location") || is_directive(t, "complete") ||
+            is_directive(t, "through")) {
+            break;
+        }
         bool compiler = is_directive(t, "compiler");
         if (!compiler && !string_eq(t->text, str("foreign"))) {
             diag_error(p->diag, t->pos, "unknown directive '#" STR_FMT "'", STR_ARG(t->text));

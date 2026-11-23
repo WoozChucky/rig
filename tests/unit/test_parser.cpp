@@ -4237,6 +4237,14 @@ TEST(switch_syntax_mistakes) {
     // A #load before the first case is misplaced, as anywhere in a body.
     body_dump(&a, "if x == { #load \"x.rig\"; case 1; }", &errors);
     CHECK_STR(errors, "2:15: #load can only be at the top level\n");
+    // After a signature, a switch's directives are where the body should
+    // be, as a #run is there, never unknown directives (spec 2.7).
+    parse_src(&a, "f :: () #through { }\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    parse_src(&a, "f :: () -> int #complete { return 1; }\n", &errors);
+    CHECK_STR(errors, "1:16: expected '{', found directive\n");
+    parse_src(&a, "f :: () #c_call #through { }\n", &errors);
+    CHECK_STR(errors, "1:17: expected '{', found directive\n");
     arena_free(&a);
 }
 
