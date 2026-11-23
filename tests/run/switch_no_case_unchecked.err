@@ -1,0 +1,1 @@
+tests/run/switch_no_case_unchecked.rig:11:5: runtime error: no case for value 18446744073709551615 of 'Huge'

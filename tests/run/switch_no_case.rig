@@ -1,0 +1,18 @@
+// A #complete switch with no case; that meets a value no member has stops
+// the program at its `if`, the value written as the enum's integer type's
+// sign reads it (issue #222, spec 6.14, 8.1): here an s8's -7. Compiled
+// and interpreted.
+#import "Basic";
+
+Mode :: enum s8 { ALLOCATE; RESIZE; FREE :: -2; }
+
+main :: () {
+    print("before\n");
+    m := cast(Mode) -7;
+    if #complete m == {
+        case .ALLOCATE; print("allocate\n");
+        case .RESIZE;   print("resize\n");
+        case .FREE;     print("free\n");
+    }
+    print("after\n");
+}

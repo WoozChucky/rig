@@ -363,6 +363,20 @@ static bool walk_node(Reach *r, Ast *node) {
         array_add(nodes, push->context);
         return true;
     }
+    // A switch's expression, then each case's value and block (spec 6.14),
+    // as an if's condition and blocks. Only a string case's value is code:
+    // lowering writes its bytes (a #run's string, or a constant's, reached
+    // by its name); any other case's is a constant, which reaches no code.
+    case AST_SWITCH: {
+        Ast_Switch *sw = (Ast_Switch *)node;
+        for (s64 i = sw->cases.count - 1; i >= 0; i--) {
+            Ast_Case *k = sw->cases[i];
+            array_add(nodes, k->block);
+            if (k->value && sw->value->type == &type_string) array_add(nodes, k->value);
+        }
+        array_add(nodes, sw->value);
+        return true;
+    }
     case AST_BREAK:
     case AST_CONTINUE: return true;
     default: return walk_expression(r, node);

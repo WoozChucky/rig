@@ -2464,7 +2464,8 @@ static String shown_c_name(Arena *a, String name) {
 //   definition that comes second (main.1), and it wouldn't link. "'main'
 //   can't be a C function's name: it's where the program starts";
 // - the runtime's procedures, all named __rig_ (llvm_backend.cpp's
-//   __rig_panic, lower.cpp's __rig_bounds_failed and __rig_string_equal):
+//   __rig_panic, lower.cpp's __rig_bounds_failed, __rig_string_equal and
+//   __rig_no_case):
 //   "'__rig_panic' can't be a C function's name: names starting with __rig_
 //   are the compiler's own". A program's own procedure called free is
 //   renamed and keeps working, being internal; a foreign one can't be.

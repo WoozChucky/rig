@@ -2050,7 +2050,7 @@ Case   = "case" [ Expression ] ";" { Statement } [ "#through" ";" ] .
 
 `if x == { ... }` is a switch, Jai's: `x` is worked out once, and the case whose value equals it runs. Each `case v;` is followed by its statements, up to the next `case` or the switch's `}`; `case;`, with no value, is the default, which runs when no case has `x`'s value. No case runs on into the next unless it ends with `#through;`. With no case for the value and no `case;`, nothing runs.
 
-```rig fragment
+```rig
 puts :: (s: *u8) -> s32 #foreign libc;
 
 describe :: (n: int) {
@@ -2062,9 +2062,22 @@ describe :: (n: int) {
         case;    puts("many");
     }
 }
+
+main :: () {
+    describe(2);
+    describe(3);
+    describe(7);
+}
 ```
 
-`describe(2)` prints `a pair` then `a few`; `describe(3)` `a few`; `describe(7)` `many`.
+`describe(2)` prints `a pair` then `a few`; `describe(3)` `a few`; `describe(7)` `many`:
+
+```text
+a pair
+a few
+a few
+many
+```
 
 **Telling it from an `if`.** An `==` right before a `{` ends the expression it follows, however deep, and is never a comparison, since no expression starts with `{`. So `if a == b {` and `if x == .{1, 2} {` are `if`s, comparing, and `if (x) == {`, `if a && b == {` and `if it > limit == {` are switches on `x`, `a && b` and `it > limit`. Anywhere else an expression is followed by `== {`, it is the error for what was expected after the expression: `x := a == { };` is `expected ';', found '=='`, `if (x == {` is `expected ')', found '=='`, and `while x == {`, `#if x == {` and `push_context x == {` are `expected '{', found '=='`. There is no switch while compiling: an `#if` picks code, and a switch is always code that runs.
 
@@ -2073,7 +2086,7 @@ describe :: (n: int) {
 **The cases' values.** Each converts to `x`'s type as an assignment's value does (section 6.4): `.FREE` takes `x`'s enum, an untyped constant its integer type, `null` its pointer type, and a value that doesn't convert is `a value of type 'string' doesn't convert to 'int' implicitly`, `'.FREE' needs an enum type, not 'int'` or `300 doesn't fit in 'u8'`. Each must be known while compiling, and is never worked out at run time:
 
 - an integer's, an enum's or a `bool`'s is a constant (section 5.9): a literal, a named constant, a member, `.FREE`, a flags expression such as `.A | .B`, a cast of one, or a `#run`'s number;
-- a string's is constant data: a string literal, a constant holding one, or a `#run`'s string, compared as `==` compares strings;
+- a string's is constant data: a string literal, a constant holding one, or a `#run`'s string, compared as `==` compares strings (below);
 - a pointer's can only be `null`, the one pointer known while compiling as a number: a string literal's address has none until the program is linked, so any other value of a pointer switch, a constant `cast(*u8) "x"` included, is `a pointer's case can only be null, as in case null;`, at it.
 
 Anything else, a variable say, is `a case's value must be known while compiling`, at its start.
@@ -2086,11 +2099,35 @@ Anything else, a variable say, is `a case's value must be known while compiling`
 
 **No case at run time.** A `#complete` switch with no `case;` can still meet a value no member has: `cast(Mode) 7`, or memory C wrote. That stops the program with a runtime error at the `if`, `runtime error: no case for value 7 of 'Mode'`, the value written in decimal as the enum's integer type's sign reads it (section 8.1). It is checked with bounds checks on or off, as a null pointer is (section 8.4): it isn't a bounds check. A switch with a `case;`, or that isn't `#complete`, has no such check: a value with no case runs `case;`, or nothing.
 
+```rig runtime-error
+#import "Basic";
+
+Mode :: enum { ALLOCATE; RESIZE; FREE; }
+
+main :: () {
+    print("before\n");
+    m := cast(Mode) 7;
+    if #complete m == {
+        case .ALLOCATE; print("allocate\n");
+        case .RESIZE;   print("resize\n");
+        case .FREE;     print("free\n");
+    }
+}
+```
+
+This program prints `before`, then stops:
+
+```text
+example.rig:8:5: runtime error: no case for value 7 of 'Mode'
+```
+
 **Blocks and jumps.** Each case's statements are a block and a scope of their own (sections 6.1, 4.7): two cases may declare the same name, and a `defer` in a case runs when the case is left, by its end, a `#through`, a `break`, a `continue` or a `return` (section 6.12). A switch is no loop: `break` and `continue` in a case act on the loop around the switch, leaving the case's block (section 6.9), and with none around are `'break' is only allowed inside a loop`.
 
 **Reaching the end.** A switch reaches its end (section 6.11) when a value may find no case, since it has no `case;` and isn't `#complete` with a case for every member's value, or when a case that doesn't end with `#through` reaches the end of its block; a case ending with `#through` goes on into the next, which is judged in its turn. Only `case;` and `#complete` count as covering every value: a switch on a `bool` with `case true;` and `case false;` and no `case;` reaches its end. A switch whose switched expression has an error, or that is `#complete` and doesn't cover every value, is taken not to reach its end, so its message is the only one.
 
-```rig fragment
+```rig
+#import "Basic";
+
 Mode :: enum { ALLOCATE; RESIZE; FREE; FREE_ALL; }
 
 name :: (m: Mode) -> string {
@@ -2109,9 +2146,21 @@ first_word :: (s: string) -> int {
         case;         return -1;
     }
 }
+
+main :: () {
+    print("{} {}\n", name(.FREE), name(Mode.RESIZE));
+    print("{} {} {}\n", first_word(""), first_word("hello"), first_word("help"));
+}
 ```
 
-Neither procedure reaches its end: `name`'s switch has a case for every member's value, each returning, and `first_word`'s has a `case;`. A `Mode` that no member has stops the program at `name`'s `if`.
+Neither procedure reaches its end: `name`'s switch has a case for every member's value, each returning, and `first_word`'s has a `case;`. A `Mode` that no member has stops the program at `name`'s `if`. The program prints:
+
+```text
+free resize
+0 1 -1
+```
+
+**How a string switch compares.** A switch on a string compares it with each case's value in turn, in source order, as `==` does (section 6.5), until one is equal: first the counts, then, only when they are the same, the bytes. Its count and data are read once, before the first comparison. So a string whose count is above 0 and whose data is null passes every case of another count, and stops at the switch's `==` with `null pointer dereference` at the first case of its count (section 8.4).
 
 **`else` and `else if`.** A switch takes no `else`, its default being `case;`: an `else` after its `}` is `a switch takes no else; its 'case;' runs when no case does`, at the `else`. A switch may be the `if` after an `else`, `if n == 1 { ... } else if n == { ... }`, ending the chain.
 
@@ -3016,9 +3065,10 @@ The messages and their positions:
 |---|---|---|
 | integer division by zero (section 8.2) | `division by zero` | the `/` or `%` (or `/=`, `%=`) |
 | checked integer cast (section 8.3) | `the value doesn't fit in 'T'` | the `cast` |
-| null pointer dereference (section 8.4) | `null pointer dereference` | the `.` of `p.*`, the field's name of `p.x`, the `[` of `p[i]` or `v[i]`, the sequence of a `for` (its name, the name of its field, or the `(` of a call), the `==` or `!=` of a string comparison, the name of a resizable array's built-in procedure given a null pointer, or an array whose count or `allocated` is above 0 and whose data is null (section 3.17) |
+| null pointer dereference (section 8.4) | `null pointer dereference` | the `.` of `p.*`, the field's name of `p.x`, the `[` of `p[i]` or `v[i]`, the sequence of a `for` (its name, the name of its field, or the `(` of a call), the `==` or `!=` of a string comparison, the `==` of a string switch (section 6.14), the name of a resizable array's built-in procedure given a null pointer, or an array whose count or `allocated` is above 0 and whose data is null (section 3.17) |
 | index out of bounds (section 8.5) | `index I is out of bounds (count C)` | the `[`, or the name of a resizable array's built-in procedure (section 3.17) |
 | call of a null procedure value (section 8.4) | `null procedure call` | the `(` of the call |
+| a `#complete` switch without `case;` meeting a value no case has (section 6.14), checked with bounds checks on or off | `no case for value V of 'T'`, `V` in decimal as `T`'s integer type's sign reads it | the switch's `if` |
 | `array_resize` given a negative count (section 3.17) | `'array_resize' was given a negative count` | the name `array_resize` |
 | a resizable array's built-in procedure given an array whose count is below 0 (section 3.17) | `'array_add' was given an array with a negative count`, naming the procedure | the procedure's name |
 | `array_pop` or a remove given an array that owns memory and whose count is past `allocated` (section 3.17) | `'array_pop' was given an array with more elements than its memory holds`, naming the procedure | the procedure's name |
@@ -3078,7 +3128,7 @@ Widening to a type of the same signedness, or from unsigned to a wider signed ty
 
 Every read or write through a pointer checks first that the pointer is not null, and stops with `null pointer dereference` when it is: `p.*`, a field through a pointer (`p.x`), and an index into a pointer (`p[i]`). The check is made where the place is worked out, before anything is read or written, so `*p.*` with `p` null fails too.
 
-A view's or a string's data is a pointer too, checked when it would be read: when indexing (after the bounds check, and also when bounds checks are off), once before the first iteration of a `for` over it when its count is above 0, and in `==` or `!=` on strings when the two counts are equal and above 0 (the only case that reads bytes). A zeroed view, with count 0, reads nothing and passes. A resizable array's data is checked as a view's is, when indexing and in a `for`. A built-in procedure given a pointer to one checks the pointer before it does anything, and then, unless it is `array_reset` or `array_free`, which use no element, checks the array's data when its count or its `allocated` is above 0, after the index and the count: a count above 0 says there are elements at `data`, and an `allocated` above 0 that its memory has room, so a `null` data is the null dereference that indexing such a view would be, whether or not the procedure itself would go on to read or write there. Both checks are at its name, with bounds checks on or off (section 3.17).
+A view's or a string's data is a pointer too, checked when it would be read: when indexing (after the bounds check, and also when bounds checks are off), once before the first iteration of a `for` over it when its count is above 0, and in `==` or `!=` on strings when the two counts are equal and above 0 (the only case that reads bytes). A switch on a string checks it the same way, at the switch's `==`, as it compares the string with each case of the same count, above 0 (section 6.14). A zeroed view, with count 0, reads nothing and passes. A resizable array's data is checked as a view's is, when indexing and in a `for`. A built-in procedure given a pointer to one checks the pointer before it does anything, and then, unless it is `array_reset` or `array_free`, which use no element, checks the array's data when its count or its `allocated` is above 0, after the index and the count: a count above 0 says there are elements at `data`, and an `allocated` above 0 that its memory has room, so a `null` data is the null dereference that indexing such a view would be, whether or not the procedure itself would go on to read or write there. Both checks are at its name, with bounds checks on or off (section 3.17).
 
 A procedure value is an address too (section 3.15). Every call through a procedure value checks that the value is not null, and stops with `null procedure call`, at the call's `(`, when it is. The check comes after the callee and the arguments are evaluated, right before the call (section 5.18), so what the arguments did has happened. A direct call, of a procedure by its name, is never checked: it always names a procedure.
 

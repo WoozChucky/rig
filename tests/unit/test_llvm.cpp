@@ -2988,3 +2988,28 @@ TEST(a_resizable_array_of_its_own_struct_debug_type) {
     }
     arena_free(&a);
 }
+
+// Issue #222: the switch (spec 6.14).
+
+TEST(llvm_switch) {
+    // An IR switch is LLVM's: the value, the default's label, then each
+    // case's value and label; it verifies on both targets.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "main :: () {\n"
+                                "    n := 2;\n"
+                                "    if n == {\n"
+                                "        case 1; n = 10;\n"
+                                "        case 2; n = 20;\n"
+                                "        case; n = 30;\n"
+                                "    }\n"
+                                "}\n");
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(text, "switch i64 %"));
+        CHECK(contains(text, ", label %"));
+        CHECK(contains(text, "i64 1, label %"));
+        CHECK(contains(text, "i64 2, label %"));
+    }
+    arena_free(&a);
+}

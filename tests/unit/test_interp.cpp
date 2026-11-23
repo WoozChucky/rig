@@ -239,6 +239,40 @@ TEST(interp_signed_division_by_minus_one) {
     arena_free(&a);
 }
 
+TEST(interp_switch_by_hand) {
+    // A switch goes to the block of the case whose value is its operand's,
+    // compared as the type's bits (255 is an i8's -1), or to its default.
+    // Issue #222.
+    Arena a = arena_make();
+    Ir_Module *m = arena_new<Ir_Module>(&a);
+    Ir_Proc *p = new_proc_returning(m, &a, "pick", IR_I64);
+    s32 x = ir_add_param(p, IR_I8, IR_EXT_NONE);
+    s32 b0 = ir_new_block(&a, p), b1 = ir_new_block(&a, p), b2 = ir_new_block(&a, p), b3 = ir_new_block(&a, p);
+    Ir_Instr *dispatch = ir_emit(p, b0, IR_SWITCH, IR_I8);
+    dispatch->a = x;
+    dispatch->target = b3;
+    array_add(&dispatch->cases, Ir_Case{1, b1});
+    array_add(&dispatch->cases, Ir_Case{255, b2});
+    emit_ret(p, b1, emit_const(p, b1, IR_I64, 10));
+    emit_ret(p, b2, emit_const(p, b2, IR_I64, 20));
+    emit_ret(p, b3, emit_const(p, b3, IR_I64, 30));
+    Interp *in = interp_new(m);
+    u64 picks[3][2] = {{1, 10}, {255, 20}, {7, 30}};
+    for (s64 i = 0; i < 3; i++) {
+        Array<u64> args = {};
+        array_add(&args, picks[i][0]);
+        Interp_Result r = {};
+        interp_run(in, interp_test_proc(m, "pick"), args, &a, &r);
+        CHECK(r.ok);
+        CHECK_EQ(r.results.count, 1);
+        if (r.results.count == 1) CHECK_EQ(r.results[0], picks[i][1]);
+        array_free(&args);
+        interp_test_free(&r);
+    }
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_shifts_mask_their_amount) {
     // Lowering masks every shift's amount to the width; the interpreter
     // does too, rather than shift by the width or more, which C++ leaves
