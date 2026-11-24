@@ -1,0 +1,51 @@
+// Unions baked from #run (issue #223, spec 7.8): a union is baked as its
+// bytes, all of them, as the run left them, whichever member wrote them;
+// every member of a baked union is read from its bytes at run time. A union
+// inside a struct is baked so too, its struct field by field. A pointer
+// among a union's bytes is baked as bytes, not refused as a pointer field
+// is: an address from compile time means nothing at run time, so the
+// program only tests it for zero.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Value :: union { i: s64; f: float64; p: *void; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+
+make :: () -> Value {
+    v: Value;
+    v.f = 2.5;
+    return v;
+}
+
+make_event :: () -> Event {
+    e: Event;
+    e.kind = 2;
+    e.mouse.x = 3;
+    e.mouse.y = -4;
+    return e;
+}
+
+pointing :: () -> Value {
+    v: Value;
+    v.p = *v;
+    return v;
+}
+
+B :: #run make();
+E :: #run make_event();
+P :: #run pointing();
+
+#run {
+    printf("a Value is %lld bytes while compiling\n", size_of(Value));
+}
+
+main :: () {
+    printf("%lld %g\n", B.i, B.f);
+    printf("%d %d %d %d\n", E.kind, E.mouse.x, E.mouse.y, E.key.code);
+    if P.i != 0 {
+        printf("true\n");
+    } else {
+        printf("false\n");
+    }
+}

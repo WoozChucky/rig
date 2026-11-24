@@ -2288,6 +2288,60 @@ TEST(member_through_a_pointer_is_null_checked) {
     arena_free(&a);
 }
 
+TEST(a_field_through_anonymous_members_is_one_address) {
+    // p.key.code is p.<anonymous>.key.code (spec 3.19): the pointer is
+    // followed and checked once, at key, and the chain's offsets add up as
+    // nested fields' do, to one address 4 bytes past p (the anonymous union's
+    // offset; key's and code's are 0), as p.kind's is p itself.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Key :: struct { code: s32; }\n"
+                                "Mouse :: struct { x: s16; y: s16; }\n"
+                                "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                                "f :: (p: *Event) -> s32 {\n"
+                                "    return p.key.code;\n"
+                                "}\n"
+                                "g :: (p: *Event) -> s32 {\n"
+                                "    return p.kind;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr) -> i32 {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %5 = const i64 4\n"
+              "  %6 = ptradd %2, %5\n"
+              "  %7 = load i32 %6\n"
+              "  ret %7\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:5:14: runtime error: null pointer dereference\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(ptr) -> i32 {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  %5 = load i32 %2\n"
+              "  ret %5\n"
+              "}\n");
+    arena_free(&a);
+}
+
 // Milestone 2b (issue #59): arrays and views. An index of an array or a
 // view is compared with its count, unsigned, after widening by its own sign
 // (so -1 and a u64 above int's range fail too); a failing check calls

@@ -1906,6 +1906,52 @@ static s32 lower_address(Lowering *l, Ast *e) {
     return address_of(l, ((Ast_Name *)e)->decl);
 }
 
+// A value of a struct literal that holds the checker's groups
+// (Ast_Literal.written), as lower_literal stores it: the value and its
+// field's type, its offset in the literal's temporary (the offsets of the
+// anonymous members it was grouped into added), and its place among the
+// values the program wrote.
+struct Literal_Part {
+    Ast *value;
+    Type *type;
+    s64 offset;
+    s32 written;
+};
+
+// The values the program wrote in `literal`, a literal holding the
+// checker's groups or one of those groups, at `offset` bytes into the
+// outermost literal, added to *parts: a group's own values, to any depth,
+// in place of the group (spec 3.19).
+static void add_literal_parts(Ast_Literal *literal, s64 offset, Array<Literal_Part> *parts) {
+    Type *t = literal->type;
+    RIG_ASSERT(literal->written.count == literal->values.count);
+    for (s64 i = 0; i < literal->values.count; i++) {
+        Type_Field *field = &t->fields[literal->fields[i]];
+        s32 written = literal->written[i];
+        if (written < 0) {
+            Ast *group = literal->values[i];
+            RIG_ASSERT(group->kind == AST_LITERAL);
+            add_literal_parts((Ast_Literal *)group, offset + field->offset, parts);
+            continue;
+        }
+        array_add(parts, Literal_Part{literal->values[i], field->type, offset + field->offset, written});
+    }
+}
+
+// The values the program wrote in `literal`, a literal holding the
+// checker's groups, each at its offset in the literal (add_literal_parts),
+// in the order they were written (spec 5.17): a literal has a few, so
+// they're sorted by insertion, by their places, one value's each.
+static void literal_parts(Ast_Literal *literal, Array<Literal_Part> *parts) {
+    add_literal_parts(literal, 0, parts);
+    for (s64 i = 1; i < parts->count; i++) {
+        Literal_Part part = (*parts)[i];
+        s64 j = i;
+        for (; j > 0 && (*parts)[j - 1].written > part.written; j--) (*parts)[j] = (*parts)[j - 1];
+        (*parts)[j] = part;
+    }
+}
+
 // A struct literal, T.{a, b} or T.{y = b}, built in a temporary of its
 // own: zeroed first (the fields not given are zero, and so is the padding
 // between fields, which a copy then carries along), then each value given
@@ -1926,6 +1972,14 @@ static s32 lower_address(Lowering *l, Ast *e) {
 // element at i * SIZE, but isn't zeroed: it gives every element, and an
 // array has no padding between them (each one's size is a multiple of its
 // alignment, and a struct element brings its own padding, zeroed).
+//
+// Each value goes to the field the checker found for it (Ast_Literal.fields).
+// A union's literal is zeroed the same way, then its one member stored at 0
+// (spec 3.19). A literal whose names reach through anonymous members holds
+// the checker's groups, literals of the members' anonymous types
+// (Ast_Literal.written): it's still built in one temporary, zeroed once, its
+// values stored through the groups at their whole paths' offsets
+// (literal_parts), in the order the program wrote them, not the groups'.
 static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
     Type *t = literal->type;  // the checker gave an untyped literal the type it met
     if (literal->is_array) {
@@ -1938,9 +1992,19 @@ static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
     }
     s32 temporary = emit_slot(l, t);
     emit_zero(l, t, temporary);
+    if (literal->written.count) {
+        Array<Literal_Part> parts = {};
+        literal_parts(literal, &parts);
+        for (s64 i = 0; i < parts.count; i++) {
+            Literal_Part *part = &parts[i];
+            s32 address = emit_field_address(l, temporary, part->offset);
+            emit_put(l, part->type, lower_value(l, part->value, part->type), address);
+        }
+        array_free(&parts);
+        return temporary;
+    }
     for (s64 i = 0; i < literal->values.count; i++) {
-        s32 index = literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i;
-        Type_Field *field = &t->fields[index];
+        Type_Field *field = &t->fields[literal->fields[i]];
         s32 address = emit_field_address(l, temporary, field->offset);
         emit_put(l, field->type, lower_value(l, literal->values[i], field->type), address);
     }
@@ -3969,7 +4033,9 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 
 // The bytes of a constant value of type t, written `offset` bytes into a
 // global's `bytes`: a struct literal's values at their fields' offsets (the
-// fields not given, and the padding, stay zero), an array literal's at i
+// fields not given, and the padding, stay zero; a union's literal gives one
+// member at most, at 0, and a #run's baked union is its bytes as they were,
+// Ast_Literal.bytes, spec 3.19), an array literal's at i
 // times the element's size, an integer's low bytes, a bool's 0 or 1, a
 // float's IEEE 754 bits (a float32's rounded from the double the constant
 // keeps, as the backend rounds an f32 constant), a pointer's address (null's
@@ -3986,9 +4052,12 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // where the data or the pointer goes. The backend wants `relocs` in
 // increasing order of offset, so the values are written in that order: an
 // array's in turn, and a struct's by its fields, in the order they are laid
-// out, not the order a literal with names gives them. A procedure's address
-// (procedure_address) is a relocation too, to the procedure, and so is a
-// type's description's (type_info_address, spec 5.19), to its type_info.N
+// out, not the order a literal with names gives them (a name reaching
+// through anonymous members gave its value to the checker's literal of the
+// member's type, written at the member's field, its own fields in turn). A
+// procedure's address (procedure_address) is a relocation too, to the
+// procedure, and so is a type's description's (type_info_address, spec
+// 5.19), to its type_info.N
 // (type_info_global). The checker made sure every value is a constant, a
 // string literal, a procedure, a description's address, constant data, a
 // literal of them (check_global_value), or a #run's baked
@@ -4069,7 +4138,16 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
             }
             return;
         }
-        // Field by field; a named literal's value for each, if it gives one.
+        // A #run's baked union is its bytes, as the run left them (spec
+        // 3.19, 7.8): an address among them is copied as a number, no
+        // relocation.
+        if (literal->bytes.count) {
+            RIG_ASSERT(literal->bytes.count == t->size);
+            memcpy(bytes + offset, literal->bytes.data, (size_t)literal->bytes.count);
+            return;
+        }
+        // Field by field, the literal's value for each, if it gives one
+        // (Ast_Literal.fields): a union's literal gives one member at most.
         for (s64 f = 0; f < t->fields.count; f++) {
             Ast *field_value = literal_field_value(literal, (s32)f);
             if (!field_value) continue;
@@ -4097,13 +4175,15 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
 // and `S.{x = 1}` only up to x's. Constant data's is its literal's
 // (literal_of), a #run's baked value's included, and a part a literal
 // leaves out needs none. A baked view's is a view's whole size, as any
-// view's: its elements are in a global of their own.
+// view's: its elements are in a global of their own; and so is a baked
+// union's, all of whose bytes it holds (Ast_Literal.bytes, spec 3.19).
 static s64 constant_extent(Type *t, Ast *value) {
     if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
     // A string here is one a literal leaves out: any other is a string
     // literal's, literal_address's.
     Ast_Literal *literal = literal_of(value);
     if (!literal) return 0;
+    if (literal->bytes.count) return t->size;  // a baked union's, all its bytes
     s64 extent = 0;
     for (s64 i = 0; i < literal->values.count; i++) {
         Type *field;
@@ -4112,7 +4192,7 @@ static s64 constant_extent(Type *t, Ast *value) {
             field = t->element;
             offset = i * t->element->size;
         } else {
-            Type_Field *f = &t->fields[literal->names.count ? type_field_index(t, literal->names[i]) : (s32)i];
+            Type_Field *f = &t->fields[literal->fields[i]];
             field = f->type;
             offset = f->offset;
         }

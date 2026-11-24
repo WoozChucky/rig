@@ -1506,7 +1506,13 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Small :: enum u8 { X :: 200; }\n"
                                 "Huge :: enum u64 { TOP :: 18446744073709551615; }\n"
                                 "Signed :: enum s8 { LOW :: -2; }\n"
+                                "Value :: union { i: s64; f: float64; p: *void; }\n"
+                                "Key :: struct { code: s32; }\n"
+                                "Mouse :: struct { x: s16; y: s16; }\n"
+                                "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
                                 "main :: () {\n"
+                                "    value: Value;\n"
+                                "    event: Event;\n"
                                 "    mode: Mode;\n"
                                 "    tiny: Small;\n"
                                 "    huge: Huge;\n"
@@ -1594,6 +1600,41 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(low, "size: 8"));
         CHECK(contains(node_line(&a, text, attached(&a, low, "baseType:")), "!DIBasicType(name: \"s8\""));
         CHECK(contains(text, "!DIEnumerator(name: \"LOW\", value: -2)"));
+        // A union is a union type (spec 10.7), at its declaration's line, its
+        // members all at offset 0, which LLVM's text leaves out.
+        String value = line_with(text, "!DICompositeType(tag: DW_TAG_union_type, name: \"Value\"");
+        CHECK(contains(value, "line: 8,"));
+        CHECK(contains(value, "size: 64"));
+        String value_node = defined_node(value);
+        CHECK(value_node.count > 0);
+        const char *value_members[] = {"i", "f", "p"};
+        for (const char *name : value_members) {
+            String member = line_with(
+                text, string_cstr(&a, string_printf(&a, "!DIDerivedType(tag: DW_TAG_member, name: \"%s\"", name)));
+            CHECK(string_eq(attached(&a, member, "scope:"), value_node));
+            CHECK(contains(member, "size: 64"));
+            CHECK(!contains(member, "offset:"));
+        }
+        // An anonymous member is a member with no name, at its offset, of a
+        // union type with no name, at the member's line, as clang describes
+        // C's; the anonymous union's members are its own.
+        String event = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Event\""));
+        CHECK(event.count > 0);
+        String anonymous = line_with(text, "!DIDerivedType(tag: DW_TAG_member, scope: ");
+        CHECK(contains(anonymous, "size: 32, offset: 32)"));
+        CHECK(string_eq(attached(&a, anonymous, "scope:"), event));
+        String inner = node_line(&a, text, attached(&a, anonymous, "baseType:"));
+        CHECK(contains(inner, "!DICompositeType(tag: DW_TAG_union_type, scope: "));
+        CHECK(!contains(inner, "name:"));
+        CHECK(contains(inner, "line: 11,"));
+        CHECK(contains(inner, "size: 32"));
+        String inner_node = defined_node(inner);
+        CHECK(inner_node.count > 0);
+        String key = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"key\"");
+        String mouse = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"mouse\"");
+        CHECK(string_eq(attached(&a, key, "scope:"), inner_node));
+        CHECK(string_eq(attached(&a, mouse, "scope:"), inner_node));
+        CHECK(!contains(key, "offset:") && !contains(mouse, "offset:"));
     }
     arena_free(&a);
 }

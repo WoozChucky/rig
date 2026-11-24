@@ -248,7 +248,8 @@ static u64 read_bits(const u8 *at, s64 size) {
 // A struct or array literal of type t to hold `count` baked values, made as
 // the checker would find a written one of constant data: is_data already,
 // with no type written and no names, a struct's values its fields' in
-// order, as its caller says (Ast_Literal.fields, literal_field_value); and
+// order, as its caller says (Ast_Literal.fields, literal_field_value), or a
+// union's bytes (Ast_Literal.bytes, bake_value); and
 // is_baked, so a constant may hold it as a baked view's elements
 // (checker.cpp's check_constant_value).
 static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
@@ -305,6 +306,13 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 //   all through the run's type, before it ran (check_run.cpp's walk_type),
 //   for every struct held by value through arrays and views, the only
 //   ones baking meets (a pointer isn't followed).
+// - A union, an anonymous one too, is a literal of its bytes, all of them
+//   as the run left them (Ast_Literal.bytes, spec 3.19), not of its
+//   members: they all lie over the same bytes, and which one the run wrote
+//   last is the program's to know. A pointer, a view, a string or a
+//   procedure value among them is baked as bytes, not refused: an address
+//   from compile time in them means nothing at run time, the program's
+//   business, as reading the wrong member is (spec 7.8).
 // - An array [N]T is a literal of its N elements.
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the
@@ -344,6 +352,19 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
     // A view of its elements bakes as any view does.
     case TYPE_RESIZABLE: return refuse(b, "#run's result holds a resizable array, which can't be baked, for now");
     case TYPE_STRUCT: {
+        if (t->is_union) {
+            // Its bytes, all of them, whichever member wrote them (spec 3.19,
+            // 7.8): copied into the checker's arena, the literal's only
+            // content (Ast_Literal.bytes). Size 0 copies none: the literal
+            // gives nothing, all zeros.
+            Ast_Literal *literal = baked_literal(b, t, 0);
+            if (t->size) {
+                u8 *bytes = (u8 *)arena_alloc(b->c->arena, (u64)t->size, 1);
+                memcpy(bytes, at, (size_t)t->size);
+                literal->bytes = {bytes, t->size};
+            }
+            return literal;
+        }
         Ast_Literal *literal = baked_literal(b, t, t->fields.count);
         for (s64 i = 0; i < t->fields.count; i++) {
             Type_Field *field = &t->fields[i];

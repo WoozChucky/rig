@@ -1,0 +1,12 @@
+// A field reached through an anonymous member (issue #223, spec 3.19) of a
+// null pointer stops the program with a runtime error, at the field's name,
+// as a field of its own does (spec 8.4): p.key is p.<anonymous>.key, the
+// pointer followed and checked once, at key.
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+
+main :: () {
+    p : *Event = null;
+    p.key.code = 1;
+}
