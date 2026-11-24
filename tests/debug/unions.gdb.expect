@@ -1,5 +1,5 @@
 main () at
-unions.rig:30
+unions.rig:43
 putchar(10);
 $1 = {i = 4609434218613702656, f = 1.5, p = 0x3ff8000000000000}
 type = union Value {
@@ -26,4 +26,16 @@ u16 hi;
 u32 all;
 }
 $6 = 2
+$7 = {tag = 1 '\001', {d =
+{a = 2 '\002', {b = 12884901888, c = {0, 3}}}}, z = 4 '\004'}
+type = struct Deep {
+u8 tag;
+union {
+float64 d;
+struct {...};
+};
+u8 z;
+}
+$8 = 12884901888
+$9 = {0, 3}
 !.debug_names not created by gdb

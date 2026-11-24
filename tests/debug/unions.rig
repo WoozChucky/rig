@@ -1,16 +1,19 @@
 // A debugger's view of unions and anonymous members (bin/run-tests runs it
-// under gdb with unions.gdb and under cdb with unions.cdb; issue #223, spec
-// 10.7): a union shown with every member over the same bytes, all at offset
-// 0, a struct's anonymous union shown as a member with no name whose fields
-// are reached as the struct's own (e.key.code), and a union's anonymous
-// struct the same (w.hi), each as the debugger shows C's. gdb prints an
+// under gdb with unions.gdb and under cdb with unions.cdb; issue #223,
+// spec 10.7): a union shown with every member over the same bytes, all at
+// offset 0, a struct's anonymous union shown as a member with no name
+// whose fields are reached as the struct's own (e.key.code), and a union's
+// anonymous struct the same (w.hi), and so is a field of anonymous members
+// nested three deep (deep.b, in Deep's anonymous union's anonymous
+// struct's anonymous union), each as the debugger shows C's. gdb prints an
 // anonymous member as a value with no name among the outer one's, and
 // ptype describes it as a union or struct with no name, the kind it was
-// declared as (Event's `union {`, Word's `struct {`); cdb's `??` lists its
-// fields in the outer type instead, at their offsets (key and mouse at
-// +0x004, hi at +0x002), as CodeView describes them, and writes an
-// unsigned value in hex, with no 0x when it is below 10 (w.hi's `unsigned
-// short 2`; 12 would be `0xc`).
+// declared as (Event's `union {`, Word's `struct {`), a level below that
+// as `struct {...}`; cdb's `??` lists its fields in the outer type
+// instead, at their offsets (key and mouse at +0x004, hi at +0x002, Deep's
+// b and c at +0x010), as CodeView describes them, and writes an unsigned
+// value in hex, with no 0x when it is below 10 (w.hi's `unsigned short 2`;
+// 12 would be `0xc`).
 putchar :: (c: s32) -> s32 #foreign libc;
 
 Value :: union { i: s64; f: float64; p: *void; }
@@ -18,6 +21,11 @@ Key :: struct { code: s32; }
 Mouse :: struct { x: s16; y: s16; }
 Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
 Word :: union { struct { lo: u16; hi: u16; }; all: u32; }
+Deep :: struct {
+    tag: u8;
+    union { d: float64; struct { a: u8; union { b: s64; c: [2]s32; }; }; };
+    z: u8;
+}
 
 main :: () {
     v: Value;
@@ -27,5 +35,10 @@ main :: () {
     e.key.code = 65;
     w: Word;
     w.all = 0x00020001;
+    deep: Deep;
+    deep.tag = 1;
+    deep.a = 2;
+    deep.c[1] = 3;
+    deep.z = 4;
     putchar(10);
 }

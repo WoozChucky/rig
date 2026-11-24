@@ -1,7 +1,7 @@
 l+t
 l+s
 l+l
-bp `unions.rig:30`
+bp `unions.rig:43`
 g
 dv /t
 ?? v
@@ -9,4 +9,7 @@ dv /t
 ?? e.key.code
 ?? w
 ?? w.hi
+?? deep
+?? deep.b
+?? deep.c[1]
 q
