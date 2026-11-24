@@ -1518,6 +1518,27 @@ TEST(union_declaration_mistakes) {
     arena_free(&a);
 }
 
+TEST(unclosed_body_ends_at_a_union) {
+    // A union's declaration in column 1, as a struct's, can't be a
+    // statement: a body still open there was never closed, and the union
+    // and what follows are the top level's. So is a column-1 #if whose
+    // branch declares one.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "main :: () {\n"
+                            "    x := 1;\n"
+                            "Value :: union { i: s64; }\n"
+                            "g :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'Value'\n");
+    CHECK_STR(dump, "(broken main)\n(union Value (i s64))\n(proc g (params) (block))\n");
+    dump = parse_src(&a, "main :: () {\n    x := 1;\n#if X {\nU :: union { a: int; }\n}\ng :: () { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(dump, "(broken main)\n(#if (name X) (block (union U (a int))))\n(proc g (params) (block))\n");
+    arena_free(&a);
+}
+
 TEST(unclosed_body_ends_at_a_struct) {
     // A struct's declaration in column 1, like a procedure's, can't be a
     // statement, so a body still open there was never closed: the struct

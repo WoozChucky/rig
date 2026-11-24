@@ -1,12 +1,14 @@
 // A union's declaration's mistakes (issue #223, spec 3.19), one a line: a
 // member declared twice in its braces, and a name reached twice across an
 // anonymous member's braces, as C refuses them; a union holding itself; a
-// member of type void, or of a type that isn't known; and a union's name
+// member of type void, or of a type that isn't known, held or, inside an
+// anonymous member, behind a pointer that nothing uses; and a union's name
 // used as a value.
 Twice :: union { i: int; i: float; }
 Clash :: struct { x: int; union { x: float; }; }
 Self :: union { s: Self; }
 Hollow :: union { v: void; }
 Unknown :: union { n: Nope; }
+Late :: struct { union { p: *Nope; q: int; }; }
 Value :: union { i: s64; f: float64; }
 main :: () { v := Value; }

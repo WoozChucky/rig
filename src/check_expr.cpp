@@ -2758,8 +2758,10 @@ static Type *check_member(Checker *c, Ast_Member *m) {
     Array<s32> path = {};
     type_find_member(s, m->name, &path);
     if (!path.count) {
-        diag_error(c->diag, m->pos, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
-                   s->is_union ? "member" : "field", STR_ARG(m->name));
+        if (!check_member_under_way(c, s, m->name)) {
+            diag_error(c->diag, m->pos, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
+                       s->is_union ? "member" : "field", STR_ARG(m->name));
+        }
         return nullptr;
     }
     // Reached through anonymous members (spec 3.19): e.key is e.<anonymous>.key,

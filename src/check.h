@@ -124,6 +124,13 @@ bool check_layout(Checker *c, Type *t);
 // resolve_struct marks them: false.
 bool check_finished_layout(Checker *c, Type *t);
 
+// Whether member `name`, not found in struct t, is a field of an anonymous
+// member of t still being laid out (spec 3.19), reached in one of that
+// member's counts: a circle, "'S' is defined in terms of itself", at t's
+// declaration, said and marked as check_finished_layout says and marks
+// one: true. False when it isn't, and t has no such member.
+bool check_member_under_way(Checker *c, Type *t, String name);
+
 // Makes sure procedure proc's signature is checked, its parameters' and
 // results' types known, before a call is checked against it: a call in a
 // global's value may come before its turn in source order (checker.cpp's

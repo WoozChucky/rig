@@ -10259,6 +10259,7 @@ TEST(unions_are_laid_out_as_clang_lays_them_out) {
                           "Value :: union { i: s64; f: float64; p: *void; }\n"
                           "Odd :: union { a: [5]u8; b: u32; }\n"
                           "Lone :: union { a: [0]s64; }\n"
+                          "Empty :: union { }\n"
                           "Key :: struct { code: s32; }\n"
                           "Mouse :: struct { x: s16; y: s16; }\n"
                           "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; last: u8; }\n"
@@ -10284,6 +10285,11 @@ TEST(unions_are_laid_out_as_clang_lays_them_out) {
     Type *lone = struct_named(&c, "Lone");
     CHECK_EQ(lone->size, 0);
     CHECK_EQ(type_align(lone), 8);
+    // With no members, size 0 aligned to 1, as an empty struct is: no twin
+    // either.
+    Type *empty = struct_named(&c, "Empty");
+    CHECK_EQ(empty->size, 0);
+    CHECK_EQ(type_align(empty), 1);
     Type *event = struct_named(&c, "Event");
     CHECK(!event->is_union);
     CHECK_EQ(event->size, (s64)sizeof(C_Union_Event));
@@ -10433,8 +10439,10 @@ TEST(union_literals_give_one_member) {
                   "Key :: struct { code: s32; }\n"
                   "Mouse :: struct { x: s16; y: s16; }\n"
                   "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                  "Word :: union { struct { lo: u16; hi: u16; }; all: u32; }\n"
                   "main :: () {\n"
                   "    e := Event.{kind = 2, key = .{3}};\n"
+                  "    w := Word.{lo = 1, hi = 2};\n"
                   "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "e"))->value;
@@ -10450,6 +10458,22 @@ TEST(union_literals_give_one_member) {
         if (group->fields.count == 1) CHECK_EQ(group->fields[0], 0);
         CHECK_EQ(group->values.count, 1);
         if (group->values.count == 1) CHECK_EQ(group->values[0]->type, struct_named(&c, "Key"));
+    }
+    // Two names reaching one anonymous member give the union that one
+    // member: both go to its group, a literal of the anonymous struct.
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "w"))->value;
+    CHECK_EQ(literal->fields.count, 1);
+    CHECK_EQ(literal->values.count, 1);
+    if (literal->fields.count == 1 && literal->values.count == 1) {
+        CHECK_EQ(literal->fields[0], 0);
+        Ast_Literal *group = (Ast_Literal *)literal->values[0];
+        CHECK_EQ(group->kind, AST_LITERAL);
+        CHECK(group->type && !group->type->is_union && !group->type->name.count);
+        CHECK_EQ(group->fields.count, 2);
+        if (group->fields.count == 2) {
+            CHECK_EQ(group->fields[0], 0);
+            CHECK_EQ(group->fields[1], 1);
+        }
     }
     token_list_free(c.list);
     arena_free(&a);
@@ -10488,12 +10512,14 @@ TEST(union_members_fold_only_as_written) {
                   "Word :: union { struct { lo: u16; hi: u16; }; all: u32; }\n"
                   "E :: Event.{kind = 2, key = .{3}};\n"
                   "W :: Word.{lo = 1};\n"
+                  "B :: Word.{lo = 1, hi = 2};\n"
                   "g : Event = .{kind = 1, mouse = .{3, 4}};\n"
                   "main :: () {\n"
                   "    a := E.key.code;\n"
                   "    b := E.mouse.x;\n"
                   "    c := W.hi;\n"
                   "    d := W.all;\n"
+                  "    e := B.hi;\n"
                   "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast *code = ((Ast_Var *)local_named(&c, "a"))->value;
@@ -10504,6 +10530,10 @@ TEST(union_members_fold_only_as_written) {
     CHECK(hi->is_constant);
     CHECK_EQ(hi->constant, 0);
     CHECK(!((Ast_Var *)local_named(&c, "d"))->value->is_constant);
+    // Two names through the one anonymous struct give it both.
+    hi = ((Ast_Var *)local_named(&c, "e"))->value;
+    CHECK(hi->is_constant);
+    CHECK_EQ(hi->constant, 2);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -10519,6 +10549,69 @@ TEST(unions_contain_themselves_as_structs_do) {
                            "main :: () { }\n"),
               "1:1: 'U' contains itself; it can hold a pointer to itself, *U\n"
               "2:1: 'N' contains itself; it can hold a pointer to itself, *N\n");
+    arena_free(&a);
+}
+
+TEST(anonymous_members_late_fields_are_made) {
+    // A pointer inside an anonymous member is a late field of its type,
+    // made once the layouts are done though nothing uses it: its mistakes
+    // are said, and a pointer to its own outer is typed.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "Late :: struct { union { p: *Nope; q: int; }; }\nmain :: () { }\n"),
+              "1:30: unknown type 'Nope'\n");
+    Checked c = check_src(&a, "N :: struct { union { next: *N; v: int; }; }\nmain :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *n = struct_named(&c, "N");
+    CHECK_EQ(n->fields.count, 1);
+    if (n->fields.count == 1 && n->fields[0].type) {
+        Type *inner = n->fields[0].type;
+        CHECK_EQ(inner->fields.count, 2);
+        if (inner->fields.count == 2) {
+            CHECK(inner->fields[0].type != nullptr);
+            if (inner->fields[0].type) CHECK_STR(type_name(&a, inner->fields[0].type), "*N");
+        }
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(anonymous_members_under_way_are_a_circle) {
+    // A field of an anonymous member still being laid out, reached in one
+    // of the member's own counts, by a #run's code or not: the member isn't
+    // placed in its outer struct until all its fields are, so where the
+    // field is isn't known yet. As for a #run reaching a struct under way,
+    // that's a circle, at the top-level declaration, read or named in a
+    // literal, at any depth; a name the member doesn't hold is still
+    // missing.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "W :: struct { union { key: [2]int; b: [g.key.count]int; }; }\n"
+                           "g: *W;\n"
+                           "main :: () { }\n"),
+              "1:1: 'W' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "S :: struct { union { key: int; b: [#run f()]int; }; }\n"
+                           "g: *S;\n"
+                           "f :: () -> int { if g != null { return g.key; } return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "T :: struct { x: u8; union { key: int; b: [#run f()]int; }; }\n"
+                           "f :: () -> int { t := T.{key = 1}; return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'T' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "U :: struct { union { struct { key: int; }; b: [#run f()]int; }; }\n"
+                           "g: *U;\n"
+                           "f :: () -> int { if g != null { return g.key; } return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'U' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a,
+                           "V :: struct { union { key: int; b: [#run f()]int; }; }\n"
+                           "g: *V;\n"
+                           "f :: () -> int { if g != null { return g.nope; } return 1; }\n"
+                           "main :: () { }\n"),
+              "3:42: 'V' has no field 'nope'\n");
     arena_free(&a);
 }
 

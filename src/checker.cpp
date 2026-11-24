@@ -1478,18 +1478,13 @@ bool check_layout(Checker *c, Type *t) {
 // the bodies the walk checked are done, off c->resolving, by the time it
 // meets the struct.
 //
-// An anonymous member is under way while its own fields are laid out
-// (spec 3.19), inside its top-level declaration's layout: a #run in one of
-// those fields that needs its layout is in a circle through that
-// declaration, or through one it needs worked out since (the end of
-// c->resolving), which is said instead, since the member has no name.
+// An anonymous member's type (spec 3.19) is never met under way: it's in
+// its outer's fields, so reached at all, only once its own fields are laid
+// out (lay_out), and a field of one still under way isn't found, a circle
+// at its top-level declaration (check_member_under_way).
 bool check_finished_layout(Checker *c, Type *t) {
     Ast_Struct *s = t->decl;
-    if (s && !s->name.count && s->resolve == RESOLVE_UNDER_WAY) {
-        s64 i = c->resolving.count - 1;
-        while (c->resolving[i]->kind != AST_STRUCT) i--;
-        s = (Ast_Struct *)c->resolving[i];
-    }
+    RIG_ASSERT(!s || s->name.count || s->resolve == RESOLVE_DONE);
     if (s && (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE)) {
         if (s->resolve == RESOLVE_UNDER_WAY) {
             diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
@@ -1498,6 +1493,41 @@ bool check_finished_layout(Checker *c, Type *t) {
         return false;
     }
     return check_layout(c, t);
+}
+
+// Whether an anonymous member of struct s still being laid out, or one
+// under way inside it, at any depth, holds a field named `name` already, in
+// its type so far. Each level has one under way at most: lay_out works
+// them out in turn.
+static bool held_under_way(Ast_Struct *s, String name) {
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Struct *inner = s->fields[i]->anonymous;
+        if (!inner || inner->resolve != RESOLVE_UNDER_WAY) continue;
+        Array<s32> path = {};
+        type_find_member(inner->declared, name, &path);
+        bool held = path.count > 0;
+        array_free(&path);
+        return held || held_under_way(inner, name);
+    }
+    return false;
+}
+
+// An anonymous member is in its outer's fields only once its own are laid
+// out (lay_out), since only then are its size and alignment known, and with
+// them where it goes: so a field of one still under way, reached in one of
+// its own counts (`b: [g.key.count]int`, or a #run's code), can't be found
+// yet, though a named field before it could. The member's place depends on
+// the count, a circle through a value, said as check_finished_layout says
+// one.
+bool check_member_under_way(Checker *c, Type *t, String name) {
+    Ast_Struct *s = t->decl;
+    if (!s || (s->resolve != RESOLVE_UNDER_WAY && s->resolve != RESOLVE_CYCLE)) return false;
+    if (!held_under_way(s, name)) return false;
+    if (s->resolve == RESOLVE_UNDER_WAY) {
+        diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
+    }
+    mark_circle(c, s);
+    return true;
 }
 
 void check_late_field(Checker *c, Type *t, s32 index) {
