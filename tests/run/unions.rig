@@ -22,6 +22,15 @@ set_float :: (p: *Value, f: float64) {
     p.f = f;
 }
 
+// A literal meeting a union as a result, alone and beside another.
+narrow :: () -> Wide {
+    return .{b = 1};
+}
+
+float_and_count :: () -> Value, int {
+    return .{f = 1.5}, 3;
+}
+
 main :: () {
     // The sizes: Value 8, Odd 8 (5 bytes rounded up to u32's alignment),
     // Empty 0, and [3]Odd 24, each element 8 bytes from the last.
@@ -66,6 +75,11 @@ main :: () {
     wide = Wide.{all = 0xFFFF_FFFF_FFFF_FFFF};
     wide = Wide.{b = 1};
     printf("%llu\n", wide.all);
+    wide = Wide.{all = 0xFFFF_FFFF_FFFF_FFFF};
+    wide = narrow();
+    printf("%llu\n", wide.all);
+    result, count := float_and_count();
+    printf("%g %lld\n", result.f, count);
 
     // .{} meeting a union: every byte zero.
     wide.all = 99;

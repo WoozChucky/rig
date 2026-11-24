@@ -1,12 +1,12 @@
 // A union's uses' mistakes (issue #223, spec 3.19), one a line: a union
 // passed to C by value; a union's literal in order, or giving two members,
-// one of them an anonymous union's through its fields' names; a member a
-// union doesn't have, read or in a literal, and a field a struct with an
-// anonymous member doesn't have; == and < on unions; a union's literal
-// meeting no type; a value in order meeting an anonymous union, and
-// values in order given to one; a field given twice beside an anonymous
-// member; and a name an anonymous union or struct doesn't have, said with
-// its keyword for its name.
+// returned or not, one of them an anonymous union's through its fields'
+// names; a member a union doesn't have, read or in a literal, and a field a
+// struct with an anonymous member doesn't have; == and < on unions; a
+// union's literal meeting no type; a value in order meeting an anonymous
+// union, and values in order given to one; a field given twice beside an
+// anonymous member; and a name an anonymous union or struct doesn't have,
+// said with its keyword for its name.
 Value :: union { i: s64; f: float64; }
 Key :: struct { code: s32; }
 Mouse :: struct { x: s16; y: s16; }
@@ -14,6 +14,8 @@ Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
 Pair :: struct { struct { a: int; }; }
 puts :: (s: *u8) -> s32 #foreign libc;
 bad :: (v: Value) #foreign libc;
+one :: () -> Value { return .{1}; }
+two :: () -> Value { return .{i = 1, f = 2}; }
 
 main :: () {
     v: Value;

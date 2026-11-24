@@ -2710,7 +2710,9 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // folds, as a constant's name does: ORIGIN.y, LINE.b.y, Vec2.{5, 6}.y. An
 // aggregate field, or a pointer to a string literal's bytes, a procedure or
 // a type's description, stays a part of the data, read where it's used. A
-// union's member folds only when its literal gives that one, or none.
+// union's member folds only when its literal gives that one, or a written
+// literal gives none (all zero); never a #run's baked union's, read from
+// its bytes.
 //
 // e.x where e is a name, not in parentheses, that declares an enum (a
 // local of the name hides it, as it hides any top-level name) is its

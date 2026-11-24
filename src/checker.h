@@ -1092,8 +1092,9 @@
 //   groups the values for one anonymous member into a literal of its type
 //   (check_expr.cpp's place_named_values).
 // - A member of a union that is constant data folds only when its literal
-//   gives that member, or none (constant_data): any other is read from the
-//   data where it's used.
+//   gives that member, or a written literal gives none, all zero
+//   (constant_data); never a #run's baked union's, its bytes
+//   (Ast_Literal.bytes): any other is read from the data where it's used.
 // - What lowering may rely on: a union is a TYPE_STRUCT with is_union,
 //   every field at offset 0; an anonymous member a field with an empty
 //   name, whose type's name is empty too. No Ast_Member reaches through an
@@ -1227,8 +1228,10 @@ bool is_literal_string(Ast *e);
 //   first time it's asked and kept (Ast_Literal.is_data);
 // - the name of a constant with is_data (its `data`);
 // - a field of constant data (a struct's, not reached through a pointer;
-//   a union's member only when its literal gives that member, or none,
-//   spec 3.19), or an element of it (an array's) at an is_constant index;
+//   a union's member only when its literal gives that member, or a
+//   written literal gives none, all zero; never a #run's baked union's,
+//   its bytes (Ast_Literal.bytes), spec 3.19), or an element of it (an
+//   array's) at an is_constant index;
 // - a cast of constant data to its own type, or between string and []u8:
 //   a #run's baked []u8 cast to a string is its bytes' string literal
 //   (Ast_Literal.text), not the array literal of its elements;

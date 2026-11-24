@@ -10422,13 +10422,14 @@ TEST(anonymous_member_names_clash_where_declared) {
 
 TEST(union_literals_give_one_member) {
     // By name, one member, wherever the literal meets the union: written,
-    // a declaration's type, an argument, a field, an element; Value.{} is
-    // its zero. Each value's field is in Ast_Literal.fields.
+    // a declaration's type, an argument, a field, an element, a result;
+    // Value.{} is its zero. Each value's field is in Ast_Literal.fields.
     Arena a = arena_make();
     Checked c = check_src(&a,
                           "Value :: union { i: s64; f: float64; }\n"
                           "Holder :: struct { v: Value; n: int; }\n"
                           "take :: (v: Value) { }\n"
+                          "give :: () -> Value { return .{f = 2}; }\n"
                           "main :: () {\n"
                           "    a := Value.{f = 1.5};\n"
                           "    b : Value = .{i = 2};\n"
@@ -10456,6 +10457,11 @@ TEST(union_literals_give_one_member) {
     literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "z"))->value;
     CHECK_EQ(literal->fields.count, 0);
     CHECK_STR(type_of(&a, &c, "vs"), "[2]Value");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(c.file, "give"))->body;
+    literal = (Ast_Literal *)((Ast_Return *)body->statements[0])->values[0];
+    CHECK_EQ(literal->kind, AST_LITERAL);
+    CHECK_EQ(literal->fields.count, 1);
+    if (literal->fields.count == 1) CHECK_EQ(literal->fields[0], 1);
     token_list_free(c.list);
     // A name reaching through an anonymous member: the values for it are
     // grouped into a literal of its type, at its index.
@@ -10768,6 +10774,7 @@ TEST(unions_arent_compared_and_stay_out_of_c) {
                            "draw :: (v: Value) #foreign libc;\n"
                            "make :: () -> Value #foreign libc;\n"
                            "fill :: (p: *Value) -> *Value #foreign libc;\n"
+                           "back :: (v: Value) -> Value #c_call { return v; }\n"
                            "main :: () {\n"
                            "    a : Value;\n"
                            "    b : Value;\n"
@@ -10775,6 +10782,8 @@ TEST(unions_arent_compared_and_stay_out_of_c) {
                            "}\n"),
               "2:13: a foreign procedure can't take a 'Value' yet; pass a pointer to it\n"
               "3:15: a foreign procedure can't return a 'Value' yet\n"
-              "8:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'\n");
+              "5:13: a #c_call procedure can't take a 'Value' yet; pass a pointer to it\n"
+              "5:23: a #c_call procedure can't return a 'Value' yet\n"
+              "9:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'\n");
     arena_free(&a);
 }
