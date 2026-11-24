@@ -308,6 +308,9 @@ struct Ast_Enum : Ast {
                                  // the checker gives it an Ast_Int of its number
     Ast_Resolve resolve;         // its members' values (checker.cpp's resolve_enum)
     Type *declared;              // its TYPE_ENUM, made with the top level's names
+    Table<s32> member_index;     // each member's index, by its name: made at the first lookup
+                                 // (checker.cpp's enum_member_index), freed with the checker
+                                 // that made it
 };
 
 // .FREE: a member written without its enum (spec 3.18), which takes the

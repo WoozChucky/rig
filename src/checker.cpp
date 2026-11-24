@@ -957,12 +957,30 @@ static void resolve_global(Checker *c, Ast *decl) {
 // member of every enum in the circle is then unknown, so nothing more is
 // said about it or its uses. Its own body may name a member already worked
 // out as E.X, which needs nothing more of it (find_enum_member).
+//
+// A member is found by its name in a table of the enum's own
+// (Ast_Enum.member_index), so a switch naming every member of a large
+// enum checks in time that grows with the members, not their square. The
+// first lookup makes it, from every member, each name with its first
+// member's index (a second of the name is check_enum_members' mistake),
+// so it finds what looking through the members in order would, whether
+// or not their values are worked out: in the enum's own body, whether
+// the member found is visible yet is find_enum_member's to say, by its
+// resolve. Its slots are the heap's, so the checker that made it frees it
+// (Checker.indexed, free_checker_fields), and a later checker of the same
+// tree, check() after a decider (they share Operating_System), makes it
+// again.
 
-s32 enum_member_index(Ast_Enum *e, String name) {
-    for (s64 i = 0; i < e->members.count; i++) {
-        if (string_eq(e->members[i]->name, name)) return (s32)i;
+s32 enum_member_index(Checker *c, Ast_Enum *e, String name) {
+    if (e->member_index.count == 0 && e->members.count > 0) {
+        for (s64 i = 0; i < e->members.count; i++) {
+            String key = e->members[i]->name;
+            if (!table_get(&e->member_index, key)) table_put(&e->member_index, key, (s32)i);
+        }
+        array_add(&c->indexed, e);
     }
-    return -1;
+    s32 *index = table_get(&e->member_index, name);
+    return index ? *index : -1;
 }
 
 // "N doesn't fit in 'u8'", at `at`, for N the number one above `below`,
@@ -3217,6 +3235,8 @@ static void free_checker_fields(Checker *c) {
     array_free(&c->loops);
     array_free(&c->resolving);
     array_free(&c->too_deep);
+    for (s64 i = 0; i < c->indexed.count; i++) table_free(&c->indexed[i]->member_index);
+    array_free(&c->indexed);
 }
 
 void check_decider_free(Checker *c) {

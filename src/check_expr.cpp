@@ -504,7 +504,7 @@ static Ast_Dot_Name *first_dot_name(Ast *e) {
 // that name each other's members are each worked out whole.
 static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at, s32 *index) {
     Ast_Enum *e = t->enum_decl;
-    *index = enum_member_index(e, name);
+    *index = enum_member_index(c, e, name);
     bool own_body = e->resolve == RESOLVE_UNDER_WAY && c->resolving.count > 0 &&
                     c->resolving[c->resolving.count - 1] == (Ast *)e;
     if (own_body && *index >= 0 && e->members[*index]->resolve == RESOLVE_DONE) {
@@ -518,7 +518,7 @@ static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at
     }
     *index = -1;
     if (!check_enum_values(c, t)) return nullptr;
-    *index = enum_member_index(e, name);
+    *index = enum_member_index(c, e, name);
     if (*index < 0) {
         diag_error(c->diag, at, "'" STR_FMT "' has no member '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                    STR_ARG(name));
