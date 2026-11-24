@@ -995,6 +995,20 @@ static void report_past_the_range(Checker *c, Position at, u64 below, Type *t) {
     diag_error(c->diag, at, STR_FMT " doesn't fit in '" STR_FMT "'", STR_ARG(number), STR_ARG(type_name(c->arena, t)));
 }
 
+// An integer literal of `value`, at `at`, already checked: a constant of
+// type t, value in its form. The value of a constant with none written: an
+// enum's member without one (check_enum_members), and the predeclared
+// Operating_System's members and OS (declare_predeclared), so whatever
+// reaches a constant's value finds one.
+static Ast_Int *integer_literal(Arena *a, u64 value, Type *t, Position at) {
+    Ast_Int *number = ast_new<Ast_Int>(a, AST_INT, at);
+    number->value = value;
+    number->type = t;
+    number->is_constant = true;
+    number->constant = value;
+    return number;
+}
+
 // The members of enum e, in order, each a constant of its integer type
 // (Type.underlying) once known, in a scope of the enum's own that each joins
 // after its value is checked (declare: "'A' is already declared at
@@ -1071,14 +1085,7 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
             } else {
                 value = previous + 1;  // within the type's range, so already its constant's form
             }
-            if (known) {
-                Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, member->pos);
-                number->value = value;
-                number->type = integer;
-                number->is_constant = true;
-                number->constant = value;
-                member->value = number;
-            }
+            if (known) member->value = integer_literal(c->arena, value, integer, member->pos);
         }
         member->resolve = RESOLVE_DONE;
         member->type = known ? integer : nullptr;
@@ -2938,14 +2945,9 @@ static const char *predeclared_meaning(String name) {
 // program writes is once its enum is resolved (check_enum_members), of
 // int, done, its value an integer literal of its number, written nowhere.
 static Ast_Const *operating_system_member(Arena *a, const char *name, System value) {
-    Ast_Int *number = ast_new<Ast_Int>(a, AST_INT, {0, 0, 0});
-    number->value = value;
-    number->type = &type_int;
-    number->is_constant = true;
-    number->constant = value;
     Ast_Const *member = ast_new<Ast_Const>(a, AST_CONST, {0, 0, 0});
     member->name = str(name);
-    member->value = number;
+    member->value = integer_literal(a, value, &type_int, {0, 0, 0});
     member->type = &type_int;
     member->is_constant = true;
     member->constant = value;
@@ -3001,14 +3003,9 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
     Ast_Enum *system = operating_system(c, file);
     table_put(&c->top_level, system->name, (Ast *)system);
     System value = file->system ? file->system : host_system();
-    Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, {0, 0, 0});
-    number->value = value;
-    number->type = system->declared;
-    number->is_constant = true;
-    number->constant = value;
     Ast_Const *os = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
     os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry, as its static_assert says
-    os->value = number;
+    os->value = integer_literal(c->arena, value, system->declared, {0, 0, 0});
     os->type = system->declared;
     os->is_constant = true;
     os->constant = value;

@@ -2142,6 +2142,10 @@ static Ast *parse_enum(Parser *p, Token *name) {
             return nullptr;
         }
         advance(p);
+        // A member's value is read as parse_constant reads a constant's,
+        // but here: a member without one is made here all the same, and
+        // with parse_constant there would be two ways to make a member and
+        // two places that expect its ';', no shorter and less plain.
         Ast_Const *member = ast_new<Ast_Const>(p->arena, AST_CONST, member_name->pos);
         member->name = member_name->text;
         if (peek(p)->kind == TOKEN_COLON_COLON) {
