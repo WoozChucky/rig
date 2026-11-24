@@ -3937,15 +3937,16 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // pointer's pointee's description (a *void's, void's); an array's, a view's
 // or a resizable array's element's description, its kind and its count (-1
 // for a view or a resizable array, whose count is its value's); a struct's
-// name and members; a procedure type's parameters' and results'
-// descriptions (a ..T parameter's []T), #c_call and whether its last
-// parameter is a ..T; an enum's name, its integer type's description,
-// whether it's an enum_flags, and its members' names and values. Its names'
-// str.N and its arrays' globals are made first; the descriptions it points
-// at are asked for through type_info_global, which only queues them. The
-// relocations go in increasing offset, as the backend wants. The bytes are
-// put in the global last, through its index: the globals array may move
-// while they're made.
+// name and members, and whether it's a union (an anonymous member's type
+// has an empty name, as its member has); a procedure type's parameters'
+// and results' descriptions (a ..T parameter's []T), #c_call and whether
+// its last parameter is a ..T; an enum's name, its integer type's
+// description, whether it's an enum_flags, and its members' names and
+// values. Its names' str.N and its arrays' globals are made first; the
+// descriptions it points at are asked for through type_info_global, which
+// only queues them. The relocations go in increasing offset, as the
+// backend wants. The bytes are put in the global last, through its index:
+// the globals array may move while they're made.
 static void describe_type(Lowering *l, s32 global, Type *t) {
     String name = l->module->globals[global].name;
     s64 size = l->module->globals[global].size;
@@ -3972,6 +3973,7 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
         write_bits(bytes + TYPE_INFO_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
         array_add(&relocs, Ir_Reloc{TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
         describe_members(l, bytes, &relocs, string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
+        bytes[TYPE_INFO_STRUCT_IS_UNION_OFFSET] = t->is_union;
         break;
     case TYPE_PROC:
         describe_types(l, bytes, &relocs, TYPE_INFO_PARAMETERS_OFFSET,

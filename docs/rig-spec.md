@@ -684,7 +684,8 @@ Type_Info_Integer   :: struct { info: Type_Info; signed: bool; }
 Type_Info_Pointer   :: struct { info: Type_Info; pointer_to: *Type_Info; }
 Type_Info_Procedure :: struct { info: Type_Info; parameter_types: []*Type_Info; result_types: []*Type_Info;
                                 is_c_call: bool; is_variadic: bool; }
-Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member; }
+Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member;
+                                is_union: bool; }
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
 Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
@@ -700,11 +701,11 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 - **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
 - **Pointers** (`.POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
 - **Arrays, views and resizable arrays** (`.ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind`, a member of the enum `Array_Kind`, is `.FIXED` for an array `[N]T`, `.VIEW` for a view `[]T` and `.RESIZABLE` for a resizable array `[..]T` (section 3.17), in Jai's order, and `count` is the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A resizable array's `size` is 40 (section 3.11).
-- **Structs** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's declared name and whose `members` are its fields in order, none for a struct with none. Each is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9).
+- **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, whose `members` are its fields in order, none for a struct with none, and whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
 - **Procedure types** (`.PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
 - **Enums**, `enum` and `enum_flags` types (`.ENUM`, section 3.18): a `Type_Info_Enum`, whose `name` is the enum's declared name, `underlying` the description of its integer type, whose size, alignment and sign it has, and `is_flags` whether it is an `enum_flags`. Its members are `names` and `values`, in order, none for an enum with none: `names[i]` is a member's name and `values[i]` its value, as 64 bits, sign-extended from a signed integer type and zero-extended from an unsigned one, so a `u64` member above `s64`'s largest value reads as a negative `s64`.
 
-Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 56, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
+Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 64, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
 
 **One description per type.** Types that are the same type by section 3.1's identity have one description, at one address, so `a.type == type_info(int)` tells types apart by their descriptions' addresses. `int` and `s64` are two types, with two descriptions, the same in all but their addresses; `float` is `float32`, with one. A description points at the descriptions of the types it is made of, so a struct that holds a pointer to itself (`Node :: struct { next: *Node; }`) is described by pointing back at its own description: the descriptions are cyclic, not infinite.
 
@@ -1157,6 +1158,28 @@ example.rig:4:10: error: a union's literal names its one member, as in Value.{f 
 A name in a struct's or a union's literal may reach through anonymous members, as C's designated initializers do: `Event.{kind = 1, key = .{65}}` gives `kind` and the anonymous union's `key`. An anonymous union given two names this way is given two members, `Event.{key = k, mouse = m}` being `a union's literal gives one member; 'key' is given already`. In order, an anonymous member is one field, whose value is one of its type, which only a literal without its type can be: `Event.{1, .{key = .{65}}}`.
 
 **Constants.** A union's literal whose value is constant data (section 5.9) is constant data, a constant's value or a global's, as a struct's is. A member of a union that is constant data folds only when it is the member the literal gives, or when the literal gives none: for `V :: Value.{i = 3};`, `V.i` is the constant 3, and `Value.{}.f` is 0, but `V.f`, the same bytes as a `float64`, is read from `V`'s data at run time, and is no constant. A `#run`'s union is baked as its bytes, whichever member wrote them (section 7.8), so every member of it is read at run time.
+
+**Description and printing.** A union is described as a struct is, by a `Type_Info_Struct` whose `is_union` is true, its members all at offset 0, and an anonymous member is a member with an empty name, whose type's description has an empty name too (section 3.16). Basic's `print` writes a union by its size alone, `union(8 bytes)`, never its members, since which of them holds the value is the program's to know, and writes an anonymous member as its value alone, without a name:
+
+```rig
+#import "Basic";
+
+Value :: union { i: s64; f: float64; }
+Number :: struct { kind: int; union { i: s64; f: float64; }; }
+Pair :: struct { n: int; struct { a: int; b: int; }; }
+
+main :: () {
+    s := cast(*Type_Info_Struct) type_info(Number);
+    inner := cast(*Type_Info_Struct) s.members[1].type;
+    print("{} {} {}\n", s.is_union, s.members[1].name.count, inner.is_union);
+    print("{} {} {}\n", Value.{i = 1}, Number.{kind = 2, f = 1.5}, Pair.{n = 1, a = 2, b = 3});
+}
+```
+
+```text
+false 0 true
+union(8 bytes) {kind = 2, union(8 bytes)} {n = 1, {a = 2, b = 3}}
+```
 
 **Comparison.** Unions are not compared by any operator, as structs aren't: `'==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'`, `'<' needs numbers, not 'Value'`.
 

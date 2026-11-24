@@ -5669,20 +5669,21 @@ TEST(only_used_types_are_described) {
     // Preload's own structs, get none. A struct's name and each member's are
     // str.N globals of their own; its members are a read-only array of its
     // own, type_info.0.members: each member's name, its type's description
-    // and its offset.
+    // and its offset. Last, is_union, false, and its padding.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "Unused :: struct { a: u8; }\n"
                                                     "Used :: struct { next: *Used; }\n"
                                                     "main :: () {\n"
                                                     "    t := type_info(Used);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 56 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\04\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
     CHECK(contains(ir, " reloc 48 @type_info.0.members\n"));
     CHECK(contains(ir, "const @type_info.0.members: 32 align 8 = \"\\04"));
@@ -5753,11 +5754,12 @@ TEST(an_empty_view_makes_no_array) {
                                                     "    e := type_info(Empty);\n"
                                                     "    p := type_info(() -> int);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 56 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
@@ -5772,6 +5774,50 @@ TEST(an_empty_view_makes_no_array) {
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 48 @type_info.1.results\n"));
     CHECK(!contains(ir, ".members"));
     CHECK(!contains(ir, ".parameters"));
+    arena_free(&a);
+}
+
+TEST(a_unions_description_says_it_is_one) {
+    // A union is described as a struct is (spec 3.16, 3.19), its is_union
+    // byte, at 56, 1: Value's, type_info.0 (its members' s64 and float64
+    // are 1 and 2), and the anonymous union's in Event, type_info.5, after
+    // Event's, 3, and s32's, 4, which Event's members point at: its name is
+    // empty, a count of 0, and its size and alignment u8's. Event's own
+    // is_union is 0.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Value :: union { i: s64; f: float64; }\n"
+                                                    "Event :: struct { kind: s32; union { b: u8; }; }\n"
+                                                    "main :: () {\n"
+                                                    "    v := type_info(Value);\n"
+                                                    "    e := type_info(Event);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, "const @type_info.3: 64 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, "const @type_info.5: 64 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
     arena_free(&a);
 }
 

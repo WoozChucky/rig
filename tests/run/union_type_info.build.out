@@ -1,0 +1,7 @@
+STRUCT 8 true "Value": "i" 0 "f" 0 "p" 0
+STRUCT 8 false "Event": "kind" 0 "" 4
+STRUCT 4 true "": "key" 0 "mouse" 0
+STRUCT 4 true "Word": "" 0 "all" 0
+STRUCT 4 false "": "lo" 0 "hi" 2
+STRUCT 8 false "Vec2": "x" 0 "y" 4
+64

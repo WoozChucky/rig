@@ -163,9 +163,10 @@ const s64 TYPE_INFO_POINTER_TO_OFFSET = 24, TYPE_INFO_POINTER_SIZE = 32;
 // *Type_Info), then the bools is_c_call and is_variadic.
 const s64 TYPE_INFO_PARAMETERS_OFFSET = 24, TYPE_INFO_RESULTS_OFFSET = 40, TYPE_INFO_IS_C_CALL_OFFSET = 56,
           TYPE_INFO_IS_VARIADIC_OFFSET = 57, TYPE_INFO_PROCEDURE_SIZE = 64;
-// Type_Info_Struct: info, name, a string, then members, a view of
-// Type_Info_Struct_Member.
-const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_STRUCT_SIZE = 56;
+// Type_Info_Struct: info, name, a string, members, a view of
+// Type_Info_Struct_Member, then is_union, a bool (spec 3.19), padded to 8.
+const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_STRUCT_IS_UNION_OFFSET = 56,
+          TYPE_INFO_STRUCT_SIZE = 64;
 // Type_Info_Struct_Member: name, a string; type, a *Type_Info; offset, an int.
 const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, TYPE_INFO_MEMBER_OFFSET_OFFSET = 24,
           TYPE_INFO_MEMBER_SIZE = 32;

@@ -1,0 +1,39 @@
+// Basic's print of unions (issue #223, spec 3.19): a union is written by
+// its size alone, union(8 bytes), never its members, since which one holds
+// the value is the program's to know; as a struct's field, an array's
+// element and an Any's value too. An anonymous member, a member with no
+// name, is written without one: a union as union(N bytes), a struct as its
+// fields in braces.
+#import "Basic";
+
+Value :: union { i: s64; f: float64; p: *void; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+Word :: union { struct { lo: u16; hi: u16; }; all: u32; }
+Deep :: struct { tag: u8; union { d: float64; struct { a: u8; b: s64; }; }; }
+Pair :: struct { n: int; struct { a: int; b: int; }; }
+Holder :: struct { v: Value; n: int; }
+
+main :: () {
+    v: Value;
+    v.f = 1.5;
+    print("{}\n", v);
+    e: Event;
+    e.kind = 1;
+    e.key.code = 65;
+    print("{}\n", e);
+    w: Word;
+    w.all = 0x0002_0001;
+    print("{}\n", w);
+    d: Deep;
+    d.tag = 3;
+    d.b = 7;
+    print("{}\n", d);
+    print("{}\n", Pair.{n = 1, a = 2, b = 3});
+    print("{}\n", Holder.{.{i = 2}, 4});
+    a : Any = v;
+    print("{}\n", a);
+    print("{}\n", Value.[.{i = 1}, .{f = 2}]);
+    print("{}\n", sprint("[{}]", Value.{}));
+}

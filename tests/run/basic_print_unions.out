@@ -1,0 +1,9 @@
+union(8 bytes)
+{kind = 1, union(4 bytes)}
+union(4 bytes)
+{tag = 3, union(16 bytes)}
+{n = 1, {a = 2, b = 3}}
+{v = union(8 bytes), n = 4}
+union(8 bytes)
+[union(8 bytes), union(8 bytes)]
+[union(8 bytes)]
