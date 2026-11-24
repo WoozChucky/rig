@@ -1,5 +1,5 @@
 main () at
-unions.rig:27
+unions.rig:30
 putchar(10);
 $1 = {i = 4609434218613702656, f = 1.5, p = 0x3ff8000000000000}
 type = union Value {
@@ -8,8 +8,22 @@ float64 f;
 void *p;
 }
 $2 = {kind = 2, {key = {code = 65}, mouse = {x = 65, y = 0}}}
+type = struct Event {
+s32 kind;
+union {
+struct Key key;
+struct Mouse mouse;
+};
+}
 $3 = 65
 $4 = {x = 65, y = 0}
 $5 = {{lo = 1, hi = 2}, all = 131073}
+type = union Word {
+struct {
+u16 lo;
+u16 hi;
+};
+u32 all;
+}
 $6 = 2
 !.debug_names not created by gdb

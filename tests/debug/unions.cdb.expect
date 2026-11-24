@@ -1,4 +1,4 @@
-27:     putchar(10);
+30:     putchar(10);
 union Value v = union Value
 struct Event e = struct Event
 union Word w = union Word
@@ -11,4 +11,8 @@ struct Event
 +0x004 key              : Key
 +0x004 mouse            : Mouse
 int 0n65
+union Word
++0x000 lo
++0x002 hi
++0x000 all
 unsigned short 2
