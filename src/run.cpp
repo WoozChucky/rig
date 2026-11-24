@@ -37,21 +37,21 @@
 // Baking. A result is made into nodes of the tree, as if it were written
 // there: a number an Ast_Int, an Ast_Float or an Ast_Bool, folded
 // (is_constant), a procedure value a name bound to the procedure, a null
-// pointer null; a string a string literal, a struct or an array a literal
-// of constant data holding its parts, a union a literal of its bytes
+// pointer null; a string a string literal, a struct or an array a literal of
+// constant data holding its parts, a union a literal of its bytes
 // (Ast_Literal.bytes), and a view the array literal of its elements
 // (bake_value). So the one reading of constant data (#113: constant_data,
-// procedure_address, literal_address, folding, and
-// lowering's constant_global and constant_bytes) takes a baked value as it
-// takes a written one, and the program never sees the compile-time module.
-// A baked value is a copy, made when its run ends: what its view or string
-// pointed at may change in a later run, and it stays as it was. The
-// interpreter's values are canonical (interp.h): a type's bits
-// zero-extended from its width, a float32's in the low 32 bits. Ast.constant
-// wants a signed integer sign-extended from its width, and every float as
-// the bits of the double holding its value: baking converts. An aggregate
-// result is read from the memory the run copied it into, which is laid out
-// as the target's, as all of the interpreter's memory is.
+// procedure_address, literal_address, folding, and lowering's
+// constant_global and constant_bytes) takes a baked value as it takes a
+// written one, and the program never sees the compile-time module. A baked
+// value is a copy, made when its run ends: what its view or string pointed
+// at may change in a later run, and it stays as it was. The interpreter's
+// values are canonical (interp.h): a type's bits zero-extended from its
+// width, a float32's in the low 32 bits. Ast.constant wants a signed integer
+// sign-extended from its width, and every float as the bits of the double
+// holding its value: baking converts. An aggregate result is read from the
+// memory the run copied it into, which is laid out as the target's, as all
+// of the interpreter's memory is.
 //
 // What can't be baked. A non-null pointer anywhere in the result but in a
 // union's bytes refers to the compiler's own memory: "#run's result holds a
@@ -252,9 +252,9 @@ static u64 read_bits(const u8 *at, s64 size) {
 // the checker would find a written one of constant data: is_data already,
 // with no type written and no names, a struct's values its fields' in
 // order, as its caller says (Ast_Literal.fields, literal_field_value), or a
-// union's bytes (Ast_Literal.bytes, bake_value); and
-// is_baked, so a constant may hold it as a baked view's elements
-// (checker.cpp's check_constant_value).
+// union's bytes (Ast_Literal.bytes, bake_value); and is_baked, so a
+// constant may hold it as a baked view's elements (checker.cpp's
+// check_constant_value).
 static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
     Ast_Literal *literal = baked_node<Ast_Literal>(b, AST_LITERAL, t);
     literal->is_array = t->kind == TYPE_ARRAY;

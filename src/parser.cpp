@@ -752,20 +752,20 @@ static bool type_declaration_follows(Parser *p, s64 ahead) {
     return kind == TOKEN_STRUCT || kind == TOKEN_UNION || kind == TOKEN_ENUM || kind == TOKEN_ENUM_FLAGS;
 }
 
-// Whether the next tokens are a procedure's, a struct's or an enum's
-// declaration with the name in column 1, IDENT '::' '(' ... or IDENT '::'
-// 'struct' (or 'union', 'enum', 'enum_flags'), the way a top-level one
-// starts, or a #run { in column 1: inside a body (or a struct's or an
-// enum's braces), a body that was never closed. A constant (`N :: 5;`) isn't, in column 1 or
-// not: it's a local constant, a statement of the body, and indentation
-// means nothing to the language. Procedures, structs and enums are
-// declared only at the top level, so none can be a statement; nor can
-// #run { ... }, which only the top level has (a #run in a body takes an
-// expression, and a block isn't one). An #if in column 1 isn't one either:
-// in a body it's a statement, unindented, as a constant may be (spec 4.9);
-// unless a branch of it declares a procedure, a struct or an enum, or holds
-// a #run { } (branch_declares_top_level), which only a top-level #if's
-// branch can.
+// Whether the next tokens are a procedure's or a type's (a struct's, a
+// union's or an enum's) declaration with the name in column 1, IDENT '::'
+// '(' ... or IDENT '::' 'struct' (or 'union', 'enum', 'enum_flags'), the
+// way a top-level one starts, or a #run { in column 1: inside a body (or a
+// struct's, a union's or an enum's braces), a body that was never closed.
+// A constant (`N :: 5;`) isn't, in column 1 or not: it's a local constant,
+// a statement of the body, and indentation means nothing to the language.
+// Procedures, structs, unions and enums are declared only at the top
+// level, so none can be a statement; nor can #run { ... }, which only the
+// top level has (a #run in a body takes an expression, and a block isn't
+// one). An #if in column 1 isn't one either: in a body it's a statement,
+// unindented, as a constant may be (spec 4.9); unless a branch of it
+// declares a procedure or a type, or holds a #run { }
+// (branch_declares_top_level), which only a top-level #if's branch can.
 static bool branch_declares_top_level(Parser *p);
 
 static bool starts_declaration(Parser *p) {
@@ -776,13 +776,13 @@ static bool starts_declaration(Parser *p) {
            (procedure_follows(p, 2) || type_declaration_follows(p, 2));
 }
 
-// Whether a branch of the #if chain at the next token declares a procedure,
-// a struct or an enum, or holds a #run { }, right inside its braces, IDENT
-// '::' '(' ... or IDENT '::' 'struct' (or 'union', 'enum', 'enum_flags') or
-// #run '{', indented or not: no body can hold any of them (a #run in a body
-// takes an expression), so it can only be a top-level #if, its branches
-// holding declarations, as the writer's indentation says (an #if written
-// after a body whose '}' was forgotten).
+// Whether a branch of the #if chain at the next token declares a procedure
+// or a type (a struct, a union or an enum), or holds a #run { }, right
+// inside its braces, IDENT '::' '(' ... or IDENT '::' 'struct' (or 'union',
+// 'enum', 'enum_flags') or #run '{', indented or not: no body can hold any
+// of them (a #run in a body takes an expression), so it can only be a
+// top-level #if, its branches holding declarations, as the writer's
+// indentation says (an #if written after a body whose '}' was forgotten).
 // A branch of an #if right inside a branch counts too (`#if OS == .. {
 // #if DEBUG { f :: () {} } }`), at any depth: its braces are a branch's
 // as well. A block in a branch isn't one, nor is anything in it.
@@ -2049,21 +2049,21 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 // members = '{' {member} '}'
 // member  = IDENT ':' type ';' | ('struct' | 'union') members ';'
 //
-// The braces of struct s, after its keyword: a struct's fields or a
-// union's members (parse_struct), or an anonymous member's (spec 3.19),
-// read alike, by the same rules, s's own keyword saying which messages.
-// Every field ends with its ';', the last too. A column-1 declaration of a
-// procedure, a struct or an enum, or a #run { (starts_declaration), before
-// the '}' means the braces were never closed: "expected '}'" there, where
-// the top level resumes (p->resume). So does any #run in column 1: a
-// struct holds no code, so it can only be the top level's. A #run anywhere
-// else among the fields is "expected a field's name" ("a member's name" in
-// a union). An #if in column 1 ends the fields too, read as the top
-// level's; anywhere else, fields compiled conditionally aren't in the
-// language yet (spec 4.9): "#if can't be among a struct's fields, for now"
-// ("... among a union's members ..."), at the '#if', and the declaration is
-// given up. A #load among the fields is reported and skipped, as in a body
-// (skip_misplaced_load), and the fields after it are kept.
+// The braces of struct s, after its keyword: a struct's fields or a union's
+// members (parse_struct), or an anonymous member's (spec 3.19), read alike,
+// by the same rules, s's own keyword saying which messages. Every field
+// ends with its ';', the last too. A column-1 declaration of a procedure or
+// a type, or a #run { (starts_declaration), before the '}' means the braces
+// were never closed: "expected '}'" there, where the top level resumes
+// (p->resume). So does any #run in column 1: a struct holds no code, so it
+// can only be the top level's. A #run anywhere else among the fields is
+// "expected a field's name" ("a member's name" in a union). An #if in
+// column 1 ends the fields too, read as the top level's; anywhere else,
+// fields compiled conditionally aren't in the language yet (spec 4.9): "#if
+// can't be among a struct's fields, for now" ("... among a union's members
+// ..."), at the '#if', and the declaration is given up. A #load among the
+// fields is reported and skipped, as in a body (skip_misplaced_load), and
+// the fields after it are kept.
 //
 // The #loads in column 1 right before such an end are read again at the
 // top level, as after a body never closed (parse_block_rest): "expected

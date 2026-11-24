@@ -626,8 +626,8 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //   body's first line, which is where a debugger's breakpoint on the
 //   procedure stops.
 // - Types (DIType): how to read a variable's bytes, a number of some size
-//   and encoding (DIBasicType), a pointer or a struct's member
-//   (DIDerivedType), a struct or an array (DICompositeType).
+//   and encoding (DIBasicType), a pointer or a struct's or a union's member
+//   (DIDerivedType), a struct, a union or an array (DICompositeType).
 // - Variables: a local or a parameter (DILocalVariable) in its scope, with
 //   its name, line and type, and where it lives, said by a declare record
 //   (#dbg_declare) naming its stack slot; a global (DIGlobalVariable)
@@ -1114,7 +1114,10 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 //   string's data, as text), bool a boolean, float32 and float64 floats.
 // - *T is a pointer to T's debug type; *void to none (C's void *, which a
 //   debugger shows as an address only).
-// - A struct is a struct type of its fields, each a member at its offset.
+// - A struct is a struct type of its fields, each a member at its offset;
+//   a union, a union type of its members, all at offset 0. An anonymous
+//   member is a member with no name, of its own struct or union type with
+//   no name, which a debugger shows as C's (spec 3.19).
 // - An enum is an enumeration type of its members (debug_enum).
 // - [N]T is an array of N T's.
 // - []T, string and [..]T are the structs they're laid out as, named as

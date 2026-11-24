@@ -1940,8 +1940,9 @@ static void add_literal_parts(Ast_Literal *literal, s64 offset, Array<Literal_Pa
 
 // The values the program wrote in `literal`, a literal holding the
 // checker's groups, each at its offset in the literal (add_literal_parts),
-// in the order they were written (spec 5.17): a literal has a few, so
-// they're sorted by insertion, by their places, one value's each.
+// put back in the order they were written (spec 5.17), by their places
+// (Literal_Part.written), each value's its own: a literal has few values,
+// so an insertion sort does.
 static void literal_parts(Ast_Literal *literal, Array<Literal_Part> *parts) {
     add_literal_parts(literal, 0, parts);
     for (s64 i = 1; i < parts->count; i++) {
@@ -4037,34 +4038,33 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // global's `bytes`: a struct literal's values at their fields' offsets (the
 // fields not given, and the padding, stay zero; a union's literal gives one
 // member at most, at 0, and a #run's baked union is its bytes as they were,
-// Ast_Literal.bytes, spec 3.19), an array literal's at i
-// times the element's size, an integer's low bytes, a bool's 0 or 1, a
-// float's IEEE 754 bits (a float32's rounded from the double the constant
-// keeps, as the backend rounds an f32 constant), a pointer's address (null's
-// zeros). Constant data is written as the literal holding it (literal_of):
-// `origin := ORIGIN;` gets ORIGIN's bytes, copied into the global, and a
-// part a literal leaves out writes nothing, zeros. A view's value is an
-// array, a literal or constant data (the checker allows nothing else in a
-// global, but a string literal), which becomes a global array of its own:
-// the view's count is written here, and its data is that array's address,
-// which only the linker knows, so a relocation says where it goes. A string
-// literal, as a string, a []u8 or a pointer (literal_address), constant data
-// holding one included, is written the same way: its count, for a string or
-// a view, and a relocation to its constant bytes, str.N (literal_global),
-// where the data or the pointer goes. The backend wants `relocs` in
-// increasing order of offset, so the values are written in that order: an
-// array's in turn, and a struct's by its fields, in the order they are laid
-// out, not the order a literal with names gives them (a name reaching
-// through anonymous members gave its value to the checker's literal of the
-// member's type, written at the member's field, its own fields in turn). A
-// procedure's address (procedure_address) is a relocation too, to the
-// procedure, and so is a type's description's (type_info_address, spec
-// 5.19), to its type_info.N
+// Ast_Literal.bytes, spec 3.19), an array literal's at i times the element's
+// size, an integer's low bytes, a bool's 0 or 1, a float's IEEE 754 bits (a
+// float32's rounded from the double the constant keeps, as the backend
+// rounds an f32 constant), a pointer's address (null's zeros). Constant data
+// is written as the literal holding it (literal_of): `origin := ORIGIN;`
+// gets ORIGIN's bytes, copied into the global, and a part a literal leaves
+// out writes nothing, zeros. A view's value is an array, a literal or
+// constant data (the checker allows nothing else in a global, but a string
+// literal), which becomes a global array of its own: the view's count is
+// written here, and its data is that array's address, which only the linker
+// knows, so a relocation says where it goes. A string literal, as a string,
+// a []u8 or a pointer (literal_address), constant data holding one included,
+// is written the same way: its count, for a string or a view, and a
+// relocation to its constant bytes, str.N (literal_global), where the data
+// or the pointer goes. The backend wants `relocs` in increasing order of
+// offset, so the values are written in that order: an array's in turn, and a
+// struct's by its fields, in the order they are laid out, not the order a
+// literal with names gives them (a name reaching through anonymous members
+// gave its value to the checker's literal of the member's type, written at
+// the member's field, its own fields in turn). A procedure's address
+// (procedure_address) is a relocation too, to the procedure, and so is a
+// type's description's (type_info_address, spec 5.19), to its type_info.N
 // (type_info_global). The checker made sure every value is a constant, a
 // string literal, a procedure, a description's address, constant data, a
-// literal of them (check_global_value), or a #run's baked
-// value (run.cpp), which is made of the same: a view's is the array literal
-// of its elements, read here as a view's array value is.
+// literal of them (check_global_value), or a #run's baked value (run.cpp),
+// which is made of the same: a view's is the array literal of its elements,
+// read here as a view's array value is.
 //
 // `writable` says whose bytes they are: a global variable's (lower_global),
 // which the program may change, or a constant's or a #run's read-only

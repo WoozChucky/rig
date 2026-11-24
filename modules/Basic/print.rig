@@ -259,8 +259,9 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
         s := cast(*Type_Info_Struct) t;
         // A union is written by its size alone: which member holds the
         // value is the program's to know (spec 3.19), and writing any
-        // other would read its bytes as what they aren't, a pointer that
-        // points nowhere, say.
+        // other would read its bytes as what they aren't. A string's or a
+        // view's would follow a data pointer that is an integer's bits,
+        // say, and stop at a null one or read memory that isn't there.
         if s.is_union {
             buffer : [INT_TEXT_MAX]u8;
             print_or_append(builder, "union(");

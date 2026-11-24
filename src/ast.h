@@ -11,8 +11,8 @@
 // elements (a[i]) and array literals (int.[1, 2]), spreads (..xs, a view
 // passed as a '..T' parameter's arguments), members without their enum
 // (.FREE), and code run while compiling (#run e).
-// And structs and enums, declared at the top level, the files a program
-// loads (#load "PATH";), named there too, and the code it runs while
+// And structs, unions and enums, declared at the top level, the files a
+// program loads (#load "PATH";), named there too, and the code it runs while
 // compiling for its effect (#run e; and #run { ... }), there too. And code
 // compiled for one system and not another (#if c { ... } else { ... }), at
 // the top level and in a body.
@@ -439,7 +439,7 @@ struct Ast_Literal : Ast {
                                     // group: for each value, where it was written among the values of the
                                     // literal the program wrote, -1 for a group, so lowering evaluates them in
                                     // that order (spec 5.17); empty for any other literal
-    String bytes;                  // a baked union (run.cpp): its whole size's bytes, the literal's only content
+    String bytes;                   // a baked union (run.cpp): its whole size's bytes, the literal's only content
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a

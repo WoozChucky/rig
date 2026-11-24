@@ -20,15 +20,15 @@
 //
 // Names.
 // - The program's procedures, global variables, top-level constants,
-//   structs and enums are visible everywhere, in any order. They share one
-//   set of names: a global can't take a procedure's ("'x' is already
-//   declared at PATH:L:C").
-// - A struct's name is a type, and so is an enum's: used as a value, it's
-//   "'Vec2' is a type, not a value". A name declared as anything else,
-//   written where a type goes, is "'foo' is not a type"; a name declared
-//   nowhere, "unknown type 'foo'". A built-in type's name always means the
-//   built-in type, so a struct or an enum can't take one: "'u8' is a
-//   built-in type", at its name.
+//   structs, unions and enums are visible everywhere, in any order. They
+//   share one set of names: a global can't take a procedure's ("'x' is
+//   already declared at PATH:L:C").
+// - A struct's name is a type, and so is a union's or an enum's: used as a
+//   value, it's "'Vec2' is a type, not a value". A name declared as
+//   anything else, written where a type goes, is "'foo' is not a type"; a
+//   name declared nowhere, "unknown type 'foo'". A built-in type's name
+//   always means the built-in type, so a struct, a union or an enum can't
+//   take one: "'u8' is a built-in type", at its name.
 // - An enum and a constant are predeclared (spec 2.5), visible everywhere:
 //   Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }, the systems a
 //   program can be built for, and OS, the one it is (Ast_File.system, else
