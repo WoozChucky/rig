@@ -388,6 +388,21 @@ static String type_of(Arena *a, Checked *c, const char *name) {
     return t ? type_name(a, t) : str("?");
 }
 
+// Where member `name` of struct or union t is, from its start: the offsets
+// of each field on the way to it, through anonymous members, added; -1 when
+// it has none.
+static s64 member_offset(Type *t, const char *name) {
+    Array<s32> path = {};
+    type_find_member(t, str(name), &path);
+    s64 offset = path.count ? 0 : -1;
+    for (s64 i = 0; i < path.count; i++) {
+        offset += t->fields[path[i]].offset;
+        t = t->fields[path[i]].type;
+    }
+    array_free(&path);
+    return offset;
+}
+
 TEST(untyped_constants_take_the_type_they_meet) {
     Arena a = arena_make();
     Checked c = check_src(&a,
@@ -7531,13 +7546,17 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         CHECK_EQ(t->size, s->size);
         CHECK_EQ(t->align, s->align);
         CHECK_EQ(t->fields.count, s->field_count);  // no field types.h doesn't know
+        Array<s32> path = {};
         for (s64 f = 0; f < s->field_count; f++) {
-            s32 index = type_field_index(t, str(s->fields[f].name));
+            type_find_member(t, str(s->fields[f].name), &path);
+            CHECK_EQ(path.count, 1);  // its own field, through no anonymous member
+            if (path.count != 1) continue;
+            s32 index = path[0];
             CHECK_EQ(index, f);  // in the order given here
-            if (index < 0) continue;
             CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
             CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
         }
+        array_free(&path);
     }
     // The tags, numbered as Jai's (ENUM is Jai's 11), and the array kinds:
     // the members of Preload's enums Type_Info_Tag and Array_Kind, each
@@ -8494,13 +8513,13 @@ TEST(preload_declares_the_context) {
     CHECK(tree->runtime_init->is_c_call);
     Type *context = tree->context_type;
     CHECK_EQ(context->size, 56);
-    CHECK_EQ(context->fields[type_field_index(context, str("allocator"))].offset, 0);
-    CHECK_EQ(context->fields[type_field_index(context, str("temporary_storage"))].offset, 16);
-    CHECK_EQ(context->fields[type_field_index(context, str("allocation_location"))].offset, 24);
+    CHECK_EQ(member_offset(context, "allocator"), 0);
+    CHECK_EQ(member_offset(context, "temporary_storage"), 16);
+    CHECK_EQ(member_offset(context, "allocation_location"), 24);
     Type *storage = ((Ast_Struct *)top_level_named(tree, "Temporary_Storage"))->declared;
     CHECK_EQ(storage->size, 56);
-    CHECK_EQ(storage->fields[type_field_index(storage, str("overflow_allocator"))].offset, 32);
-    CHECK_EQ(storage->fields[type_field_index(storage, str("overflow_pages"))].offset, 48);
+    CHECK_EQ(member_offset(storage, "overflow_allocator"), 32);
+    CHECK_EQ(member_offset(storage, "overflow_pages"), 48);
     CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Temporary_Storage_Page"))->declared->size, 24);
     arena_free(&a);
 }
@@ -9349,9 +9368,9 @@ TEST(caller_location_is_a_default_value) {
     }
     CHECK_STR(location->decl->name, "Source_Code_Location");
     CHECK_EQ(location->size, 32);
-    CHECK_EQ(location->fields[type_field_index(location, str("file"))].offset, 0);
-    CHECK_EQ(location->fields[type_field_index(location, str("line"))].offset, 16);
-    CHECK_EQ(location->fields[type_field_index(location, str("column"))].offset, 24);
+    CHECK_EQ(member_offset(location, "file"), 0);
+    CHECK_EQ(member_offset(location, "line"), 16);
+    CHECK_EQ(member_offset(location, "column"), 24);
     CHECK(((Ast_Proc *)top_level_named(tree, "here"))->params[0]->default_value->type == location);
     arena_free(&a);
 }
@@ -10234,21 +10253,6 @@ struct C_Union_Mixed {
         };
     };
 };
-
-// Where member `name` of struct or union t is, from its start: the offsets
-// of each field on the way to it, through anonymous members, added; -1 when
-// it has none.
-static s64 member_offset(Type *t, const char *name) {
-    Array<s32> path = {};
-    type_find_member(t, str(name), &path);
-    s64 offset = path.count ? 0 : -1;
-    for (s64 i = 0; i < path.count; i++) {
-        offset += t->fields[path[i]].offset;
-        t = t->fields[path[i]].type;
-    }
-    array_free(&path);
-    return offset;
-}
 
 TEST(unions_are_laid_out_as_clang_lays_them_out) {
     // Every member at offset 0, the union aligned as its largest member,

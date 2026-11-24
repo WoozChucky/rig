@@ -124,13 +124,6 @@ Type *type_c_promoted(Type *t) {
     return t;
 }
 
-s32 type_field_index(Type *t, String name) {
-    for (s64 i = 0; i < t->fields.count; i++) {
-        if (string_eq(t->fields[i].name, name)) return (s32)i;
-    }
-    return -1;
-}
-
 // A struct type_find_member searches: its type, and how it was reached, the
 // one searched before it that holds it (an index into the walk's list, -1
 // for the type searched first) and its field there.

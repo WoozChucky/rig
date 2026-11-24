@@ -276,11 +276,6 @@ bool type_has_view_fields(Type *t);
 // lets a variadic call pass (checker.h).
 Type *type_c_promoted(Type *t);
 
-// The index in struct type t's fields of the one called `name`, or -1: its
-// own fields only, none reached through an anonymous member
-// (type_find_member).
-s32 type_field_index(Type *t, String name);
-
 // Where member `name` of struct or union t is (spec 3.19): t's own named
 // fields first, then its anonymous members' fields, depth by depth (#225
 // adds using fields to the same walk). *path gets the field indices from t
