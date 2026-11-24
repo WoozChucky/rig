@@ -1,0 +1,61 @@
+// Unions and anonymous members deciding a top-level #if (issue #223, spec
+// 3.19, 4.9): the decider lays out the types the checker does, sharing
+// them, so a condition may read a union's size, a constant reached through
+// an anonymous member and a literal's member through one, and an array's
+// length there may be such a constant. A union, or a struct's anonymous
+// union, may hold a pointer to a struct, or a view of them, declared only
+// in the branch its own size decides; main and a #run then use it.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Key :: struct { code: s32; }
+Event :: struct { kind: s32; union { key: Key; f: float32; }; }
+E :: Event.{kind = 1, key = .{2}};
+K :: E.key.code;
+Arr :: struct { union { a: [K]u8; b: [size_of(Event)]u8; }; }
+
+#if K == 2 && size_of(Arr) == 8 && Event.{key = .{3}}.key.code == 3 {
+    decided :: () { printf("taken: %d %lld\n", K, size_of(Arr)); }
+} else {
+    decided :: () { printf("not taken\n"); }
+}
+
+Value :: union { i: s64; p: *Node; }
+#if size_of(Value) == 8 {
+    Node :: struct { v: Value; union { next: *Node; n: int; }; }
+}
+
+Outer :: struct { k: int; union { p: *Link; n: int; struct { q: []Link; }; }; }
+#if size_of(Outer) == 24 {
+    Link :: struct { x: int; o: Outer; }
+}
+
+#run {
+    o: Outer;
+    l: Link;
+    l.x = 9;
+    o.p = *l;
+    printf("while compiling: %lld\n", o.p.x);
+}
+
+main :: () {
+    decided();
+    arr: Arr;
+    arr.b[7] = 1;
+    printf("%d %d\n", E.key.code, arr.b[7]);
+
+    a: Node;
+    b: Node;
+    a.next = *b;
+    b.v.i = 5;
+    a.v.p = *b;
+    printf("%lld %lld %lld\n", a.next.v.i, a.v.p.v.i, size_of(Node));
+
+    l: Link;
+    l.x = 4;
+    o: Outer;
+    o.p = *l;
+    printf("%lld\n", o.p.x);
+    links := Link.[l, l];
+    o.q = links;
+    printf("%lld %lld %lld\n", o.q.count, o.q[1].x, size_of(Link));
+}
