@@ -1,0 +1,10 @@
+// A program that imports Basic keeps the names Basic's print helpers don't
+// take: its own read_integer is its own, and print, which reads an integer
+// through print_read_integer, still writes a u8 by its number.
+#import "Basic";
+
+read_integer :: (x: int) -> int { return x + 1; }
+
+main :: () {
+    print("{} {}\n", read_integer(1), cast(u8) 200);
+}
