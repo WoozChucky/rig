@@ -5,8 +5,9 @@
 // A global union starts from its literal, the rest of its bytes zero, and
 // main may change it; so may a global struct whose anonymous union is given
 // by a name reaching through it, and one with two anonymous members, each
-// value going to its own. A constant array of unions is indexed at run
-// time.
+// value going to its own. A constant's names may reach through two
+// anonymous members, each value at its whole path's offset. A constant
+// array of unions is indexed at run time.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 Value :: union { i: s64; f: float64; }
@@ -14,6 +15,7 @@ Key :: struct { code: s32; }
 Mouse :: struct { x: s16; y: s16; }
 Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
 Two :: struct { struct { a: int; }; union { b: int; c: u8; }; }
+Deep :: struct { tag: u8; union { d: float64; struct { a: u8; b: s64; }; }; }
 
 V :: Value.{f = 1.5};
 NONE :: Value.{};
@@ -23,6 +25,7 @@ g : Value = .{i = 7};
 ev : Event = .{kind = 1, mouse = .{3, 4}};
 two : Two = .{b = 5};
 TWO :: Two.{c = 6, a = 7};
+DC :: Deep.{tag = 1, b = 5, a = 3};
 
 main :: () {
     #if V.f > 1 {
@@ -43,6 +46,10 @@ main :: () {
     printf("%lld %lld\n", two.a, two.b);
     copy := TWO;
     printf("%lld %lld %d\n", copy.a, copy.b, TWO.c);
+
+    // Through two anonymous members: b at 16, a at 8.
+    deep := DC;
+    printf("%d %d %lld\n", deep.tag, deep.a, deep.b);
 
     for 0..2 {
         if it == 1 {

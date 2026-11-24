@@ -742,9 +742,10 @@
 //   the #run, followed by the calls that led there; it has no value then,
 //   and what needs it says nothing more, as after an error it reaches. So
 //   is a result that can't be baked: one holding a pointer that isn't null,
-//   "#run's result holds a pointer, which can't be baked, for now", or a
-//   view or a string whose count is below zero, "#run failed: its result
-//   holds a view with a negative count" ("a string").
+//   but in a union's bytes, which are baked as they are, "#run's result
+//   holds a pointer, which can't be baked, for now", or a view or a string
+//   whose count is below zero, "#run failed: its result holds a view with a
+//   negative count" ("a string").
 // - A baked string is a string literal's bytes: it converts to a *u8 and
 //   passes C's '...' as a literal does (is_literal_string). A constant may
 //   hold a baked view, its elements read-only data, as the #run's value or

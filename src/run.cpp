@@ -38,9 +38,10 @@
 // there: a number an Ast_Int, an Ast_Float or an Ast_Bool, folded
 // (is_constant), a procedure value a name bound to the procedure, a null
 // pointer null; a string a string literal, a struct or an array a literal
-// of constant data holding its parts, and a view the array literal of its
-// elements (bake_value). So the one reading of constant data (#113:
-// constant_data, procedure_address, literal_address, folding, and
+// of constant data holding its parts, a union a literal of its bytes
+// (Ast_Literal.bytes), and a view the array literal of its elements
+// (bake_value). So the one reading of constant data (#113: constant_data,
+// procedure_address, literal_address, folding, and
 // lowering's constant_global and constant_bytes) takes a baked value as it
 // takes a written one, and the program never sees the compile-time module.
 // A baked value is a copy, made when its run ends: what its view or string
@@ -52,15 +53,17 @@
 // result is read from the memory the run copied it into, which is laid out
 // as the target's, as all of the interpreter's memory is.
 //
-// What can't be baked. A non-null pointer anywhere in the result refers to
-// the compiler's own memory: "#run's result holds a pointer, which can't be
-// baked, for now". A view or a string whose count is below zero has no
-// elements: "#run failed: its result holds a view with a negative count"
-// (a string's says string). A resizable array anywhere in it, whatever it
-// holds, is "#run's result holds a resizable array, which can't be baked,
-// for now" (spec 3.17). Baking stops at the first part refused, and
-// that is said at the #run, once, after it (Baking); nothing of the value
-// is kept, and the #run has no value, as after a failure.
+// What can't be baked. A non-null pointer anywhere in the result but in a
+// union's bytes refers to the compiler's own memory: "#run's result holds a
+// pointer, which can't be baked, for now". A view or a string whose count
+// is below zero has no elements: "#run failed: its result holds a view with
+// a negative count" (a string's says string). A resizable array anywhere in
+// it but in a union's bytes, whatever it holds, is "#run's result holds a
+// resizable array, which can't be baked, for now" (spec 3.17). A union's
+// bytes are baked as they are, whatever its members hold (spec 7.8). Baking
+// stops at the first part refused, and that is said at the #run, once,
+// after it (Baking); nothing of the value is kept, and the #run has no
+// value, as after a failure.
 
 #include "check.h"
 #include "interp.h"
@@ -309,10 +312,11 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 // - A union, an anonymous one too, is a literal of its bytes, all of them
 //   as the run left them (Ast_Literal.bytes, spec 3.19), not of its
 //   members: they all lie over the same bytes, and which one the run wrote
-//   last is the program's to know. A pointer, a view, a string or a
-//   procedure value among them is baked as bytes, not refused: an address
-//   from compile time in them means nothing at run time, the program's
-//   business, as reading the wrong member is (spec 7.8).
+//   last is the program's to know. A pointer, a view, a string, a
+//   resizable array or a procedure value among them is baked as bytes, not
+//   refused: an address from compile time in them means nothing at run
+//   time, the program's business, as reading the wrong member is (spec
+//   7.8).
 // - An array [N]T is a literal of its N elements.
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the

@@ -62,6 +62,9 @@ main :: () {
     // The values are evaluated in the order written, then put in place.
     pair := Pair.{a = say(1), x = say(2), b = say(3)};
     printf("%lld %lld %lld\n", pair.x, pair.a, pair.b);
+    // So through two groups, b at 8 in the struct at 0 in the union at 8.
+    deep := Deep.{b = say(5), tag = cast(u8) say(1), a = cast(u8) say(3)};
+    printf("%d %d %lld\n", deep.tag, deep.a, deep.b);
 
     // Two anonymous members, neither with a name: each value goes to its
     // own, the other left zero.
