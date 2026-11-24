@@ -3103,7 +3103,8 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
     }
 
     s64 entry = 0;
-    s32 through = -1;      // the block ending in the last case's #through, its jump not yet pointed, or -1
+    s32 through = -1;      // the block ending in the last case's #through, its jump not
+                           // yet pointed, or -1
     Array<s32> ends = {};  // the blocks ending in a jump to `after`
     for (s64 i = 0; i < s->cases.count; i++) {
         Ast_Case *k = s->cases[i];
@@ -3851,7 +3852,8 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
     Array<Ir_Reloc> name_relocs = {};
     for (s64 i = 0; i < count; i++) {
         Ast_Const *member = e->members[i];
-        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops lowering and a #run
+        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops
+                                          // lowering and a #run
         write_bits(names + i * string_size + VIEW_COUNT_OFFSET, (u64)member->name.count, 8);
         array_add(&name_relocs, Ir_Reloc{i * string_size + VIEW_DATA_OFFSET, add_bytes(l, member->name), false});
         write_bits(values + i * 8, member->constant, 8);

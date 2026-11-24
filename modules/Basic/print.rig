@@ -147,10 +147,10 @@ print_quoted :: (builder: *String_Builder, s: string) {
 // builder is null, by its type's description (spec 3.16), whose tag says
 // how to read the bytes at item.value_pointer:
 //
-//   - An integer, by its size and sign, in base 10: a signed one is read
-//     into an int for format_int, an unsigned one into a u64 for
-//     format_u64, since a u64 above int's largest has no int. A u8 is a
-//     number, not a byte.
+//   - An integer, by its size and sign (print_read_integer), in base 10:
+//     a signed one by format_int, an unsigned one by format_u64, its 64
+//     bits read as a u64, since a u64 above int's largest has no int. A u8
+//     is a number, not a byte.
 //   - A float, a float32 widened to a float64, with 6 decimals as
 //     format_float writes them, and then its trailing zeros cut down to
 //     one: 1.5, 3.0, -0.0, nan, inf. So a magnitude below 0.0000005 is 0.0
@@ -194,31 +194,13 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
     if t == null {
         print_or_append(builder, "null");
     } else if t.tag == .INTEGER {
+        signed := (cast(*Type_Info_Integer) t).signed;
+        value := print_read_integer(p, t.size, signed);
         buffer : [INT_TEXT_MAX]u8;
-        if (cast(*Type_Info_Integer) t).signed {
-            value : int = 0;
-            if t.size == 1 {
-                value = (cast(*s8) p).*;
-            } else if t.size == 2 {
-                value = (cast(*s16) p).*;
-            } else if t.size == 4 {
-                value = (cast(*s32) p).*;
-            } else {
-                value = (cast(*int) p).*;
-            }
+        if signed {
             print_or_append(builder, format_int(buffer, value, 10));
         } else {
-            value : u64 = 0;
-            if t.size == 1 {
-                value = (cast(*u8) p).*;
-            } else if t.size == 2 {
-                value = (cast(*u16) p).*;
-            } else if t.size == 4 {
-                value = (cast(*u32) p).*;
-            } else {
-                value = (cast(*u64) p).*;
-            }
-            print_or_append(builder, format_u64(buffer, value, 10));
+            print_or_append(builder, format_u64(buffer, cast,trunc(u64) value, 10));
         }
     } else if t.tag == .FLOAT {
         value : float64 = 0;
@@ -311,8 +293,7 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
 // Writes the enum value at p, described by e (spec 3.16, 3.18), to
 // builder, or to standard output when builder is null. The value is read
 // at its integer type's size and sign into the 64 bits a member's value
-// has in e.values, sign-extended from a signed type and zero-extended from
-// an unsigned one (a u64's 8 bytes as they are), and written:
+// has in e.values (print_read_integer), and written:
 //
 //   - When a member has it, as the name of the first that does, in
 //     declaration order: of two members of one value, the first.
@@ -329,26 +310,7 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
 print_enum :: (builder: *String_Builder, e: *Type_Info_Enum, p: *void) {
     signed := (cast(*Type_Info_Integer) e.underlying).signed;
     size := e.info.size;
-    value : s64 = 0;
-    if size == 8 {
-        value = (cast(*s64) p).*;
-    } else if signed {
-        if size == 1 {
-            value = (cast(*s8) p).*;
-        } else if size == 2 {
-            value = (cast(*s16) p).*;
-        } else {
-            value = (cast(*s32) p).*;
-        }
-    } else {
-        if size == 1 {
-            value = (cast(*u8) p).*;
-        } else if size == 2 {
-            value = (cast(*u16) p).*;
-        } else {
-            value = (cast(*u32) p).*;
-        }
-    }
+    value := print_read_integer(p, size, signed);
     for e.values {
         if it == value {
             print_or_append(builder, e.names[it_index]);
@@ -377,12 +339,26 @@ print_enum :: (builder: *String_Builder, e: *Type_Info_Enum, p: *void) {
         print_or_append(builder, format_u64(buffer, bits, 10));
         return;
     }
-    buffer : [INT_TEXT_MAX]u8;
+    print_item(builder, Any.{e.underlying, p}, false);
+}
+
+// The integer at p of size bytes (1, 2, 4 or 8), signed or not, as 64 bits:
+// sign-extended from a signed one, zero-extended from an unsigned one, and
+// 8 bytes as they are, so a u64 above s64's largest reads negative, as a
+// member's value in a Type_Info_Enum's values does. print_item reads an
+// integer through it, and print_enum an enum's value. Its name starts with
+// print_, as the other helpers here do, so it leaves a program that imports
+// Basic its own read_integer (tests/run/basic_print_own_names.rig).
+print_read_integer :: (p: *void, size: int, signed: bool) -> s64 {
+    if size == 8 { return (cast(*s64) p).*; }
     if signed {
-        print_or_append(builder, format_int(buffer, left, 10));
-    } else {
-        print_or_append(builder, format_u64(buffer, cast,trunc(u64) left, 10));
+        if size == 1 { return (cast(*s8) p).*; }
+        if size == 2 { return (cast(*s16) p).*; }
+        return (cast(*s32) p).*;
     }
+    if size == 1 { return (cast(*u8) p).*; }
+    if size == 2 { return (cast(*u16) p).*; }
+    return (cast(*u32) p).*;
 }
 
 // Writes format to builder, or to standard output when builder is null,

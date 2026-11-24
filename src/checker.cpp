@@ -957,12 +957,30 @@ static void resolve_global(Checker *c, Ast *decl) {
 // member of every enum in the circle is then unknown, so nothing more is
 // said about it or its uses. Its own body may name a member already worked
 // out as E.X, which needs nothing more of it (find_enum_member).
+//
+// A member is found by its name in a table of the enum's own
+// (Ast_Enum.member_index), so a switch naming every member of a large
+// enum checks in time that grows with the members, not their square. The
+// first lookup makes it, from every member, each name with its first
+// member's index (a second of the name is check_enum_members' mistake),
+// so it finds what looking through the members in order would, whether
+// or not their values are worked out: in the enum's own body, whether
+// the member found is visible yet is find_enum_member's to say, by its
+// resolve. Its slots are the heap's, so the checker that made it frees it
+// (Checker.indexed, free_checker_fields), and a later checker of the same
+// tree, check() after a decider (they share the tree's enums,
+// Operating_System among them), makes it again.
 
-s32 enum_member_index(Ast_Enum *e, String name) {
-    for (s64 i = 0; i < e->members.count; i++) {
-        if (string_eq(e->members[i]->name, name)) return (s32)i;
+s32 enum_member_index(Checker *c, Ast_Enum *e, String name) {
+    if (e->member_index.count == 0 && e->members.count > 0) {
+        for (s64 i = 0; i < e->members.count; i++) {
+            String key = e->members[i]->name;
+            if (!table_get(&e->member_index, key)) table_put(&e->member_index, key, (s32)i);
+        }
+        array_add(&c->indexed, e);
     }
-    return -1;
+    s32 *index = table_get(&e->member_index, name);
+    return index ? *index : -1;
 }
 
 // "N doesn't fit in 'u8'", at `at`, for N the number one above `below`,
@@ -975,6 +993,20 @@ static void report_past_the_range(Checker *c, Position at, u64 below, Type *t) {
     String number = below == UINT64_MAX ? str("18446744073709551616")
                                         : string_printf(c->arena, "%llu", (unsigned long long)(below + 1));
     diag_error(c->diag, at, STR_FMT " doesn't fit in '" STR_FMT "'", STR_ARG(number), STR_ARG(type_name(c->arena, t)));
+}
+
+// An integer literal of `value`, at `at`, already checked: a constant of
+// type t, value in its form. The value of a constant with none written: an
+// enum's member without one (check_enum_members), the predeclared
+// Operating_System's members (operating_system_member) and OS
+// (declare_predeclared), so whatever reaches a constant's value finds one.
+static Ast_Int *integer_literal(Arena *a, u64 value, Type *t, Position at) {
+    Ast_Int *number = ast_new<Ast_Int>(a, AST_INT, at);
+    number->value = value;
+    number->type = t;
+    number->is_constant = true;
+    number->constant = value;
+    return number;
 }
 
 // The members of enum e, in order, each a constant of its integer type
@@ -1016,7 +1048,7 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
     u64 largest = integer->is_signed ? mask >> 1 : mask;  // the type's largest value
     bool next_known = true;  // the next member without a value can be worked out
     u64 previous = 0;        // the last member's value (an enum's)
-    u64 highest = 0;         // the highest value so far, read as unsigned at the width (an enum_flags')
+    u64 highest = 0;         // the highest value so far, as unsigned at the width (an enum_flags')
     push_scope(c);
     for (s64 i = 0; i < e->members.count; i++) {
         Ast_Const *member = e->members[i];
@@ -1037,7 +1069,8 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
         } else if (next_known) {
             known = true;
             if (e->is_flags) {
-                // The lowest power of two above `highest`: the bit above its top one.
+                // The lowest power of two above `highest`: the bit above
+                // its top one.
                 s32 bit = 0;
                 while (bit < 64 && (highest >> bit) != 0) bit++;
                 value = bit < 64 ? (u64)1 << bit : 0;
@@ -1053,14 +1086,7 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
             } else {
                 value = previous + 1;  // within the type's range, so already its constant's form
             }
-            if (known) {
-                Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, member->pos);
-                number->value = value;
-                number->type = integer;
-                number->is_constant = true;
-                number->constant = value;
-                member->value = number;
-            }
+            if (known) member->value = integer_literal(c->arena, value, integer, member->pos);
         }
         member->resolve = RESOLVE_DONE;
         member->type = known ? integer : nullptr;
@@ -1590,7 +1616,8 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         return;
     }
     if (value == &type_untyped_member) {
-        check_convert(c, assign->value, to);  // "'.A' needs an enum type, not 'int'" when x isn't one
+        // "'.A' needs an enum type, not 'int'" when x isn't an enum.
+        check_convert(c, assign->value, to);
         value = assign->value->type;
         if (!value) return;
     }
@@ -2920,14 +2947,9 @@ static const char *predeclared_meaning(String name) {
 // program writes is once its enum is resolved (check_enum_members), of
 // int, done, its value an integer literal of its number, written nowhere.
 static Ast_Const *operating_system_member(Arena *a, const char *name, System value) {
-    Ast_Int *number = ast_new<Ast_Int>(a, AST_INT, {0, 0, 0});
-    number->value = value;
-    number->type = &type_int;
-    number->is_constant = true;
-    number->constant = value;
     Ast_Const *member = ast_new<Ast_Const>(a, AST_CONST, {0, 0, 0});
     member->name = str(name);
-    member->value = number;
+    member->value = integer_literal(a, value, &type_int, {0, 0, 0});
     member->type = &type_int;
     member->is_constant = true;
     member->constant = value;
@@ -2952,12 +2974,13 @@ static void declare_enum_type(Checker *c, Ast_Enum *e, Type *integer) {
     e->declared = t;
 }
 
-// The tree's predeclared Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }
-// (spec 2.5): made the first time, resolved, its Type made as
-// declare_top_level makes an enum's, and kept on the tree, so every checker
-// of the tree, a decider's and check()'s, has the one type, and a constant
-// a decider resolved as OS compares with check()'s OS. It's in the arena
-// the tree's nodes are in, which the decider and the checker share.
+// The tree's predeclared enum (spec 2.5),
+// `Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }`: made the first
+// time, resolved, its Type made as declare_top_level makes an enum's, and
+// kept on the tree, so every checker of the tree, a decider's and
+// check()'s, has the one type, and a constant a decider resolved as OS
+// compares with check()'s OS. It's in the arena the tree's nodes are in,
+// which the decider and the checker share.
 static Ast_Enum *operating_system(Checker *c, Ast_File *file) {
     if (file->operating_system) return file->operating_system;
     Ast_Enum *e = ast_new<Ast_Enum>(c->arena, AST_ENUM, {0, 0, 0});
@@ -2983,14 +3006,9 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
     Ast_Enum *system = operating_system(c, file);
     table_put(&c->top_level, system->name, (Ast *)system);
     System value = file->system ? file->system : host_system();
-    Ast_Int *number = ast_new<Ast_Int>(c->arena, AST_INT, {0, 0, 0});
-    number->value = value;
-    number->type = system->declared;
-    number->is_constant = true;
-    number->constant = value;
     Ast_Const *os = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
-    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry, as its static_assert says
-    os->value = number;
+    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry (its static_assert)
+    os->value = integer_literal(c->arena, value, system->declared, {0, 0, 0});
     os->type = system->declared;
     os->is_constant = true;
     os->constant = value;
@@ -3217,6 +3235,8 @@ static void free_checker_fields(Checker *c) {
     array_free(&c->loops);
     array_free(&c->resolving);
     array_free(&c->too_deep);
+    for (s64 i = 0; i < c->indexed.count; i++) table_free(&c->indexed[i]->member_index);
+    array_free(&c->indexed);
 }
 
 void check_decider_free(Checker *c) {

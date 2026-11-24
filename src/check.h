@@ -43,6 +43,7 @@ struct Checker {
                                  // below the levels of the type or value that needs it, 0 in a
                                  // declaration's own turn (checker.cpp's open_declaration)
     Array<Ast *> too_deep;       // the declarations found nested too deeply so far, each said once
+    Array<Ast_Enum *> indexed;   // the enums whose member_index this checker made, freed with it
     bool lost_a_file;            // a #load failed, or a top-level #if's condition did
                                  // (Ast_File.lost_a_file): a name declared nowhere
                                  // may be the missing file's, so it isn't reported as unknown,
@@ -169,8 +170,9 @@ bool check_in_a_branch(Checker *c, String name, Position at);
 // the enum and a #run's walk call it.
 bool check_enum_values(Checker *c, Type *t);
 
-// The index of member `name` of enum `e` (its first of that name), or -1.
-s32 enum_member_index(Ast_Enum *e, String name);
+// The index of member `name` of enum `e` (its first of that name), or -1,
+// found in the enum's table (Ast_Enum.member_index).
+s32 enum_member_index(Checker *c, Ast_Enum *e, String name);
 
 // [count]element (type_array_of), or null after "'[N]T' is too big", at
 // `at`: larger than any type may be (TYPE_MAX_SIZE), its count read as
