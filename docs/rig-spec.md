@@ -1139,7 +1139,7 @@ main :: () {
 1 0 2
 ```
 
-Values in order are refused, since none of them says which member it is for, and so is a second member, `Value.{i = 1, f = 2}` (`a union's literal gives one member; 'i' is given already`, at `f`):
+Values in order are refused, since none of them says which member it is for, and so is a second member, `Value.{i = 1, f = 2}` (`a union's literal gives one member; 'i' is given already`, at `f`), and the same member twice, `Value.{i = 1, i = 2}` (`member 'i' is given twice`, at the second `i`):
 
 ```rig error
 Value :: union { i: s64; f: float64; }
@@ -1796,7 +1796,7 @@ ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ]
 
 **Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19).
 
-**Union literals.** A union's literal gives one member, by name, `Value.{f = 1.5}`, and the rest of its bytes are zero; `Value.{}` is all zero. Values in order are `a union's literal names its one member, as in Value.{f = 1.5}`, and a second member is `a union's literal gives one member; 'i' is given already` (section 3.19).
+**Union literals.** A union's literal gives one member, by name, `Value.{f = 1.5}`, and the rest of its bytes are zero; `Value.{}` is all zero. Values in order are `a union's literal names its one member, as in Value.{f = 1.5}`, a second member is `a union's literal gives one member; 'i' is given already`, and a member given twice is `member 'i' is given twice` (section 3.19).
 
 **Array literals.** `int.[1, 2, 3]` makes a `[3]int`: the name before the `.` is the elements' type, and each value converts implicitly to it. An array literal's values are always in order.
 
@@ -3533,6 +3533,7 @@ The sections defining each construct give its messages. Some of those met most o
 | `'Value' has no member 'z'` | 3.19, 5.12 |
 | `a union's literal names its one member, as in Value.{f = 1.5}` | 3.19, 5.17 |
 | `a union's literal gives one member; 'i' is given already` | 3.19, 5.17 |
+| `member 'i' is given twice` | 3.19, 5.17 |
 
 ### 9.4 Limits
 

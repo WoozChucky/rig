@@ -2808,21 +2808,22 @@ static void check_stray_value(Checker *c, Ast *value) {
 // The named values of a literal of struct type t, each put where its name
 // goes (Ast_Literal.fields), or nowhere (-1) after saying why: a name that
 // isn't a field ("'Vec2' has no field 'z'"; a union's, "'Value' has no
-// member 'z'"), or is given twice ("field 'x' is given twice"), or a
-// union's second member ("a union's literal gives one member; 'i' is given
-// already", spec 3.19), each said at the name. A name reached through
-// anonymous members (type_find_member), as C's designated initializers
-// reach them, goes to the outermost of them: the values whose names go
-// through one anonymous member are grouped, in order, into a literal of its
-// type made here, untyped, `.{key = k}`, at the first of those names, which
-// takes the member's place in the literal, as if written so. Checked in
-// turn, the group puts its own names where they go, the same way, so an
-// anonymous union reached by two names is a union given two members. A
-// group moves its values away from where they were written, which is the
-// order they're evaluated in (spec 5.17): so each value keeps that place,
-// among the values the program wrote (Ast_Literal.written), the group's
-// own passed on to the groups inside it. A name of an anonymous member
-// still under way isn't found, a circle (check_member_under_way), as e.x's.
+// member 'z'"), or is given twice ("field 'x' is given twice"; a union's,
+// "member 'i' is given twice"), or a union's second member ("a union's
+// literal gives one member; 'i' is given already", spec 3.19), each said at
+// the name. A name reached through anonymous members (type_find_member), as
+// C's designated initializers reach them, goes to the outermost of them:
+// the values whose names go through one anonymous member are grouped, in
+// order, into a literal of its type made here, untyped, `.{key = k}`, at
+// the first of those names, which takes the member's place in the literal,
+// as if written so. Checked in turn, the group puts its own names where
+// they go, the same way, so an anonymous union reached by two names is a
+// union given two members. A group moves its values away from where they
+// were written, which is the order they're evaluated in (spec 5.17): so
+// each value keeps that place, among the values the program wrote
+// (Ast_Literal.written), the group's own passed on to the groups inside it.
+// A name of an anonymous member still under way isn't found, a circle
+// (check_member_under_way), as e.x's.
 static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     Array<Ast *> values = {};  // the literal's, grouped
     Array<String> names = {};
@@ -2848,7 +2849,8 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
                            t->is_union ? "member" : "field", STR_ARG(name));
             }
         } else if (given_before) {
-            diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
+            diag_error(c->diag, at, "%s '" STR_FMT "' is given twice", t->is_union ? "member" : "field",
+                       STR_ARG(name));
         } else if (t->is_union && first_field >= 0 && path[0] != first_field) {
             diag_error(c->diag, at, "a union's literal gives one member; '" STR_FMT "' is given already",
                        STR_ARG(first_name));

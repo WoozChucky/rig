@@ -49,3 +49,6 @@ tests/errors/union_uses.rig:35:22: error: 'union' has no member 'z'
 tests/errors/union_uses.rig:36:18: error: 'struct' has no field 'z'
         k := Pair.{.{z = 1}};
                      ^
+tests/errors/union_uses.rig:37:24: error: member 'i' is given twice
+        l := Value.{i = 1, i = 2};
+                           ^
