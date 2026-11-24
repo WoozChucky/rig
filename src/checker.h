@@ -1100,8 +1100,10 @@
 //   for each, so e.key is e.<anonymous>.key, fields of fields.
 //   Ast_Literal.fields is set for every struct or union literal that
 //   checked, each value's field there (a value a name reached through
-//   anonymous members is the literal of the outermost one's type); bytes
-//   only on a baked union.
+//   anonymous members is the literal of the outermost one's type);
+//   Ast_Literal.written, on a literal holding such a group and on each
+//   group, is where each value was written, the order to evaluate them in;
+//   bytes only on a baked union.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

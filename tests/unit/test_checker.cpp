@@ -10331,12 +10331,15 @@ TEST(anonymous_members_are_reached_directly) {
                           "Key :: struct { code: s32; }\n"
                           "Mouse :: struct { x: s16; y: s16; }\n"
                           "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                          "Mixed :: struct { tag: u8; union { d: float64; f: float32; struct { a: u8; b: s64; }; }; }\n"
                           "main :: () {\n"
                           "    e: Event;\n"
                           "    e.key.code = 3;\n"
                           "    p := *e;\n"
                           "    m := p.mouse;\n"
                           "    a := *e.key;\n"
+                          "    x: Mixed;\n"
+                          "    y := x.a;\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast_Block *body = c.file->procs[c.file->procs.count - 1]->body;
@@ -10363,6 +10366,26 @@ TEST(anonymous_members_are_reached_directly) {
     }
     CHECK_STR(type_of(&a, &c, "m"), "Mouse");
     CHECK_STR(type_of(&a, &c, "a"), "*Key");
+    // Two anonymous members deep, a's path is [1, 2, 0]: x.<union>.<struct>.a,
+    // each member of the chain at its own index, its type the one it reaches.
+    CHECK_STR(type_of(&a, &c, "y"), "u8");
+    Ast_Member *field = (Ast_Member *)((Ast_Var *)local_named(&c, "y"))->value;
+    CHECK_EQ(field->kind, AST_MEMBER);
+    CHECK_EQ(field->index, 0);
+    Ast_Member *inner = (Ast_Member *)field->operand;
+    CHECK_EQ(inner->kind, AST_MEMBER);
+    if (inner->kind == AST_MEMBER) {
+        CHECK_EQ(inner->index, 2);
+        CHECK(inner->type && !inner->type->is_union && !inner->type->name.count);
+        Ast_Member *outer = (Ast_Member *)inner->operand;
+        CHECK_EQ(outer->kind, AST_MEMBER);
+        if (outer->kind == AST_MEMBER) {
+            CHECK_EQ(outer->index, 1);
+            CHECK(outer->type && outer->type->is_union && !outer->type->name.count);
+            CHECK_EQ(outer->operand->kind, AST_NAME);
+            CHECK_STR(((Ast_Name *)outer->operand)->name, "x");
+        }
+    }
     Type *event = struct_named(&c, "Event");
     CHECK_EQ(event->fields.count, 2);
     if (event->fields.count == 2) {
@@ -10440,9 +10463,14 @@ TEST(union_literals_give_one_member) {
                   "Mouse :: struct { x: s16; y: s16; }\n"
                   "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
                   "Word :: union { struct { lo: u16; hi: u16; }; all: u32; }\n"
+                  "Mixed :: struct { tag: u8; union { d: float64; f: float32; struct { a: u8; b: s64; }; }; }\n"
+                  "Pair :: struct { x: int; struct { a: int; b: int; }; }\n"
                   "main :: () {\n"
                   "    e := Event.{kind = 2, key = .{3}};\n"
                   "    w := Word.{lo = 1, hi = 2};\n"
+                  "    m := Mixed.{tag = 1, a = 2, b = 3};\n"
+                  "    o := Event.{1, .{key = .{65}}};\n"
+                  "    q := Pair.{a = 1, x = 2, b = 3};\n"
                   "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "e"))->value;
@@ -10475,6 +10503,72 @@ TEST(union_literals_give_one_member) {
             CHECK_EQ(group->fields[1], 1);
         }
     }
+    // Two anonymous members deep, a group inside a group: the union's
+    // holds the struct's, which holds a and b.
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "m"))->value;
+    CHECK_EQ(literal->fields.count, 2);
+    if (literal->fields.count == 2 && literal->values.count == 2) {
+        CHECK_EQ(literal->fields[0], 0);
+        CHECK_EQ(literal->fields[1], 1);
+        Ast_Literal *group = (Ast_Literal *)literal->values[1];
+        CHECK_EQ(group->kind, AST_LITERAL);
+        CHECK_EQ(group->fields.count, 1);
+        if (group->fields.count == 1 && group->values.count == 1) {
+            CHECK_EQ(group->fields[0], 2);
+            Ast_Literal *inner = (Ast_Literal *)group->values[0];
+            CHECK_EQ(inner->kind, AST_LITERAL);
+            CHECK_EQ(inner->fields.count, 2);
+            if (inner->fields.count == 2) {
+                CHECK_EQ(inner->fields[0], 0);
+                CHECK_EQ(inner->fields[1], 1);
+            }
+        }
+    }
+    // In order, the anonymous union is one field, given an untyped literal.
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "o"))->value;
+    CHECK_EQ(literal->fields.count, 2);
+    if (literal->fields.count == 2) {
+        CHECK_EQ(literal->fields[0], 0);
+        CHECK_EQ(literal->fields[1], 1);
+    }
+    // A group's values keep where they were written among the literal's
+    // (Ast_Literal.written), so lowering evaluates them in that order: a,
+    // then x, then b. The group itself, made here, is -1.
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "q"))->value;
+    CHECK_EQ(literal->values.count, 2);
+    CHECK_EQ(literal->written.count, 2);
+    if (literal->values.count == 2 && literal->written.count == 2 && literal->fields.count == 2) {
+        CHECK_EQ(literal->fields[0], 1);
+        CHECK_EQ(literal->fields[1], 0);
+        CHECK_EQ(literal->written[0], -1);
+        CHECK_EQ(literal->written[1], 1);
+        Ast_Literal *group = (Ast_Literal *)literal->values[0];
+        CHECK_EQ(group->written.count, 2);
+        if (group->written.count == 2) {
+            CHECK_EQ(group->written[0], 0);
+            CHECK_EQ(group->written[1], 2);
+        }
+    }
+    // Through a group inside a group, the inner one's values keep the
+    // outermost literal's positions; a literal with no group has none.
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "m"))->value;
+    CHECK_EQ(literal->written.count, 2);
+    if (literal->written.count == 2 && literal->values.count == 2) {
+        CHECK_EQ(literal->written[0], 0);
+        CHECK_EQ(literal->written[1], -1);
+        Ast_Literal *group = (Ast_Literal *)literal->values[1];
+        CHECK_EQ(group->written.count, 1);
+        if (group->written.count == 1 && group->values.count == 1) {
+            CHECK_EQ(group->written[0], -1);
+            Ast_Literal *inner = (Ast_Literal *)group->values[0];
+            CHECK_EQ(inner->written.count, 2);
+            if (inner->written.count == 2) {
+                CHECK_EQ(inner->written[0], 1);
+                CHECK_EQ(inner->written[1], 2);
+            }
+        }
+    }
+    CHECK_EQ(((Ast_Literal *)((Ast_Var *)local_named(&c, "o"))->value)->written.count, 0);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -10513,6 +10607,8 @@ TEST(union_members_fold_only_as_written) {
                   "E :: Event.{kind = 2, key = .{3}};\n"
                   "W :: Word.{lo = 1};\n"
                   "B :: Word.{lo = 1, hi = 2};\n"
+                  "Mixed :: struct { tag: u8; union { d: float64; f: float32; struct { a: u8; b: s64; }; }; }\n"
+                  "M :: Mixed.{a = 2, b = 3};\n"
                   "g : Event = .{kind = 1, mouse = .{3, 4}};\n"
                   "main :: () {\n"
                   "    a := E.key.code;\n"
@@ -10520,6 +10616,8 @@ TEST(union_members_fold_only_as_written) {
                   "    c := W.hi;\n"
                   "    d := W.all;\n"
                   "    e := B.hi;\n"
+                  "    f := M.b;\n"
+                  "    h := M.d;\n"
                   "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Ast *code = ((Ast_Var *)local_named(&c, "a"))->value;
@@ -10534,6 +10632,12 @@ TEST(union_members_fold_only_as_written) {
     hi = ((Ast_Var *)local_named(&c, "e"))->value;
     CHECK(hi->is_constant);
     CHECK_EQ(hi->constant, 2);
+    // Two anonymous members deep: the struct's b, which the literal gives,
+    // folds; the union's d, which it doesn't, is read where it's used.
+    Ast *b = ((Ast_Var *)local_named(&c, "f"))->value;
+    CHECK(b->is_constant);
+    CHECK_EQ(b->constant, 3);
+    CHECK(!((Ast_Var *)local_named(&c, "h"))->value->is_constant);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -10600,6 +10704,14 @@ TEST(anonymous_members_under_way_are_a_circle) {
                            "f :: () -> int { t := T.{key = 1}; return 1; }\n"
                            "main :: () { }\n"),
               "1:1: 'T' is defined in terms of itself\n");
+    // An untyped literal meeting S through a pointer looks key up in S
+    // itself, under way, as g.key does.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { union { key: int; b: [#run f()]int; }; }\n"
+                           "g: *S;\n"
+                           "f :: () -> int { if g != null { g.* = .{key = 1}; } return 1; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'S' is defined in terms of itself\n");
     CHECK_STR(check_source(&a,
                            "U :: struct { union { struct { key: int; }; b: [#run f()]int; }; }\n"
                            "g: *U;\n"
@@ -10612,6 +10724,36 @@ TEST(anonymous_members_under_way_are_a_circle) {
                            "f :: () -> int { if g != null { return g.nope; } return 1; }\n"
                            "main :: () { }\n"),
               "3:42: 'V' has no field 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(anonymous_members_braces_count_toward_the_depth_limit) {
+    // Each anonymous member's braces are a level around its fields' types
+    // (spec 9.4): S's own levels are one more for each, and a count inside
+    // them is needed from a level below them all.
+    Arena a = arena_make();
+    // 999 around a: [1]int are S's 1000 levels; 1000, 1001.
+    CHECK(builds(&a, nested_source(&a, "S :: struct { ", "union { ", 999, "a: [1]int; ", "}; ",
+                                   "}\nmain :: () { v : S; }\n")));
+    CHECK_STR(check_source(&a, nested_source(&a, "S :: struct { ", "union { ", 1000, "a: [1]int; ", "}; ",
+                                             "}\nmain :: () { v : S; }\n")),
+              needed_too_deeply(&a, 1, "S"));
+    // T, at 0, needs S a level below its field's type, at 1: 999 around
+    // a: u8 reach 1000, 1000 reach 1001.
+    const char *holder = "T :: struct { s: S; }\n";
+    CHECK(builds(&a, joined(&a, holder,
+                            nested_source(&a, "S :: struct { ", "union { ", 999, "a: u8; ", "}; ",
+                                          "}\nmain :: () { v : T; }\n"))));
+    CHECK_STR(check_source(&a, joined(&a, holder,
+                                      nested_source(&a, "S :: struct { ", "union { ", 1000, "a: u8; ", "}; ",
+                                                    "}\nmain :: () { v : T; }\n"))),
+              needed_too_deeply(&a, 2, "S"));
+    // N, in a count 998 anonymous members deep, is needed from 998 + 2:
+    // 1000; 999 deep, from 1001.
+    const char *n_after = "}\nN :: 1;\nmain :: () { v : S; }\n";
+    CHECK(builds(&a, nested_source(&a, "S :: struct { ", "union { ", 998, "a: [N]u8; ", "}; ", n_after)));
+    CHECK_STR(check_source(&a, nested_source(&a, "S :: struct { ", "union { ", 999, "a: [N]u8; ", "}; ", n_after)),
+              needed_too_deeply(&a, 2, "N"));
     arena_free(&a);
 }
 

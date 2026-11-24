@@ -435,7 +435,11 @@ struct Ast_Literal : Ast {
                                     // by run.cpp for a baked struct (in order); a name reaching through
                                     // anonymous members was grouped into a literal of the anonymous type, at
                                     // the member's index
-    String bytes;                   // a baked union (run.cpp): its whole size's bytes, the literal's only content
+    Array<s32> written;             // set by the checker for a literal that holds such a group, and for each
+                                    // group: for each value, where it was written among the values of the
+                                    // literal the program wrote, -1 for a group, so lowering evaluates them in
+                                    // that order (spec 5.17); empty for any other literal
+    String bytes;                  // a baked union (run.cpp): its whole size's bytes, the literal's only content
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a

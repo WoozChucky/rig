@@ -2815,26 +2815,36 @@ static void check_stray_value(Checker *c, Ast *value) {
 // type made here, untyped, `.{key = k}`, at the first of those names, which
 // takes the member's place in the literal, as if written so. Checked in
 // turn, the group puts its own names where they go, the same way, so an
-// anonymous union reached by two names is a union given two members.
+// anonymous union reached by two names is a union given two members. A
+// group moves its values away from where they were written, which is the
+// order they're evaluated in (spec 5.17): so each value keeps that place,
+// among the values the program wrote (Ast_Literal.written), the group's
+// own passed on to the groups inside it. A name of an anonymous member
+// still under way isn't found, a circle (check_member_under_way), as e.x's.
 static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     Array<Ast *> values = {};  // the literal's, grouped
     Array<String> names = {};
     Array<Position> positions = {};
     Array<s32> fields = {};
+    Array<s32> written = {};
     Array<s32> path = {};
+    bool grouped = literal->written.count > 0;  // a group, or a literal holding one
     s32 first_field = -1;  // where the first value that went to a field went, and its name
     String first_name = {};
     for (s64 i = 0; i < literal->values.count; i++) {
         String name = literal->names[i];
         Position at = literal->name_positions[i];
         Ast *value = literal->values[i];
+        s32 place = literal->written.count ? literal->written[i] : (s32)i;
         type_find_member(t, name, &path);
         bool given_before = false;
         for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
         s32 field = -1;
         if (!path.count) {
-            diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
-                       t->is_union ? "member" : "field", STR_ARG(name));
+            if (!check_member_under_way(c, t, name)) {
+                diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+                           t->is_union ? "member" : "field", STR_ARG(name));
+            }
         } else if (given_before) {
             diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
         } else if (t->is_union && first_field >= 0 && path[0] != first_field) {
@@ -2860,27 +2870,34 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
             array_add(&names, String{});
             array_add(&positions, at);
             array_add(&fields, field);
+            array_add(&written, -1);
+            grouped = true;
         }
         if (group) {
             array_add(&group->names, name);
             array_add(&group->name_positions, at);
             array_add(&group->values, value);
+            array_add(&group->written, place);
             continue;
         }
         array_add(&values, value);
         array_add(&names, name);
         array_add(&positions, at);
         array_add(&fields, field);
+        array_add(&written, place);
     }
     array_free(&path);
     array_free(&literal->values);
     array_free(&literal->names);
     array_free(&literal->name_positions);
     array_free(&literal->fields);
+    array_free(&literal->written);
+    if (!grouped) array_free(&written);
     literal->values = values;
     literal->names = names;
     literal->name_positions = positions;
     literal->fields = fields;
+    literal->written = written;
 }
 
 // The values of a literal of struct type t (its type written, T.{...}, or
