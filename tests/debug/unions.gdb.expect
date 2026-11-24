@@ -1,0 +1,15 @@
+main () at
+unions.rig:27
+putchar(10);
+$1 = {i = 4609434218613702656, f = 1.5, p = 0x3ff8000000000000}
+type = union Value {
+s64 i;
+float64 f;
+void *p;
+}
+$2 = {kind = 2, {key = {code = 65}, mouse = {x = 65, y = 0}}}
+$3 = 65
+$4 = {x = 65, y = 0}
+$5 = {{lo = 1, hi = 2}, all = 131073}
+$6 = 2
+!.debug_names not created by gdb

@@ -1,0 +1,14 @@
+27:     putchar(10);
+union Value v = union Value
+struct Event e = struct Event
+union Word w = union Word
+union Value
++0x000 i                : 0n4609434218613702656
++0x000 f                : 1.5
++0x000 p                : 0x3ff80000`00000000 Void
+struct Event
++0x000 kind             : 0n2
++0x004 key              : Key
++0x004 mouse            : Mouse
+int 0n65
+unsigned short 2
