@@ -968,8 +968,8 @@ static void resolve_global(Checker *c, Ast *decl) {
 // the member found is visible yet is find_enum_member's to say, by its
 // resolve. Its slots are the heap's, so the checker that made it frees it
 // (Checker.indexed, free_checker_fields), and a later checker of the same
-// tree, check() after a decider (they share Operating_System), makes it
-// again.
+// tree, check() after a decider (they share the tree's enums,
+// Operating_System among them), makes it again.
 
 s32 enum_member_index(Checker *c, Ast_Enum *e, String name) {
     if (e->member_index.count == 0 && e->members.count > 0) {
@@ -997,9 +997,9 @@ static void report_past_the_range(Checker *c, Position at, u64 below, Type *t) {
 
 // An integer literal of `value`, at `at`, already checked: a constant of
 // type t, value in its form. The value of a constant with none written: an
-// enum's member without one (check_enum_members), and the predeclared
-// Operating_System's members and OS (declare_predeclared), so whatever
-// reaches a constant's value finds one.
+// enum's member without one (check_enum_members), the predeclared
+// Operating_System's members (operating_system_member) and OS
+// (declare_predeclared), so whatever reaches a constant's value finds one.
 static Ast_Int *integer_literal(Arena *a, u64 value, Type *t, Position at) {
     Ast_Int *number = ast_new<Ast_Int>(a, AST_INT, at);
     number->value = value;
