@@ -9,7 +9,7 @@
     {kind,    size,    align,   is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
      nullptr, {},      nullptr, nullptr,   nullptr, 0,                                    nullptr, \
      nullptr, nullptr, nullptr, nullptr,   0,       nullptr,                              0,       \
-     false,   false,   nullptr, nullptr,   nullptr, false,                                nullptr}
+     false,   false,   nullptr, nullptr,   nullptr, false,                                nullptr,      false}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -28,7 +28,7 @@ static Type integer_types[] = {
 Type type_string = {
     TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
     &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
-    nullptr, false, nullptr,
+    nullptr, false, nullptr, false,
 };
 
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
@@ -59,7 +59,7 @@ Type type_untyped_member = BUILT_IN(TYPE_UNTYPED_MEMBER, ".NAME", 0, 1, false);
 static Type float_name = {
     TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
     nullptr,    0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
-    nullptr,    false, nullptr,
+    nullptr,    false, nullptr, false,
 };
 
 // Every type a program can name, by its built-in name: the one list
@@ -129,6 +129,52 @@ s32 type_field_index(Type *t, String name) {
         if (string_eq(t->fields[i].name, name)) return (s32)i;
     }
     return -1;
+}
+
+// A struct type_find_member searches: its type, and how it was reached, the
+// one searched before it that holds it (an index into the walk's list, -1
+// for the type searched first) and its field there.
+struct Member_Search {
+    Type *type;
+    s64 outer;
+    s32 field;
+};
+
+// Breadth first, in a list that is the queue: each struct's named fields
+// are looked at when it's taken from it, and its anonymous members put at
+// its end, to be searched after every struct at its own depth. An empty name
+// is never found: it's an anonymous member's, which is searched, not named.
+// The checker refuses a name reachable twice from one declaration
+// (checker.cpp's lay_out), so the first found is the only one, for now.
+void type_find_member(Type *t, String name, Array<s32> *path) {
+    path->count = 0;
+    if (!name.count) return;
+    Array<Member_Search> queue = {};
+    array_add(&queue, Member_Search{t, -1, -1});
+    for (s64 next = 0; next < queue.count && !path->count; next++) {
+        Type *s = queue[next].type;
+        for (s64 i = 0; i < s->fields.count; i++) {
+            Type_Field *field = &s->fields[i];
+            if (!field->name.count) {
+                if (field->type && field->type->kind == TYPE_STRUCT) {
+                    array_add(&queue, Member_Search{field->type, next, (s32)i});
+                }
+                continue;
+            }
+            if (!string_eq(field->name, name)) continue;
+            // The indices from t down, gathered from the field up, then
+            // turned around.
+            array_add(path, (s32)i);
+            for (s64 at = next; queue[at].outer >= 0; at = queue[at].outer) array_add(path, queue[at].field);
+            for (s64 j = 0; j < path->count / 2; j++) {
+                s32 swapped = (*path)[j];
+                (*path)[j] = (*path)[path->count - 1 - j];
+                (*path)[path->count - 1 - j] = swapped;
+            }
+            break;
+        }
+    }
+    array_free(&queue);
 }
 
 s32 type_align(Type *t) {
@@ -296,6 +342,14 @@ static s64 name_prefix(Type *t, char *to, u64 room) {
     }
 }
 
+// A type's own name, as type_name writes it after any prefixes: its name,
+// or for an anonymous member's struct, which has none (spec 3.19), the
+// keyword it was written with, "union" or "struct".
+static String own_name(Type *t) {
+    if (t->kind != TYPE_STRUCT || t->name.count) return t->name;
+    return str(t->is_union ? "union" : "struct");
+}
+
 // The prefixes, outermost first, then the innermost type's name: **[3]u8 is
 // "*", "*", "[3]" and "u8". Written in a loop, down the chain twice, once
 // to measure and once to write, rather than by naming what t is made of and
@@ -312,14 +366,15 @@ String type_name(Arena *a, Type *t) {
     s64 length = 0;
     Type *inner = t;
     for (; named_after(inner); inner = named_after(inner)) length += name_prefix(inner, nullptr, 0);
-    if (inner == t) return t->name;
-    length += inner->name.count;
+    String name_of_inner = own_name(inner);
+    if (inner == t) return name_of_inner;
+    length += name_of_inner.count;
     char *name = (char *)arena_alloc(a, (u64)length + 1, 1);
     s64 at = 0;
     for (Type *level = t; level != inner; level = named_after(level)) {
         at += name_prefix(level, name + at, (u64)(length + 1 - at));
     }
-    if (inner->name.count > 0) memcpy(name + at, inner->name.data, (size_t)inner->name.count);
+    if (name_of_inner.count > 0) memcpy(name + at, name_of_inner.data, (size_t)name_of_inner.count);
     return {(const u8 *)name, length};
 }
 

@@ -1,0 +1,30 @@
+// A union's uses' mistakes (issue #223, spec 3.19), one a line: a union
+// passed to C by value; a union's literal in order, or giving two members,
+// one of them an anonymous union's through its fields' names; a member a
+// union doesn't have, read or in a literal, and a field a struct with an
+// anonymous member doesn't have; == and < on unions; a union's literal
+// meeting no type; a value in order meeting an anonymous union; and a
+// field given twice beside an anonymous member.
+Value :: union { i: s64; f: float64; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+puts :: (s: *u8) -> s32 #foreign libc;
+bad :: (v: Value) #foreign libc;
+
+main :: () {
+    v: Value;
+    e: Event;
+    a := Value.{1};
+    b := Value.{i = 1, f = 2};
+    c := Event.{key = .{1}, mouse = .{2, 3}};
+    v.z = 1;
+    d := Value.{z = 1};
+    e.z = 1;
+    if v == v { }
+    if v < v { }
+    x := .{f = 1};
+    g := Event.{1, Key.{2}};
+    h := Event.{kind = 1, kind = 2};
+    puts("unreached");
+}

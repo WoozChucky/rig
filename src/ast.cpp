@@ -394,9 +394,14 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ")");
         break;
     case AST_STRUCT: {
+        // (struct Vec2 (x float32) (y float32)), (union Value (i s64)); an
+        // anonymous member's has no name: (union (key Key) (mouse Mouse)).
         Ast_Struct *s = (Ast_Struct *)node;
-        out(buffer, "(struct ");
-        out(buffer, s->name);
+        out(buffer, s->is_union ? "(union" : "(struct");
+        if (s->name.count) {
+            out(buffer, " ");
+            out(buffer, s->name);
+        }
         for (s64 i = 0; i < s->fields.count; i++) {
             out(buffer, " ");
             dump(buffer, s->fields[i]);
@@ -406,6 +411,10 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
     case AST_FIELD: {
         Ast_Field *field = (Ast_Field *)node;
+        if (field->anonymous) {
+            dump(buffer, field->anonymous);
+            break;
+        }
         out(buffer, "(");
         out(buffer, field->name);
         out(buffer, " ");

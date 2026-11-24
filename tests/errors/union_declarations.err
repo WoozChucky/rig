@@ -1,0 +1,18 @@
+tests/errors/union_declarations.rig:6:26: error: 'i' is already declared at tests/errors/union_declarations.rig:6:18
+    Twice :: union { i: int; i: float; }
+                             ^
+tests/errors/union_declarations.rig:7:35: error: 'x' is already declared at tests/errors/union_declarations.rig:7:19
+    Clash :: struct { x: int; union { x: float; }; }
+                                      ^
+tests/errors/union_declarations.rig:8:1: error: 'Self' contains itself; it can hold a pointer to itself, *Self
+    Self :: union { s: Self; }
+    ^
+tests/errors/union_declarations.rig:9:22: error: 'void' is only a pointer's target, as in *void
+    Hollow :: union { v: void; }
+                         ^
+tests/errors/union_declarations.rig:10:23: error: unknown type 'Nope'
+    Unknown :: union { n: Nope; }
+                          ^
+tests/errors/union_declarations.rig:12:19: error: 'Value' is a type, not a value
+    main :: () { v := Value; }
+                      ^

@@ -248,8 +248,9 @@ static u64 read_bits(const u8 *at, s64 size) {
 // A struct or array literal of type t to hold `count` baked values, made as
 // the checker would find a written one of constant data: is_data already,
 // with no type written and no names, a struct's values its fields' in
-// order (literal_field_value); and is_baked, so a constant may hold it as a
-// baked view's elements (checker.cpp's check_constant_value).
+// order, as its caller says (Ast_Literal.fields, literal_field_value); and
+// is_baked, so a constant may hold it as a baked view's elements
+// (checker.cpp's check_constant_value).
 static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
     Ast_Literal *literal = baked_node<Ast_Literal>(b, AST_LITERAL, t);
     literal->is_array = t->kind == TYPE_ARRAY;
@@ -350,6 +351,7 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
             Ast *value = bake_value(b, field->type, at + field->offset);
             if (!value) return nullptr;
             array_add(&literal->values, value);
+            array_add(&literal->fields, (s32)i);
         }
         return literal;
     }

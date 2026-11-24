@@ -10189,3 +10189,356 @@ TEST(switches_reach_their_end_as_spec_6_11_says) {
               "89:8: #complete needs an enum, not the enum_flags 'Look'\n");
     arena_free(&a);
 }
+
+// Issue #223: unions and anonymous members (spec 3.19).
+
+// C's unions and anonymous members, as the pinned clang lays them out (it
+// builds these tests, and C bindings' C sides): the twins of the Rig types
+// in unions_are_laid_out_as_clang_lays_them_out. C++ takes C's anonymous
+// struct members as clang's extension does, with the same layout.
+union C_Union_Value {
+    int64_t i;
+    double f;
+    void *p;
+};
+union C_Union_Odd {
+    uint8_t a[5];
+    uint32_t b;
+};
+struct C_Union_Event {
+    int32_t kind;
+    union {
+        struct {
+            int32_t code;
+        } key;
+        struct {
+            int16_t x, y;
+        } mouse;
+    };
+    uint8_t last;
+};
+union C_Union_Word {
+    struct {
+        uint16_t lo, hi;
+    };
+    uint32_t all;
+};
+struct C_Union_Mixed {
+    uint8_t tag;
+    union {
+        double d;
+        struct {
+            uint8_t a;
+            int64_t b;
+        };
+    };
+};
+
+// Where member `name` of struct or union t is, from its start: the offsets
+// of each field on the way to it, through anonymous members, added; -1 when
+// it has none.
+static s64 member_offset(Type *t, const char *name) {
+    Array<s32> path = {};
+    type_find_member(t, str(name), &path);
+    s64 offset = path.count ? 0 : -1;
+    for (s64 i = 0; i < path.count; i++) {
+        offset += t->fields[path[i]].offset;
+        t = t->fields[path[i]].type;
+    }
+    array_free(&path);
+    return offset;
+}
+
+TEST(unions_are_laid_out_as_clang_lays_them_out) {
+    // Every member at offset 0, the union aligned as its largest member,
+    // its size the largest member's rounded up to that; an anonymous
+    // member placed as a field of its type is, its fields reached as its
+    // outer's.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Value :: union { i: s64; f: float64; p: *void; }\n"
+                          "Odd :: union { a: [5]u8; b: u32; }\n"
+                          "Lone :: union { a: [0]s64; }\n"
+                          "Key :: struct { code: s32; }\n"
+                          "Mouse :: struct { x: s16; y: s16; }\n"
+                          "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; last: u8; }\n"
+                          "Word :: union { struct { lo: u16; hi: u16; }; all: u32; }\n"
+                          "Mixed :: struct { tag: u8; union { d: float64; struct { a: u8; b: s64; }; }; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *value = struct_named(&c, "Value");
+    CHECK(value->is_union);
+    CHECK_EQ(value->size, (s64)sizeof(C_Union_Value));
+    CHECK_EQ(type_align(value), (s32)alignof(C_Union_Value));
+    CHECK_EQ(member_offset(value, "i"), 0);
+    CHECK_EQ(member_offset(value, "f"), 0);
+    CHECK_EQ(member_offset(value, "p"), 0);
+    Type *odd = struct_named(&c, "Odd");
+    CHECK_EQ(odd->size, (s64)sizeof(C_Union_Odd));
+    CHECK_EQ(odd->size, 8);
+    CHECK_EQ(type_align(odd), (s32)alignof(C_Union_Odd));
+    CHECK_EQ(type_align(odd), 4);
+    CHECK_EQ(member_offset(odd, "b"), (s64)offsetof(C_Union_Odd, b));
+    // GNU C's layout, size 0 aligned to 8, as an empty struct is 0: C++ on
+    // Windows gives no class a size of 0, so this one has no twin.
+    Type *lone = struct_named(&c, "Lone");
+    CHECK_EQ(lone->size, 0);
+    CHECK_EQ(type_align(lone), 8);
+    Type *event = struct_named(&c, "Event");
+    CHECK(!event->is_union);
+    CHECK_EQ(event->size, (s64)sizeof(C_Union_Event));
+    CHECK_EQ(event->size, 12);
+    CHECK_EQ(type_align(event), (s32)alignof(C_Union_Event));
+    CHECK_EQ(member_offset(event, "kind"), (s64)offsetof(C_Union_Event, kind));
+    CHECK_EQ(event->fields.count, 3);
+    if (event->fields.count == 3) CHECK_EQ(event->fields[1].offset, (s64)offsetof(C_Union_Event, key));
+    CHECK_EQ(member_offset(event, "key"), (s64)offsetof(C_Union_Event, key));
+    CHECK_EQ(member_offset(event, "mouse"), (s64)offsetof(C_Union_Event, mouse));
+    CHECK_EQ(member_offset(event, "last"), (s64)offsetof(C_Union_Event, last));
+    CHECK_EQ(member_offset(event, "last"), 8);
+    Type *word = struct_named(&c, "Word");
+    CHECK_EQ(word->size, (s64)sizeof(C_Union_Word));
+    CHECK_EQ(type_align(word), (s32)alignof(C_Union_Word));
+    CHECK_EQ(member_offset(word, "lo"), (s64)offsetof(C_Union_Word, lo));
+    CHECK_EQ(member_offset(word, "hi"), (s64)offsetof(C_Union_Word, hi));
+    CHECK_EQ(member_offset(word, "hi"), 2);
+    CHECK_EQ(member_offset(word, "all"), (s64)offsetof(C_Union_Word, all));
+    Type *mixed = struct_named(&c, "Mixed");
+    CHECK_EQ(mixed->size, (s64)sizeof(C_Union_Mixed));
+    CHECK_EQ(mixed->size, 24);
+    CHECK_EQ(type_align(mixed), (s32)alignof(C_Union_Mixed));
+    CHECK_EQ(member_offset(mixed, "d"), (s64)offsetof(C_Union_Mixed, d));
+    CHECK_EQ(member_offset(mixed, "a"), (s64)offsetof(C_Union_Mixed, a));
+    CHECK_EQ(member_offset(mixed, "b"), (s64)offsetof(C_Union_Mixed, b));
+    CHECK_EQ(member_offset(mixed, "b"), 16);
+    CHECK_EQ(member_offset(mixed, "z"), -1);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(anonymous_members_are_reached_directly) {
+    // e.key is e.<anonymous>.key: the checker makes the anonymous member's
+    // access, with no name, its operand e, at the name written, so through
+    // a pointer and as a place it's a field of a field.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Key :: struct { code: s32; }\n"
+                          "Mouse :: struct { x: s16; y: s16; }\n"
+                          "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                          "main :: () {\n"
+                          "    e: Event;\n"
+                          "    e.key.code = 3;\n"
+                          "    p := *e;\n"
+                          "    m := p.mouse;\n"
+                          "    a := *e.key;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Block *body = c.file->procs[c.file->procs.count - 1]->body;
+    Ast_Assign *assign = (Ast_Assign *)body->statements[1];
+    CHECK_EQ(assign->kind, AST_ASSIGN);
+    Ast_Member *code = (Ast_Member *)assign->targets[0];
+    CHECK_EQ(code->kind, AST_MEMBER);
+    Ast_Member *key = (Ast_Member *)code->operand;
+    CHECK_EQ(key->kind, AST_MEMBER);
+    CHECK_STR(key->name, "key");
+    CHECK_EQ(key->index, 0);
+    Ast_Member *anonymous = (Ast_Member *)key->operand;
+    CHECK_EQ(anonymous->kind, AST_MEMBER);
+    if (anonymous->kind == AST_MEMBER) {
+        CHECK_STR(anonymous->name, "");
+        CHECK_EQ(anonymous->index, 1);
+        CHECK(anonymous->type && anonymous->type->is_union);
+        if (anonymous->type) CHECK_STR(anonymous->type->name, "");
+        if (anonymous->type) CHECK_STR(type_name(&a, anonymous->type), "union");
+        CHECK_EQ(anonymous->pos.line, key->pos.line);
+        CHECK_EQ(anonymous->pos.col, key->pos.col);
+        CHECK_EQ(anonymous->operand->kind, AST_NAME);
+        CHECK_STR(((Ast_Name *)anonymous->operand)->name, "e");
+    }
+    CHECK_STR(type_of(&a, &c, "m"), "Mouse");
+    CHECK_STR(type_of(&a, &c, "a"), "*Key");
+    Type *event = struct_named(&c, "Event");
+    CHECK_EQ(event->fields.count, 2);
+    if (event->fields.count == 2) {
+        CHECK_STR(event->fields[1].name, "");
+        CHECK_EQ(event->fields[1].offset, 4);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(anonymous_member_names_clash_where_declared) {
+    // As C refuses them: a name reachable twice from one declaration, in
+    // one pair of braces or across them, at any depth, at the later one.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "S :: struct { x: int; union { x: float; y: int; }; }\n"
+                           "T :: struct { union { a: int; }; struct { a: u8; }; }\n"
+                           "U :: union { a: int; struct { b: int; union { a: u8; }; }; }\n"
+                           "main :: () { }\n"),
+              "1:31: 'x' is already declared at test.rig:1:15\n"
+              "2:43: 'a' is already declared at test.rig:2:23\n"
+              "3:47: 'a' is already declared at test.rig:3:14\n");
+    // The first stays the one found, and the later isn't in its braces' type.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { union { struct { x: int; }; }; x: float; }\n"
+                           "main :: () {\n"
+                           "    s: S;\n"
+                           "    n: int = s.x;\n"
+                           "}\n"),
+              "1:46: 'x' is already declared at test.rig:1:32\n");
+    arena_free(&a);
+}
+
+TEST(union_literals_give_one_member) {
+    // By name, one member, wherever the literal meets the union: written,
+    // a declaration's type, an argument, a field, an element; Value.{} is
+    // its zero. Each value's field is in Ast_Literal.fields.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Value :: union { i: s64; f: float64; }\n"
+                          "Holder :: struct { v: Value; n: int; }\n"
+                          "take :: (v: Value) { }\n"
+                          "main :: () {\n"
+                          "    a := Value.{f = 1.5};\n"
+                          "    b : Value = .{i = 2};\n"
+                          "    take(.{f = 2});\n"
+                          "    h := Holder.{.{i = 3}, 4};\n"
+                          "    z := Value.{};\n"
+                          "    vs := Value.[.{i = 1}, .{f = 2}];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Literal *literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "a"))->value;
+    CHECK_EQ(literal->fields.count, 1);
+    if (literal->fields.count == 1) CHECK_EQ(literal->fields[0], 1);
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "b"))->value;
+    CHECK_EQ(literal->fields.count, 1);
+    if (literal->fields.count == 1) CHECK_EQ(literal->fields[0], 0);
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "h"))->value;
+    CHECK_EQ(literal->fields.count, 2);
+    if (literal->fields.count == 2) {
+        CHECK_EQ(literal->fields[0], 0);
+        CHECK_EQ(literal->fields[1], 1);
+        Ast_Literal *inner = (Ast_Literal *)literal->values[0];
+        CHECK_EQ(inner->fields.count, 1);
+        if (inner->fields.count == 1) CHECK_EQ(inner->fields[0], 0);
+    }
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "z"))->value;
+    CHECK_EQ(literal->fields.count, 0);
+    CHECK_STR(type_of(&a, &c, "vs"), "[2]Value");
+    token_list_free(c.list);
+    // A name reaching through an anonymous member: the values for it are
+    // grouped into a literal of its type, at its index.
+    c = check_src(&a,
+                  "Key :: struct { code: s32; }\n"
+                  "Mouse :: struct { x: s16; y: s16; }\n"
+                  "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                  "main :: () {\n"
+                  "    e := Event.{kind = 2, key = .{3}};\n"
+                  "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    literal = (Ast_Literal *)((Ast_Var *)local_named(&c, "e"))->value;
+    CHECK_EQ(literal->fields.count, 2);
+    CHECK_EQ(literal->values.count, 2);
+    if (literal->fields.count == 2 && literal->values.count == 2) {
+        CHECK_EQ(literal->fields[0], 0);
+        CHECK_EQ(literal->fields[1], 1);
+        Ast_Literal *group = (Ast_Literal *)literal->values[1];
+        CHECK_EQ(group->kind, AST_LITERAL);
+        CHECK(group->type && group->type->is_union && !group->type->name.count);
+        CHECK_EQ(group->fields.count, 1);
+        if (group->fields.count == 1) CHECK_EQ(group->fields[0], 0);
+        CHECK_EQ(group->values.count, 1);
+        if (group->values.count == 1) CHECK_EQ(group->values[0]->type, struct_named(&c, "Key"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(union_members_fold_only_as_written) {
+    // A member of a constant union folds when its literal gives it, or
+    // gives none (all zero); another member is the same bytes read as
+    // another type, read where it's used.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Value :: union { i: s64; f: float64; }\n"
+                          "V :: Value.{i = 3};\n"
+                          "Z :: Value.{};\n"
+                          "main :: () {\n"
+                          "    a := V.i;\n"
+                          "    b := V.f;\n"
+                          "    c := Z.f;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *i = ((Ast_Var *)local_named(&c, "a"))->value;
+    CHECK(i->is_constant);
+    CHECK_EQ(i->constant, 3);
+    CHECK(!((Ast_Var *)local_named(&c, "b"))->value->is_constant);
+    Ast *zero = ((Ast_Var *)local_named(&c, "c"))->value;
+    CHECK(zero->is_constant);
+    CHECK_EQ(zero->constant, 0);
+    token_list_free(c.list);
+    // So through anonymous members: a name reaching through them in a
+    // constant's literal, or a global's, gives the anonymous union that one
+    // member; a struct inside a union, its fields, the others zero.
+    c = check_src(&a,
+                  "Key :: struct { code: s32; }\n"
+                  "Mouse :: struct { x: s16; y: s16; }\n"
+                  "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                  "Word :: union { struct { lo: u16; hi: u16; }; all: u32; }\n"
+                  "E :: Event.{kind = 2, key = .{3}};\n"
+                  "W :: Word.{lo = 1};\n"
+                  "g : Event = .{kind = 1, mouse = .{3, 4}};\n"
+                  "main :: () {\n"
+                  "    a := E.key.code;\n"
+                  "    b := E.mouse.x;\n"
+                  "    c := W.hi;\n"
+                  "    d := W.all;\n"
+                  "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *code = ((Ast_Var *)local_named(&c, "a"))->value;
+    CHECK(code->is_constant);
+    CHECK_EQ(code->constant, 3);
+    CHECK(!((Ast_Var *)local_named(&c, "b"))->value->is_constant);
+    Ast *hi = ((Ast_Var *)local_named(&c, "c"))->value;
+    CHECK(hi->is_constant);
+    CHECK_EQ(hi->constant, 0);
+    CHECK(!((Ast_Var *)local_named(&c, "d"))->value->is_constant);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(unions_contain_themselves_as_structs_do) {
+    // By value, directly or through an anonymous member; behind a pointer
+    // it's fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "U :: union { a: int; u: U; }\n"
+                           "N :: struct { union { next: N; }; }\n"
+                           "P :: union { a: int; next: *P; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'U' contains itself; it can hold a pointer to itself, *U\n"
+              "2:1: 'N' contains itself; it can hold a pointer to itself, *N\n");
+    arena_free(&a);
+}
+
+TEST(unions_arent_compared_and_stay_out_of_c) {
+    // A union is a struct to == and to C: not compared, and passed to C
+    // only through a pointer, until C's rules for passing one by value come
+    // (#236).
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Value :: union { i: s64; f: float64; }\n"
+                           "draw :: (v: Value) #foreign libc;\n"
+                           "make :: () -> Value #foreign libc;\n"
+                           "fill :: (p: *Value) -> *Value #foreign libc;\n"
+                           "main :: () {\n"
+                           "    a : Value;\n"
+                           "    b : Value;\n"
+                           "    c := a == b;\n"
+                           "}\n"),
+              "2:13: a foreign procedure can't take a 'Value' yet; pass a pointer to it\n"
+              "3:15: a foreign procedure can't return a 'Value' yet\n"
+              "8:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'\n");
+    arena_free(&a);
+}

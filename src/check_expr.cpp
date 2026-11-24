@@ -290,12 +290,11 @@ static bool is_bytes_retyped(Type *from, Type *to) {
     return (from == &type_string && to == bytes) || (from == bytes && to == &type_string);
 }
 
-Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field) {
-    if (!literal->names.count) return field < literal->values.count ? literal->values[field] : nullptr;
-    // The first value given for it: one given twice is an error, reported,
-    // and the second was never checked against the field.
-    for (s64 i = 0; i < literal->names.count; i++) {
-        if (string_eq(literal->names[i], t->fields[field].name)) return literal->values[i];
+Ast *literal_field_value(Ast_Literal *literal, s32 field) {
+    // A value given twice met no field the second time (-1): an error,
+    // reported, and it was never checked against the field.
+    for (s64 i = 0; i < literal->fields.count; i++) {
+        if (literal->fields[i] == field) return literal->values[i];
     }
     return nullptr;
 }
@@ -360,7 +359,14 @@ bool constant_data(Ast *e, Ast **value) {
         // Anything but a literal of this struct is a value of the wrong
         // type, given a literal's field or element and reported: no data.
         if (whole->kind != AST_LITERAL || whole->type != s) return false;
-        Ast *part = literal_field_value((Ast_Literal *)whole, s, m->index);
+        Ast_Literal *literal = (Ast_Literal *)whole;
+        Ast *part = literal_field_value(literal, m->index);
+        // A union's member its literal doesn't give is another member's
+        // bytes, or a baked union's (Ast_Literal.bytes), reinterpreted: read
+        // where it's used, not known here (spec 3.19). Only the member the
+        // literal gives is, or any member of a literal giving none, whose
+        // bytes are all zero.
+        if (s->is_union && !part && (literal->values.count || literal->bytes.count)) return false;
         *value = part ? part_value(part) : nullptr;
         return true;
     }
@@ -2691,12 +2697,20 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // through a pointer: on a pointer to one, "'.count' isn't reached through a
 // pointer, '*string'; write .*.count".
 //
+// A union's members are found as a struct's fields are (spec 3.19), and so
+// are the fields of anonymous members, which are e's own: x is looked up in
+// e's fields, then in its anonymous members', depth by depth
+// (type_find_member). A union's missing one is "'Value' has no member
+// 'z'". One reached through anonymous members makes e the chain of them,
+// which lowering and the rest see as fields of fields.
+//
 // A field of constant data is known while compiling (spec 5.9) when it's a
 // number, a bool or null: the value its literal gives, or zero when it
 // leaves it out, or leaves out the struct holding it (constant_data). So it
 // folds, as a constant's name does: ORIGIN.y, LINE.b.y, Vec2.{5, 6}.y. An
 // aggregate field, or a pointer to a string literal's bytes, a procedure or
-// a type's description, stays a part of the data, read where it's used.
+// a type's description, stays a part of the data, read where it's used. A
+// union's member folds only when its literal gives that one, or none.
 //
 // e.x where e is a name, not in parentheses, that declares an enum (a
 // local of the name hides it, as it hides any top-level name) is its
@@ -2741,12 +2755,28 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         return nullptr;
     }
     if (!check_layout(c, s)) return nullptr;
-    m->index = type_field_index(s, m->name);
-    if (m->index < 0) {
-        diag_error(c->diag, m->pos, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
-                   STR_ARG(m->name));
+    Array<s32> path = {};
+    type_find_member(s, m->name, &path);
+    if (!path.count) {
+        diag_error(c->diag, m->pos, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
+                   s->is_union ? "member" : "field", STR_ARG(m->name));
         return nullptr;
     }
+    // Reached through anonymous members (spec 3.19): e.key is e.<anonymous>.key,
+    // a member with no name for each, made here, at the name written. The
+    // first takes e as written, so a pointer is followed once, there, as for
+    // a field of its own.
+    for (s64 k = 0; k + 1 < path.count; k++) {
+        Ast_Member *inner = ast_new<Ast_Member>(c->arena, AST_MEMBER, m->pos);
+        inner->start = m->start;
+        inner->operand = m->operand;
+        inner->index = path[k];
+        s = s->fields[path[k]].type;
+        inner->type = s;
+        m->operand = inner;
+    }
+    m->index = path[path.count - 1];
+    array_free(&path);
     check_late_field(c, s, m->index);
     Type *field = s->fields[m->index].type;
     fold_constant_part(m, field);
@@ -2771,48 +2801,124 @@ static void check_stray_value(Checker *c, Ast *value) {
     if (t && type_waits_for_one(t)) value->type = nullptr;
 }
 
+// The named values of a literal of struct type t, each put where its name
+// goes (Ast_Literal.fields), or nowhere (-1) after saying why: a name that
+// isn't a field ("'Vec2' has no field 'z'"; a union's, "'Value' has no
+// member 'z'"), or is given twice ("field 'x' is given twice"), or a
+// union's second member ("a union's literal gives one member; 'i' is given
+// already", spec 3.19), each said at the name. A name reached through
+// anonymous members (type_find_member), as C's designated initializers
+// reach them, goes to the outermost of them: the values whose names go
+// through one anonymous member are grouped, in order, into a literal of its
+// type made here, untyped, `.{key = k}`, at the first of those names, which
+// takes the member's place in the literal, as if written so. Checked in
+// turn, the group puts its own names where they go, the same way, so an
+// anonymous union reached by two names is a union given two members.
+static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
+    Array<Ast *> values = {};  // the literal's, grouped
+    Array<String> names = {};
+    Array<Position> positions = {};
+    Array<s32> fields = {};
+    Array<s32> path = {};
+    s32 first_field = -1;  // where the first value that went to a field went, and its name
+    String first_name = {};
+    for (s64 i = 0; i < literal->values.count; i++) {
+        String name = literal->names[i];
+        Position at = literal->name_positions[i];
+        Ast *value = literal->values[i];
+        type_find_member(t, name, &path);
+        bool given_before = false;
+        for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
+        s32 field = -1;
+        if (!path.count) {
+            diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+                       t->is_union ? "member" : "field", STR_ARG(name));
+        } else if (given_before) {
+            diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
+        } else if (t->is_union && first_field >= 0 && path[0] != first_field) {
+            diag_error(c->diag, at, "a union's literal gives one member; '" STR_FMT "' is given already",
+                       STR_ARG(first_name));
+        } else {
+            field = path[0];
+        }
+        if (field >= 0 && first_field < 0) {
+            first_field = field;
+            first_name = name;
+        }
+        bool through_anonymous = field >= 0 && path.count > 1;
+        // A value for a field of an anonymous member joins the member's
+        // group, made by the first of them.
+        Ast_Literal *group = nullptr;
+        for (s64 j = 0; j < values.count && through_anonymous && !group; j++) {
+            if (fields[j] == field) group = (Ast_Literal *)values[j];
+        }
+        if (!group && through_anonymous) {
+            group = ast_new<Ast_Literal>(c->arena, AST_LITERAL, at);
+            array_add(&values, (Ast *)group);
+            array_add(&names, String{});
+            array_add(&positions, at);
+            array_add(&fields, field);
+        }
+        if (group) {
+            array_add(&group->names, name);
+            array_add(&group->name_positions, at);
+            array_add(&group->values, value);
+            continue;
+        }
+        array_add(&values, value);
+        array_add(&names, name);
+        array_add(&positions, at);
+        array_add(&fields, field);
+    }
+    array_free(&path);
+    array_free(&literal->values);
+    array_free(&literal->names);
+    array_free(&literal->name_positions);
+    array_free(&literal->fields);
+    literal->values = values;
+    literal->names = names;
+    literal->name_positions = positions;
+    literal->fields = fields;
+}
+
 // The values of a literal of struct type t (its type written, T.{...}, or
-// met, .{...}). In order, there may be fewer than the fields, never more:
-// "'Vec2' has 2 fields, but this literal gives 3", at the literal. By name,
-// each must be a field ("'Vec2' has no field 'z'"), given once ("field 'x'
-// is given twice"), each said at the name. The fields not given are zeroed
-// (lowering). After any of these, a value with no field to go to is still
-// checked for its own mistakes (check_stray_value). A late field's type is
-// made before its value meets it, if it isn't yet (check_late_field).
+// met, .{...}), each meeting the field it goes to (Ast_Literal.fields). In
+// order, there may be fewer than the fields, never more: "'Vec2' has 2
+// fields, but this literal gives 3", at the literal; and a union's
+// literal names its member (spec 3.19): one in order is "a union's literal
+// names its one member, as in Value.{f = 1.5}", at the literal, whose
+// values then go nowhere. By name, as place_named_values puts them. The
+// fields not given are zeroed (lowering): Value.{} is a union's zero. After
+// any of these, a value with no field to go to is still checked for its own
+// mistakes (check_stray_value). A late field's type is made before its
+// value meets it, if it isn't yet (check_late_field).
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
     if (!check_layout(c, t)) return;  // its fields aren't known: said already
+    literal->fields.count = 0;
     if (!literal->names.count) {
-        if (literal->values.count > t->fields.count) {
+        bool fits = true;
+        if (t->is_union && literal->values.count) {
+            diag_error(c->diag, literal->start, "a union's literal names its one member, as in Value.{f = 1.5}");
+            fits = false;
+        } else if (literal->values.count > t->fields.count) {
             s64 n = t->fields.count;
             diag_error(c->diag, literal->start, "'" STR_FMT "' has %lld field%s, but this literal gives %lld",
                        STR_ARG(type_name(c->arena, t)), (long long)n, n == 1 ? "" : "s",
                        (long long)literal->values.count);
-            for (s64 i = 0; i < literal->values.count; i++) check_stray_value(c, literal->values[i]);
-            return;
+            fits = false;
         }
-        for (s64 i = 0; i < literal->values.count; i++) {
-            check_late_field(c, t, (s32)i);
-            check_field_value(c, literal->values[i], t->fields[i].type);
-        }
-        return;
+        for (s64 i = 0; i < literal->values.count; i++) array_add(&literal->fields, fits ? (s32)i : -1);
+    } else {
+        place_named_values(c, literal, t);
     }
     for (s64 i = 0; i < literal->values.count; i++) {
-        String name = literal->names[i];
-        Position at = literal->name_positions[i];
-        s32 index = type_field_index(t, name);
-        bool given_before = false;
-        for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
-        if (index < 0) {
-            diag_error(c->diag, at, "'" STR_FMT "' has no field '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
-                       STR_ARG(name));
-        } else if (given_before) {
-            diag_error(c->diag, at, "field '" STR_FMT "' is given twice", STR_ARG(name));
-        } else {
-            check_late_field(c, t, index);
-            check_field_value(c, literal->values[i], t->fields[index].type);
+        s32 field = literal->fields[i];
+        if (field < 0) {
+            check_stray_value(c, literal->values[i]);
             continue;
         }
-        check_stray_value(c, literal->values[i]);
+        check_late_field(c, t, field);
+        check_field_value(c, literal->values[i], t->fields[field].type);
     }
 }
 

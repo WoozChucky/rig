@@ -4071,7 +4071,7 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
         }
         // Field by field; a named literal's value for each, if it gives one.
         for (s64 f = 0; f < t->fields.count; f++) {
-            Ast *field_value = literal_field_value(literal, t, (s32)f);
+            Ast *field_value = literal_field_value(literal, (s32)f);
             if (!field_value) continue;
             Type_Field *field = &t->fields[f];
             constant_bytes(l, bytes, offset + field->offset, relocs, field->type, field_value, writable);

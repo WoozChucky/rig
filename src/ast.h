@@ -270,27 +270,43 @@ struct Ast_Const : Ast {
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
 };
 
-// A field of a struct: `x: float;`, at its name. Its type is in Ast.type
-// once the checker has worked it out.
+struct Ast_Struct;
+
+// A field of a struct or a member of a union: `x: float;`, at its name. Its
+// type is in Ast.type once the checker has worked it out. Or an anonymous
+// member (spec 3.19), `union { ... };` or `struct { ... };`, at its
+// keyword: no name, no type written, its fields in `anonymous`; its type is
+// that struct's, made when its outer one is laid out.
 struct Ast_Field : Ast {
     String name;
     Ast_Type *type_expr;
-    bool is_late;         // its type holds a pointer or a view: laid out from what's written,
-                          // the type made later (checker.cpp's lay_out, make_late_field)
-    Ast_Resolve resolve;  // a late field's type: how far the checker has got with it
+    bool is_late;           // its type holds a pointer or a view: laid out from what's written,
+                            // the type made later (checker.cpp's lay_out, make_late_field)
+    Ast_Resolve resolve;    // a late field's type: how far the checker has got with it
+    Ast_Struct *anonymous;  // an anonymous member, union { ... }; or struct { ... };: its fields; its name is
+                            // empty and type_expr null (spec 3.19); null for a named field
+    s32 levels;             // an anonymous member's: one more than its deepest field's (layout_levels)
+    s32 index;              // where it is in its struct's Type.fields, set by the layout; -1 when it
+                            // isn't there, its name being reachable earlier (checker.cpp's lay_out)
 };
 
-// A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, at the
+// A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, or a
+// union's, `Value :: union { i: s64; f: float64; }` (spec 3.19), at the
 // top level only (for now), at its name. A struct's name is a type, usable
-// anywhere, before its declaration too.
+// anywhere, before its declaration too. An anonymous member's fields are an
+// Ast_Struct too, with no name, at its keyword (Ast_Field.anonymous).
 struct Ast_Struct : Ast {
-    String name;
-    Array<Ast_Field *> fields;  // in order, which is their order in memory
+    String name;                // empty for an anonymous member's
+    Array<Ast_Field *> fields;  // in order, which is their order in memory (a union's all at 0)
     Ast_Resolve resolve;        // its layout is worked out where first needed (checker.cpp's
-                                // resolve_struct); a struct that holds itself is a cycle
+                                // resolve_struct); a struct that holds itself is a cycle. An
+                                // anonymous member's is under way while its own fields are laid
+                                // out, inside its outer struct's layout, and done after
     Type *declared;             // its type: made when the checker collects the top level's names,
                                 // so a pointer can name it before its layout is known; null once
-                                // it's found to contain itself
+                                // it's found to contain itself. An anonymous member's is made by
+                                // its outer struct's layout, and is null when that one's is
+    bool is_union;              // union { ... }: every member at offset 0 (spec 3.19)
 };
 
 // An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`
@@ -373,7 +389,10 @@ struct Ast_Type_Info : Ast {
 // e.x: the field x of the struct e, or of the struct e points at (one
 // pointer: p.x is p.*.x); or, when e is an enum's name, its member x (spec
 // 3.18). A postfix operator, as .* is. pos is the field's name, where a
-// null pointer's runtime error points; start is e's.
+// null pointer's runtime error points; start is e's. A field reached
+// through anonymous members (spec 3.19), e.key, is made by the checker into
+// the chain of members it means, e.<anonymous>.key: a member with an empty
+// name for each anonymous member, at the name written.
 struct Ast_Member : Ast {
     Ast *operand;       // e
     String name;        // x
@@ -396,7 +415,8 @@ struct Ast_Literal : Ast {
     Ast_Type *type_expr;            // the T before the '.' (an array's element type), or null: the type
                                     // comes from where it's used
     Array<String> names;            // the field each value is for (x = a), or empty: in order (always
-                                    // for an array)
+                                    // for an array); for a value the checker grouped into a literal of an
+                                    // anonymous member's type (`fields`), that member's name, empty
     Array<Position> name_positions; // where each of those names is written
     Array<Ast *> values;
     bool is_array;                  // T.[a, b] or .[a, b]: an array's elements, in order
@@ -410,6 +430,12 @@ struct Ast_Literal : Ast {
     Ast_String *text;               // a baked []u8's elements (run.cpp): the same bytes as a string
                                     // literal, is_baked, what the view cast to a string holds
                                     // (constant_data); null for any other literal
+    Array<s32> fields;              // a struct's or a union's literal: the field of its type each value goes to,
+                                    // set by the checker (in order too; -1 for a value that meets no field), and
+                                    // by run.cpp for a baked struct (in order); a name reaching through
+                                    // anonymous members was grouped into a literal of the anonymous type, at
+                                    // the member's index
+    String bytes;                   // a baked union (run.cpp): its whole size's bytes, the literal's only content
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a
