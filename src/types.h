@@ -47,8 +47,10 @@ enum Type_Kind : u8 {
     TYPE_RESIZABLE,  // [..]T: a view's count and data, then allocated and allocator (spec 3.17)
     TYPE_PROC,     // (params) -> results: a procedure's type; a value of it is the address of a
                    // procedure's code, or null (spec 3's "Procedure types")
-    TYPE_ENUM,     // an enum or enum_flags a program declares: its integer type and members (spec 3.18)
-    TYPE_UNTYPED_MEMBER,  // a member without its enum, .FREE, until it meets one (type_untyped_member)
+    TYPE_ENUM,     // an enum or enum_flags a program declares: its integer type and members
+                   // (spec 3.18)
+    TYPE_UNTYPED_MEMBER,  // a member without its enum, .FREE, until it meets one
+                          // (type_untyped_member)
 };
 
 struct Ast_Struct;  // ast.h: a struct's declaration
@@ -72,9 +74,10 @@ struct Type {
     Type *alias_of;  // a second name for another type (float for float32): the type it names
     Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
     Ast_Struct *decl;          // TYPE_STRUCT: its declaration
-    Arena *arena;    // where this type lives, and the types made from it (pointers, arrays, ...): a
-                     // struct's or an enum's is the compilation's arena (and so theirs), freed with
-                     // it; a built-in type's, null: it and the types made from it last the whole run
+    Arena *arena;    // where this type lives, and the types made from it (pointers, arrays,
+                     // ...): a struct's or an enum's is the compilation's arena (and so
+                     // theirs), freed with it; a built-in type's, null: it and the types made
+                     // from it last the whole run
     Type *element;   // TYPE_ARRAY, TYPE_VIEW, TYPE_RESIZABLE: T in [N]T, []T and [..]T; TYPE_STRING: u8
     s64 count;       // TYPE_ARRAY: N
     Type *view;      // the type []this, once asked for

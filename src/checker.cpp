@@ -1048,7 +1048,7 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
     u64 largest = integer->is_signed ? mask >> 1 : mask;  // the type's largest value
     bool next_known = true;  // the next member without a value can be worked out
     u64 previous = 0;        // the last member's value (an enum's)
-    u64 highest = 0;         // the highest value so far, read as unsigned at the width (an enum_flags')
+    u64 highest = 0;         // the highest value so far, as unsigned at the width (an enum_flags')
     push_scope(c);
     for (s64 i = 0; i < e->members.count; i++) {
         Ast_Const *member = e->members[i];
@@ -1069,7 +1069,8 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
         } else if (next_known) {
             known = true;
             if (e->is_flags) {
-                // The lowest power of two above `highest`: the bit above its top one.
+                // The lowest power of two above `highest`: the bit above
+                // its top one.
                 s32 bit = 0;
                 while (bit < 64 && (highest >> bit) != 0) bit++;
                 value = bit < 64 ? (u64)1 << bit : 0;
@@ -1615,7 +1616,8 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
         return;
     }
     if (value == &type_untyped_member) {
-        check_convert(c, assign->value, to);  // "'.A' needs an enum type, not 'int'" when x isn't one
+        // "'.A' needs an enum type, not 'int'" when x isn't an enum.
+        check_convert(c, assign->value, to);
         value = assign->value->type;
         if (!value) return;
     }
@@ -2972,12 +2974,13 @@ static void declare_enum_type(Checker *c, Ast_Enum *e, Type *integer) {
     e->declared = t;
 }
 
-// The tree's predeclared Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }
-// (spec 2.5): made the first time, resolved, its Type made as
-// declare_top_level makes an enum's, and kept on the tree, so every checker
-// of the tree, a decider's and check()'s, has the one type, and a constant
-// a decider resolved as OS compares with check()'s OS. It's in the arena
-// the tree's nodes are in, which the decider and the checker share.
+// The tree's predeclared enum (spec 2.5),
+// `Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }`: made the first
+// time, resolved, its Type made as declare_top_level makes an enum's, and
+// kept on the tree, so every checker of the tree, a decider's and
+// check()'s, has the one type, and a constant a decider resolved as OS
+// compares with check()'s OS. It's in the arena the tree's nodes are in,
+// which the decider and the checker share.
 static Ast_Enum *operating_system(Checker *c, Ast_File *file) {
     if (file->operating_system) return file->operating_system;
     Ast_Enum *e = ast_new<Ast_Enum>(c->arena, AST_ENUM, {0, 0, 0});
@@ -3004,7 +3007,7 @@ static void declare_predeclared(Checker *c, Ast_File *file) {
     table_put(&c->top_level, system->name, (Ast *)system);
     System value = file->system ? file->system : host_system();
     Ast_Const *os = ast_new<Ast_Const>(c->arena, AST_CONST, {0, 0, 0});
-    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry, as its static_assert says
+    os->name = str(PREDECLARED_CONSTANTS[0].name);  // the table's one entry (its static_assert)
     os->value = integer_literal(c->arena, value, system->declared, {0, 0, 0});
     os->type = system->declared;
     os->is_constant = true;

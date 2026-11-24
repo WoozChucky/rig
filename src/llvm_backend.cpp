@@ -1017,9 +1017,11 @@ static Debug_Type debug_enum(Backend *b, Type *t) {
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, e->members.count ? e->members.count : 1);
     for (s64 i = 0; i < e->members.count; i++) {
         Ast_Const *member = e->members[i];
-        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops the build
+        RIG_ASSERT(member->is_constant);  // a member without a value is an error, which stops
+                                          // the build
         u64 words[1] = {(u64)member->constant};
-        u64 bits = t->is_signed && t->size == 4 ? 64 : (u64)t->size * 8;  // above: an s32's would be LF_ULONG
+        // All 64 for an s32's, whose 32 would be LF_ULONG (above).
+        u64 bits = t->is_signed && t->size == 4 ? 64 : (u64)t->size * 8;
         members[i] = LLVMDIBuilderCreateEnumeratorOfArbitraryPrecision(
             b->debug, (const char *)member->name.data, (size_t)member->name.count, bits, words, !t->is_signed);
     }

@@ -484,8 +484,9 @@ static Ast_Dot_Name *first_dot_name(Ast *e) {
         if (e->kind == AST_UNARY) {
             e = ((Ast_Unary *)e)->operand;
         } else {
+            // The operand that isn't a member is an untyped constant.
             Ast_Binary *b = (Ast_Binary *)e;
-            e = b->left->type == &type_untyped_member ? b->left : b->right;  // the other is an untyped constant
+            e = b->left->type == &type_untyped_member ? b->left : b->right;
         }
     }
 }
