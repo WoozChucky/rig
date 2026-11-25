@@ -4,15 +4,18 @@
 // `tag` naming the member it holds and an anonymous union of its members
 // that aren't void, so s.circle is reached as in C, and a switch's `it` a
 // pointer to the member in the union itself, so a write through it shows
-// in s. A void member's union shows its other members over zeroed bytes
-// (e's key is 0). A member named tag is listed as tag$, so k.tag is the
-// tag and k.tag$ the member (a second `tag` crashes gdb). gdb writes the
-// tag as its enumerator's name (`tag = circle`), and ptype the tag's type
-// as `enum {circle, rect, empty}`; cdb's `??` writes it as its number and
-// name, `0 ( circle )`, and lists the anonymous union's members in the
-// struct itself, at the members' offset (circle and rect at +0x004), as it
-// does any anonymous member's; its `dv /t` lists `it`, in the case's
-// block, before main's own variables.
+// in s. Each case's `it` is a variable of its own, of its own member's
+// type, in the case's block only: the second switch's `.rect` case shows a
+// *Rect, and after the switch there is no `it`. A void member's union
+// shows its other members over zeroed bytes (e's key is 0). A member named
+// tag is listed as tag$, so k.tag is the tag and k.tag$ the member (a
+// second `tag` crashes gdb). gdb writes the tag as its enumerator's name
+// (`tag = circle`), and ptype the tag's type as `enum {circle, rect,
+// empty}`; cdb's `??` writes it as its number and name, `0 ( circle )`,
+// and lists the anonymous union's members in the struct itself, at the
+// members' offset (circle and rect at +0x004), as it does any anonymous
+// member's; its `dv /t` lists `it`, in the case's block, before main's own
+// variables.
 putchar :: (c: s32) -> s32 #foreign libc;
 
 Circle :: struct { r: float; }
@@ -31,4 +34,12 @@ main :: () {
             putchar(10);
         case;
     }
+    s = .{rect = .{4, 5}};
+    if s == {
+        case .rect;
+            it.w = 6;
+            putchar(10);
+        case;
+    }
+    putchar(10);
 }

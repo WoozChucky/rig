@@ -1,5 +1,5 @@
 main () at
-tagged_unions.rig:31
+tagged_unions.rig:34
 putchar(10);
 $1 = {tag = circle, {circle = {r = 3}, rect = {w = 3, h = 0}}}
 type = struct Shape {
@@ -23,7 +23,14 @@ s32 tag$;
 }
 $7 = tag
 $8 = 5
-!No symbol
-!Error in sourced command file
+tagged_unions.rig:41
+putchar(10);
+type = struct Rect {
+} *
+$9 = {w = 6, h = 5}
+$10 = {tag = rect, {circle = {r = 6}, rect = {w = 6, h = 5}}}
+tagged_unions.rig:44
+putchar(10);
+No symbol "it" in current context.
 !Fatal signal
 !.debug_names not created by gdb

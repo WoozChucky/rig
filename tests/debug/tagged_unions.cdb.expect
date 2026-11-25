@@ -1,4 +1,4 @@
-31:             putchar(10);
+34:             putchar(10);
 struct Circle * it
 struct Shape s = struct Shape
 struct Event e = struct Event
@@ -19,4 +19,17 @@ struct Token
 +0x004 tag$             : 0n5
 <unnamed-tag> tag (0n1)
 int 0n5
-!Couldn't resolve error
+41:             putchar(10);
+struct Rect * it
+struct Shape s = struct Shape
+struct Event e = struct Event
+struct Token k = struct Token
+float 6
+struct Shape
++0x000 tag              : 1 ( rect )
+44:     putchar(10);
+Couldn't resolve error at 'it'
+!Couldn't resolve error at 's
+!Couldn't resolve error at 'e'
+!Couldn't resolve error at 'it->
+!Couldn't resolve error at 'k

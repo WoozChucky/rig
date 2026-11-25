@@ -1,4 +1,4 @@
-break tagged_unions.rig:31
+break tagged_unions.rig:34
 run
 print s
 ptype s
@@ -10,3 +10,11 @@ print k
 ptype k
 print k.tag
 print k.tag$
+break tagged_unions.rig:41
+continue
+ptype it
+print *it
+print s
+break tagged_unions.rig:44
+continue
+print it
