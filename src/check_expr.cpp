@@ -3062,7 +3062,8 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         if (s->fields[index].type == &type_void) {
             // Its case declares no it: there's nothing to read but whether
             // the union holds it.
-            diag_error(c->diag, m->pos, "'" STR_FMT "." STR_FMT "' holds nothing; test it with " STR_FMT "%s == ." STR_FMT,
+            diag_error(c->diag, m->pos,
+                       "'" STR_FMT "." STR_FMT "' holds nothing; test it with " STR_FMT "%s == ." STR_FMT,
                        STR_ARG(type_name(c->arena, s)), STR_ARG(m->name), STR_ARG(operand_text(c, m)),
                        s == t ? "" : ".*", STR_ARG(m->name));
             return nullptr;
@@ -3154,6 +3155,7 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     bool grouped = literal->written.count > 0;  // a group, or a literal holding one
     s32 first_field = -1;  // where the first value that went to a field went, and its name
     String first_name = {};
+    bool members = t->is_union || t->is_tagged;  // a union's words, "member", not "field"
     for (s64 i = 0; i < literal->values.count; i++) {
         String name = literal->names[i];
         Position at = literal->name_positions[i];
@@ -3163,7 +3165,6 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
         bool given_before = false;
         for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
         s32 field = -1;
-        bool members = t->is_union || t->is_tagged;  // a union's words, "member", not "field"
         if (!path.count) {
             if (!check_member_under_way(c, t, name)) {
                 diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),

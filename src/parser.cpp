@@ -2089,9 +2089,10 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 // messages, but named ones only: 'union' or 'struct' among them is "a
 // tagged union's member needs a name, as in circle: Circle;", at the
 // keyword. Nor is a tagged union an anonymous member anywhere: `union
-// #tagged {` among any fields is "a tagged union can't be an anonymous
-// member; declare it, as in Shape :: union #tagged { ... }", at the
-// directive (`struct #tagged {` is parse_struct's "#tagged is for a
+// #tagged {` among a struct's or a union's fields is "a tagged union can't
+// be an anonymous member; declare it, as in Shape :: union #tagged { ...
+// }", at the directive (among a tagged union's members, the message above,
+// at the `union`; `struct #tagged {` is parse_struct's "#tagged is for a
 // union"). Either gives the declaration up.
 //
 // An enum's members are in braces too (parse_enum), which end the same way:
@@ -2101,12 +2102,12 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
     if (!expect(p, TOKEN_LBRACE)) return false;
     s64 first_load = -1;        // where the column-1 loads up to here start, or -1
     Array<Token *> loads = {};  // those loads, not reported yet
+    bool members = s->is_union || s->is_tagged;  // a union's words, "member", not "field"
     while (peek(p)->kind != TOKEN_RBRACE) {
         Braced_Next next = braced_next(p, &first_load, &loads);
         if (next == BRACED_ENDED) return false;
         if (next == BRACED_SKIPPED) continue;
         Token *field_name = peek(p);
-        bool members = s->is_union || s->is_tagged;  // a union's words, "member", not "field"
         if (is_directive(field_name, "if")) {
             diag_error(p->diag, field_name->pos,
                        members ? "#if can't be among a union's members, for now"
