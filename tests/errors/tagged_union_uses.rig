@@ -1,6 +1,9 @@
 // A tagged union's uses' mistakes (issue #224, spec 3.20), one a line: a
 // member read or written outside a switch, directly, through a pointer and
-// through an element, each message showing the switch to write; a literal
+// through an element, each message showing the switch to write, and a
+// name the union doesn't have, said as that; Shape.empty, which is no
+// place, assigned to, its address taken, and switched on with its it
+// written; a literal
 // in order, with no member, giving two members, or one twice, or a value
 // to a void member, or a member it doesn't have; a member it doesn't have,
 // or one that isn't void, written as a value; == and != with anything but
@@ -22,6 +25,10 @@ main :: () {
     s.circle.r = 1;
     y := p.rect;
     z := *shapes[0].circle;
+    w := s.nope;
+    Shape.empty = s;
+    q := *Shape.empty;
+    if Shape.empty == { case .circle; it.r = 1; case; }
     a := Shape.{Circle.{1}};
     b := Shape.{};
     c := Shape.{circle = .{1}, rect = .{1, 2}};

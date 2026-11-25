@@ -1,6 +1,10 @@
 // Mistakes in a switch on a tagged union (issue #224, spec 3.20), one
 // procedure each: a case that names no member, or a member it doesn't
-// have; a member named twice; one member missing, in a procedure whose
+// have, or another tagged union's member, written .NAME or Shape.NAME; a
+// member named twice; the same mistakes with it used in the case, and in a
+// loop's switch on its it, each mistake said once; a case's mistake in a
+// procedure whose cases all return, with a member missing, which gets no
+// other message; a second case;; one member missing, in a procedure whose
 // cases all return, which gets no second message; two missing; #through
 // ending a case; it written, or its address taken, when the switched value
 // is a parameter or a call; it used by a #run, the switched value a
@@ -10,11 +14,30 @@
 Circle :: struct { r: float; }
 Rect :: struct { w: float; h: float; }
 Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Other :: union #tagged { circle: Circle; none: void; }
 make :: () -> Shape { return .empty; }
 
 not_a_name :: (s: Shape) { if s == { case 0; case; } }
 no_such :: (s: Shape) { if s == { case .nope; case; } }
+other :: (s: Shape) { if s == { case Other.circle; case Shape.nope; case; } }
 twice :: (s: Shape) { if s == { case .circle; case .circle; case; } }
+it_after :: (s: Shape) {
+    if s == {
+        case 0; x := it.r;
+        case .nope; y := it.r;
+        case .circle;
+        case .circle; z := it.r;
+        case;
+    }
+}
+in_loop :: (shapes: []Shape) { for shapes { if it == { case .nope; x := it.r; case; } } }
+mistake_returns :: (s: Shape) -> int {
+    if s == {
+        case .nope; return 1;
+        case .circle; return 2;
+    }
+}
+two_defaults :: (s: Shape) { if s == { case; case .circle; case; } }
 one_missing :: (s: Shape) -> int {
     if s == {
         case .circle; return 1;

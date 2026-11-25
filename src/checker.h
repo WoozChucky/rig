@@ -1043,7 +1043,8 @@
 //   PATH:L:C", and two `case;`s "this switch already has a 'case;' at
 //   PATH:L:C".
 // - #complete takes an enum ("#complete needs an enum, not 'int'"), but
-//   not an enum_flags ("... not the enum_flags 'Look'"). Every value of
+//   not an enum_flags ("... not the enum_flags 'Look'"), and a tagged
+//   union, where it adds nothing (below). Every value of
 //   the enum's members must have a case, `case;` or not: "this switch is
 //   #complete, but 'Mode.FREE_ALL' has no case", the missing values named
 //   by their first members, in one message.
@@ -1136,14 +1137,16 @@
 //   ("a tagged union's case names one of its members, as in case
 //   .circle;", "'Shape.circle' already has a case at PATH:L:C"), with no
 //   #through ("#through can't end a tagged union's case: the next case's
-//   'it' is another member"). In a case, `it` is the member in the union
-//   itself: a place when the switched value is one, read-only otherwise
-//   ("can't assign to 'it': it's a member of a switched value that isn't
-//   a place"). A void member's case and `case;` declare no it.
-// - s == .empty and s != .circle (Shape.empty too, either order) test the
-//   tag, a bool, folded when s is constant data. A tagged union is compared
-//   with nothing else ("'==' compares a tagged union only with a member's
-//   name, as in s == .empty").
+//   'it' is another member"); #complete adds nothing. In a case, `it` is
+//   the member in the union itself: a place when the switched value is
+//   one, read-only otherwise ("can't assign to 'it': it's a member of a
+//   switched value that isn't a place"). A void member's case and `case;`
+//   declare no it. A name the union has no member of is "'Shape' has no
+//   member 'z'", as a case's, a literal's, Shape.z or s.z.
+// - s == .empty and s != .circle (Shape.empty too, either order, beside a
+//   .NAME or a Shape.NAME) test the tag, a bool, folded when s is constant
+//   data. A tagged union is compared with nothing else ("'==' compares a
+//   tagged union only with a member's name, as in s == .empty").
 // - What lowering may rely on: a tagged union is a TYPE_STRUCT with
 //   is_tagged, its tag of tag_type at offset 0, its fields its members,
 //   all at fields[0].offset, a void member's of type void (size 0). A

@@ -603,8 +603,9 @@ struct Ast_Switch : Ast {
                               // tagged union's switch, checked cleanly, every member has a case
     bool failed;              // the switched expression had an error, #complete was refused (not an
                               // enum, or an enum_flags), or a #complete switch doesn't cover every
-                              // value (said), or a tagged union's switch had a case's error or
-                              // doesn't handle every member (said): taken not to go past (spec 6.11)
+                              // value (said), or a tagged union's switch had a mistake in a case's
+                              // value or doesn't handle every member (said): taken not to go past
+                              // (spec 6.11)
 };
 
 // while condition { ... }; pos is the 'while'.

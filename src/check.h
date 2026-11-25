@@ -112,7 +112,8 @@ void check_late_field(Checker *c, Type *t, s32 index);
 // Makes sure struct t's layout is worked out before its fields are looked
 // at: a global's value may reach a struct through a pointer before its turn
 // in source order (checker.cpp's lay_out). False when t has no fields to
-// look at, its layout found wrong (a circle, too big: reported) or not
+// look at, its layout found wrong (a circle, too big, a tagged union's tag
+// too small: reported) or not
 // worked out yet (nested too deeply: reported).
 bool check_layout(Checker *c, Type *t);
 
@@ -280,7 +281,9 @@ const char *loop_variable_kind(Ast_Var *var);
 
 // The member that e, `.NAME` or `T.NAME` with T naming tagged union t (spec
 // 3.20), names: its index; -1 after "'Shape' has no member 'z'", at the
-// name; -2 when e names no member that way (nothing said). Found, e gets
+// name, or when t has no layout (said; check_layout, which lays out one
+// reached only through a pointer); -2 when e names no member that way
+// (nothing said). Found, e gets
 // type t and no constant (a T.NAME its of_tagged), as a case's value and a
 // tag test's name side need: check_run.cpp's walk_expression fails on any
 // expression it reaches with no type.

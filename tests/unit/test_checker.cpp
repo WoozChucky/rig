@@ -11127,6 +11127,103 @@ TEST(cases_bind_it_as_the_member) {
     arena_free(&a);
 }
 
+TEST(it_is_a_place_when_the_switched_value_is) {
+    // A case's it is the member in the switched union itself: a place
+    // through a pointer, an element, a field and a pointer loop's it.*, so
+    // it may be assigned whole and its address taken; read-only for a
+    // constant's. A case may name its member Shape.circle. A loop or a
+    // switch inside a case declares its own it, hiding the case's, which
+    // is its again after them.
+    Arena a = arena_make();
+    Checked c = check_src(&a, TAGGED_SHAPES
+                          "Holder :: struct { s: Shape; }\n"
+                          "K :: Shape.{circle = .{1}};\n"
+                          "main :: () {\n"
+                          "    s: Shape;\n"
+                          "    p := *s;\n"
+                          "    shapes: [2]Shape;\n"
+                          "    h: Holder;\n"
+                          "    if p.* == { case .circle; it.r = 1; case; }\n"
+                          "    if shapes[1] == { case .circle; it.r = 1; case; }\n"
+                          "    if h.s == { case .circle; it.r = 1; case; }\n"
+                          "    for * shapes { if it.* == { case .circle; it.r = 1; case; } }\n"
+                          "    if K == { case .circle; k := it.r; case; }\n"
+                          "    if s == {\n"
+                          "        case Shape.circle; it = Circle.{5}; q := *it;\n"
+                          "        case .rect;\n"
+                          "            for 0..2 { x : int = it; }\n"
+                          "            if s == { case .circle; y := it.r; case; }\n"
+                          "            z := it.w;\n"
+                          "        case;\n"
+                          "    }\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Block *body = c.file->procs[c.file->procs.count - 1]->body;
+    for (s64 i = 4; i < 9; i++) {
+        Ast_Switch *s = (Ast_Switch *)body->statements[i];
+        if (s->kind == AST_FOR) s = (Ast_Switch *)((Ast_For *)s)->body->statements[0];
+        CHECK_EQ(s->kind, AST_SWITCH);
+        if (s->kind != AST_SWITCH) continue;
+        Ast_Var *it = s->cases[0]->it;
+        CHECK(it && it->is_case_member);
+        // Only the constant's is read-only.
+        if (it) CHECK_EQ(it->is_iterator, i == 8);
+    }
+    Ast_Switch *s = switch_at(&c, 9);
+    CHECK(s && s->cases.count == 3);
+    if (!s || s->cases.count != 3) {
+        token_list_free(c.list);
+        arena_free(&a);
+        return;
+    }
+    Ast_Case *circle = s->cases[0];
+    CHECK_EQ(circle->member, 0);
+    CHECK(circle->it && !circle->it->is_iterator);
+    if (circle->it) CHECK_STR(type_name(&a, circle->it->type), "Circle");
+    CHECK_EQ(circle->value->kind, AST_MEMBER);
+    CHECK_EQ(circle->value->type, struct_named(&c, "Shape"));
+    Ast_Case *rect = s->cases[1];
+    Ast_Block *block = rect->block;
+    Ast_For *loop = (Ast_For *)block->statements[0];
+    CHECK_EQ(loop->kind, AST_FOR);
+    Ast_Var *x = (Ast_Var *)loop->body->statements[0];
+    CHECK(x->value->kind == AST_NAME && ((Ast_Name *)x->value)->decl == loop->iterator);
+    Ast_Switch *inner = (Ast_Switch *)block->statements[1];
+    CHECK_EQ(inner->kind, AST_SWITCH);
+    if (inner->kind == AST_SWITCH) {
+        Ast_Var *y = (Ast_Var *)inner->cases[0]->block->statements[0];
+        Ast_Member *r = (Ast_Member *)y->value;
+        CHECK(r->operand->kind == AST_NAME && ((Ast_Name *)r->operand)->decl == inner->cases[0]->it);
+    }
+    Ast_Member *w = (Ast_Member *)((Ast_Var *)block->statements[2])->value;
+    CHECK(w->operand->kind == AST_NAME && ((Ast_Name *)w->operand)->decl == rect->it);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(tagged_unions_lay_out_where_their_members_are_named) {
+    // A tagged union reached only through a pointer isn't laid out when a
+    // global's value or a body a #run reaches is checked, before its
+    // declaration: a tag test or a switch there lays it out, to find its
+    // members. Each has a mistake of its own, so nothing runs: only those
+    // are said.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "P: *Shape;\n"
+                               "B := P.* == .circle;\n"
+                               "f :: () -> int {\n"
+                               "    q: *Shape = null;\n"
+                               "    n : int = \"no\";\n"
+                               "    if q.* == { case .circle; return 1; case .empty; return 2; }\n"
+                               "}\n"
+                               "X :: #run f();\n"
+                               "Circle :: struct { r: float; }\n"
+                               "Shape :: union #tagged { circle: Circle; empty: void; }\n"
+                               "main :: () { }\n"),
+              "2:6: a global's value must be known while compiling, for now\n"
+              "5:15: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    arena_free(&a);
+}
+
 TEST(tagged_switches_cover_every_member) {
     // Every member named, or a case;: a switch whose cases all return then
     // doesn't reach its end. One that misses a member says so, alone.
@@ -11158,7 +11255,8 @@ TEST(tagged_switches_cover_every_member) {
 TEST(tag_tests_are_bools) {
     // == and != between a tagged union and a member's name, either order,
     // .NAME or Shape.NAME, any member: a bool, folded when the union is
-    // constant data, so a top-level #if decides by one.
+    // constant data, so a top-level #if decides by one. The union may be
+    // Shape.empty, beside either.
     Arena a = arena_make();
     Checked c = check_src(&a, TAGGED_SHAPES
                           "K :: Shape.{circle = .{1}};\n"
@@ -11171,6 +11269,9 @@ TEST(tag_tests_are_bools) {
                           "    e := K != Shape.circle;\n"
                           "    f := .circle == Shape.empty;\n"
                           "    g := Shape.empty == .empty;\n"
+                          "    h := Shape.circle == Shape.empty;\n"
+                          "    i := Shape.empty != Shape.circle;\n"
+                          "    j := Shape.empty == Shape.empty;\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Type *shape = struct_named(&c, "Shape");
@@ -11189,6 +11290,11 @@ TEST(tag_tests_are_bools) {
     // Shape.empty, a value, beside a .NAME: the .NAME is the member's name.
     CHECK(folds_to(&c, "f", 0));
     CHECK(folds_to(&c, "g", 1));
+    // Shape.NAME on both sides: a void member's is the value, the other
+    // the member's name, either way when both are void.
+    CHECK(folds_to(&c, "h", 0));
+    CHECK(folds_to(&c, "i", 1));
+    CHECK(folds_to(&c, "j", 1));
     token_list_free(c.list);
     // A top-level #if decides by one, as the loader decides it: the branch
     // not taken would make n a string's. .empty in a constant's literal is

@@ -1448,7 +1448,8 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // say nothing. So may a local of a body a #run reaches before it, whose
 // messages stay said too, but whose type isn't made again. A struct larger
 // than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is
-// too big", at its name, and has no type either.
+// too big", at its name, and has no type either; so has a tagged union
+// whose written tag type can't count its members (lay_out_tag).
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
@@ -2171,13 +2172,14 @@ static String member_list(Checker *c, String type, Array<String> names) {
 //   handle 'Shape.empty'; add its case or a 'case;'" ("... 'Shape.rect' and
 //   'Shape.empty'; add their cases ..."). With every member and a `case;`
 //   too, the `case;` runs only for a tag no member has, one C wrote. Missing
-//   members are only looked for once every case checked with no error (a
-//   case with one would make a second message about the member it meant).
-//   covers_every_value is set when none is missing; checks_no_case when
-//   there's no `case;`, since a tag no member has then finds no case, a
-//   runtime error (spec 8.1). A switch with a case's error, or that doesn't
-//   handle every member, is `failed`: its message is the only one (spec
-//   6.11). #complete adds nothing.
+//   members are only looked for once every case's value checked with no
+//   error (a case with one would make a second message about the member it
+//   meant). covers_every_value is set when none is missing; checks_no_case
+//   when there's no `case;`, since a tag no member has then finds no case,
+//   a runtime error (spec 8.1). A switch with a mistake in a case's value,
+//   or that doesn't handle every member, is `failed`: its message is the
+//   only one (spec 6.11). #complete adds nothing. A union with no layout
+//   (said) has its every case as after a mistake in its value.
 // - #through can't end a case, "#through can't end a tagged union's case:
 //   the next case's 'it' is another member", at it: each case sees only
 //   its own member.
@@ -2192,12 +2194,20 @@ static String member_list(Checker *c, String type, Array<String> names) {
 //   read-only, as an iterator is (is_iterator): "can't assign to 'it': it's
 //   a member of a switched value that isn't a place". A void member's case
 //   and `case;` declare no it: there, it means what it means around the
-//   switch.
+//   switch. A case with a mistake in its value declares one too, as
+//   check_for declares an iterator over a sequence with an error, not in
+//   Ast_Case.it: of the member's type for a member named twice (none for a
+//   void one), else of no type, so its uses add no second message, nor
+//   reach an outer it.
 static void check_tagged_switch(Checker *c, Ast_Switch *s, Type *t) {
     bool place = expr_is_place(s->value);
+    // A union reached only through a pointer may not be laid out yet, its
+    // fields not filled in. With no layout (said), every case is as after
+    // a mistake in its value.
+    bool laid_out = check_layout(c, t);
     Array<Ast *> named = {};  // each member's first case's value, or null
-    for (s64 i = 0; i < t->fields.count; i++) array_add(&named, (Ast *)nullptr);
-    bool cases_fine = true;
+    for (s64 i = 0; laid_out && i < t->fields.count; i++) array_add(&named, (Ast *)nullptr);
+    bool cases_fine = laid_out;
     String type = type_name(c->arena, t);
     for (s64 i = 0; i < s->cases.count; i++) {
         Ast_Case *k = s->cases[i];
@@ -2211,26 +2221,27 @@ static void check_tagged_switch(Checker *c, Ast_Switch *s, Type *t) {
             check_scoped_block(c, k->block);
             continue;
         }
-        s32 member = tagged_member_named(c, t, k->value);
+        s32 member = laid_out ? tagged_member_named(c, t, k->value) : -1;
         if (member == -2) {
             diag_error(c->diag, k->value->start, "a tagged union's case names one of its members, as in case .circle;");
         }
+        Type *held = nullptr;  // the type of it; null after an error, so its uses say nothing
         if (member >= 0 && named[member]) {
             Position at = named[member]->start;
             diag_error(c->diag, k->value->start, "'" STR_FMT "." STR_FMT "' already has a case at " STR_FMT ":%d:%d",
                        STR_ARG(type), STR_ARG(t->fields[member].name), STR_ARG(c->diag->files[at.file].path), at.line,
                        at.col);
+            held = t->fields[member].type;  // the member's, known: it means it
             member = -1;
         }
         if (member < 0) {
             cases_fine = false;
-            check_scoped_block(c, k->block);
-            continue;
+        } else {
+            named[member] = k->value;
+            k->member = member;
+            check_late_field(c, t, member);
+            held = t->fields[member].type;  // null after its own error
         }
-        named[member] = k->value;
-        k->member = member;
-        check_late_field(c, t, member);
-        Type *held = t->fields[member].type;  // null after its own error: its uses then say nothing
         push_scope(c);
         if (held != &type_void) {
             Ast_Var *it = ast_new<Ast_Var>(c->arena, AST_VAR, k->pos);
@@ -2238,7 +2249,7 @@ static void check_tagged_switch(Checker *c, Ast_Switch *s, Type *t) {
             it->type = held;
             it->is_case_member = true;
             it->is_iterator = !place;
-            k->it = it;
+            if (member >= 0) k->it = it;
             declare(c, it->name, it);
         }
         check_block(c, k->block);
@@ -2319,11 +2330,12 @@ static String case_key(Type *t, Ast *value) {
 //
 // #complete takes an enum, but not an enum_flags, whose values are mostly
 // combinations of its members, and 0, which none of its implicit members
-// has: on anything else that a switch takes, it's "#complete needs an
-// enum, not 'int'" ("not the enum_flags 'Look'"), at it, and the cases are
-// checked as without it, the switch `failed`, so its message is the only
-// one (spec 6.11): a procedure whose cases all return gets no second
-// message that it reaches its end. On an enum, once its members' values
+// has: on anything else that a switch takes but a tagged union
+// (check_tagged_switch), it's "#complete needs an enum, not 'int'" ("not
+// the enum_flags 'Look'"), at it, and the cases are checked as without it,
+// the switch `failed`, so its message is the only one (spec 6.11): a
+// procedure whose cases all return gets no second message that it reaches
+// its end. On an enum, once its members' values
 // are known and every case's value checked with no error (a case with one
 // would make a second message about the member it meant), each member's
 // value, in declaration order, must be some case's: each value missing is

@@ -614,6 +614,9 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e) {
     } else {
         return -2;
     }
+    // A union reached only through a pointer may not be laid out yet, its
+    // fields not filled in, in a global's value or a body a #run reaches.
+    if (!check_layout(c, t)) return -1;  // said
     s32 index = tagged_member_index(c, t, name, at);
     if (index < 0) return -1;
     if (e->kind == AST_MEMBER) ((Ast_Member *)e)->index = index;
@@ -2108,6 +2111,22 @@ static bool names_a_member(Checker *c, Ast *e) {
     return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_tagged;
 }
 
+// Whether e, a T.NAME that names_a_member, names a member of tagged union
+// T that holds nothing, so it may be a value (Shape.empty). Nothing said:
+// a name T has no member of, or a T with no layout (said), is no such
+// member.
+static bool names_a_void_member(Checker *c, Ast_Member *e) {
+    Ast_Struct *s = (Ast_Struct *)check_lookup(c, ((Ast_Name *)e->operand)->name);
+    Type *t = s->declared;
+    if (!t || !check_layout(c, t)) return false;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        if (!string_eq(t->fields[i].name, e->name)) continue;
+        check_late_field(c, t, (s32)i);
+        return t->fields[i].type == &type_void;
+    }
+    return false;
+}
+
 // A tag test, s == .empty or s != .circle (spec 3.20): b's operand `value`
 // a tagged union of type t, its other operand naming t's member `member`
 // (tagged_member_named). A bool, b->operand_type t and b->tag_member the
@@ -2157,7 +2176,7 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // A tag test (spec 3.20), == or != between a tagged union and a member's
 // name, .NAME or Shape.NAME, either order, any member, void or not, is a
 // bool: whether the union holds that member (check_tag_test). The union
-// may itself be written Shape.empty, beside a .NAME.
+// may itself be written Shape.empty, beside a .NAME or a Shape.NAME.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -2172,6 +2191,16 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     // member's name: .circle == Shape.empty is a tag test.
     if (left_names && right_names && (b->left->kind == AST_DOT_NAME) != (b->right->kind == AST_DOT_NAME)) {
         *(b->left->kind == AST_DOT_NAME ? &right_names : &left_names) = false;
+    }
+    // With Shape.NAME on both sides, the one naming a member that holds
+    // nothing is the value, the left when both do: Shape.circle ==
+    // Shape.empty is a tag test. With neither, both are values, refused.
+    if (left_names && right_names && b->left->kind == AST_MEMBER && b->right->kind == AST_MEMBER) {
+        if (names_a_void_member(c, (Ast_Member *)b->left)) {
+            left_names = false;
+        } else if (names_a_void_member(c, (Ast_Member *)b->right)) {
+            right_names = false;
+        }
     }
     if (left_names != right_names) {
         Ast *value = left_names ? b->right : b->left;
@@ -2946,7 +2975,8 @@ static String operand_text(Checker *c, Ast_Member *m) {
 // time, so it's read in a switch, whose case knows (checker.cpp's
 // check_switch): "a tagged union's member is read in a switch: if s == {
 // case .circle; ... it ... }", at the member's name, the operand as
-// written (operand_text), with .* after it through a pointer.
+// written (operand_text), with .* after it through a pointer. A name the
+// union has no member of is "'Shape' has no member 'z'" there instead.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
     if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
@@ -2966,7 +2996,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
             name->decl = decl;
             Ast_Struct *s = (Ast_Struct *)decl;
             m->of_tagged = s;
-            if (!s->declared) return nullptr;  // a circle, said
+            if (!s->declared) return nullptr;  // its layout failed, said: a circle, too big, or a tag too small
             Type *t = s->declared;
             m->made = void_member_value(c, t, m->name, m->pos, m, &m->index);
             return m->made ? t : nullptr;
@@ -2991,6 +3021,8 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         return nullptr;
     }
     if (s->is_tagged) {
+        // A name it doesn't have is said as that, not sent to a switch.
+        if (!check_layout(c, s) || tagged_member_index(c, s, m->name, m->pos) < 0) return nullptr;
         // Through a pointer, the switch is on what it points at: `if p ==
         // {` would be on the pointer.
         diag_error(c->diag, m->pos,
