@@ -125,86 +125,12 @@ Type *type_c_promoted(Type *t) {
     return t;
 }
 
-// A struct type_find_member searches: its type, and how it was reached, the
-// one searched before it that holds it (an index into the walk's list, -1
-// for the type searched first) and its field there.
-struct Member_Search {
-    Type *type;
-    s64 outer;
-    s32 field;
-};
-
-// Breadth first, in a list that is the queue: each struct's named fields
-// are looked at when it's taken from it, and its anonymous members put at
-// its end, to be searched after every struct at its own depth. An empty name
-// is never found: it's an anonymous member's, which is searched, not named.
-// The checker refuses a name reachable twice from one declaration
-// (checker.cpp's lay_out), so the first found is the only one. Using
-// fields aren't followed: check_find_member does that.
-void type_find_member(Type *t, String name, Array<s32> *path) {
-    path->count = 0;
-    if (!name.count) return;
-    Array<Member_Search> queue = {};
-    array_add(&queue, Member_Search{t, -1, -1});
-    for (s64 next = 0; next < queue.count && !path->count; next++) {
-        Type *s = queue[next].type;
-        for (s64 i = 0; i < s->fields.count; i++) {
-            Type_Field *field = &s->fields[i];
-            if (!field->name.count) {
-                if (field->type && field->type->kind == TYPE_STRUCT) {
-                    array_add(&queue, Member_Search{field->type, next, (s32)i});
-                }
-                continue;
-            }
-            if (!string_eq(field->name, name)) continue;
-            // The indices from t down, gathered from the field up, then
-            // turned around.
-            array_add(path, (s32)i);
-            for (s64 at = next; queue[at].outer >= 0; at = queue[at].outer) array_add(path, queue[at].field);
-            for (s64 j = 0; j < path->count / 2; j++) {
-                s32 swapped = (*path)[j];
-                (*path)[j] = (*path)[path->count - 1 - j];
-                (*path)[path->count - 1 - j] = swapped;
-            }
-            break;
-        }
-    }
-    array_free(&queue);
+void field_walk_add_root(Field_Walk *w, Type *t, s32 root) {
+    array_add(&w->list, Field_Step{t, -1, -1, 0, root});
+    array_add(&w->level, w->list.count - 1);
 }
 
-// A struct type_find_base searches: its type; how it was reached, the one
-// searched before it that holds it (an index into the walk's list, -1 for
-// t) and its field there; and the depth it's searched at, an anonymous
-// member at its outer's.
-struct Base_Search {
-    Type *type;
-    s64 outer;
-    s32 field;
-    s32 depth;
-};
-
-// type_find_base's state: its list of structs searched or to search (each
-// path's way back up), those to search at the next depth, and the first
-// two using fields of the base's type found, each a struct in the list and
-// its field.
-struct Base_Walk {
-    Type *base;
-    Array<Base_Search> list;
-    Array<s64> next;
-    s32 found;
-    s64 found_in[2];
-    s32 found_field[2];
-};
-
-// Whether struct `type`, held by a using field, is searched at `depth`, as
-// the checker's walk through using fields decides it (check_expr.cpp's
-// using_search_needed): not when it was searched at an earlier depth,
-// where it held no base and queued what it holds, nor when two paths reach
-// it at this one already, enough to say the base is reached two ways. A
-// struct can't hold itself by value, so there's no cycle to end, but a
-// struct holding two of another, each holding two of a third, would be
-// searched twice as often at each depth.
-static bool base_search_needed(Base_Walk *w, Type *type, s32 depth) {
+bool field_walk_needed(Field_Walk *w, Type *type, s32 depth) {
     s32 paths = 0;
     for (s64 i = 0; i < w->list.count; i++) {
         if (w->list[i].type != type) continue;
@@ -214,47 +140,106 @@ static bool base_search_needed(Base_Walk *w, Type *type, s32 depth) {
     return paths < 2;
 }
 
-// Searches struct `at` of the walk's list, at its depth: each of its value
-// using fields in order, one of the base's type counted (the first two
-// kept), any other's struct queued for the next depth; an anonymous member
-// searched in its place, as its fields are its outer's (spec 3.19). A
-// pointer field is never followed: what it points at isn't in the struct.
-static void search_base_struct(Base_Walk *w, s64 at) {
+void field_walk_found(Field_Walk *w, s64 at, s32 field) {
+    if (w->found < 2) {
+        w->found_in[w->found] = at;
+        w->found_field[w->found] = field;
+    }
+    w->found++;
+}
+
+void field_walk_next_depth(Field_Walk *w) {
+    Array<s64> searched = w->level;
+    w->level = w->next;
+    w->next = searched;
+    w->next.count = 0;
+}
+
+s32 field_walk_path(Field_Walk *w, s32 k, Array<s32> *path) {
+    // The indices from the root down, gathered from the field up, then
+    // turned around.
+    path->count = 0;
+    array_add(path, w->found_field[k]);
+    s64 at = w->found_in[k];
+    for (; w->list[at].outer >= 0; at = w->list[at].outer) array_add(path, w->list[at].field);
+    for (s64 j = 0; j < path->count / 2; j++) {
+        s32 swapped = (*path)[j];
+        (*path)[j] = (*path)[path->count - 1 - j];
+        (*path)[path->count - 1 - j] = swapped;
+    }
+    return w->list[at].root;
+}
+
+s32 field_walk_paths(Field_Walk *w, Array<s32> *path, s32 *path_root, Array<s32> *other, s32 *other_root) {
+    s32 found = w->found < 2 ? w->found : 2;
+    if (found >= 1) *path_root = field_walk_path(w, 0, path);
+    if (found == 2) *other_root = field_walk_path(w, 1, other);
+    return found;
+}
+
+void field_walk_free(Field_Walk *w) {
+    array_free(&w->list);
+    array_free(&w->level);
+    array_free(&w->next);
+}
+
+// Breadth first, the walk's list its queue: each struct's named fields are
+// looked at when it's taken from it, and its anonymous members put at its
+// end, to be searched after every struct at its own depth, so the list's
+// order is the depths' and no depth is kept. An empty name is never found:
+// it's an anonymous member's, which is searched, not named. The checker
+// refuses a name reachable twice from one declaration (checker.cpp's
+// lay_out), so the first found is the only one. Using fields aren't
+// followed: check_find_member does that.
+void type_find_member(Type *t, String name, Array<s32> *path) {
+    path->count = 0;
+    if (!name.count) return;
+    Field_Walk w = {};
+    array_add(&w.list, Field_Step{t, -1, -1, 0, 0});
+    for (s64 next = 0; next < w.list.count && !w.found; next++) {
+        Type *s = w.list[next].type;
+        for (s64 i = 0; i < s->fields.count; i++) {
+            Type_Field *field = &s->fields[i];
+            if (!field->name.count) {
+                if (field->type && field->type->kind == TYPE_STRUCT) {
+                    array_add(&w.list, Field_Step{field->type, next, (s32)i, 0, 0});
+                }
+                continue;
+            }
+            if (!string_eq(field->name, name)) continue;
+            field_walk_found(&w, next, (s32)i);
+            break;
+        }
+    }
+    if (w.found) field_walk_path(&w, 0, path);
+    field_walk_free(&w);
+}
+
+// Searches step `at` of the walk, a struct at its depth, for using fields
+// of type `base`: each of its value using fields in order, one of the
+// base's type counted (field_walk_found), any other's struct queued for the
+// next depth; an anonymous member searched in its place, as its fields are
+// its outer's (spec 3.19). A pointer field is never followed: what it
+// points at isn't in the struct.
+static void search_base_struct(Field_Walk *w, Type *base, s64 at) {
     Type *t = w->list[at].type;
     s32 depth = w->list[at].depth;
     for (s64 i = 0; i < t->fields.count; i++) {
         Type_Field *field = &t->fields[i];
         if (!field->type || field->type->kind != TYPE_STRUCT) continue;
         if (!field->name.count) {
-            array_add(&w->list, Base_Search{field->type, at, (s32)i, depth});
-            search_base_struct(w, w->list.count - 1);
+            array_add(&w->list, Field_Step{field->type, at, (s32)i, depth, 0});
+            search_base_struct(w, base, w->list.count - 1);
             continue;
         }
         if (!field->is_using) continue;
-        if (field->type == w->base) {
-            if (w->found < 2) {
-                w->found_in[w->found] = at;
-                w->found_field[w->found] = (s32)i;
-            }
-            w->found++;
+        if (field->type == base) {
+            field_walk_found(w, at, (s32)i);
             continue;
         }
-        if (!base_search_needed(w, field->type, depth + 1)) continue;
-        array_add(&w->list, Base_Search{field->type, at, (s32)i, depth + 1});
+        if (!field_walk_needed(w, field->type, depth + 1)) continue;
+        array_add(&w->list, Field_Step{field->type, at, (s32)i, depth + 1, 0});
         array_add(&w->next, w->list.count - 1);
-    }
-}
-
-// The path of the k-th using field the walk found: the field indices from
-// t down, into *path.
-static void base_found_path(Base_Walk *w, s32 k, Array<s32> *path) {
-    path->count = 0;
-    array_add(path, w->found_field[k]);
-    for (s64 at = w->found_in[k]; w->list[at].outer >= 0; at = w->list[at].outer) array_add(path, w->list[at].field);
-    for (s64 j = 0; j < path->count / 2; j++) {
-        s32 swapped = (*path)[j];
-        (*path)[j] = (*path)[path->count - 1 - j];
-        (*path)[path->count - 1 - j] = swapped;
     }
 }
 
@@ -262,24 +247,15 @@ s32 type_find_base(Type *t, Type *base, Array<s32> *path, Array<s32> *other) {
     path->count = 0;
     other->count = 0;
     if (t->kind != TYPE_STRUCT) return 0;
-    Base_Walk w = {};
-    w.base = base;
-    array_add(&w.list, Base_Search{t, -1, -1, 0});
-    Array<s64> level = {};  // the structs searched at this depth
-    array_add(&level, 0);
-    while (level.count && !w.found) {
-        for (s64 i = 0; i < level.count; i++) search_base_struct(&w, level[i]);
-        Array<s64> searched = level;
-        level = w.next;
-        w.next = searched;
-        w.next.count = 0;
+    Field_Walk w = {};
+    field_walk_add_root(&w, t, 0);
+    while (w.level.count && !w.found) {
+        for (s64 i = 0; i < w.level.count; i++) search_base_struct(&w, base, w.level[i]);
+        field_walk_next_depth(&w);
     }
-    s32 found = w.found < 2 ? w.found : 2;
-    if (found >= 1) base_found_path(&w, 0, path);
-    if (found == 2) base_found_path(&w, 1, other);
-    array_free(&level);
-    array_free(&w.next);
-    array_free(&w.list);
+    s32 root;  // t's, the walk's one root
+    s32 found = field_walk_paths(&w, path, &root, other, &root);
+    field_walk_free(&w);
     return found;
 }
 
