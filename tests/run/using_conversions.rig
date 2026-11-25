@@ -41,6 +41,8 @@ count :: (es: ..*Entity) -> int {
 
 pick :: (e: *Entity = *first) -> int { return e.id; }
 
+none_default :: (e: *Entity = cast(*Player) null) -> bool { return e == null; }
+
 pair :: (p: *Player) -> *Player, int { return p, 2; }
 
 entity_pair :: (p: *Player) -> *Entity, int { return p, 3; }
@@ -77,8 +79,8 @@ checks :: () {
     n: int;
     pn := pe;
     pn, n = pair(none);
-    print("{} {} {} {} {} {} {}\n", ne == null, get(none) == null, Holder.{none}.e == null, es[0] == null,
-          es[1] == null, nulls(none, pe, none), pn == null);
+    print("{} {} {} {} {} {} {} {}\n", ne == null, get(none) == null, Holder.{none}.e == null, es[0] == null,
+          es[1] == null, nulls(none, pe, none), pn == null, none_default());
 }
 
 main :: () {

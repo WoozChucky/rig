@@ -11531,6 +11531,41 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
                            "S :: struct { b: [size_of(A)]int; }\n"
                            "main :: () { a: A; }\n"),
               "");
+    // A name no struct's declaration holds, g here, lays none out: not C,
+    // reached through B's using field, nor C as the parameter's own, nor C
+    // whose own using field reaches D, none holding g, so the #run during
+    // A's layout isn't a circle, as it isn't without using.
+    const char *no_name[] = {
+        "B :: struct { using c: *C; }\n"
+        "C :: struct { a: A; }\n"
+        "f :: (using b: *B) -> int { return g(); }\n",
+        "C :: struct { a: A; }\n"
+        "f :: (using c: *C) -> int { return g(); }\n",
+        "B :: struct { using c: *C; }\n"
+        "C :: struct { a: A; using d: *D; }\n"
+        "D :: struct { k: int; }\n"
+        "f :: (using b: *B) -> int { return g(); }\n",
+    };
+    for (s64 i = 0; i < 3; i++) {
+        const char *src = string_cstr(&a, string_printf(&a,
+                                                        "A :: struct { arr: [#run f(null)]int; }\n"
+                                                        "%s"
+                                                        "g :: () -> int { return 2; }\n"
+                                                        "main :: () { x: A; }\n",
+                                                        no_name[i]));
+        CHECK_STR(check_source(&a, src), "");
+    }
+    // One whose using field reaches it is laid out, and is the circle it
+    // closes: C, in it, has no fields to search, so g is found nowhere.
+    CHECK_STR(check_source(&a,
+                           "A :: struct { arr: [#run f(null)]int; }\n"
+                           "B :: struct { using c: *C; }\n"
+                           "C :: struct { a: A; using d: *D; }\n"
+                           "D :: struct { g: int; }\n"
+                           "f :: (using b: *B) -> int { return g; }\n"
+                           "main :: () { x: A; }\n"),
+              "1:1: 'A' is defined in terms of itself\n"
+              "5:36: unknown identifier 'g'\n");
     arena_free(&a);
 }
 

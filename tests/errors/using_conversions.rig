@@ -5,9 +5,9 @@
 // and a view. Then an address the linker writes, moved through a using
 // field, which a constant or a global can't hold, for now: a string
 // literal's converted into a constant's field, in a constant's cast, into
-// a global, a global literal's field and a global's cast, and a type's
-// description's into a global. One at offset 0, Wrap's into a *Base, is
-// the address itself, and allowed.
+// a global, a global literal's field, a global array's element and a
+// global's cast, and a type's description's into a global. One at offset
+// 0, Wrap's into a *Base, is the address itself, and allowed.
 Vec2 :: struct { x: float; y: float; }
 Entity :: struct { id: int; position: Vec2; }
 Player :: struct { name: string; using entity: Entity; health: int; }
@@ -24,6 +24,7 @@ H :: Holder.{W};
 X :: cast(*Entity) W;
 global_entity : *Entity = W;
 global_holder := Holder.{W};
+global_array : [1]*Entity = .[W];
 global_cast := cast(*Entity) W;
 global_info : *Type_Info = cast(*Wrap) type_info(int);
 global_base : *Base = cast(*Wrap) type_info(int);

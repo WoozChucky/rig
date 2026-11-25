@@ -3134,6 +3134,48 @@ static bool using_search_needed(Using_Walk *w, Type *type, s32 depth) {
     return paths < 2;
 }
 
+// Whether struct s's declaration may hold `name`, so a using walk needs its
+// layout to search it: a field of that name, in an anonymous member too
+// (spec 3.19), or a using field whose struct may hold it, that struct
+// found by the name written, at the top level, as its layout finds it. A
+// using field whose type is written any other way, or names no struct
+// declared (an error, a builtin type), may: its layout says what it is.
+// Each struct is followed once (`seen`), which ends a cycle of using
+// fields. Only names are read, so nothing is laid out or made here.
+static bool may_hold_name(Checker *c, Ast_Struct *s, String name, Array<Ast_Struct *> *seen) {
+    for (s64 i = 0; i < seen->count; i++) {
+        if ((*seen)[i] == s) return false;
+    }
+    array_add(seen, s);
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Field *field = s->fields[i];
+        if (field->anonymous) {
+            if (may_hold_name(c, field->anonymous, name, seen)) return true;
+            continue;
+        }
+        if (string_eq(field->name, name)) return true;
+        if (!field->is_using) continue;
+        Ast_Type *written = field->type_expr;
+        if (written->kind == AST_TYPE_POINTER) written = written->pointee;
+        if (written->kind != AST_TYPE_NAME || type_from_name(written->name)) return true;
+        Ast **decl = table_get(&c->top_level, written->name);
+        if (!decl || (*decl)->kind != AST_STRUCT) return true;
+        if (may_hold_name(c, (Ast_Struct *)*decl, name, seen)) return true;
+    }
+    return false;
+}
+
+// Whether struct type t, reached by a using walk for `name`, needs its
+// layout to be searched (may_hold_name): one with no declaration, a
+// builtin's, is taken as it is.
+static bool using_needs_layout(Checker *c, Type *t, String name) {
+    if (!t->decl) return true;
+    Array<Ast_Struct *> seen = {};
+    bool may = may_hold_name(c, t->decl, name, &seen);
+    array_free(&seen);
+    return may;
+}
+
 // Enters struct `at` of the walk's list, reached through a using field, as
 // its depth is about to be searched, not before: a name found at a
 // shallower depth needs nothing deeper, and making a type or a layout it
@@ -3141,10 +3183,14 @@ static bool using_search_needed(Using_Walk *w, Type *type, s32 depth) {
 // layouts reading a field of its own). A pointer using field's type is
 // made first if it isn't yet (check_late_field), which says whether using
 // takes it; then the struct it holds or points at is laid out
-// (check_layout). Whether it's searched: not when the field's type is
-// unknown (an error, a circle), nor when using_search_needed says so, nor
-// when its layout fails, its fields unknown. One still under way is
-// searched as it is, its fields so far, as e.x's is.
+// (check_layout), unless its declaration can't hold the name, at any
+// depth (using_needs_layout): a name found nowhere, a global or a
+// procedure a using body names, enters every depth, and would lay out
+// every struct the walk reaches. Whether it's searched: not when the
+// field's type is unknown (an error, a circle), nor when using_search_needed
+// says so, nor when its declaration can't hold the name, nor when its
+// layout fails, its fields unknown. One still under way is searched as it
+// is, its fields so far, as e.x's is.
 static bool enter_using_struct(Using_Walk *w, s64 at) {
     Type *outer = w->list[w->list[at].outer].type;
     s32 index = w->list[at].field;
@@ -3152,7 +3198,8 @@ static bool enter_using_struct(Using_Walk *w, s64 at) {
     Type_Field *field = &outer->fields[index];
     if (!field->is_using || !field->type) return false;
     Type *held = type_is_pointer(field->type) ? field->type->pointee : field->type;
-    if (!using_search_needed(w, held, w->list[at].depth) || !check_layout(w->c, held)) return false;
+    if (!using_search_needed(w, held, w->list[at].depth) || !using_needs_layout(w->c, held, w->name)) return false;
+    if (!check_layout(w->c, held)) return false;
     w->list[at].type = held;
     return true;
 }
@@ -3288,13 +3335,15 @@ static Type *using_struct(Ast_Param *param) {
 }
 
 // The roots are the structs laid out, in parameter order, and which
-// parameter each is.
+// parameter each is. One whose declaration can't hold the name, at any
+// depth, isn't one (using_needs_layout): a pointer parameter's struct
+// isn't laid out for a name it can't hold, as it isn't without using.
 s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array<s32> *other, s32 *other_root) {
     Array<Type *> roots = {};
     Array<s32> params = {};
     for (s64 i = 0; i < c->using_params.count; i++) {
         Type *s = using_struct(c->using_params[i]);
-        if (!check_layout(c, s)) continue;
+        if (!using_needs_layout(c, s, name) || !check_layout(c, s)) continue;
         array_add(&roots, s);
         array_add(&params, (s32)i);
     }

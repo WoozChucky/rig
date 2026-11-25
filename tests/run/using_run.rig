@@ -2,7 +2,8 @@
 // calls procedures whose bodies name their using parameters' fields, as
 // the program does when it runs. A constant is baked from a Player such
 // procedures made, a #run in a body converts a *Player into a using
-// *Entity parameter, and a top-level #run prints what it moved. A #run in
+// *Entity parameter, what it moved read back through the Player too, and a
+// top-level #run prints what it moved. A #run in
 // a using body reaches a procedure declared after it, whose body is checked
 // there: its id is the global's, never the outer body's field.
 #import "Basic";
@@ -35,7 +36,7 @@ build :: () -> Player {
 described :: () -> int {
     p: Player;
     move(*p, 3);
-    return describe(*p);
+    return describe(*p) * 100 + p.id;
 }
 
 id := 7;
