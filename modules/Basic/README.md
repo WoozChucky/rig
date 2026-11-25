@@ -430,7 +430,7 @@ What is written to standard output goes through C's `putchar`, so it comes out i
 - `print_line(s: string)`: writes `s` and a line feed.
 - `print_or_append(builder: *String_Builder, s: string)`: writes the bytes of `s` to `builder`, or to standard output when it is null.
 - `print_quoted(builder: *String_Builder, s: string)`: writes `s` in double quotes, with the escapes below.
-- `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, an array, a view, a resizable array or `{!EXTRA: ...}`, where a string is quoted.
+- `print_item(builder: *String_Builder, item: Any, nested: bool)`: writes the value `item` holds, as below; `nested` says it is inside a struct, a tagged union, an array, a view, a resizable array or `{!EXTRA: ...}`, where a string is quoted.
 - `print_enum(builder: *String_Builder, e: *Type_Info_Enum, p: *void)`: writes the enum value at `p`, described by `e`, as below (Enums).
 - `print_read_integer(p: *void, size: int, signed: bool) -> s64`: the integer of `size` bytes (1, 2, 4 or 8) at `p`, as 64 bits: sign-extended when `signed`, zero-extended when not, so a `u64` above `s64`'s largest reads negative, as an enum's `values` do. `print_item` and `print_enum` read integers through it.
 - `print_formatted(builder: *String_Builder, format: string, args: []Any)`: writes `format` with each `{}` replaced by the next of `args`, as below. `print` calls it with a null builder, and `print_to_builder`, `sprint` and `tprint` with a builder of their own.

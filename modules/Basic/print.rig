@@ -16,8 +16,8 @@
 //
 // print_item writes a value of any type, through its type info (spec
 // 3.16): it reads an Any by its description, as the type's kind says, and
-// writes a struct's fields and an array's, a view's or a resizable array's
-// elements each as an Any of its own.
+// writes a struct's fields, a tagged union's member and an array's, a
+// view's or a resizable array's elements each as an Any of its own.
 //
 // print, print_to_builder, sprint, tprint and print_error write a format
 // whose {} placeholders take ..Any arguments, each written by print_item,
@@ -177,12 +177,14 @@ print_quoted :: (builder: *String_Builder, s: string) {
 //   - An enum, by its members' names, through print_enum: FREE, or
 //     VISIBLE | GLOWING for an enum_flags.
 //
-// nested says the value is inside a struct or an array of any kind, or among
-// the arguments a format leaves over, {!EXTRA: ...}, where a string is
-// quoted so that its bytes can't be mistaken for the punctuation around
-// it. Fields and elements are written by calling print_item again, nested,
-// each made into an Any of its own: a field's type at the struct's address
-// plus the field's offset, an element's type at its place in the data.
+// nested says the value is inside a struct, a tagged union or an array of
+// any kind, or among the arguments a format leaves over, {!EXTRA: ...},
+// where a string is quoted so that its bytes can't be mistaken for the
+// punctuation around it. Fields, members and elements are written by
+// calling print_item again, nested, each made into an Any of its own: a
+// field's type at the struct's address plus the field's offset, a tagged
+// union's member's type at the union's address plus the member's offset,
+// an element's type at its place in the data.
 //
 // What no conversion to Any makes: a zeroed Any, whose type is null, as a
 // zeroed struct's Any field is, writes null, as a zeroed pointer does; a
