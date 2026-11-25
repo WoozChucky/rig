@@ -1,0 +1,43 @@
+// Basic's print of tagged unions (issue #224, spec 3.20): a tagged union is
+// a dot and the name of the member its tag says it holds, then that
+// member's value in parentheses, written as inside a struct (a string
+// quoted), or nothing more for a void member: .circle({r = 2.0}), .empty.
+// As a struct's field, an array's element, another tagged union's member
+// and an Any's value, the same. A tag no member has, as C may write, is
+// (tag N), N read by the tag type's sign.
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Label :: union #tagged { text: string; count: int; none: void; }
+Holder :: struct { s: Shape; n: int; }
+Outer :: union #tagged { shape: Shape; none: void; }
+Signed :: union #tagged s8 { a: int; }
+
+memset :: (dest: *void, c: s32, count: u64) -> *void #foreign libc;
+
+main :: () {
+    print("{}\n", Shape.{circle = .{2}});
+    print("{}\n", Shape.{rect = .{2, 3.5}});
+    print("{}\n", Shape.empty);
+    print("{}\n", Label.{text = "hi"});
+    print("{}\n", Label.{count = 3});
+    print("{}\n", Label.none);
+    shapes := Shape.[.{circle = .{1}}, .empty];
+    print("{}\n", shapes);
+    print("{}\n", Holder.{s = .empty, n = 1});
+    print("{}\n", Outer.{shape = .{rect = .{1, 2}}});
+    a : Any = Shape.{circle = .{4}};
+    print("{}\n", a);
+    print("{}\n", sprint("[{}]", Label.{text = "a \"b\""}));
+    zero: Shape;
+    print("{}\n", zero);
+
+    s := Shape.empty;
+    memset(*s, 7, 1);
+    print("{}\n", s);
+    n := Signed.{a = 1};
+    memset(*n, 0x80, 1);
+    print("{}\n", n);
+}

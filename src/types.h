@@ -144,11 +144,12 @@ const s64 RESIZABLE_ALLOCATED_OFFSET = 16, RESIZABLE_ALLOCATOR_OFFSET = 24, RESI
 //
 // The tags are the members of Preload's enum Type_Info_Tag, numbered as
 // Jai's tags are: ENUM is Jai's 11, the numbers between being kinds of
-// Jai's that Rig doesn't have.
+// Jai's that Rig doesn't have. TAGGED_UNION (spec 3.20) is a kind Jai
+// doesn't have: 32, past every number Jai uses.
 enum Type_Info_Tag : s64 {
     TYPE_INFO_INTEGER = 0, TYPE_INFO_FLOAT = 1, TYPE_INFO_BOOL = 2, TYPE_INFO_STRING = 3,
     TYPE_INFO_POINTER = 4, TYPE_INFO_PROCEDURE = 5, TYPE_INFO_VOID = 6, TYPE_INFO_STRUCT = 7,
-    TYPE_INFO_ARRAY = 8, TYPE_INFO_ENUM = 11,
+    TYPE_INFO_ARRAY = 8, TYPE_INFO_ENUM = 11, TYPE_INFO_TAGGED_UNION = 32,
 };
 // Type_Info_Array's array_kind, the members of Preload's enum Array_Kind:
 // an array, [N]T, a view, []T, or a resizable array, [..]T (spec 3.17), in
@@ -186,6 +187,14 @@ const s64 TYPE_INFO_ELEMENT_OFFSET = 24, TYPE_INFO_ARRAY_KIND_OFFSET = 32, TYPE_
 const s64 TYPE_INFO_ENUM_NAME_OFFSET = 24, TYPE_INFO_ENUM_UNDERLYING_OFFSET = 40,
           TYPE_INFO_ENUM_IS_FLAGS_OFFSET = 48, TYPE_INFO_ENUM_NAMES_OFFSET = 56,
           TYPE_INFO_ENUM_VALUES_OFFSET = 72, TYPE_INFO_ENUM_SIZE = 88;
+// Type_Info_Tagged_Union (spec 3.16, 3.20): info, name, a string,
+// tag_type, the *Type_Info of its tag's integer type, tag_offset, an int
+// (the tag's offset, 0 in every Rig tagged union), then members, a view of
+// Type_Info_Struct_Member, each a member's name, type (void's for a void
+// member) and offset, the members' one offset after the tag.
+const s64 TYPE_INFO_TAGGED_NAME_OFFSET = 24, TYPE_INFO_TAGGED_TAG_TYPE_OFFSET = 40,
+          TYPE_INFO_TAGGED_TAG_OFFSET_OFFSET = 48, TYPE_INFO_TAGGED_MEMBERS_OFFSET = 56,
+          TYPE_INFO_TAGGED_UNION_SIZE = 72;
 // Any: type, the value's *Type_Info, then value_pointer, its address.
 const s64 ANY_TYPE_OFFSET = 0, ANY_VALUE_OFFSET = 8, ANY_SIZE = 16;
 // Every description, member and Any is aligned to 8.

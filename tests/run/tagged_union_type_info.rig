@@ -1,0 +1,47 @@
+// Tagged unions described (issue #224, spec 3.16, 3.20): a
+// Type_Info_Tagged_Union, tag .TAGGED_UNION (32, a kind Jai doesn't have),
+// with the union's size, alignment and name, its tag's integer type, the
+// tag's offset (0 in every Rig tagged union), and its members as a
+// struct's, each at the members' offset after the tag, a void member's
+// type void's description. A chosen tag type is the one described, signed
+// too, and a tagged union that points at itself is described by pointing
+// back at its own description. The #run says the same while compiling
+// (spec 7.8), its output the build's.
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Chosen :: union #tagged u32 { a: u8; }
+Signed :: union #tagged s16 { i: s64; }
+List :: union #tagged { end: void; next: *List; }
+
+#run show();
+
+// t's tag, size, alignment and name, its tag type's tag, size and sign,
+// the tag's offset, then each member's name, offset and type's tag.
+describe :: (t: *Type_Info) {
+    u := cast(*Type_Info_Tagged_Union) t;
+    tag := cast(*Type_Info_Integer) u.tag_type;
+    print("{} {} {} {}: tag {} {} {} at {};", t.tag, t.size, t.alignment, u.name,
+        u.tag_type.tag, u.tag_type.size, tag.signed, u.tag_offset);
+    for u.members { print(" {} {} {}", it.name, it.offset, it.type.tag); }
+    print("\n");
+}
+
+show :: () {
+    print("{} {}\n", type_info(Shape).tag == .TAGGED_UNION, cast(int) Type_Info_Tag.TAGGED_UNION);
+    describe(type_info(Shape));
+    describe(type_info(Chosen));
+    describe(type_info(Signed));
+    describe(type_info(List));
+    // A member's type is its type's one description: Circle's, void's,
+    // and List's own behind the pointer.
+    shape := cast(*Type_Info_Tagged_Union) type_info(Shape);
+    list := cast(*Type_Info_Tagged_Union) type_info(List);
+    print("{} {} {}\n", shape.members[0].type == type_info(Circle), shape.members[2].type == type_info(void),
+        (cast(*Type_Info_Pointer) list.members[1].type).pointer_to == type_info(List));
+    print("{}\n", size_of(Type_Info_Tagged_Union));
+}
+
+main :: () { show(); }

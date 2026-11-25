@@ -3928,9 +3928,10 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // returns.
 
 // The tag of the description of a type of t's kind: integers, floats, bool,
-// string, pointers, procedure types, void, structs, arrays, views and
-// resizable arrays (spec 3.17), which share one, and enums (spec 3.18),
-// enum_flags too. The checker gave every value a type of its own before
+// string, pointers, procedure types, void, structs (unions too), arrays,
+// views and resizable arrays (spec 3.17), which share one, enums (spec
+// 3.18), enum_flags too, and tagged unions (spec 3.20), structs with a flag
+// to the checker but a kind of their own here. The checker gave every value a type of its own before
 // lowering, so the untyped types, null's and a literal's without its type
 // never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
@@ -3943,7 +3944,7 @@ static Type_Info_Tag type_info_tag(Type *t) {
     case TYPE_POINTER: return TYPE_INFO_POINTER;
     case TYPE_PROC: return TYPE_INFO_PROCEDURE;
     case TYPE_VOID: return TYPE_INFO_VOID;
-    case TYPE_STRUCT: return TYPE_INFO_STRUCT;
+    case TYPE_STRUCT: return t->is_tagged ? TYPE_INFO_TAGGED_UNION : TYPE_INFO_STRUCT;
     case TYPE_ARRAY:
     case TYPE_VIEW:
     case TYPE_RESIZABLE: return TYPE_INFO_ARRAY;
@@ -3963,6 +3964,7 @@ static s64 type_info_size(Type_Info_Tag tag) {
     case TYPE_INFO_STRUCT: return TYPE_INFO_STRUCT_SIZE;
     case TYPE_INFO_ARRAY: return TYPE_INFO_ARRAY_SIZE;
     case TYPE_INFO_ENUM: return TYPE_INFO_ENUM_SIZE;
+    case TYPE_INFO_TAGGED_UNION: return TYPE_INFO_TAGGED_UNION_SIZE;
     default: return TYPE_INFO_SIZE;
     }
 }
@@ -4032,12 +4034,14 @@ static void describe_types(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, s64 
     array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, array, false});
 }
 
-// A struct's members, written at TYPE_INFO_MEMBERS_OFFSET in its
-// description's `bytes`: a view of a read-only array of its own,
+// A struct's members, or a tagged union's, written at `offset` in its
+// description's `bytes` (TYPE_INFO_MEMBERS_OFFSET, or
+// TYPE_INFO_TAGGED_MEMBERS_OFFSET): a view of a read-only array of its own,
 // type_info.N.members (`name`), a Type_Info_Struct_Member per field, in
 // order: the field's name (its bytes a str.N of their own), its type's
-// description and its offset. No fields: the empty view, zeros.
-static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
+// description (void's for a tagged union's void member) and its offset. No
+// fields: the empty view, zeros.
+static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, s64 offset, String name, Type *t) {
     s64 count = t->fields.count;
     if (count == 0) return;
     s64 size = count * TYPE_INFO_MEMBER_SIZE;
@@ -4053,8 +4057,8 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, St
         write_bits(members + at + TYPE_INFO_MEMBER_OFFSET_OFFSET, (u64)field->offset, 8);
     }
     s32 array = add_type_info_global(l, name, size, {members, size}, member_relocs);
-    write_bits(bytes + TYPE_INFO_MEMBERS_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);
-    array_add(relocs, Ir_Reloc{TYPE_INFO_MEMBERS_OFFSET + VIEW_DATA_OFFSET, array, false});
+    write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, array, false});
 }
 
 // An enum's members, written at TYPE_INFO_ENUM_NAMES_OFFSET and
@@ -4100,11 +4104,12 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // or a resizable array's element's description, its kind and its count (-1
 // for a view or a resizable array, whose count is its value's); a struct's
 // name and members, and whether it's a union (an anonymous member's type
-// has an empty name, as its member has); a procedure type's parameters'
-// and results' descriptions (a ..T parameter's []T), #c_call and whether
-// its last parameter is a ..T; an enum's name, its integer type's
-// description, whether it's an enum_flags, and its members' names and
-// values. Its names' str.N and its arrays' globals are made first; the
+// has an empty name, as its member has); a tagged union's name, its tag
+// type's description, the tag's offset (0) and its members, as a struct's;
+// a procedure type's parameters' and results' descriptions (a ..T
+// parameter's []T), #c_call and whether its last parameter is a ..T; an
+// enum's name, its integer type's description, whether it's an
+// enum_flags, and its members' names and values. Its names' str.N and its arrays' globals are made first; the
 // descriptions it points at are asked for through type_info_global, which
 // only queues them. The relocations go in increasing offset, as the
 // backend wants. The bytes are put in the global last, through its index:
@@ -4132,9 +4137,21 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
         break;
     }
     case TYPE_STRUCT:
+        if (t->is_tagged) {
+            // The tag is at 0 in every Rig tagged union (spec 3.20):
+            // tag_offset stays the zero it was made.
+            write_bits(bytes + TYPE_INFO_TAGGED_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
+            array_add(&relocs,
+                      Ir_Reloc{TYPE_INFO_TAGGED_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
+            array_add(&relocs, Ir_Reloc{TYPE_INFO_TAGGED_TAG_TYPE_OFFSET, type_info_global(l, t->tag_type), false});
+            describe_members(l, bytes, &relocs, TYPE_INFO_TAGGED_MEMBERS_OFFSET,
+                             string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
+            break;
+        }
         write_bits(bytes + TYPE_INFO_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
         array_add(&relocs, Ir_Reloc{TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
-        describe_members(l, bytes, &relocs, string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
+        describe_members(l, bytes, &relocs, TYPE_INFO_MEMBERS_OFFSET,
+                         string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
         bytes[TYPE_INFO_STRUCT_IS_UNION_OFFSET] = t->is_union;
         break;
     case TYPE_PROC:

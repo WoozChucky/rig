@@ -1,1 +1,1 @@
-@MODULES@/Basic/print.rig:480:22: runtime error: null pointer dereference
+@MODULES@/Basic/print.rig:507:22: runtime error: null pointer dereference

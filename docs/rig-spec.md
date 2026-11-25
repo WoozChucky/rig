@@ -679,7 +679,8 @@ main :: () {
 A program can find out, while it runs, what type a value has. `type_info(T)` (section 5.19) gives a `*Type_Info`, the address of a **description** of type `T`, laid out as structs the program reads as it reads any data, and an `Any` pairs a value's address with its type's description. Every value converts to `Any` implicitly (below), so a procedure that takes an `Any` takes a value of any type and finds out what it is. This is Jai's type information, trimmed to Rig's types. The structs, their tags and `Any` are Preload's (section 2.14), so every program has them:
 
 ```text
-Type_Info_Tag :: enum { INTEGER; FLOAT; BOOL; STRING; POINTER; PROCEDURE; VOID; STRUCT; ARRAY; ENUM :: 11; }
+Type_Info_Tag :: enum { INTEGER; FLOAT; BOOL; STRING; POINTER; PROCEDURE; VOID; STRUCT; ARRAY; ENUM :: 11;
+                        TAGGED_UNION :: 32; }
 
 Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
@@ -694,11 +695,13 @@ Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array
 Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
 Type_Info_Enum      :: struct { info: Type_Info; name: string; underlying: *Type_Info; is_flags: bool;
                                 names: []string; values: []s64; }
+Type_Info_Tagged_Union :: struct { info: Type_Info; name: string; tag_type: *Type_Info; tag_offset: int;
+                                   members: []Type_Info_Struct_Member; }
 
 Any :: struct { type: *Type_Info; value_pointer: *void; }
 ```
 
-**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, a member of the enum `Type_Info_Tag` (section 3.18), numbered as Jai's tags are (`ENUM` is Jai's 11, the numbers between being kinds of Jai's that Rig doesn't have), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `info`, is that `Type_Info` (Rig has no `using`, so it is read as `t.info.size`), and a `*Type_Info` whose tag says the kind is cast to the kind's struct: `cast(*Type_Info_Struct) t` when `t.tag == .STRUCT`.
+**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, a member of the enum `Type_Info_Tag` (section 3.18), numbered as Jai's tags are (`ENUM` is Jai's 11, the numbers between being kinds of Jai's that Rig doesn't have; `TAGGED_UNION`, a kind Jai doesn't have, is 32, past every number Jai uses), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `info`, is that `Type_Info` (Rig has no `using`, so it is read as `t.info.size`), and a `*Type_Info` whose tag says the kind is cast to the kind's struct: `cast(*Type_Info_Struct) t` when `t.tag == .STRUCT`.
 
 - **Integers**, `s8` to `u64` and `int` (`.INTEGER`): a `Type_Info_Integer`, whose `signed` says whether the type is signed.
 - **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
@@ -707,12 +710,13 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 - **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, whose `members` are its fields in order, none for a struct with none, and whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
 - **Procedure types** (`.PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
 - **Enums**, `enum` and `enum_flags` types (`.ENUM`, section 3.18): a `Type_Info_Enum`, whose `name` is the enum's declared name, `underlying` the description of its integer type, whose size, alignment and sign it has, and `is_flags` whether it is an `enum_flags`. Its members are `names` and `values`, in order, none for an enum with none: `names[i]` is a member's name and `values[i]` its value, as 64 bits, sign-extended from a signed integer type and zero-extended from an unsigned one, so a `u64` member above `s64`'s largest value reads as a negative `s64`.
+- **Tagged unions** (`.TAGGED_UNION`, section 3.20): a `Type_Info_Tagged_Union`, whose `name` is the tagged union's declared name, `tag_type` the description of its tag's integer type, whose size and sign the tag has, and `tag_offset` the tag's offset, 0 in every Rig tagged union (it is there for a C layout that puts the tag elsewhere). Its `members` are described as a struct's, in order: each one's `name`, its type's description, `void`'s for a member that holds nothing, and its `offset`, the members' one offset past the tag. A value holds `members[tag]`, its tag read at `tag_offset`, when the tag is one of theirs.
 
-Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 64, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
+Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 64, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88, `Type_Info_Tagged_Union` 72 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
 
 **One description per type.** Types that are the same type by section 3.1's identity have one description, at one address, so `a.type == type_info(int)` tells types apart by their descriptions' addresses. `int` and `s64` are two types, with two descriptions, the same in all but their addresses; `float` is `float32`, with one. A description points at the descriptions of the types it is made of, so a struct that holds a pointer to itself (`Node :: struct { next: *Node; }`) is described by pointing back at its own description: the descriptions are cyclic, not infinite.
 
-**Where they live.** The compiler writes each description into the program's read-only data (section 10.3), once, and only for the types the program uses: those `type_info` names, those of the values it converts to `Any`, and every type their descriptions reach (fields, elements, pointees, parameters, results and an enum's integer type). Names are string literals there, and the arrays that the views of members, parameter types, result types and an enum's names and values see are read-only too. Writing any of it is a memory error that no check catches (section 8.6). Code run while compiling has descriptions of its own, laid out the same (section 7.8).
+**Where they live.** The compiler writes each description into the program's read-only data (section 10.3), once, and only for the types the program uses: those `type_info` names, those of the values it converts to `Any`, and every type their descriptions reach (fields, elements, pointees, parameters, results, an enum's integer type and a tagged union's tag type). Names are string literals there, and the arrays that the views of members, parameter types, result types and an enum's names and values see are read-only too. Writing any of it is a memory error that no check catches (section 8.6). Code run while compiling has descriptions of its own, laid out the same (section 7.8).
 
 **Any.** `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`: its `type` is a value's type's description, and its `value_pointer` the value's address. A value converts to `Any` implicitly wherever a value goes into something of a known type (section 3.13): a variable's declaration with a type, an assignment, an argument, a `..Any` one included (section 5.10), a return, a field or element of a compound literal, and a cast, `cast(Any) e`, which is this conversion for a value of any type, a pointer and a procedure value included (section 3.14).
 
@@ -1349,6 +1353,30 @@ true true false
 **Comparison.** Two tagged unions aren't compared, nor is one with anything but a member's name: `s == t`, `s == null` and `s != 1` are `'==' compares a tagged union only with a member's name, as in s == .empty` (`'!='`), at the operator; `s < t` is `'<' needs numbers, not 'Shape'`.
 
 **Constants.** A tagged union's literal whose value is constant data (section 5.9), and `Shape.empty`, are constant data, a constant's value or a global's, as a struct's literal is. No member of one is folded, members being read only in a switch: `if K == {` on a constant `K` reads its read-only data, `it` read-only. A `#run`'s tagged union is baked as its tag and the value of the member it holds (section 7.8).
+
+**Description and printing.** A tagged union is described by a `Type_Info_Tagged_Union`, tag `.TAGGED_UNION` (section 3.16): its name, its tag's integer type, the tag's offset, 0, and its members as a struct's, each at the members' offset, a `void` member's type `void`. Basic's `print` writes a tagged union as the member its tag says it holds: a `.` and the member's name, then the member's value in parentheses, written as inside a struct (so a string is quoted), or nothing more for a `void` member. Only that member is read. A tag no member has, as C may write, is written `(tag 7)`, the number read by the tag type's sign:
+
+```rig
+#import "Basic";
+
+Circle :: struct { r: float; }
+Shape :: union #tagged { circle: Circle; empty: void; }
+Label :: union #tagged { text: string; count: int; }
+Holder :: struct { s: Shape; n: int; }
+
+main :: () {
+    t := cast(*Type_Info_Tagged_Union) type_info(Shape);
+    print("{} {} {} {} {}\n", t.info.tag, t.name, t.tag_type.size, t.members[1].name, t.members[1].offset);
+    print("{} {} {}\n", Shape.{circle = .{2}}, Shape.empty, Label.{text = "hi"});
+    print("{} {}\n", Shape.[.empty, .{circle = .{1}}], Holder.{s = .empty, n = 1});
+}
+```
+
+```text
+TAGGED_UNION Shape 1 empty 4
+.circle({r = 2.0}) .empty .text("hi")
+[.empty, .circle({r = 1.0})] {s = .empty, n = 1}
+```
 
 **C.** A pointer to a tagged union is passed to C as a pointer to the C struct its layout is (above), so a C function that takes a `struct Shape *` is declared with a `*Shape`. A tagged union is not passed to or returned from C by value, for now, as a struct isn't: `a foreign procedure can't take a 'Shape' yet; pass a pointer to it`, `a foreign procedure can't return a 'Shape' yet`, and the same for a `#c_call` procedure.
 

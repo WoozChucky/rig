@@ -7523,6 +7523,15 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
           {"names", TYPE_INFO_ENUM_NAMES_OFFSET, "[]string"},
           {"values", TYPE_INFO_ENUM_VALUES_OFFSET, "[]s64"}},
          6},
+        {"Type_Info_Tagged_Union",
+         TYPE_INFO_TAGGED_UNION_SIZE,
+         TYPE_INFO_ALIGN,
+         {{"info", 0, "Type_Info"},
+          {"name", TYPE_INFO_TAGGED_NAME_OFFSET, "string"},
+          {"tag_type", TYPE_INFO_TAGGED_TAG_TYPE_OFFSET, "*Type_Info"},
+          {"tag_offset", TYPE_INFO_TAGGED_TAG_OFFSET_OFFSET, "int"},
+          {"members", TYPE_INFO_TAGGED_MEMBERS_OFFSET, "[]Type_Info_Struct_Member"}},
+         5},
         {"Any",
          ANY_SIZE,
          TYPE_INFO_ALIGN,
@@ -7558,10 +7567,11 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         }
         array_free(&path);
     }
-    // The tags, numbered as Jai's (ENUM is Jai's 11), and the array kinds:
-    // the members of Preload's enums Type_Info_Tag and Array_Kind, each
-    // over int, so a Type_Info's tag and a Type_Info_Array's array_kind
-    // are ints in memory, as lowering writes them.
+    // The tags, numbered as Jai's (ENUM is Jai's 11; TAGGED_UNION, a kind
+    // Jai doesn't have, 32, past all of Jai's), and the array kinds: the
+    // members of Preload's enums Type_Info_Tag and Array_Kind, each over
+    // int, so a Type_Info's tag and a Type_Info_Array's array_kind are ints
+    // in memory, as lowering writes them.
     struct {
         const char *enum_name;
         const char *name;
@@ -7577,6 +7587,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
         {"Type_Info_Tag", "STRUCT", TYPE_INFO_STRUCT},
         {"Type_Info_Tag", "ARRAY", TYPE_INFO_ARRAY},
         {"Type_Info_Tag", "ENUM", TYPE_INFO_ENUM},
+        {"Type_Info_Tag", "TAGGED_UNION", TYPE_INFO_TAGGED_UNION},
         {"Array_Kind", "FIXED", ARRAY_FIXED},
         {"Array_Kind", "VIEW", ARRAY_VIEW},
         {"Array_Kind", "RESIZABLE", ARRAY_RESIZABLE},
@@ -7600,7 +7611,7 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // know.
     Ast *tags = top_level_named(tree, "Type_Info_Tag");
     Ast *kinds = top_level_named(tree, "Array_Kind");
-    CHECK(tags->kind == AST_ENUM && ((Ast_Enum *)tags)->members.count == 10);
+    CHECK(tags->kind == AST_ENUM && ((Ast_Enum *)tags)->members.count == 11);
     CHECK(kinds->kind == AST_ENUM && ((Ast_Enum *)kinds)->members.count == 3);
     // Declaring them describes nothing: a program that uses no type
     // information lowers as it did, with no description in its data.

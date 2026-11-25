@@ -4,8 +4,8 @@
 // extremes, floats as float32 and float64, bools, strings with each escape
 // and a UTF-8 character, null and other pointers and procedure values,
 // structs and arrays nested a few levels, an Any field, a zeroed Any, an Any
-// of an Any, a description of void, a tag that isn't one of the ten, and a
-// string builder in place of standard output.
+// of an Any, a description of void, a tag that isn't one of the eleven, and
+// a string builder in place of standard output.
 // The same compiled and interpreted.
 #import "Basic";
 
@@ -151,7 +151,7 @@ main :: () {
     show(Any.[1, "x", 2.5]);
 
     // A description of void, which only an Any made by hand can hold, and a
-    // tag that isn't one of the ten, which writes nothing.
+    // tag that isn't one of the eleven, which writes nothing.
     t := Type_Info.{.VOID, 0, 1};
     show(Any.{*t, null});
     bad := Type_Info.{cast(Type_Info_Tag) 99, 0, 1};

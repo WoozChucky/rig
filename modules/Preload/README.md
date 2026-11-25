@@ -51,7 +51,7 @@ There is one description per type, so `a.type == type_info(int)` tells types apa
 
 A `Type_Info`'s `tag` is a member of the enum `Type_Info_Tag` (spec 3.18), over `int`, its members numbered as Jai's tags are:
 
-- `INTEGER` 0, `FLOAT` 1, `BOOL` 2, `STRING` 3, `POINTER` 4, `PROCEDURE` 5, `VOID` 6, `STRUCT` 7, `ARRAY` 8, `ENUM` 11 (Jai's number; the ones between are kinds of Jai's that Rig doesn't have).
+- `INTEGER` 0, `FLOAT` 1, `BOOL` 2, `STRING` 3, `POINTER` 4, `PROCEDURE` 5, `VOID` 6, `STRUCT` 7, `ARRAY` 8, `ENUM` 11 (Jai's number; the ones between are kinds of Jai's that Rig doesn't have), `TAGGED_UNION` 32 (a kind Jai doesn't have, past every number Jai uses).
 
 A tag is written `Type_Info_Tag.STRUCT`, or `.STRUCT` where its type is known: `t.tag == .STRUCT`.
 
@@ -91,6 +91,12 @@ Every description starts with a `Type_Info`. Each kind's struct holds it as its 
   - `underlying: *Type_Info`: its integer type's description.
   - `is_flags: bool`: whether it is an `enum_flags`.
   - `names: []string`, `values: []s64`: its members, in order; none for an enum with none. `names[i]` is a member's name and `values[i]` its value, as 64 bits: sign-extended from a signed integer type, zero-extended from an unsigned one, so a `u64` member above `s64`'s largest reads negative.
+- `Type_Info_Tagged_Union` (`.TAGGED_UNION`, for a tagged union, spec 3.20):
+  - `info: Type_Info`.
+  - `name: string`: the tagged union's declared name.
+  - `tag_type: *Type_Info`: its tag's integer type's description, whose size and sign the tag has.
+  - `tag_offset: int`: where the tag is, in bytes from the start: 0 in every Rig tagged union, there for a C layout that puts it elsewhere.
+  - `members: []Type_Info_Struct_Member`: its members, in order, as a struct's fields: each one's name, its type's description, `void`'s for a member that holds nothing, and its offset, the same for all, past the tag. A value holds `members[tag]`, its tag read at `tag_offset`, when the tag is one of theirs.
 
 `Any` is an ordinary struct, so it has a description of its own, a struct named `Any`:
 

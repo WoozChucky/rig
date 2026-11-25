@@ -1,0 +1,7 @@
+true 32
+TAGGED_UNION 12 4 Shape: tag INTEGER 1 false at 0; circle 4 STRUCT rect 4 STRUCT empty 4 VOID
+TAGGED_UNION 8 4 Chosen: tag INTEGER 4 false at 0; a 4 INTEGER
+TAGGED_UNION 16 8 Signed: tag INTEGER 2 true at 0; i 8 INTEGER
+TAGGED_UNION 16 8 List: tag INTEGER 1 false at 0; end 8 VOID next 8 POINTER
+true true true
+72
