@@ -4,9 +4,11 @@ $1 = 4
 20	            putchar(51);
 23	    }
 24	    putchar(10);
+n = 2
 switch.rig:26
 30	            putchar(66);
 No symbol "twice" in current context.
+!twice =
 !13	        case 1;
 !14	            putchar(49);
 !15	        case 2;

@@ -7,6 +7,7 @@ print twice
 next
 next
 next
+info locals
 next
 continue
 next

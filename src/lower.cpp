@@ -3232,10 +3232,12 @@ static void lower_tagged_case(Lowering *l, Ast_Case *k, s32 slot, Ast_Proc *sour
 // it), whose defers run at its end, before the jump out: to `after`, at the
 // switch's '}', in the scope around, as an if block's jump is at its own
 // '}' (lower_if), so a debugger steps from a case's last line to the '}',
-// then to the code after, never through another case's line; or, ending
-// with #through, into the next case's block, at the #through, a jump to the
-// block laid out right after it, which has no instruction ("What a debugger
-// needs" above). A #complete switch without `case;`, or a tagged union's
+// then to the code after, never through another case's line, but from the
+// case laid out last straight to the code after: its jump is to the block
+// laid out right after it, `after`, and has no instruction ("What a
+// debugger needs" above); or, ending with #through, into the next case's
+// block, at the #through, a jump to the block laid out right after it,
+// which has no instruction either. A #complete switch without `case;`, or a tagged union's
 // without one, sends every other value to a block that stops the program
 // (emit_no_case), at the `if`, laid out right after the dispatch, before
 // the cases' blocks, so all of the `if` line's code is in one piece, where

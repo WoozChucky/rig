@@ -7595,6 +7595,17 @@ TEST(a_tagged_switch_reads_its_tag_once) {
     CHECK(contains(dispatch, string_cstr(&a, string_printf(&a, "switch i8 " STR_FMT ", b", STR_ARG(tag)))));
     CHECK(contains(dispatch, " [0: b") && contains(dispatch, ", 1: b") && contains(dispatch, ", 2: b"));
     CHECK_EQ(count_of(f, "call @__rig_no_case("), 1);
+    // The no-case block, where the tag no member has goes, is laid out
+    // right after the dispatch's, its call at f's `if`, 5:5: all of the
+    // `if` line's code is one piece, where cdb can break.
+    s64 open = index_of(dispatch, ", b") + 2, close = index_of(dispatch, " [");
+    CHECK(open > 1 && close > open);
+    if (open > 1 && close > open) {
+        String fail = string_slice(dispatch, open, close - open);
+        CHECK(contains(f, string_cstr(&a, string_printf(&a, STR_FMT "\n" STR_FMT ":\n", STR_ARG(dispatch),
+                                                        STR_ARG(fail)))));
+    }
+    CHECK(contains(line_with(f, "call @__rig_no_case("), "  ; 5:5 "));
 
     String g = proc_ir(ir, "g");
     CHECK(contains(g, "= load i8 %0  "));
