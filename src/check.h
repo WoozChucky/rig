@@ -113,8 +113,8 @@ void check_late_field(Checker *c, Type *t, s32 index);
 // at: a global's value may reach a struct through a pointer before its turn
 // in source order (checker.cpp's lay_out). False when t has no fields to
 // look at, its layout found wrong (a circle, too big, a tagged union's tag
-// too small: reported) or not
-// worked out yet (nested too deeply: reported).
+// too small: reported) or not worked out yet (nested too deeply:
+// reported).
 bool check_layout(Checker *c, Type *t);
 
 // check_layout, for the code a #run reaches (check_run.cpp's walk), which

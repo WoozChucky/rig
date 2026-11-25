@@ -2023,10 +2023,10 @@ static void literal_parts(Ast_Literal *literal, Array<Literal_Part> *parts) {
 //     %5 = ptradd %t, %4
 //     copy %5, %c, 4             (circle, at 4)
 //
-// A literal whose names reach through anonymous members holds
-// the checker's groups, literals of the members' anonymous types
-// (Ast_Literal.written): it's still built in one temporary, zeroed once, its
-// values stored through the groups at their whole paths' offsets
+// A literal whose names reach through anonymous members holds the
+// checker's groups, literals of the members' anonymous types
+// (Ast_Literal.written): it's still built in one temporary, zeroed once,
+// its values stored through the groups at their whole paths' offsets
 // (literal_parts), in the order the program wrote them, not the groups'.
 static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
     Type *t = literal->type;  // the checker gave an untyped literal the type it met
@@ -3079,13 +3079,13 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
 static s32 no_case_proc(Lowering *l);
 
 // The block a #complete switch without `case;`, or a tagged union's switch
-// without one (spec 3.20), sends a value no case has to
-// (Ast_Switch.checks_no_case, spec 6.14, 8.1), made here and current after
-// it; its index. %value is what the switch dispatches on, of type t: the
-// switched value, or a tagged union's tag, of its tag type, whose message
-// names the union, s's own type, as an enum's names the enum. It calls
-// __rig_no_case, which writes "PATH:L:C: runtime error: no case for value V
-// of 'T'" and panics, so it never returns:
+// without one (spec 3.20), sends a value no case has to (spec 6.14, 8.1;
+// Ast_Switch.checks_no_case), made here and current after it; its index.
+// %value is what the switch dispatches on, of type t: the switched value,
+// or a tagged union's tag, of its tag type, whose message names the union,
+// s's own type, as an enum's names the enum. It calls __rig_no_case, which
+// writes "PATH:L:C: runtime error: no case for value V of 'T'" and panics,
+// so it never returns:
 //
 //   fail:
 //     %b = local N align 1          the message's buffer
@@ -3919,9 +3919,10 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // with no rig_type (the compiler makes it). What a description points at is
 // a relocation: another type's description, a name's bytes (a str.N of its
 // own, add_bytes), or a read-only array of its own, type_info.N.members for
-// a struct, type_info.N.parameters and .results for a procedure type,
-// type_info.N.names and .values for an enum, made only when not empty (an
-// empty view is zeros). Names with a '.' are no Rig global's.
+// a struct or a tagged union, type_info.N.parameters and .results for a
+// procedure type, type_info.N.names and .values for an enum, made only
+// when not empty (an empty view is zeros). Names with a '.' are no Rig
+// global's.
 //
 // Descriptions point at each other, in cycles too (a struct holding a
 // pointer to itself), so a description is made empty first, cached by its
@@ -3935,9 +3936,9 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // string, pointers, procedure types, void, structs (unions too), arrays,
 // views and resizable arrays (spec 3.17), which share one, enums (spec
 // 3.18), enum_flags too, and tagged unions (spec 3.20), structs with a flag
-// to the checker but a kind of their own here. The checker gave every value a type of its own before
-// lowering, so the untyped types, null's and a literal's without its type
-// never get here.
+// to the checker but a kind of their own here. The checker gave every
+// value a type of its own before lowering, so the untyped types, null's
+// and a literal's without its type never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
     RIG_ASSERT(!type_is_untyped(t));
     switch (t->kind) {
@@ -4113,11 +4114,12 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // a procedure type's parameters' and results' descriptions (a ..T
 // parameter's []T), #c_call and whether its last parameter is a ..T; an
 // enum's name, its integer type's description, whether it's an
-// enum_flags, and its members' names and values. Its names' str.N and its arrays' globals are made first; the
-// descriptions it points at are asked for through type_info_global, which
-// only queues them. The relocations go in increasing offset, as the
-// backend wants. The bytes are put in the global last, through its index:
-// the globals array may move while they're made.
+// enum_flags, and its members' names and values. Its names' str.N and its
+// arrays' globals are made first; the descriptions it points at are asked
+// for through type_info_global, which only queues them. The relocations go
+// in increasing offset, as the backend wants. The bytes are put in the
+// global last, through its index: the globals array may move while they're
+// made.
 static void describe_type(Lowering *l, s32 global, Type *t) {
     String name = l->module->globals[global].name;
     s64 size = l->module->globals[global].size;
@@ -4222,17 +4224,17 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // member at most, at 0, and a #run's baked union is its bytes as they were,
 // Ast_Literal.bytes, spec 3.19; a tagged union's literal is its tag, at 0,
 // and its member's value, if it has one, spec 3.20, a #run's baked one too),
-// an array literal's at i times the element's
-// size, an integer's low bytes, a bool's 0 or 1, a float's IEEE 754 bits (a
-// float32's rounded from the double the constant keeps, as the backend
-// rounds an f32 constant), a pointer's address (null's zeros). Constant data
-// is written as the literal holding it (literal_of): `origin := ORIGIN;`
-// gets ORIGIN's bytes, copied into the global, and a part a literal leaves
-// out writes nothing, zeros. A view's value is an array, a literal or
-// constant data (the checker allows nothing else in a global, but a string
-// literal), which becomes a global array of its own: the view's count is
-// written here, and its data is that array's address, which only the linker
-// knows, so a relocation says where it goes. A string literal, as a string,
+// an array literal's at i times the element's size, an integer's low
+// bytes, a bool's 0 or 1, a float's IEEE 754 bits (a float32's rounded from
+// the double the constant keeps, as the backend rounds an f32 constant), a
+// pointer's address (null's zeros). Constant data is written as the
+// literal holding it (literal_of): `origin := ORIGIN;` gets ORIGIN's bytes,
+// copied into the global, and a part a literal leaves out writes nothing,
+// zeros. A view's value is an array, a literal or constant data (the
+// checker allows nothing else in a global, but a string literal), which
+// becomes a global array of its own: the view's count is written here, and
+// its data is that array's address, which only the linker knows, so a
+// relocation says where it goes. A string literal, as a string,
 // a []u8 or a pointer (literal_address), constant data holding one included,
 // is written the same way: its count, for a string or a view, and a
 // relocation to its constant bytes, str.N (literal_global), where the data
@@ -4749,11 +4751,11 @@ static void lower_string_equal(Lowering *l) {
 // __rig_no_case(ptr buffer, ptr where, i64 where_length, i64 value,
 // i1 value_is_signed, ptr tail, i64 tail_length): what a #complete switch
 // without `case;`, or a tagged union's without one, calls for a value no
-// case has (emit_no_case). Made the
-// first time a switch needs it, with no body yet (lower_no_case makes it,
-// once every procedure's is, as __rig_string_equal's is); its index in the
-// module's procedures, after the program's. On demand, it is made third,
-// body and all (ir_lowering_new).
+// case has (emit_no_case). Made the first time a switch needs it, with no
+// body yet (lower_no_case makes it, once every procedure's is, as
+// __rig_string_equal's is); its index in the module's procedures, after
+// the program's. On demand, it is made third, body and all
+// (ir_lowering_new).
 static s32 no_case_proc(Lowering *l) {
     if (l->no_case < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_no_case"));
@@ -4777,7 +4779,8 @@ static s32 no_case_proc(Lowering *l) {
 //
 // WHERE as the switch passed it ("PATH:L:C: runtime error: "), V the value
 // in decimal, signed or unsigned as value_is_signed says (the enum's
-// integer type's sign), TAIL the switch's " of 'Mode'\n". The buffer is the
+// integer type's sign, or the tag type's), TAIL the switch's " of
+// 'Mode'\n" (" of 'Shape'\n" for a tagged union's). The buffer is the
 // caller's, made to fit (emit_no_case), so this body is the same for every
 // program. WHERE is the message's prefix, so the panic's c is where_length
 // (ir.h).
@@ -5164,8 +5167,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
     // or a switch on a string calls it, and __rig_no_case, if a #complete
-    // switch without `case;`, or a tagged union's, does. None comes from the source: they have no
-    // scopes, and their instructions no position (line 0) and no scope (-1).
+    // switch without `case;`, or a tagged union's, does. None comes from
+    // the source: they have no scopes, and their instructions no position
+    // (line 0) and no scope (-1).
     place(&l, {}, -1);
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);

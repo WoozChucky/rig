@@ -157,9 +157,10 @@ Type_Info_Struct :: struct {
     is_union: bool;
 }
 
-// One field of a struct or a union: its name, empty for an anonymous
-// member, its type's description, and where it is in the struct, in bytes
-// from its start (spec 3.9, 3.19).
+// One field of a struct or a union, or one member of a tagged union
+// (Type_Info_Tagged_Union.members): its name, empty for an anonymous
+// member, its type's description, and where it is in the struct or the
+// tagged union, in bytes from its start (spec 3.9, 3.19, 3.20).
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 
 // .ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T, which

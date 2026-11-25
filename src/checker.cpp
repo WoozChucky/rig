@@ -1172,12 +1172,12 @@ bool check_enum_values(Checker *c, Type *t) {
 // resolve_late_fields gets to it, and it's made then (make_late_field,
 // check_late_field). A late field's type, a global's or a signature's can
 // take a struct's Type before its layout is known (*Bad), and that layout
-// may still fail (a circle, too big), leaving the struct no type; so such
-// a type is made again at the end (made_again). A body a #run reaches is
-// worked out in the pass too (check_reached_body), and its locals' types
-// can take a struct behind a pointer the same way; those aren't made
-// again, and what the body says of them stays said, as a global's value's
-// does.
+// may still fail (a circle, too big, a tag too small), leaving the struct
+// no type; so such a type is made again at the end (made_again). A body a
+// #run reaches is worked out in the pass too (check_reached_body), and its
+// locals' types can take a struct behind a pointer the same way; those
+// aren't made again, and what the body says of them stays said, as a
+// global's value's does.
 
 // The offset `offset` rounded up to a multiple of `align` (a power of 2).
 static s64 align_up(s64 offset, s32 align) {
@@ -1404,8 +1404,8 @@ static bool lay_out_tag(Checker *c, Ast_Struct *s) {
 }
 
 // Struct s, laid out, done: its anonymous members, nested to any depth,
-// have no type when s has none (a circle, too big), as nothing reaches
-// them but through s.
+// have no type when s has none (a circle, too big, a tag too small), as
+// nothing reaches them but through s.
 static void finish_anonymous_members(Ast_Struct *s) {
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Struct *inner = s->fields[i]->anonymous;
@@ -2183,22 +2183,23 @@ static String member_list(Checker *c, String type, Array<String> names) {
 // - #through can't end a case, "#through can't end a tagged union's case:
 //   the next case's 'it' is another member", at it: each case sees only
 //   its own member.
-// - A case naming a member that isn't void declares `it` in a scope of its
-//   own around the case's statements (Ast_Case.it, at the 'case'), as
-//   check_for declares a loop's iterator: of the member's type, hiding any
-//   outer it (a loop's, an outer switch's), and hidden in turn by a loop's
-//   or a switch's inside the case. It's the member in the union itself, no
-//   copy (lowering takes the switched value's address once), so it's a
-//   place exactly when the switched value is one (expr_is_place); when
-//   that's a parameter, a call, a constant or a loop's iterator, it's
-//   read-only, as an iterator is (is_iterator): "can't assign to 'it': it's
-//   a member of a switched value that isn't a place". A void member's case
-//   and `case;` declare no it: there, it means what it means around the
-//   switch. A case with a mistake in its value declares one too, as
-//   check_for declares an iterator over a sequence with an error, not in
-//   Ast_Case.it: of the member's type for a member named twice (none for a
-//   void one), else of no type, so its uses add no second message, nor
-//   reach an outer it.
+// - A case naming a member that isn't void declares `it` in the case's own
+//   scope, which its statements share (Ast_Case.it, at the 'case'), as
+//   check_for declares a loop's iterator in the loop's: of the member's
+//   type, hiding any outer it (a loop's, an outer switch's), and hidden in
+//   turn by a loop's or a switch's inside the case, while `it := 5;` among
+//   the case's statements is "'it' is already declared at PATH:L:C". It's
+//   the member in the union itself, no copy (lowering takes the switched
+//   value's address once), so it's a place exactly when the switched value
+//   is one (expr_is_place); when that's a parameter, a call, a constant or
+//   a loop's iterator, it's read-only, as an iterator is (is_iterator):
+//   "can't assign to 'it': it's a member of a switched value that isn't a
+//   place". A void member's case and `case;` declare no it: there, it means
+//   what it means around the switch. A case with a mistake in its value
+//   declares one too, as check_for declares an iterator over a sequence
+//   with an error, not in Ast_Case.it: of the member's type for a member
+//   named twice (none for a void one), else of no type, so its uses add no
+//   second message, nor reach an outer it.
 static void check_tagged_switch(Checker *c, Ast_Switch *s, Type *t) {
     bool place = expr_is_place(s->value);
     // A union reached only through a pointer may not be laid out yet, its

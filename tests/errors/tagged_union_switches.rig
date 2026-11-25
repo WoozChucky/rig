@@ -8,9 +8,9 @@
 // cases all return, which gets no second message; two missing; #through
 // ending a case; it written, or its address taken, when the switched value
 // is a parameter or a call; it used by a #run, the switched value a
-// parameter or a local; and a struct switched on. The last two
-// procedures have no mistake: #complete adds nothing, and a case; beside
-// every member is fine.
+// parameter or a local; and a struct switched on. The two before main
+// have no mistake: #complete adds nothing, and a case; beside every
+// member is fine.
 Circle :: struct { r: float; }
 Rect :: struct { w: float; h: float; }
 Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }

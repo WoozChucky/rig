@@ -456,9 +456,10 @@ static bool walk_type(Reach *r, Type *t) {
 // pointer, before resolve_late_fields. An enum (spec 3.18) has its
 // members' values worked out now (walk_enum), which walk_type doesn't,
 // since its description holds them, and its integer type is described
-// too, as a tagged union's tag type is (spec 3.20), its members walked as
-// a struct's fields (a void member's type, void, needing nothing more).
-// Each type is walked once, so a struct that points at itself ends.
+// too. A tagged union (spec 3.20) has its tag type described, and its
+// members walked as a struct's fields are (a void member's type, void,
+// needing nothing more). Each type is walked once, so a struct that
+// points at itself ends.
 // False when a struct has no layout, or is still being laid out
 // (describing *S in one of S's counts is a circle, as reaching S by value
 // is), or a field has no type, or an enum's member has no value: errors,

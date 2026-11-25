@@ -1064,7 +1064,8 @@ static s64 tagged_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LL
                                   field->type->size, 0, made.node);
     }
     LLVMMetadataRef real = LLVMDIBuilderCreateUnionType(b->debug, file, "", 0, file, line, (u64)size * 8,
-                                                        (u32)align * 8, LLVMDIFlagZero, parts, (unsigned)held, 0, "", 0);
+                                                        (u32)align * 8, LLVMDIFlagZero, parts, (unsigned)held, 0,
+                                                        "", 0);
     LLVMMetadataReplaceAllUsesWith(temporary, real);
     if (*levels < union_levels + 1) *levels = union_levels + 1;
     members[1] = debug_member(b, in, file, String{}, line, size, t->fields[0].offset, real);
@@ -1224,13 +1225,13 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 // count it keeps is more than DEBUG_TYPE_LEVELS, wherever the type is made
 // (though a chain through cycles can be longer than its count says: see
 // DEBUG_TYPE_LEVELS). A type made DEBUG_TYPE_LEVELS - 1 levels down is its
-// stand-in (a declaration, or a pointer to no type), a tagged union one
-// level sooner, since its members' types are two levels below it (their
-// union is one: tagged_members), as is a part whose own count is
-// DEBUG_TYPE_LEVELS already (part_debug_type): made first on its own, a
-// long chain of types is cut where it reaches the limit, and a type that
-// holds the chain's head is cut at the head. A cut is for good: the type
-// remembered is the one with the stand-in. So with
+// stand-in (a declaration, or a pointer to no type), and so is a part
+// whose own count is DEBUG_TYPE_LEVELS already (part_debug_type); a tagged
+// union is its stand-in one level sooner, since its members' types are two
+// levels below it (their union is one: tagged_members). So made first on
+// its own, a long chain of types is cut where it reaches the limit, and a
+// type that holds the chain's head is cut at the head. A cut is for good:
+// the type remembered is the one with the stand-in. So with
 // S1 :: struct { s: S0; } ... S50000 :: struct { s: S49999; },
 // a variable v of S50000 made first has v.s ... down to S49002, 998 fields
 // down, whose s is a declared S49001, which gdb shows in full only if
