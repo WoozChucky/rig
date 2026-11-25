@@ -8,9 +8,9 @@
 // milestone 2c's line tables (#71), on modules lowered from source, with
 // the debug information of a program of several files (#112) among them;
 // last, the optimiser (#116). Uses test_ir.cpp's HELLO, max_module and
-// lower_program, test_checker.cpp's chain_of and joined, test_load.cpp's
-// load_test_directory, write_source and in_directory, and test_base.cpp's
-// md5_hex.
+// lower_program, test_parser.cpp's nested_source, test_checker.cpp's
+// chain_of and joined, test_load.cpp's load_test_directory, write_source
+// and in_directory, and test_base.cpp's md5_hex.
 
 #include "test.h"
 
@@ -1506,7 +1506,16 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Small :: enum u8 { X :: 200; }\n"
                                 "Huge :: enum u64 { TOP :: 18446744073709551615; }\n"
                                 "Signed :: enum s8 { LOW :: -2; }\n"
+                                "Value :: union { i: s64; f: float64; p: *void; }\n"
+                                "Key :: struct { code: s32; }\n"
+                                "Mouse :: struct { x: s16; y: s16; }\n"
+                                "Event :: struct {\n"
+                                "    kind: s32;\n"
+                                "    union { key: Key; mouse: Mouse; };\n"
+                                "}\n"
                                 "main :: () {\n"
+                                "    value: Value;\n"
+                                "    event: Event;\n"
                                 "    mode: Mode;\n"
                                 "    tiny: Small;\n"
                                 "    huge: Huge;\n"
@@ -1594,6 +1603,45 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(contains(low, "size: 8"));
         CHECK(contains(node_line(&a, text, attached(&a, low, "baseType:")), "!DIBasicType(name: \"s8\""));
         CHECK(contains(text, "!DIEnumerator(name: \"LOW\", value: -2)"));
+        // A union is a union type (spec 10.7), at its declaration's line, its
+        // members all at offset 0, which LLVM's text leaves out.
+        String value = line_with(text, "!DICompositeType(tag: DW_TAG_union_type, name: \"Value\"");
+        CHECK(contains(value, "line: 8,"));
+        CHECK(contains(value, "size: 64"));
+        String value_node = defined_node(value);
+        CHECK(value_node.count > 0);
+        const char *value_members[] = {"i", "f", "p"};
+        for (const char *name : value_members) {
+            String member = line_with(
+                text, string_cstr(&a, string_printf(&a, "!DIDerivedType(tag: DW_TAG_member, name: \"%s\"", name)));
+            CHECK(string_eq(attached(&a, member, "scope:"), value_node));
+            CHECK(contains(member, "size: 64"));
+            CHECK(!contains(member, "offset:"));
+        }
+        // An anonymous member is a member with no name, at its offset, of a
+        // union type with no name, both at the member's keyword's line, not
+        // Event's, as clang describes C's; the anonymous union's members are
+        // its own.
+        String event_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Event\"");
+        CHECK(contains(event_line, "line: 11,"));
+        String event = defined_node(event_line);
+        CHECK(event.count > 0);
+        String anonymous = line_with(text, "!DIDerivedType(tag: DW_TAG_member, scope: ");
+        CHECK(contains(anonymous, "line: 13,"));
+        CHECK(contains(anonymous, "size: 32, offset: 32)"));
+        CHECK(string_eq(attached(&a, anonymous, "scope:"), event));
+        String inner = node_line(&a, text, attached(&a, anonymous, "baseType:"));
+        CHECK(contains(inner, "!DICompositeType(tag: DW_TAG_union_type, scope: "));
+        CHECK(!contains(inner, "name:"));
+        CHECK(contains(inner, "line: 13,"));
+        CHECK(contains(inner, "size: 32"));
+        String inner_node = defined_node(inner);
+        CHECK(inner_node.count > 0);
+        String key = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"key\"");
+        String mouse = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"mouse\"");
+        CHECK(string_eq(attached(&a, key, "scope:"), inner_node));
+        CHECK(string_eq(attached(&a, mouse, "scope:"), inner_node));
+        CHECK(!contains(key, "offset:") && !contains(mouse, "offset:"));
     }
     arena_free(&a);
 }
@@ -1659,6 +1707,45 @@ TEST(llvm_debug_types_stop_at_a_depth) {
             CHECK(ok);
             if (!ok) fprintf(stderr, "  " STR_FMT "\n", STR_ARG(error));
         }
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_debug_union_stand_ins_are_unions) {
+    // A union cut at the depth limit is declared as a union, and an
+    // anonymous one with no name, at its keyword's line (spec 10.7). In the
+    // first program, U0 to U1100 each hold the one before, and v's U1100 is
+    // made from the top: U<1100 - (MAX_DEPTH - 1)> is the declaration, as
+    // in llvm_debug_types_stop_at_a_depth, and no U is a struct. In the
+    // second, S holds 999 anonymous unions, one inside the other, each on a
+    // line of its own: the innermost, on line 1000, MAX_DEPTH - 1 levels
+    // below S, is the only declaration.
+    Arena a = arena_make();
+    const s64 last = MAX_DEPTH + 100;
+    const char *unions =
+        joined(&a, "U0 :: union { x: int; }\n", chain_of(&a, "U%lld :: union { u: U%lld; }\n", 1, last, -1),
+               string_cstr(&a, string_printf(&a, "main :: () { v : U%lld; }\n", (long long)last)));
+    const char *anonymous = nested_source(&a, "S :: struct {", "\nunion { ", MAX_DEPTH - 1, "a: [1]int; ", "}; ",
+                                          "}\nmain :: () { v : S; }\n");
+    CHECK(check_source(&a, unions).count == 0);
+    CHECK(check_source(&a, anonymous).count == 0);
+    Ir_Module *union_module = lower_source(&a, unions);
+    Ir_Module *anonymous_module = lower_source(&a, anonymous);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, union_module, (Target)t);
+        const char *top = string_cstr(&a, string_printf(&a, "DW_TAG_union_type, name: \"U%lld\", ", (long long)last));
+        const char *cut = string_cstr(
+            &a, string_printf(&a, "DW_TAG_union_type, name: \"U%lld\", ", (long long)(last - (MAX_DEPTH - 1))));
+        CHECK(contains(line_with(text, top), ", elements: !"));
+        CHECK(contains(line_with(text, cut), ", flags: DIFlagFwdDecl)"));
+        CHECK(count_of(text, "DIFlagFwdDecl") == 1);
+        CHECK(count_of(text, "DW_TAG_structure_type, name: \"U") == 0);
+        text = llvm_text(&a, anonymous_module, (Target)t);
+        CHECK(count_of(text, "DIFlagFwdDecl") == 1);
+        String stand_in = line_with(text, "DIFlagFwdDecl");
+        CHECK(contains(stand_in, "!DICompositeType(tag: DW_TAG_union_type, scope: "));
+        CHECK(!contains(stand_in, "name:"));
+        CHECK(contains(stand_in, "line: 1000,"));
     }
     arena_free(&a);
 }

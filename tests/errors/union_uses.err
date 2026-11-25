@@ -1,0 +1,54 @@
+tests/errors/union_uses.rig:16:12: error: a foreign procedure can't take a 'Value' yet; pass a pointer to it
+    bad :: (v: Value) #foreign libc;
+               ^
+tests/errors/union_uses.rig:17:29: error: a union's literal names its one member, as in Value.{f = 1.5}
+    one :: () -> Value { return .{1}; }
+                                ^
+tests/errors/union_uses.rig:18:38: error: a union's literal gives one member; 'i' is given already
+    two :: () -> Value { return .{i = 1, f = 2}; }
+                                         ^
+tests/errors/union_uses.rig:23:10: error: a union's literal names its one member, as in Value.{f = 1.5}
+        a := Value.{1};
+             ^
+tests/errors/union_uses.rig:24:24: error: a union's literal gives one member; 'i' is given already
+        b := Value.{i = 1, f = 2};
+                           ^
+tests/errors/union_uses.rig:25:29: error: a union's literal gives one member; 'key' is given already
+        c := Event.{key = .{1}, mouse = .{2, 3}};
+                                ^
+tests/errors/union_uses.rig:26:7: error: 'Value' has no member 'z'
+        v.z = 1;
+          ^
+tests/errors/union_uses.rig:27:17: error: 'Value' has no member 'z'
+        d := Value.{z = 1};
+                    ^
+tests/errors/union_uses.rig:28:7: error: 'Event' has no field 'z'
+        e.z = 1;
+          ^
+tests/errors/union_uses.rig:29:10: error: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'
+        if v == v { }
+             ^
+tests/errors/union_uses.rig:30:10: error: '<' needs numbers, not 'Value'
+        if v < v { }
+             ^
+tests/errors/union_uses.rig:31:10: error: this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}
+        x := .{f = 1};
+             ^
+tests/errors/union_uses.rig:32:20: error: a value of type 'Key' doesn't convert to 'union' implicitly
+        g := Event.{1, Key.{2}};
+                       ^
+tests/errors/union_uses.rig:33:27: error: field 'kind' is given twice
+        h := Event.{kind = 1, kind = 2};
+                              ^
+tests/errors/union_uses.rig:34:20: error: a union's literal names its one member, as in Value.{f = 1.5}
+        i := Event.{1, .{Key.{2}}};
+                       ^
+tests/errors/union_uses.rig:35:22: error: 'union' has no member 'z'
+        j := Event.{1, .{z = 1}};
+                         ^
+tests/errors/union_uses.rig:36:18: error: 'struct' has no field 'z'
+        k := Pair.{.{z = 1}};
+                     ^
+tests/errors/union_uses.rig:37:24: error: member 'i' is given twice
+        l := Value.{i = 1, i = 2};
+                           ^

@@ -1,0 +1,28 @@
+43:     putchar(10);
+union Value v = union Value
+struct Event e = struct Event
+union Word w = union Word
+struct Deep deep = struct Deep
+union Value
++0x000 i                : 0n4609434218613702656
++0x000 f                : 1.5
++0x000 p                : 0x3ff80000`00000000 Void
+struct Event
++0x000 kind             : 0n2
++0x004 key              : Key
++0x004 mouse            : Mouse
+int 0n65
+union Word
++0x000 lo
++0x002 hi
++0x000 all
+unsigned short 2
+struct Deep
++0x000 tag              : 0x1 ''
++0x008 d
++0x008 a                : 0x2 ''
++0x010 b                : 0n12884901888
++0x010 c                : [2]
++0x018 z                : 0x4 ''
+int64 0n12884901888
+int 0n3

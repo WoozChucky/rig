@@ -110,18 +110,19 @@ static void report_variadic_refused(Checker *c, Type *view, Position dots, const
 // A parameter's or, with `result`, a result's type t, at `at`, of `who`, "a
 // foreign procedure" or "a #c_call procedure", which C calls or is called by
 // (spec 7.6): what C can't take is reported.
-// - A struct, an array, a view, a resizable array or a string: C passes a
-//   struct by value by rules of its own on each platform, which come with
-//   milestone 6's bindings ("a foreign procedure can't take a 'Vec2' yet;
-//   pass a pointer to it", "... can't return a 'Vec2' yet"). A pointer to
-//   one is a C pointer to a C struct of the same layout, which passes. C has
-//   no views nor resizable arrays (spec 3.17), and takes an array as a
-//   pointer to its first element: "a foreign procedure can't take a
-//   '[3]int'; pass its .data" (or a view's or a resizable array's .data,
-//   with its count if C needs it). A C string is a pointer to bytes ending
-//   with a zero, which a literal converts to, but another string's bytes
-//   needn't end with one: "a foreign procedure can't take a 'string'; pass
-//   its .data, which may not end with a zero, or a literal".
+// - A struct or a union, an array, a view, a resizable array or a string:
+//   C passes a struct or a union by value by rules of its own on each
+//   platform, which come with milestone 6's bindings ("a foreign procedure
+//   can't take a 'Vec2' yet; pass a pointer to it", "... can't return a
+//   'Vec2' yet"; spec 3.19). A pointer to one is a C pointer to a C struct
+//   or union of the same layout, which passes. C has no views nor
+//   resizable arrays (spec 3.17), and takes an array as a pointer to its
+//   first element: "a foreign procedure can't take a '[3]int'; pass its
+//   .data" (or a view's or a resizable array's .data, with its count if C
+//   needs it). A C string is a pointer to bytes ending with a zero, which a
+//   literal converts to, but another string's bytes needn't end with one:
+//   "a foreign procedure can't take a 'string'; pass its .data, which may
+//   not end with a zero, or a literal".
 // - A procedure value that isn't #c_call: a Rig procedure, which C would
 //   call as it calls its own, but which may come to expect more (#84's
 //   context): "a foreign procedure can't take a '(int) -> int', which isn't
@@ -656,18 +657,16 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
         if (value->kind == AST_LITERAL) {
             Ast_Literal *literal = (Ast_Literal *)value;
             if (t->kind == TYPE_ARRAY ? literal->values.count != t->count && !literal->is_baked
-                                      : !literal->names.count && literal->values.count > t->fields.count) {
+                                      : literal->fields.count != literal->values.count) {
                 return false;
             }
             for (s64 i = 0; i < literal->values.count; i++) {
                 Type *part = nullptr;
                 if (t->kind == TYPE_ARRAY) {
                     part = t->element;
-                } else if (!literal->names.count) {
-                    part = t->fields[i].type;
                 } else {
-                    s32 field = type_field_index(t, literal->names[i]);
-                    if (field < 0 || literal_field_value(literal, t, field) != literal->values[i]) return false;
+                    s32 field = literal->fields[i];
+                    if (field < 0) return false;
                     part = t->fields[field].type;
                 }
                 if (!part || !check_constant_value(c, constant, literal->values[i], part)) return false;
@@ -1180,14 +1179,6 @@ bool check_enum_values(Checker *c, Type *t) {
 // again, and what the body says of them stays said, as a global's value's
 // does.
 
-// The field of struct s before its i-th with the same name, or null.
-static Ast_Field *earlier_field(Ast_Struct *s, s64 i) {
-    for (s64 j = 0; j < i; j++) {
-        if (string_eq(s->fields[j]->name, s->fields[i]->name)) return s->fields[j];
-    }
-    return nullptr;
-}
-
 // The offset `offset` rounded up to a multiple of `align` (a power of 2).
 static s64 align_up(s64 offset, s32 align) {
     return (offset + align - 1) & ~(s64)(align - 1);
@@ -1240,59 +1231,130 @@ static void late_layout(Checker *c, Ast_Type *written, s64 *size, s32 *align) {
 // all of a field held by value's; of a late field's, only the arrays it
 // starts with, whose counts the layout needs (late_layout), so all of them
 // when it starts with one, and none when it starts with a pointer, a view
-// or a resizable array, which the layout doesn't look behind.
+// or a resizable array, which the layout doesn't look behind. An anonymous
+// member's braces are a level (spec 3.19) above its deepest field's:
+// worked out the first time it's asked, and kept (Ast_Field.levels), so
+// asking for its outer members' doesn't walk it again.
 static s32 layout_levels(Ast_Field *field) {
+    if (field->anonymous) {
+        if (!field->levels) {
+            s32 deepest = 0;
+            for (s64 i = 0; i < field->anonymous->fields.count; i++) {
+                s32 levels = layout_levels(field->anonymous->fields[i]);
+                if (levels > deepest) deepest = levels;
+            }
+            field->levels = deepest + 1;
+        }
+        return field->levels;
+    }
     Ast_Type *written = field->type_expr;
     if (holds_pointer_or_view(written) && written->kind != AST_TYPE_ARRAY) return 0;
     return written->levels;
+}
+
+// The type of anonymous member `s` of struct type `outer` (spec 3.19): a
+// struct or a union of its own, with no name, made once, by its outer's
+// layout (lay_out), in its outer's arena (Type.arena), so the decider's
+// and the checker's are one, as a declared struct's are. It's under way
+// until its own fields are laid out.
+static Type *make_anonymous_type(Type *outer, Ast_Struct *s) {
+    Type *t = arena_new<Type>(outer->arena);
+    t->kind = TYPE_STRUCT;
+    t->align = 1;
+    t->decl = s;
+    t->arena = outer->arena;
+    t->is_union = s->is_union;
+    s->declared = t;
+    s->resolve = RESOLVE_UNDER_WAY;
+    return t;
 }
 
 // Struct s's fields, offsets, size and alignment, into its Type: each field
 // at the next offset that is a multiple of its alignment, the struct's
 // alignment its largest field's (1 when it has none), its size rounded up to
 // that, so in an array (or another struct) every copy stays aligned. A
-// late field (holds_pointer_or_view) is laid out from what's written, its
-// type made later; any other's type is worked out here. A field whose type
-// was an error is kept, so its uses say nothing more, but takes no room.
-// Two fields of one name: "'x' is already declared at PATH:L:C", the second
-// not kept (though a late one's type is still made, for its own mistakes).
+// union's members (spec 3.19) are all at offset 0, its alignment its
+// largest member's, its size its largest member's rounded up to that: C's
+// layout, so a union of a [5]u8 and a u32 is 8 bytes. A late field
+// (holds_pointer_or_view) is laid out from what's written, its type made
+// later; any other's type is worked out here. A field whose type was an
+// error is kept, so its uses say nothing more, but takes no room.
+//
+// An anonymous member is a field with no name, of a type of its own made
+// here (make_anonymous_type), whose fields are laid out first, as s's are;
+// then it's placed as any field is. Its fields are reached as its outer
+// struct's (type_find_member), as C reaches them, so a name is declared
+// once in all the braces of one top-level declaration, nested to any
+// depth: `reachable` holds the named fields so far, in source order, from
+// the top-level declaration's first. A field whose name is in it, in its
+// own braces or in others', is "'x' is already declared at PATH:L:C", and
+// isn't kept (Ast_Field.index -1), though a late one's type is still made,
+// for its own mistakes; so the one field a name finds is the first
+// declared. Anonymous members' empty names clash with nothing.
 //
 // A field's type starts where the struct does, at `base`, so what it needs
 // starts a level below its own levels (layout_levels; open_declaration),
-// not below the deepest field's.
-static void lay_out(Checker *c, Ast_Struct *s, s32 base) {
+// not below the deepest field's. An anonymous member's fields start a
+// level below its braces.
+static void lay_out(Checker *c, Ast_Struct *s, s32 base, Array<Ast_Field *> *reachable) {
     Type *t = s->declared;
-    s64 offset = 0;
+    s64 end = 0;  // where the fields so far end; a union's largest member's size
     s32 align = 1;
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
-        field->is_late = holds_pointer_or_view(field->type_expr);
-        Ast_Field *earlier = earlier_field(s, i);
-        if (earlier) {
-            Position at = earlier->pos;
-            diag_error(c->diag, field->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d",
-                       STR_ARG(field->name), STR_ARG(c->diag->files[at.file].path), at.line, at.col);
-            continue;
-        }
+        field->index = -1;
         Type *type = nullptr;  // a late field's comes later
         s64 size;
         s32 field_align;
-        c->levels = base + layout_levels(field) + 1;
-        if (field->is_late) {
-            late_layout(c, field->type_expr, &size, &field_align);
+        if (field->anonymous) {
+            type = make_anonymous_type(t, field->anonymous);
+            lay_out(c, field->anonymous, base + 1, reachable);
+            field->anonymous->resolve = RESOLVE_DONE;
+            size = type->size;
+            field_align = type_align(type);
         } else {
-            type = resolve_type(c, field->type_expr);
-            size = type ? type->size : 0;
-            field_align = type ? type_align(type) : 1;
+            field->is_late = holds_pointer_or_view(field->type_expr);
+            Ast_Field *earlier = nullptr;
+            for (s64 j = 0; j < reachable->count && !earlier; j++) {
+                if (string_eq((*reachable)[j]->name, field->name)) earlier = (*reachable)[j];
+            }
+            if (earlier) {
+                Position at = earlier->pos;
+                diag_error(c->diag, field->pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d",
+                           STR_ARG(field->name), STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+                continue;
+            }
+            array_add(reachable, field);
+            c->levels = base + layout_levels(field) + 1;
+            if (field->is_late) {
+                late_layout(c, field->type_expr, &size, &field_align);
+            } else {
+                type = resolve_type(c, field->type_expr);
+                size = type ? type->size : 0;
+                field_align = type ? type_align(type) : 1;
+            }
         }
-        offset = align_up(offset, field_align);
+        s64 offset = s->is_union ? 0 : align_up(end, field_align);
+        field->index = (s32)t->fields.count;
         array_add(&t->fields, Type_Field{field->name, type, offset});
         field->type = type;
-        offset += size;
+        if (offset + size > end) end = offset + size;
         if (field_align > align) align = field_align;
     }
     t->align = align;
-    t->size = align_up(offset, align);
+    t->size = align_up(end, align);
+}
+
+// Struct s, laid out, done: its anonymous members, nested to any depth,
+// have no type when s has none (a circle, too big), as nothing reaches
+// them but through s.
+static void finish_anonymous_members(Ast_Struct *s) {
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Struct *inner = s->fields[i]->anonymous;
+        if (!inner) continue;
+        if (!s->declared) inner->declared = nullptr;
+        finish_anonymous_members(inner);
+    }
 }
 
 // Whether the circle that `decl` closes (decl and every declaration needed
@@ -1350,7 +1412,9 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
-    lay_out(c, s, outer);
+    Array<Ast_Field *> reachable = {};
+    lay_out(c, s, outer, &reachable);
+    array_free(&reachable);
     c->resolving.count--;
     c->levels = outer;
     return_to_scopes(c, scopes);
@@ -1361,6 +1425,7 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         s->declared = nullptr;
     }
     s->resolve = RESOLVE_DONE;
+    finish_anonymous_members(s);
     return s->declared;
 }
 
@@ -1393,9 +1458,9 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     if (field->resolve == RESOLVE_CYCLE) type = nullptr;
     field->resolve = RESOLVE_DONE;
     field->type = type;
-    // A second field of the name isn't in the type (lay_out).
+    // A field whose name was declared before it isn't in the type (lay_out).
     Type *t = s->declared;
-    if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = type;
+    if (t && field->index >= 0) t->fields[field->index].type = type;
 }
 
 bool check_layout(Checker *c, Type *t) {
@@ -1412,8 +1477,14 @@ bool check_layout(Checker *c, Type *t) {
 // a value, so it's said as one through a value is (resolve_struct), though
 // the bodies the walk checked are done, off c->resolving, by the time it
 // meets the struct.
+//
+// An anonymous member's type (spec 3.19) is never met under way: it's in
+// its outer's fields, so reached at all, only once its own fields are laid
+// out (lay_out), and a field of one still under way isn't found, a circle
+// at its top-level declaration (check_member_under_way).
 bool check_finished_layout(Checker *c, Type *t) {
     Ast_Struct *s = t->decl;
+    RIG_ASSERT(!s || s->name.count || s->resolve == RESOLVE_DONE);
     if (s && (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE)) {
         if (s->resolve == RESOLVE_UNDER_WAY) {
             diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
@@ -1424,13 +1495,46 @@ bool check_finished_layout(Checker *c, Type *t) {
     return check_layout(c, t);
 }
 
+// Whether an anonymous member of struct s still being laid out, or one
+// under way inside it, at any depth, holds a field named `name` already, in
+// its type so far. Each level has one under way at most: lay_out works
+// them out in turn.
+static bool held_under_way(Ast_Struct *s, String name) {
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Struct *inner = s->fields[i]->anonymous;
+        if (!inner || inner->resolve != RESOLVE_UNDER_WAY) continue;
+        Array<s32> path = {};
+        type_find_member(inner->declared, name, &path);
+        bool held = path.count > 0;
+        array_free(&path);
+        return held || held_under_way(inner, name);
+    }
+    return false;
+}
+
+// An anonymous member is in its outer's fields only once its own are laid
+// out (lay_out), since only then are its size and alignment known, and with
+// them where it goes: so a field of one still under way, reached in one of
+// its own counts (`b: [g.key.count]int`, or a #run's code), can't be found
+// yet, though a named field before it could. The member's place depends on
+// the count, a circle through a value, said as check_finished_layout says
+// one.
+bool check_member_under_way(Checker *c, Type *t, String name) {
+    Ast_Struct *s = t->decl;
+    if (!s || (s->resolve != RESOLVE_UNDER_WAY && s->resolve != RESOLVE_CYCLE)) return false;
+    if (!held_under_way(s, name)) return false;
+    if (s->resolve == RESOLVE_UNDER_WAY) {
+        diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
+    }
+    mark_circle(c, s);
+    return true;
+}
+
 void check_late_field(Checker *c, Type *t, s32 index) {
     Ast_Struct *s = t->decl;
     if (!s || s->resolve != RESOLVE_DONE || s->declared != t) return;
     for (s64 i = 0; i < s->fields.count; i++) {
-        if (s->fields[i]->is_late && !earlier_field(s, i) && string_eq(s->fields[i]->name, t->fields[index].name)) {
-            make_late_field(c, s, i);
-        }
+        if (s->fields[i]->is_late && s->fields[i]->index == index) make_late_field(c, s, i);
     }
 }
 
@@ -1495,18 +1599,20 @@ static Type *made_again(Type *t) {
 // behind a pointer, in a view or in a resizable array has no type now; its
 // size can't have changed, so the layout stays. A struct in a circle has
 // no type, but its late fields' types are still made, for their own
-// mistakes.
+// mistakes. An anonymous member's late fields are its own struct's (spec
+// 3.19), made in turn, as its fields come.
 static void resolve_late_fields(Checker *c, Ast_Struct *s) {
     Type *t = s->declared;
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
+        if (field->anonymous) resolve_late_fields(c, field->anonymous);
         if (!field->is_late) continue;
         if (field->resolve != RESOLVE_DONE) {
             make_late_field(c, s, i);
             continue;
         }
         field->type = made_again(field->type);
-        if (t && !earlier_field(s, i)) t->fields[type_field_index(t, field->name)].type = field->type;
+        if (t && field->index >= 0) t->fields[field->index].type = field->type;
     }
 }
 
@@ -3068,6 +3174,7 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
                 t->align = 1;
                 t->decl = s;
                 t->arena = c->arena;  // so its pointer types are freed with it (type_pointer_to)
+                t->is_union = s->is_union;
                 s->declared = t;
             }
         }

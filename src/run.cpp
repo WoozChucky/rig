@@ -37,30 +37,33 @@
 // Baking. A result is made into nodes of the tree, as if it were written
 // there: a number an Ast_Int, an Ast_Float or an Ast_Bool, folded
 // (is_constant), a procedure value a name bound to the procedure, a null
-// pointer null; a string a string literal, a struct or an array a literal
-// of constant data holding its parts, and a view the array literal of its
-// elements (bake_value). So the one reading of constant data (#113:
-// constant_data, procedure_address, literal_address, folding, and
-// lowering's constant_global and constant_bytes) takes a baked value as it
-// takes a written one, and the program never sees the compile-time module.
-// A baked value is a copy, made when its run ends: what its view or string
-// pointed at may change in a later run, and it stays as it was. The
-// interpreter's values are canonical (interp.h): a type's bits
-// zero-extended from its width, a float32's in the low 32 bits. Ast.constant
-// wants a signed integer sign-extended from its width, and every float as
-// the bits of the double holding its value: baking converts. An aggregate
-// result is read from the memory the run copied it into, which is laid out
-// as the target's, as all of the interpreter's memory is.
+// pointer null; a string a string literal, a struct or an array a literal of
+// constant data holding its parts, a union a literal of its bytes
+// (Ast_Literal.bytes), and a view the array literal of its elements
+// (bake_value). So the one reading of constant data (#113: constant_data,
+// procedure_address, literal_address, folding, and lowering's
+// constant_global and constant_bytes) takes a baked value as it takes a
+// written one, and the program never sees the compile-time module. A baked
+// value is a copy, made when its run ends: what its view or string pointed
+// at may change in a later run, and it stays as it was. The interpreter's
+// values are canonical (interp.h): a type's bits zero-extended from its
+// width, a float32's in the low 32 bits. Ast.constant wants a signed integer
+// sign-extended from its width, and every float as the bits of the double
+// holding its value: baking converts. An aggregate result is read from the
+// memory the run copied it into, which is laid out as the target's, as all
+// of the interpreter's memory is.
 //
-// What can't be baked. A non-null pointer anywhere in the result refers to
-// the compiler's own memory: "#run's result holds a pointer, which can't be
-// baked, for now". A view or a string whose count is below zero has no
-// elements: "#run failed: its result holds a view with a negative count"
-// (a string's says string). A resizable array anywhere in it, whatever it
-// holds, is "#run's result holds a resizable array, which can't be baked,
-// for now" (spec 3.17). Baking stops at the first part refused, and
-// that is said at the #run, once, after it (Baking); nothing of the value
-// is kept, and the #run has no value, as after a failure.
+// What can't be baked. A non-null pointer anywhere in the result but in a
+// union's bytes refers to the compiler's own memory: "#run's result holds a
+// pointer, which can't be baked, for now". A view or a string whose count
+// is below zero has no elements: "#run failed: its result holds a view with
+// a negative count" (a string's says string). A resizable array anywhere in
+// it but in a union's bytes, whatever it holds, is "#run's result holds a
+// resizable array, which can't be baked, for now" (spec 3.17). A union's
+// bytes are baked as they are, whatever its members hold (spec 7.8). Baking
+// stops at the first part refused, and that is said at the #run, once,
+// after it (Baking); nothing of the value is kept, and the #run has no
+// value, as after a failure.
 
 #include "check.h"
 #include "interp.h"
@@ -248,8 +251,10 @@ static u64 read_bits(const u8 *at, s64 size) {
 // A struct or array literal of type t to hold `count` baked values, made as
 // the checker would find a written one of constant data: is_data already,
 // with no type written and no names, a struct's values its fields' in
-// order (literal_field_value); and is_baked, so a constant may hold it as a
-// baked view's elements (checker.cpp's check_constant_value).
+// order, as its caller says (Ast_Literal.fields, literal_field_value), or a
+// union's bytes (Ast_Literal.bytes, bake_value); and is_baked, so a
+// constant may hold it as a baked view's elements (checker.cpp's
+// check_constant_value).
 static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
     Ast_Literal *literal = baked_node<Ast_Literal>(b, AST_LITERAL, t);
     literal->is_array = t->kind == TYPE_ARRAY;
@@ -304,6 +309,14 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 //   all through the run's type, before it ran (check_run.cpp's walk_type),
 //   for every struct held by value through arrays and views, the only
 //   ones baking meets (a pointer isn't followed).
+// - A union, an anonymous one too, is a literal of its bytes, all of them
+//   as the run left them (Ast_Literal.bytes, spec 3.19), not of its
+//   members: they all lie over the same bytes, and which one the run wrote
+//   last is the program's to know. A pointer, a view, a string, a
+//   resizable array or a procedure value among them is baked as bytes, not
+//   refused: an address from compile time in them means nothing at run
+//   time, the program's business, as reading the wrong member is (spec
+//   7.8).
 // - An array [N]T is a literal of its N elements.
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the
@@ -343,6 +356,19 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
     // A view of its elements bakes as any view does.
     case TYPE_RESIZABLE: return refuse(b, "#run's result holds a resizable array, which can't be baked, for now");
     case TYPE_STRUCT: {
+        if (t->is_union) {
+            // Its bytes, all of them, whichever member wrote them (spec 3.19,
+            // 7.8): copied into the checker's arena, the literal's only
+            // content (Ast_Literal.bytes). Size 0 copies none: the literal
+            // gives nothing, all zeros.
+            Ast_Literal *literal = baked_literal(b, t, 0);
+            if (t->size) {
+                u8 *bytes = (u8 *)arena_alloc(b->c->arena, (u64)t->size, 1);
+                memcpy(bytes, at, (size_t)t->size);
+                literal->bytes = {bytes, t->size};
+            }
+            return literal;
+        }
         Ast_Literal *literal = baked_literal(b, t, t->fields.count);
         for (s64 i = 0; i < t->fields.count; i++) {
             Type_Field *field = &t->fields[i];
@@ -350,6 +376,7 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
             Ast *value = bake_value(b, field->type, at + field->offset);
             if (!value) return nullptr;
             array_add(&literal->values, value);
+            array_add(&literal->fields, (s32)i);
         }
         return literal;
     }

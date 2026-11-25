@@ -1,0 +1,75 @@
+// Anonymous members (issue #223, spec 3.19), compiled and interpreted: an
+// anonymous union or struct among a struct's fields or a union's members,
+// whose fields are reached as the outer one's own, directly and through a
+// pointer, read, written and addressed; given by name in a literal, as C's
+// designated initializers give them, the values evaluated in the order
+// written; or in order, the anonymous member one field.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+Word :: union { struct { lo: u16; hi: u16; }; all: u32; }
+Deep :: struct { tag: u8; union { d: float64; struct { a: u8; b: s64; }; }; }
+Pair :: struct { x: int; struct { a: int; b: int; }; }
+Two :: struct { struct { a: int; }; union { b: int; c: u8; }; }
+
+code_of :: (k: *Key) -> s32 { return k.code; }
+
+say :: (n: int) -> int {
+    printf("say %lld\n", n);
+    return n;
+}
+
+main :: () {
+    // The key and the mouse share the union's bytes, at 4.
+    e: Event;
+    e.kind = 1;
+    e.key.code = 65;
+    printf("%d %d %d\n", e.kind, e.key.code, e.mouse.x);
+    printf("%lld %lld\n", size_of(Event), cast(int) *e.mouse - cast(int) *e);
+
+    // An anonymous struct in a union: lo and hi over all's bytes.
+    w: Word;
+    w.all = 0x00020001;
+    printf("%d %d\n", w.lo, w.hi);
+    w.hi = 3;
+    printf("%u\n", w.all);
+
+    // Through a pointer, the pointer followed once: written, read, and the
+    // field's address taken, each landing in e.
+    p := *e;
+    p.mouse.y = 9;
+    printf("%d %d\n", e.mouse.y, p.mouse.y);
+    p.key.code = 7;
+    q := *p.mouse;
+    printf("%d %d\n", e.key.code, q.x);
+    printf("%d\n", code_of(*e.key));
+
+    // Literals: names reaching through the anonymous union, and in order,
+    // the anonymous member one value.
+    named := Event.{kind = 2, key = .{7}};
+    printf("%d %d\n", named.kind, named.key.code);
+    ordered := Event.{2, .{mouse = .{1, 2}}};
+    printf("%d %d %d\n", ordered.kind, ordered.mouse.x, ordered.mouse.y);
+
+    // Nested: a struct inside a union inside a struct, after a u8.
+    x: Deep;
+    printf("%lld %lld\n", size_of(Deep), cast(int) *x.b - cast(int) *x);
+    x.d = 1.0000000000000002;
+    printf("%d\n", x.a);
+
+    // The values are evaluated in the order written, then put in place.
+    pair := Pair.{a = say(1), x = say(2), b = say(3)};
+    printf("%lld %lld %lld\n", pair.x, pair.a, pair.b);
+    // So through two groups, b at 8 in the struct at 0 in the union at 8.
+    deep := Deep.{b = say(5), tag = cast(u8) say(1), a = cast(u8) say(3)};
+    printf("%d %d %lld\n", deep.tag, deep.a, deep.b);
+
+    // Two anonymous members, neither with a name: each value goes to its
+    // own, the other left zero.
+    two := Two.{b = 5};
+    printf("%lld %lld\n", two.a, two.b);
+    two = Two.{c = 6, a = 7};
+    printf("%lld %lld\n", two.a, two.b);
+}

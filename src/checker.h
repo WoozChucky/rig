@@ -20,15 +20,15 @@
 //
 // Names.
 // - The program's procedures, global variables, top-level constants,
-//   structs and enums are visible everywhere, in any order. They share one
-//   set of names: a global can't take a procedure's ("'x' is already
-//   declared at PATH:L:C").
-// - A struct's name is a type, and so is an enum's: used as a value, it's
-//   "'Vec2' is a type, not a value". A name declared as anything else,
-//   written where a type goes, is "'foo' is not a type"; a name declared
-//   nowhere, "unknown type 'foo'". A built-in type's name always means the
-//   built-in type, so a struct or an enum can't take one: "'u8' is a
-//   built-in type", at its name.
+//   structs, unions and enums are visible everywhere, in any order. They
+//   share one set of names: a global can't take a procedure's ("'x' is
+//   already declared at PATH:L:C").
+// - A struct's name is a type, and so is a union's or an enum's: used as a
+//   value, it's "'Vec2' is a type, not a value". A name declared as
+//   anything else, written where a type goes, is "'foo' is not a type"; a
+//   name declared nowhere, "unknown type 'foo'". A built-in type's name
+//   always means the built-in type, so a struct, a union or an enum can't
+//   take one: "'u8' is a built-in type", at its name.
 // - An enum and a constant are predeclared (spec 2.5), visible everywhere:
 //   Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }, the systems a
 //   program can be built for, and OS, the one it is (Ast_File.system, else
@@ -742,9 +742,10 @@
 //   the #run, followed by the calls that led there; it has no value then,
 //   and what needs it says nothing more, as after an error it reaches. So
 //   is a result that can't be baked: one holding a pointer that isn't null,
-//   "#run's result holds a pointer, which can't be baked, for now", or a
-//   view or a string whose count is below zero, "#run failed: its result
-//   holds a view with a negative count" ("a string").
+//   but in a union's bytes, which are baked as they are, "#run's result
+//   holds a pointer, which can't be baked, for now", or a view or a string
+//   whose count is below zero, "#run failed: its result holds a view with a
+//   negative count" ("a string").
 // - A baked string is a string literal's bytes: it converts to a *u8 and
 //   passes C's '...' as a literal does (is_literal_string). A constant may
 //   hold a baked view, its elements read-only data, as the #run's value or
@@ -1061,6 +1062,51 @@
 //   program; covers_every_value when every member's value has a case. A
 //   case's value is never worked out at run time.
 //
+// Unions and anonymous members (issue #223, spec 3.19).
+// - `Value :: union { i: s64; f: float64; }` declares a type at the top
+//   level, as a struct is declared, usable anywhere, before its declaration
+//   too: its own (each declaration a type). It's a struct with every member
+//   at offset 0, its alignment its largest member's, its size its largest
+//   member's rounded up to that (checker.cpp's lay_out): C's layout. So
+//   everything a struct value does a union's does (copies, pointers,
+//   places, Any, arrays and fields of it, circles: "'U' contains itself;
+//   it can hold a pointer to itself, *U"), and nothing a struct can't
+//   (comparisons, C by value: "a foreign procedure can't take a 'Value'
+//   yet; pass a pointer to it"). Any member can be read or written at any
+//   time, the bytes reinterpreted, unchecked, as in C.
+// - Among a struct's or a union's fields, `union { ... };` or `struct {
+//   ... };` is an anonymous member: a field with no name, of a type of its
+//   own, also with no name ("union", "struct" in messages), made by its
+//   outer's layout. Its fields are its outer's to reach: e.key is found in
+//   e's own fields, then in its anonymous members', depth by depth
+//   (type_find_member). A name reachable twice from one top-level
+//   declaration, in one pair of braces or across them, is "'x' is already
+//   declared at PATH:L:C", at the later, which isn't kept.
+// - A missing member: "'Value' has no member 'z'" ("'Vec2' has no field
+//   'z'" for a struct).
+// - A union's literal names its one member, Value.{f = 1.5} ("a union's
+//   literal names its one member, as in Value.{f = 1.5}" in order; "a
+//   union's literal gives one member; 'i' is given already"); the rest of
+//   its bytes are zero, all of them for Value.{}. A literal's name may
+//   reach through anonymous members, Event.{kind = 2, key = k}: the checker
+//   groups the values for one anonymous member into a literal of its type
+//   (check_expr.cpp's place_named_values).
+// - A member of a union that is constant data folds only when its literal
+//   gives that member, or a written literal gives none, all zero
+//   (constant_data); never a #run's baked union's, its bytes
+//   (Ast_Literal.bytes): any other is read from the data where it's used.
+// - What lowering may rely on: a union is a TYPE_STRUCT with is_union,
+//   every field at offset 0; an anonymous member a field with an empty
+//   name, whose type's name is empty too. No Ast_Member reaches through an
+//   anonymous member: the checker built the chain, a member with no name
+//   for each, so e.key is e.<anonymous>.key, fields of fields.
+//   Ast_Literal.fields is set for every struct or union literal that
+//   checked, each value's field there (a value a name reached through
+//   anonymous members is the literal of the outermost one's type);
+//   Ast_Literal.written, on a literal holding such a group and on each
+//   group, is where each value was written, the order to evaluate them in;
+//   bytes only on a baked union.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),
@@ -1181,8 +1227,11 @@ bool is_literal_string(Ast *e);
 //   type's description's (type_info_address) or constant data, found the
 //   first time it's asked and kept (Ast_Literal.is_data);
 // - the name of a constant with is_data (its `data`);
-// - a field of constant data (a struct's, not reached through a pointer),
-//   or an element of it (an array's) at an is_constant index;
+// - a field of constant data (a struct's, not reached through a pointer;
+//   a union's member only when its literal gives that member, or a
+//   written literal gives none, all zero; never a #run's baked union's,
+//   its bytes (Ast_Literal.bytes), spec 3.19), or an element of it (an
+//   array's) at an is_constant index;
 // - a cast of constant data to its own type, or between string and []u8:
 //   a #run's baked []u8 cast to a string is its bytes' string literal
 //   (Ast_Literal.text), not the array literal of its elements;
@@ -1203,9 +1252,12 @@ bool is_literal_string(Ast *e);
 // with the wrong type, reported (Line.{a = 5}.a.x).
 bool constant_data(Ast *e, Ast **value);
 
-// The value struct literal `literal`, of struct type t, gives field `field`,
-// by name or by position; null when it leaves it out.
-Ast *literal_field_value(Ast_Literal *literal, Type *t, s32 field);
+// The value struct or union literal `literal`, checked, gives its type's
+// field `field`, by name or by position (Ast_Literal.fields); null when it
+// leaves it out. A value for a field reached through anonymous members is
+// in the literal of the anonymous member's type the checker made for it,
+// at that member's index (spec 3.19).
+Ast *literal_field_value(Ast_Literal *literal, s32 field);
 
 // A call's results, whatever it calls: the procedure's (Ast_Call.proc), or
 // those of the procedure value's type (Ast_Call.callee_type). For a call

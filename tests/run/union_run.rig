@@ -1,0 +1,80 @@
+// Unions baked from #run (issue #223, spec 7.8): a union is baked as its
+// bytes, all of them, as the run left them, whichever member wrote them;
+// every member of a baked union is read from its bytes at run time. A union
+// inside a struct is baked so too, its struct field by field, and so are
+// an array's unions, and a global's union, which main changes. A pointer
+// among a union's bytes is baked as bytes, not refused as a pointer field
+// is: an address from compile time means nothing at run time, so the
+// program only tests it for zero. An anonymous struct member is baked as
+// any struct is, field by field, so its fields still fold.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Value :: union { i: s64; f: float64; p: *void; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+Pair :: struct { x: int; struct { a: int; b: int; }; }
+
+make :: () -> Value {
+    v: Value;
+    v.f = 2.5;
+    return v;
+}
+
+make_event :: () -> Event {
+    e: Event;
+    e.kind = 2;
+    e.mouse.x = 3;
+    e.mouse.y = -4;
+    return e;
+}
+
+pair :: () -> [2]Value {
+    a: [2]Value;
+    a[0].i = 7;
+    a[1].f = -1.5;
+    return a;
+}
+
+make_pair :: () -> Pair {
+    p: Pair;
+    p.x = 1;
+    p.a = 2;
+    p.b = 3;
+    return p;
+}
+
+pointing :: () -> Value {
+    v: Value;
+    v.p = *v;
+    return v;
+}
+
+B :: #run make();
+E :: #run make_event();
+P :: #run pointing();
+A :: #run pair();
+PB :: #run make_pair();
+g : Value = #run make();
+
+#run {
+    printf("a Value is %lld bytes while compiling\n", size_of(Value));
+}
+
+main :: () {
+    printf("%lld %g\n", B.i, B.f);
+    printf("%d %d %d %d\n", E.kind, E.mouse.x, E.mouse.y, E.key.code);
+    printf("%lld %g\n", A[0].i, A[1].f);
+    printf("%g\n", g.f);
+    g.i = 9;
+    printf("%lld\n", g.i);
+    if P.i != 0 {
+        printf("true\n");
+    } else {
+        printf("false\n");
+    }
+    printf("%lld %lld %lld\n", PB.x, PB.a, PB.b);
+    #if PB.b == 3 {
+        printf("folded\n");
+    }
+}

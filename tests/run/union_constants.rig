@@ -1,0 +1,61 @@
+// Unions as constants and globals (issue #223, spec 3.19, 5.9): a union's
+// literal of constants is constant data. A member folds only when it's the
+// one its literal gives (V.f, so #if can test it); any other member is the
+// same bytes reinterpreted, read from the constant's data at run time (V.i).
+// A global union starts from its literal, the rest of its bytes zero, and
+// main may change it; so may a global struct whose anonymous union is given
+// by a name reaching through it, and one with two anonymous members, each
+// value going to its own. A constant's names may reach through two
+// anonymous members, each value at its whole path's offset. A constant
+// array of unions is indexed at run time.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Value :: union { i: s64; f: float64; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+Two :: struct { struct { a: int; }; union { b: int; c: u8; }; }
+Deep :: struct { tag: u8; union { d: float64; struct { a: u8; b: s64; }; }; }
+
+V :: Value.{f = 1.5};
+NONE :: Value.{};
+TABLE :: Value.[.{i = 1}, .{f = 2.5}, .{i = -3}];
+
+g : Value = .{i = 7};
+ev : Event = .{kind = 1, mouse = .{3, 4}};
+two : Two = .{b = 5};
+TWO :: Two.{c = 6, a = 7};
+DC :: Deep.{tag = 1, b = 5, a = 3};
+
+main :: () {
+    #if V.f > 1 {
+        printf("V.f folds to %g\n", V.f);
+    }
+    printf("%lld\n", V.i);
+    printf("%lld %g\n", NONE.i, NONE.f);
+
+    printf("%lld\n", g.i);
+    g.f = 0.5;
+    printf("%g %lld\n", g.f, g.i);
+
+    printf("%d %d %d %d\n", ev.kind, ev.mouse.x, ev.mouse.y, ev.key.code);
+    ev.key.code = 65;
+    printf("%d %d\n", ev.mouse.x, ev.mouse.y);
+
+    // Two anonymous members, each value in its own.
+    printf("%lld %lld\n", two.a, two.b);
+    copy := TWO;
+    printf("%lld %lld %d\n", copy.a, copy.b, TWO.c);
+
+    // Through two anonymous members: b at 16, a at 8.
+    deep := DC;
+    printf("%d %d %lld\n", deep.tag, deep.a, deep.b);
+
+    for 0..2 {
+        if it == 1 {
+            printf("%g\n", TABLE[it].f);
+        } else {
+            printf("%lld\n", TABLE[it].i);
+        }
+    }
+}

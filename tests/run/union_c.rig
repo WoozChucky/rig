@@ -1,0 +1,21 @@
+// Unions and C (issue #223, spec 3.19, 7.6): a pointer to a union is a
+// pointer to a C union of the same layout, so C's memset and memcpy fill
+// and copy one, compiled and through the interpreter's calls into C. (By
+// value, a union isn't passed to C yet, as a struct isn't.)
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+memset :: (dest: *Value, c: s32, count: u64) -> *Value #foreign libc;
+memcpy :: (dest: *Value, source: *Value, count: u64) -> *Value #foreign libc;
+
+Value :: union { i: s64; f: float64; p: *void; }
+
+main :: () {
+    v: Value;
+    w: Value;
+    memset(*v, 0x11, size_of(Value));
+    printf("%lld\n", v.i);
+    memcpy(*w, *v, size_of(Value));
+    printf("%lld\n", w.i);
+    w.f = -1.5;
+    back := memcpy(*v, *w, size_of(Value));
+    printf("%g %g\n", v.f, back.f);
+}

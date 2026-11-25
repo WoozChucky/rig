@@ -1113,6 +1113,15 @@ check('the grammar colours enum declarations', () => {
     assertScopes('Mode :: enum {', { Mode: TYPE, enum: 'storage.type.rig' });
 });
 
+// A union's name is a type's, as a struct's is (issue #223), and union
+// itself a storage type wherever it's written: an anonymous member's
+// keyword too, whose fields' types are coloured as a struct's are.
+check('the grammar colours union declarations and anonymous members', () => {
+    assertScopes('Value :: union {', { Value: TYPE, union: 'storage.type.rig' });
+    assertScopes('    union { key: Key; };', { union: 'storage.type.rig', Key: TYPE, key: null });
+    assertScopes('    struct { lo: u16; hi: u16; };', { struct: 'storage.type.rig', u16: [PRIMITIVE, PRIMITIVE] });
+});
+
 // The switch (issue #222): case is a keyword of control, as if is; #complete
 // and #through are directives, which one rule colours, whatever their name.
 check('the grammar colours a switch', () => {
@@ -1139,11 +1148,11 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     assert.ok(files.length > 50, `only ${files.length} programs`);
 
     const sources = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
-    // The structs and enums a program may name: its own, Preload's, which
-    // every program imports (modules/Preload's Allocator, say), and those
-    // of the modules a program #imports or #loads. The predeclared enum
-    // Operating_System, which no file declares (spec 2.5), has a scope of
-    // its own, support.type.rig.
+    // The structs, unions and enums a program may name: its own,
+    // Preload's, which every program imports (modules/Preload's Allocator,
+    // say), and those of the modules a program #imports or #loads. The
+    // predeclared enum Operating_System, which no file declares (spec 2.5),
+    // has a scope of its own, support.type.rig.
     const modules = [];
     const walkModules = (dir) => {
         if (!fs.existsSync(dir)) return;
@@ -1156,7 +1165,7 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     walkModules(path.join(root, 'modules'));
     const typeNames = new Set();
     for (const source of [...sources.values(), ...modules]) {
-        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|enum|enum_flags)\b/g)) typeNames.add(m[1]);
+        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|union|enum|enum_flags)\b/g)) typeNames.add(m[1]);
     }
     assert.ok(typeNames.has('Vec2') && typeNames.has('Node') && typeNames.has('Mode'));
 
@@ -1169,7 +1178,7 @@ check('the grammar colours the types in every program of tests/run and tests/bui
         lines.forEach((tokenized, n) => {
             const where = `${name}:${n + 1}: ${tokenized.text}`;
             const text = tokenized.text;
-            // Each name coloured as a type is a struct's or an enum's.
+            // Each name coloured as a type is a struct's, a union's or an enum's.
             // (A word in a string may be split by an escape: \there.)
             for (const m of text.matchAll(/\b[A-Za-z_]\w*\b/g)) {
                 const scopes = tokenized.scopes[m.index];

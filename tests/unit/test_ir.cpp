@@ -2288,6 +2288,60 @@ TEST(member_through_a_pointer_is_null_checked) {
     arena_free(&a);
 }
 
+TEST(a_field_through_anonymous_members_is_one_address) {
+    // p.key.code is p.<anonymous>.key.code (spec 3.19): the pointer is
+    // followed and checked once, at key, and the chain's offsets add up as
+    // nested fields' do, to one address 4 bytes past p (the anonymous union's
+    // offset; key's and code's are 0), as p.kind's is p itself.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "Key :: struct { code: s32; }\n"
+                                "Mouse :: struct { x: s16; y: s16; }\n"
+                                "Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }\n"
+                                "f :: (p: *Event) -> s32 {\n"
+                                "    return p.key.code;\n"
+                                "}\n"
+                                "g :: (p: *Event) -> s32 {\n"
+                                "    return p.kind;\n"
+                                "}\n"
+                                "main :: () { }\n");
+    String ir = ir_print(&a, m);
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr) -> i32 {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
+              "b1:\n"
+              "  panic @str.0\n"
+              "b2:\n"
+              "  %5 = const i64 4\n"
+              "  %6 = ptradd %2, %5\n"
+              "  %7 = load i32 %6\n"
+              "  ret %7\n"
+              "}\n");
+    CHECK_STR(message_of(m, 0), "test.rig:5:14: runtime error: null pointer dereference\n");
+    CHECK_STR(proc_ir(ir, "g"),
+              "proc @g(ptr) -> i32 {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  branch %4, b1, b2\n"
+              "b1:\n"
+              "  panic @str.1\n"
+              "b2:\n"
+              "  %5 = load i32 %2\n"
+              "  ret %5\n"
+              "}\n");
+    arena_free(&a);
+}
+
 // Milestone 2b (issue #59): arrays and views. An index of an array or a
 // view is compared with its count, unsigned, after widening by its own sign
 // (so -1 and a u64 above int's range fail too); a failing check calls
@@ -5615,20 +5669,21 @@ TEST(only_used_types_are_described) {
     // Preload's own structs, get none. A struct's name and each member's are
     // str.N globals of their own; its members are a read-only array of its
     // own, type_info.0.members: each member's name, its type's description
-    // and its offset.
+    // and its offset. Last, is_union, false, and its padding.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_with_preload(&a, "Unused :: struct { a: u8; }\n"
                                                     "Used :: struct { next: *Used; }\n"
                                                     "main :: () {\n"
                                                     "    t := type_info(Used);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 56 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\04\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
     CHECK(contains(ir, " reloc 48 @type_info.0.members\n"));
     CHECK(contains(ir, "const @type_info.0.members: 32 align 8 = \"\\04"));
@@ -5699,11 +5754,12 @@ TEST(an_empty_view_makes_no_array) {
                                                     "    e := type_info(Empty);\n"
                                                     "    p := type_info(() -> int);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 56 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
@@ -5718,6 +5774,50 @@ TEST(an_empty_view_makes_no_array) {
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 48 @type_info.1.results\n"));
     CHECK(!contains(ir, ".members"));
     CHECK(!contains(ir, ".parameters"));
+    arena_free(&a);
+}
+
+TEST(a_unions_description_says_it_is_one) {
+    // A union is described as a struct is (spec 3.16, 3.19), its is_union
+    // byte, at 56, 1: Value's, type_info.0 (its members' s64 and float64
+    // are 1 and 2), and the anonymous union's in Event, type_info.5, after
+    // Event's, 3, and s32's, 4, which Event's members point at: its name is
+    // empty, a count of 0, and its size and alignment u8's. Event's own
+    // is_union is 0.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_with_preload(&a, "Value :: union { i: s64; f: float64; }\n"
+                                                    "Event :: struct { kind: s32; union { b: u8; }; }\n"
+                                                    "main :: () {\n"
+                                                    "    v := type_info(Value);\n"
+                                                    "    e := type_info(Event);\n"
+                                                    "}\n"));
+    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, "const @type_info.3: 64 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\08\\00\\00\\00\\00\\00\\00\\00"
+                       "\\04\\00\\00\\00\\00\\00\\00\\00"
+                       "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\02\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, "const @type_info.5: 64 align 8 = \""
+                       "\\07\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\01\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
     arena_free(&a);
 }
 

@@ -1,0 +1,43 @@
+// Unions described (issue #223, spec 3.16, 3.19): a Type_Info_Struct,
+// tag .STRUCT, whose is_union says it's a union, every member at offset
+// 0; an anonymous member is a member with an empty name, whose type's
+// description has an empty name and its own is_union and members; each
+// anonymous member's type has a description of its own, even when two
+// share a layout; a struct's is_union is false. The #run says the same
+// while compiling (spec 7.8), its output the build's.
+#import "Basic";
+
+Value :: union { i: s64; f: float64; p: *void; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { key: Key; mouse: Mouse; }; }
+Word :: union { struct { lo: u16; hi: u16; }; all: u32; }
+Vec2 :: struct { x: float; y: float; }
+Two :: struct { union { a: s32; b: s32; }; union { c: s32; d: s32; }; }
+
+#run show();
+
+// t's tag, size, is_union and name, then each member's name, in quotes, so
+// an empty one shows, and offset.
+describe :: (t: *Type_Info) {
+    s := cast(*Type_Info_Struct) t;
+    print("{} {} {} \"{}\":", t.tag, t.size, s.is_union, s.name);
+    for s.members { print(" \"{}\" {}", it.name, it.offset); }
+    print("\n");
+}
+
+show :: () {
+    describe(type_info(Value));
+    describe(type_info(Event));
+    describe((cast(*Type_Info_Struct) type_info(Event)).members[1].type);
+    describe(type_info(Word));
+    describe((cast(*Type_Info_Struct) type_info(Word)).members[0].type);
+    describe(type_info(Vec2));
+    // Two's anonymous unions are alike but each has its own description.
+    two := cast(*Type_Info_Struct) type_info(Two);
+    print("{} {}\n", two.members[0].type == two.members[1].type,
+        two.members[0].type == two.members[0].type);
+    print("{}\n", size_of(Type_Info_Struct));
+}
+
+main :: () { show(); }

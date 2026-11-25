@@ -151,7 +151,7 @@ null          push_context  return        struct        true          union
 using         while
 ```
 
-`union` and `using` are reserved: no construct uses them yet, and writing one is a syntax error wherever it appears. `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
+`using` is reserved: no construct uses it yet, and writing it is a syntax error wherever it appears. `union` declares union types and starts anonymous members (section 3.19). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
 
 ### 2.7 Directives
 
@@ -239,7 +239,7 @@ Appendix B lists each one with the section that defines it.
 
 ### 2.13 Program structure
 
-A source file is a sequence of top-level declarations: procedures, structs, constants and global variables (section 4), `#load`s, `#import`s of modules (section 2.14), `#run`s, code run while compiling (section 7.8), and `#if`s, whose taken branch's declarations are the file's too (section 4.9). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
+A source file is a sequence of top-level declarations: procedures, structs, unions, enums, constants and global variables (section 4), `#load`s, `#import`s of modules (section 2.14), `#run`s, code run while compiling (section 7.8), and `#if`s, whose taken branch's declarations are the file's too (section 4.9). They may come in any order. Statements appear only inside procedure bodies and a top-level `#run`'s block.
 
 ```ebnf
 LoadDecl   = "#load" string_lit ";" .
@@ -372,6 +372,7 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - resizable array types `[..]T` (section 3.17);
 - `string` (section 3.8);
 - struct types, declared by the program (section 3.9), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
+- union types, declared by the program, whose members all lie at offset 0, and the types of anonymous members, `union { ... }` and `struct { ... }` inside a struct or a union (section 3.19);
 - enum types, declared by the program with `enum` or `enum_flags`, each over an integer type (section 3.18), Preload's and Basic's among them, and the predeclared `Operating_System`, the systems a program can be built for (sections 2.5, 4.9);
 - procedure types `(int, int) -> int`, the types of procedure values (section 3.15).
 
@@ -381,9 +382,9 @@ Every value and every expression in Rig has a type, known while compiling. The t
 Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | "[" ".." "]" Type | ProcType | identifier .
 ```
 
-A type name is a built-in type's name, a struct's or an enum's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct or an enum cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
+A type name is a built-in type's name, a struct's, a union's or an enum's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct, a union or an enum cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
 
-**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, the same enum declaration (two enums declared alike are two types), or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
+**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, the same union declaration or anonymous member (section 3.19), the same enum declaration (two structs, unions or enums declared alike are two types), or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
 ### 3.2 Integer types
 
@@ -469,6 +470,8 @@ A field's type may be any type but `void`, but a struct cannot hold itself by va
 
 A struct value is copied whole by assignment, as an argument and as a result. Structs are not compared by any operator.
 
+A struct may have anonymous members among its fields, `union { ... };` and `struct { ... };`, each a field with no name whose own fields the struct reaches as its own (section 3.19).
+
 ### 3.10 void
 
 `void` names no value. It appears only as the target of a pointer, `*void` (section 3.5); anywhere else it is `'void' is only a pointer's target, as in *void`. A procedure that returns nothing has no `->` in its signature rather than a `void` result.
@@ -486,12 +489,13 @@ A struct value is copied whole by assignment, as an argument and as a result. St
 | `[]T`, `string` | 16 | 8 |
 | `[..]T` | 40 | 8 |
 | struct | section 3.9 | section 3.9 |
+| union | section 3.19 | section 3.19 |
 | enum | its integer type's | its integer type's |
 | procedure type | 8 | 8 |
 
 `size_of(T)` gives a type's size in bytes (section 5.16).
 
-No type may be larger than 2^40 bytes. A larger array type is `'[1099511627777]u8' is too big`, at its `[`; a larger struct is `'Huge' is too big`, at its name.
+No type may be larger than 2^40 bytes. A larger array type is `'[1099511627777]u8' is too big`, at its `[`; a larger struct or union is `'Huge' is too big`, at its name.
 
 ### 3.12 Untyped constants
 
@@ -680,7 +684,8 @@ Type_Info_Integer   :: struct { info: Type_Info; signed: bool; }
 Type_Info_Pointer   :: struct { info: Type_Info; pointer_to: *Type_Info; }
 Type_Info_Procedure :: struct { info: Type_Info; parameter_types: []*Type_Info; result_types: []*Type_Info;
                                 is_c_call: bool; is_variadic: bool; }
-Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member; }
+Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member;
+                                is_union: bool; }
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
 Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
@@ -696,11 +701,11 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 - **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
 - **Pointers** (`.POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
 - **Arrays, views and resizable arrays** (`.ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind`, a member of the enum `Array_Kind`, is `.FIXED` for an array `[N]T`, `.VIEW` for a view `[]T` and `.RESIZABLE` for a resizable array `[..]T` (section 3.17), in Jai's order, and `count` is the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A resizable array's `size` is 40 (section 3.11).
-- **Structs** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's declared name and whose `members` are its fields in order, none for a struct with none. Each is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9).
+- **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, whose `members` are its fields in order, none for a struct with none, and whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
 - **Procedure types** (`.PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
 - **Enums**, `enum` and `enum_flags` types (`.ENUM`, section 3.18): a `Type_Info_Enum`, whose `name` is the enum's declared name, `underlying` the description of its integer type, whose size, alignment and sign it has, and `is_flags` whether it is an `enum_flags`. Its members are `names` and `values`, in order, none for an enum with none: `names[i]` is a member's name and `values[i]` its value, as 64 bits, sign-extended from a signed integer type and zero-extended from an unsigned one, so a `u64` member above `s64`'s largest value reads as a negative `s64`.
 
-Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 56, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
+Laid out as section 3.9 says, `Type_Info` is 24 bytes, `Type_Info_Integer` and `Type_Info_Pointer` 32, `Type_Info_Procedure` 64, `Type_Info_Struct` 64, `Type_Info_Struct_Member` 32, `Type_Info_Array` 48, `Type_Info_Enum` 88 and `Any` 16, each aligned to 8. `Type_Info_Tag` and `Array_Kind` are enums over `int`, so a `tag` and an `array_kind` are 8 bytes.
 
 **One description per type.** Types that are the same type by section 3.1's identity have one description, at one address, so `a.type == type_info(int)` tells types apart by their descriptions' addresses. `int` and `s64` are two types, with two descriptions, the same in all but their addresses; `float` is `float32`, with one. A description points at the descriptions of the types it is made of, so a struct that holds a pointer to itself (`Node :: struct { next: *Node; }`) is described by pointing back at its own description: the descriptions are cyclic, not infinite.
 
@@ -820,7 +825,7 @@ A `[..]T` converts implicitly to the `[]T` of the same `T` (section 3.13): the v
 - A global variable may be one, zeroed (`numbers : [..]int;`), or hold one zeroed in its value, as a field its value leaves out. It grows as a local does, from the context of the code that first grows it.
 - A constant can't hold one, since no literal makes one, but for one zeroed, a field a struct literal leaves out, as a view field may be (section 4.2): with `Holder :: struct { items: [..]int; n: int; }`, `H :: Holder.{n = 2};` is a constant, and `h := H;` gives `h` an empty array that can grow. Any other, that field itself included (`E :: H.items;`), is `a constant can't hold a resizable array; no literal makes one`, at the value.
 - A resizable array converts to `Any` as any value does (section 3.16). `type_info([..]T)` describes it as a `Type_Info_Array` whose `array_kind` is `Array_Kind.RESIZABLE` and whose `count` is -1. Basic's `print` writes it as it writes a view, `[1, 2, 3]`.
-- A `#run`'s code uses resizable arrays as any code does, their memory being the compile-time world's (section 7.8), and may give a view of one's elements, which is baked as any view is. A `#run`'s result can't hold one, for now, wherever it is in it: `#run's result holds a resizable array, which can't be baked, for now`, at the `#run`.
+- A `#run`'s code uses resizable arrays as any code does, their memory being the compile-time world's (section 7.8), and may give a view of one's elements, which is baked as any view is. A `#run`'s result can't hold one, for now, wherever it is in it but in a union's bytes, which are baked as they are (section 7.8): `#run's result holds a resizable array, which can't be baked, for now`, at the `#run`.
 - C takes none (section 7.6): a foreign or `#c_call` procedure can't take one (`a foreign procedure can't take a '[..]int'; pass its .data`) or return one, and neither can C's `...`.
 
 **The built-in procedures.** Nine procedures, predeclared (section 2.5), grow and shrink a resizable array. Each takes a pointer to the array first:
@@ -1030,11 +1035,161 @@ Look true ["VISIBLE", "SOLID", "GLOWING"] [1, 2, 4]
 
 **How it's compiled.** Below the checker an enum is its integer type: stored as it is (section 10.3), passed to and from C as it is (section 7.6), baked from a `#run` as it is, a constant of the enum (section 7.8), and described to a debugger as an enumeration of its members (section 10.7).
 
+### 3.19 Union types
+
+A union is a type whose members all lie at the same place, at offset 0: it holds one of them at a time, as C's untagged unions do, and which one is the program's to know.
+
+```ebnf
+StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
+FieldDecl  = identifier ":" Type ";"
+           | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
+```
+
+```rig
+#import "Basic";
+
+Value :: union { i: s64; f: float64; p: *void; }
+
+main :: () {
+    v: Value;
+    v.f = 1.5;
+    // The same 8 bytes, read as an s64: 1.5's bits.
+    print("{} {}\n", size_of(Value), v.i);
+}
+```
+
+```text
+8 4609434218613702656
+```
+
+**Declaration.** A union is declared as a struct is (section 4.5), at the top level only, for now, and is usable anywhere, before its declaration too; inside a body, `U :: union` is `unions can only be declared at the top level, for now`, at the name. Its members are each a name and a type, or an anonymous member (below), each followed by `;`, the last one too; it may have none. Each declaration is a type of its own: two unions declared alike are two types (section 3.1). Two members of one name are `'x' is already declared at PATH:L:C`. An `#if` among the members is `#if can't be among a union's members, for now`, and anything but a name, `union` or `struct` where a member starts is `expected a member's name, found integer literal`. A union's name is a type, not a value: `'Value' is a type, not a value`.
+
+**Layout.** A union's layout is C's: every member is at offset 0, the union's alignment is the largest of its members' alignments (1 when it has none), and its size is the largest member's size rounded up to a multiple of that alignment. `Value` is 8 bytes, aligned to 8; `union { a: [5]u8; b: u32; }` is 8 bytes, aligned to 4, so that every element of an array of it stays aligned. A union with no members, or only members of size 0, has size 0, as a struct with no fields has. A member's type may be any type but `void` (`'void' is only a pointer's target, as in *void`), and a union cannot hold itself by value, directly or through structs, arrays or other unions: `'U' contains itself; it can hold a pointer to itself, *U`. Behind a pointer, in a view or in a resizable array it may, as a struct may (section 3.9). A union larger than 2^40 bytes is `'U' is too big` (section 3.11).
+
+**Members.** `v.f` is the member `f` of the union `v`, as a struct's field is (section 5.12): a place when `v` is one, and through a pointer `p.f` is `p.*.f`. Any member may be read or written at any time. Writing a member sets its bytes; reading one other than the last written gives its bytes as its own type sees them, as in C: once `v.f = 1.5;`, `v.i` is 4609434218613702656, the bits of 1.5. Nothing checks which member was written last, compiled or interpreted. A member the union does not have is `'Value' has no member 'z'`, at its name. A union value is copied whole, all its bytes, by assignment, as an argument and as a result.
+
+**Anonymous members.** Among a struct's fields or a union's members, `union { ... };` or `struct { ... };` is an anonymous member: a field with no name, of a union or a struct type of its own, which has no name either, placed as a field of that type is. Its fields are reached as the outer struct's or union's own, as in C:
+
+```rig
+#import "Basic";
+
+Key_Event :: struct { code: s32; }
+Mouse_Event :: struct { x: s16; y: s16; }
+
+Event :: struct {
+    kind: s32;
+    union { key: Key_Event; mouse: Mouse_Event; };
+}
+
+Word :: union { struct { lo: u16; hi: u16; }; all: u32; }
+
+code_of :: (e: *Event) -> s32 {
+    if e.kind == 1 { return e.key.code; }
+    return cast(s32) e.mouse.x;
+}
+
+high_half :: (w: Word) -> u16 { return w.hi; }
+
+main :: () {
+    e := Event.{kind = 1, key = .{65}};
+    w: Word;
+    w.all = 0x0002_0001;
+    print("{} {} {} {} {}\n", size_of(Event), code_of(*e), e.mouse.x, w.lo, high_half(w));
+}
+```
+
+```text
+8 65 65 1 2
+```
+
+`Event` is 8 bytes: `kind` at 0, then its anonymous union at 4, which holds `key` and `mouse`, both at 4 in `Event`. In `Word`, `lo` is at 0 and `hi` at 2, and `all`, at 0, covers both. Anonymous members nest to any depth, up to the limit of section 9.4, inside structs and unions alike. `e.key` looks for `key` among `e`'s own fields first, then among its anonymous members' fields, then theirs, depth by depth. The field it finds is a place when `e` is one, and through a pointer, `p.key`, the pointer is followed once, and checked not to be null at `key` (section 8.4). A field written with a name and an anonymous type, `x: union { ... };`, is not in the language: `expected a type, found 'union'`. Messages write an anonymous member's type as `union` or `struct`. An anonymous member is placed in its outer type only once all its fields are laid out, so a field of it is not reached from an array count of the member's own (written in it, or in an anonymous member inside it), by the count or by a `#run`'s code there: where the field lies depends on that count. With `g` a `*S`, `S :: struct { union { key: [2]int; b: [g.key.count]int; }; }` is `'S' is defined in terms of itself` (section 4.8), though a named field of `S` before `b` would be reached so.
+
+As C does, a name reachable twice from one declaration, in one pair of braces or across an anonymous member's, at any depth, is refused at the later one in the source, so every name finds one field:
+
+```rig error
+S :: struct { x: int; union { x: float; y: int; }; }
+
+main :: () {}
+```
+
+```text
+example.rig:1:31: error: 'x' is already declared at example.rig:1:15
+    S :: struct { x: int; union { x: float; y: int; }; }
+                                  ^
+```
+
+**Literals.** A union's literal gives one member, by name, and the rest of the union's bytes are zero: `Value.{f = 1.5}`. `Value.{}` gives none: every byte is zero. A literal without its type, `.{f = 1.5}`, takes a union type where it meets one, as it takes a struct type (section 5.17):
+
+```rig
+#import "Basic";
+
+Wide :: union { b: u8; all: u64; }
+
+all_of :: (w: Wide) -> u64 { return w.all; }
+
+main :: () {
+    w := Wide.{all = 0xFFFF};
+    w = Wide.{b = 1};       // b is 1, and the 7 bytes after it are zero
+    none := Wide.{};
+    print("{} {} {}\n", w.all, none.all, all_of(.{b = 2}));
+}
+```
+
+```text
+1 0 2
+```
+
+Values in order are refused, since none of them says which member it is for, and so is a second member, `Value.{i = 1, f = 2}` (`a union's literal gives one member; 'i' is given already`, at `f`), and the same member twice, `Value.{i = 1, i = 2}` (`member 'i' is given twice`, at the second `i`):
+
+```rig error
+Value :: union { i: s64; f: float64; }
+
+main :: () {
+    v := Value.{1.5};
+}
+```
+
+```text
+example.rig:4:10: error: a union's literal names its one member, as in Value.{f = 1.5}
+        v := Value.{1.5};
+             ^
+```
+
+A name in a struct's or a union's literal may reach through anonymous members, as C's designated initializers do: `Event.{kind = 1, key = .{65}}` gives `kind` and the anonymous union's `key`. An anonymous union given two names this way is given two members, `Event.{key = k, mouse = m}` being `a union's literal gives one member; 'key' is given already`. In order, an anonymous member is one field, whose value is one of its type, which only a literal without its type can be: `Event.{1, .{key = .{65}}}`.
+
+**Constants.** A union's literal whose value is constant data (section 5.9) is constant data, a constant's value or a global's, as a struct's is. A member of a union that is constant data folds only when it is the member the literal gives, or when the literal gives none: for `V :: Value.{i = 3};`, `V.i` is the constant 3, and `Value.{}.f` is 0, but `V.f`, the same bytes as a `float64`, is read from `V`'s data at run time, and is no constant. A `#run`'s union is baked as its bytes, whichever member wrote them (section 7.8), so every member of it is read at run time.
+
+**Description and printing.** A union is described as a struct is, by a `Type_Info_Struct` whose `is_union` is true, its members all at offset 0, and an anonymous member is a member with an empty name, whose type's description has an empty name too (section 3.16). Basic's `print` writes a union by its size alone, `union(8 bytes)`, never its members, since which of them holds the value is the program's to know, and writes an anonymous member as its value alone, without a name:
+
+```rig
+#import "Basic";
+
+Value :: union { i: s64; f: float64; }
+Number :: struct { kind: int; union { i: s64; f: float64; }; }
+Pair :: struct { n: int; struct { a: int; b: int; }; }
+
+main :: () {
+    s := cast(*Type_Info_Struct) type_info(Number);
+    inner := cast(*Type_Info_Struct) s.members[1].type;
+    print("{} {} {}\n", s.is_union, s.members[1].name.count, inner.is_union);
+    print("{} {} {}\n", Value.{i = 1}, Number.{kind = 2, f = 1.5}, Pair.{n = 1, a = 2, b = 3});
+}
+```
+
+```text
+false 0 true
+union(8 bytes) {kind = 2, union(8 bytes)} {n = 1, {a = 2, b = 3}}
+```
+
+**Comparison.** Unions are not compared by any operator, as structs aren't: `'==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'`, `'<' needs numbers, not 'Value'`.
+
+**C.** A pointer to a union is passed to C as a pointer to a C union of the same layout (section 7.6), so a C function that takes a `union value *` is declared with a `*Value`. A union is not passed to or returned from C by value, for now, as a struct isn't: `a foreign procedure can't take a 'Value' yet; pass a pointer to it`, `a foreign procedure can't return a 'Value' yet`, and the same for a `#c_call` procedure.
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
 
-A declaration of a name binds it to a constant, a variable, a procedure, a struct or an enum, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), `#run`s, which name nothing and run code while compiling (section 7.8), and `#if`s, which name nothing either, and whose taken branch's declarations are the top level's (section 4.9). The forms of a declaration of a name are:
+A declaration of a name binds it to a constant, a variable, a procedure, a struct, a union or an enum, and uses `:`. The top level also holds `#load`s, declarations that name no value but another file of the program (section 2.13), `#run`s, which name nothing and run code while compiling (section 7.8), and `#if`s, which name nothing either, and whose taken branch's declarations are the top level's (section 4.9). The forms of a declaration of a name are:
 
 | Form | Declares |
 |---|---|
@@ -1043,6 +1198,7 @@ A declaration of a name binds it to a constant, a variable, a procedure, a struc
 | `name :: (params) -> results #foreign libc;` | a foreign procedure (section 7.6) |
 | `name :: (params) -> results #foreign libc "c_name";` | a foreign procedure of another C function, `c_name` (section 7.6) |
 | `name :: struct { fields }` | a struct type (section 4.5) |
+| `name :: union { members }` | a union type (sections 4.5, 3.19) |
 | `name :: enum Type { members }`, `name :: enum_flags Type { members }` | an enum type, `Type` optional (section 3.18) |
 | `name :: expression;` | a constant (section 4.2) |
 | `name : Type = expression;` | a variable with a type and a value |
@@ -1051,7 +1207,7 @@ A declaration of a name binds it to a constant, a variable, a procedure, a struc
 | `name := expression;` | a variable whose type is its value's |
 | `a, b := call;` | several local variables, from a call's results (section 6.2); not at the top level |
 
-Procedures, structs and enums are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`, and `Mode :: enum { ... }` is `enums can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
+Procedures, structs, unions and enums are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`, `Value :: union { ... }` is `unions can only be declared at the top level, for now`, and `Mode :: enum { ... }` is `enums can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
 
 After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=` begins a procedure's parameter list (a parameter written `n := 0` is an error there, section 7.2); any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
 
@@ -1182,16 +1338,18 @@ A procedure's name is called (section 5.10), and used anywhere else it is a proc
 ### 4.5 Structs
 
 ```ebnf
-StructDecl = identifier "::" "struct" "{" { identifier ":" Type ";" } "}" .
+StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
+FieldDecl  = identifier ":" Type ";"
+           | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 ```
 
-A struct declaration declares a type with named fields, each followed by `;`, the last one too. Two fields of one name are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
+A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19). Among either's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
 
-A struct's name is a type, not a value: used as a value it is `'Vec2' is a type, not a value`.
+A struct's name, or a union's, is a type, not a value: used as a value it is `'Vec2' is a type, not a value`.
 
 ### 4.6 The top level
 
-Procedures, structs, enums, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file. Preload's declarations are in the top level too, since every program imports it (section 2.14), so a program can't declare one of its names; Preload comes first in load order, so the error is at the program's declaration, naming Preload's.
+Procedures, structs, unions, enums, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file. Preload's declarations are in the top level too, since every program imports it (section 2.14), so a program can't declare one of its names; Preload comes first in load order, so the error is at the program's declaration, naming Preload's.
 
 Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it. An enum's members are not top-level names: they are reached through their enum (section 3.18).
 
@@ -1230,7 +1388,7 @@ main's
 
 ### 4.8 Order and cycles
 
-Top-level declarations can be in any order. Each global variable, global constant, struct layout and enum's members' values is worked out where it is first needed, so in `A :: B + 1; B :: 2;` the constant `A` is 3.
+Top-level declarations can be in any order. Each global variable, global constant, struct's or union's layout (its anonymous members' with it, section 3.19) and enum's members' values is worked out where it is first needed, so in `A :: B + 1; B :: 2;` the constant `A` is 3.
 
 A declaration whose value needs itself, directly or through others, is an error, reported once per cycle at the declaration being worked out when the cycle closed:
 
@@ -1247,7 +1405,7 @@ example.rig:1:1: error: 'A' is defined in terms of itself
     ^
 ```
 
-The same holds for a global variable's value, an enum's member's value that needs its own enum (through another enum or a `#run`), reported at the enum, which is worked out whole, so `E :: enum { A :: cast(int) F.B; }` with `F :: enum { B :: 3; C :: cast(int) E.A; }` is a cycle though `B` needs nothing of `E` (in its own body, a member worked out already is no cycle, section 3.18), a struct's size (a struct cannot hold itself, section 3.9) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`. So is a struct one of whose array counts runs code describing it, by `type_info` or by converting a value to `Any`, even behind a pointer, since the description needs the struct's layout (section 7.8).
+The same holds for a global variable's value, an enum's member's value that needs its own enum (through another enum or a `#run`), reported at the enum, which is worked out whole, so `E :: enum { A :: cast(int) F.B; }` with `F :: enum { B :: 3; C :: cast(int) E.A; }` is a cycle though `B` needs nothing of `E` (in its own body, a member worked out already is no cycle, section 3.18), a struct's or a union's size (neither can hold itself, sections 3.9, 3.19) and a procedure's signature whose array count needs a global whose value calls it, and for a constant or a global whose `#run` reaches code that needs its value (section 7.8): `M :: #run k();`, where `k` returns `M`, is `'M' is defined in terms of itself`. So is a struct one of whose array counts runs code describing it, by `type_info` or by converting a value to `Any`, even behind a pointer, since the description needs the struct's layout (section 7.8).
 
 A procedure's default values are worked out with its signature (section 7.2), so a default that needs that signature, directly or through another procedure's default, is a cycle too, reported at the procedure: `f :: (n: int = f(1)) -> int { ... }` is `'f' is defined in terms of itself`, and a `g` whose default calls an `h` whose default calls `g` is one cycle, said once.
 
@@ -1271,7 +1429,7 @@ A condition with an error takes neither branch, and neither is checked, so the c
 
 **A branch not taken** is parsed and nothing more. Its syntax errors are reported (section 9.2), but its names aren't declared, its types aren't resolved, its expressions aren't checked, its `#run`s don't run, its `#load`s and `#import`s aren't read (a file one of them names that isn't there is no error), and nothing of it is compiled into the program. So each branch may hold what would be an error on the other system: a C function only that system has, or a constant that can be worked out only there.
 
-**At the top level** a branch holds what the top level holds: procedures, structs, enums, constants, global variables, `#load`s, `#import`s, `#run`s and other `#if`s, nested as deeply as blocks may be (section 9.4). The `#if` declares no name itself. The taken branch's declarations join the program's one top level (section 4.6), as if written in place of the `#if`: visible everywhere in the program, before the `#if` and after it, in every file. `main` may be declared in a branch. Two branches of one `#if` may declare the same name, since only one is taken; a name declared both in the taken branch and outside it is `'x' is already declared at PATH:L:C`, at the later of the two (section 4.6). A branch's declarations may be written unindented, as C's `#ifdef` has them: only the branch's `}` ends it (section 9.2).
+**At the top level** a branch holds what the top level holds: procedures, structs, unions, enums, constants, global variables, `#load`s, `#import`s, `#run`s and other `#if`s, nested as deeply as blocks may be (section 9.4). The `#if` declares no name itself. The taken branch's declarations join the program's one top level (section 4.6), as if written in place of the `#if`: visible everywhere in the program, before the `#if` and after it, in every file. `main` may be declared in a branch. Two branches of one `#if` may declare the same name, since only one is taken; a name declared both in the taken branch and outside it is `'x' is already declared at PATH:L:C`, at the later of the two (section 4.6). A branch's declarations may be written unindented, as C's `#ifdef` has them: only the branch's `}` ends it (section 9.2).
 
 - **When.** The top-level `#if`s are decided once the files outside every `#if` are read, before anything else is checked: file by file in load order (section 2.13), each file's in source order, and an `#if` nested in a taken branch where it is met. A taken branch's `#load`s and `#import`s are read then, and the top-level `#if`s of the files they reach are decided in their turn.
 - **What a condition may use.** A top-level condition is worked out before the program is checked, from what is known by then: literals, the predeclared `OS` and `Operating_System`, and the constants declared outside every top-level `#if`, in any file, with what they need in turn (other constants, and the structs whose sizes they take). A name declared in a branch of a top-level `#if` read by then, taken or not, at any depth, or in a file that only a taken branch loads and that has been read by then, reached from another top-level condition, directly or through constants and types, is `'LEVEL' is declared in a top-level #if, so it can't decide another top-level #if`, at the name: what the branches declare isn't known until the `#if`s are decided. What has been read by then follows the order files are read in (under **Load order**, below), so a name that only a file not read yet declares is `unknown identifier`, or nothing while a `#load` or a condition has failed. Running code would need the whole program checked, so a `#run` reached from a top-level condition, one in a constant's value included, is `a top-level #if's condition can't run code while compiling, for now`, at the `#run`. A condition in a body has neither limit (below).
@@ -1342,7 +1500,7 @@ a local constant decides
 
 Each system takes its own branches, and the program prints the same on both: `119` is `w`, the first byte of `"windows"`. The last `#if`'s branch, never taken, would have two errors, but it is only parsed.
 
-**Neither in a struct nor an expression,** for now. An `#if` among a struct's fields is `#if can't be among a struct's fields, for now`, at the `#if`, and the struct is given up, unless it is in column 1, where it ends the fields as the next top-level declaration (section 9.2). `#if` is no value: `x := #if A { };` is `expected an expression, found directive`. An `#if` that starts a line outside any braces is the next top-level declaration, as a `#load` and a `#run` are, so the declaration left unfinished before it is given up there (section 9.2).
+**Neither in a struct nor an expression,** for now. An `#if` among a struct's fields is `#if can't be among a struct's fields, for now` (among a union's members, `#if can't be among a union's members, for now`), at the `#if`, and the struct is given up, unless it is in column 1, where it ends the fields as the next top-level declaration (section 9.2). `#if` is no value: `x := #if A { };` is `expected an expression, found directive`. An `#if` that starts a line outside any braces is the next top-level declaration, as a `#load` and a `#run` are, so the declaration left unfinished before it is given up there (section 9.2).
 
 **`rig check` and the editor** check the taken branches only, for the system rig runs on, as `rig build` builds the program: on Windows a branch for Linux shows its syntax errors and nothing else (section 10.1). A file the program loads only in a branch not taken isn't part of it on that system: `rig check main.rig --stdin-for linux.rig` says `rig: error: 'main.rig' loads 'linux.rig' only in an #if branch not taken`, and an editor shows nothing for that file (section 10.1).
 
@@ -1486,7 +1644,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - a string literal;
 - a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth, and none of them converted to `Any`, which a constant can't hold (section 3.16);
 - the name of a constant holding data (section 4.2);
-- a field of constant data, of a struct and not reached through a pointer, and an element of an array that is constant data, at a constant index;
+- a field of constant data, of a struct and not reached through a pointer, and an element of an array that is constant data, at a constant index; a union's member only when it is the member its literal gives, or the literal gives none, since any other is another member's bytes, read where it's used (section 3.19), and never a `#run`'s baked union's member, which is read from its bytes (section 7.8);
 - a cast of constant data to its own type, or between `string` and `[]u8`;
 - `#run e` whose value is a string, a struct, an array or a view (section 7.8), baked as if it had been written as a literal: its strings hold literals, as written ones do. A view's count and elements do not fold: they are read at run time, as any view's are.
 
@@ -1575,6 +1733,8 @@ An element of an array is a place when the array is one, so an array constant's 
 
 **Fields.** When `e` is a struct, or a pointer to one, `e.x` is its field `x`. Through a pointer, `p.x` means `p.*.x`, and the pointer is checked not to be null (section 8.4). Only one pointer is followed: a `**Node` needs `.*` first, `pp.*.x`. A field that does not exist is `'Vec2' has no field 'z'`; a member of anything else is `'.x' needs a struct or a pointer to one, not 'int'`. A field is a place when its struct is one, and always when reached through a pointer. A field of constant data is a constant when it is a number, a `bool` or `null`, and folds (section 5.9): for `ORIGIN :: Vec2.{3, 4};`, `ORIGIN.y` is 4. A field of a constant is not a place (section 5.1).
 
+**Members of unions, and fields of anonymous members.** A union's members are reached as a struct's fields are, by the same rules; one the union does not have is `'Value' has no member 'z'` (section 3.19). The fields of a struct's or a union's anonymous members are its own (section 3.19): `e.key` is looked for among `e`'s own fields, then among its anonymous members' fields, depth by depth, and is the field it finds, through every anonymous member on the way. Through a pointer, `p.key`, the pointer is followed once, and checked not to be null at `key`.
+
 **Counts and data.** Arrays, views, resizable arrays and strings have the members `.count` and `.data`:
 
 | `e` | `e.count` | `e.data` |
@@ -1634,13 +1794,15 @@ Field         = [ identifier "=" ] Expression .
 ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-**Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct (`a '.{' literal needs a struct type, not 'int'`).
+**Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19).
+
+**Union literals.** A union's literal gives one member, by name, `Value.{f = 1.5}`, and the rest of its bytes are zero; `Value.{}` is all zero. Values in order are `a union's literal names its one member, as in Value.{f = 1.5}`, a second member is `a union's literal gives one member; 'i' is given already`, and a member given twice is `member 'i' is given twice` (section 3.19).
 
 **Array literals.** `int.[1, 2, 3]` makes a `[3]int`: the name before the `.` is the elements' type, and each value converts implicitly to it. An array literal's values are always in order.
 
 The type before the `.` is a name written directly before it, never a name in parentheses: `(Vec2).{1}` is not a literal. A comma may follow the last value.
 
-**Literals without a type.** `.{1, 2}` and `.[1, 2]` take their type from where they are used: a variable's declared type, an assignment's target, a parameter, a result, a field or element of an enclosing literal, or a cast (`cast([]int) .[1, 2]`). `.{...}` must meet a struct type. `.[...]` must meet an array type, whose count it must give exactly (`'[3]int' has 3 elements, but this literal gives 2`), or a view type `[]T`, for which it makes a `[N]T` of its `N` values, and the view is of that array. Meeting anything else is `a '.[' literal needs an array or a view type, not 'int'`. With nothing to take a type from, as in `x := .{1, 2};` or an operator's operand, a literal is `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for an array literal). So is a literal without its type that meets `Any`, a cast to `Any` included (`d : Any = .{null, null};`, `cast(Any) .{1, 2}`): `Any` is a struct, but it holds a value of any type, so it gives the literal no type to take (section 3.16).
+**Literals without a type.** `.{1, 2}` and `.[1, 2]` take their type from where they are used: a variable's declared type, an assignment's target, a parameter, a result, a field or element of an enclosing literal, or a cast (`cast([]int) .[1, 2]`). `.{...}` must meet a struct or a union type. `.[...]` must meet an array type, whose count it must give exactly (`'[3]int' has 3 elements, but this literal gives 2`), or a view type `[]T`, for which it makes a `[N]T` of its `N` values, and the view is of that array. Meeting anything else is `a '.[' literal needs an array or a view type, not 'int'`. With nothing to take a type from, as in `x := .{1, 2};` or an operator's operand, a literal is `this literal's type isn't known; write it before the '.', as in Vec2.{1, 2}` (`int.[1, 2]` for an array literal). So is a literal without its type that meets `Any`, a cast to `Any` included (`d : Any = .{null, null};`, `cast(Any) .{1, 2}`): `Any` is a struct, but it holds a value of any type, so it gives the literal no type to take (section 3.16).
 
 A literal's values are all evaluated, in the order written, before the literal is stored anywhere, so `v = Vec2.{v.y, v.x};` swaps `v`'s fields.
 
@@ -2455,7 +2617,7 @@ A foreign procedure's parameters and result are numbers, enums, bools, pointers 
 | `*T`, `*void` | a pointer, `void *` |
 | a `#c_call` procedure type, `(*void, *void) -> s32 #c_call` | a pointer to a function, `int (*)(void *, void *)` |
 
-It returns at most one value (`a foreign procedure can return at most one value`). Structs, arrays, views, resizable arrays and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data` (a view's and a resizable array's too), `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9). A C function that takes a variable number of arguments is declared with `..` (below).
+It returns at most one value (`a foreign procedure can return at most one value`). Structs, unions, arrays, views, resizable arrays and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data` (a view's and a resizable array's too), `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9), and a pointer to a union as a pointer to a C union of the same layout (section 3.19). A C function that takes a variable number of arguments is declared with `..` (below).
 
 ```rig
 malloc :: (size: u64) -> *void #foreign libc;
@@ -2712,16 +2874,17 @@ main :: () {
 - an enum's value, baked as its integer type's and a constant of the enum, as its members are (section 3.18), whether or not a member has it;
 - a procedure value, which is the procedure it names, a foreign one included, or `null`;
 - a pointer that is `null`;
-- a string, an array or a struct of these, nested to any depth, and a view of any of them.
+- a string, an array or a struct of these, nested to any depth, and a view of any of them;
+- a union (section 3.19), an anonymous one too, of any members, baked as its bytes: all of them, as they are when the `#run` ends, whichever member wrote them last. Its members are not baked one by one, since they all lie over the same bytes: so a pointer, a string, a view, a resizable array or a procedure value among its members is not refused, nor followed, nor copied. An address in a union's bytes is the compiler's, which means nothing at run time: reading it through such a member is the program's business, as reading a member other than the last written is.
 
 Strings and views are baked deeply: the bytes or elements they point at are copied as they are when the `#run` ends, wherever they lived while compiling (in a global, in memory `malloc` gave, on the interpreter's stack), and the baked string or view points at the copy. That includes a local or a temporary of the `#run`'s code: nothing runs between the end of the `#run` and the baking, so that memory still holds what the code left there, though the procedure it belonged to has returned. A call the code made after that procedure returned may have written over it, as it may over any returned procedure's locals (section 5.17): then what that call wrote is what's copied. A later `#run` that changes the memory leaves the copy as it was. A view whose data isn't memory the compiler may read is a memory error that no check catches (section 8.6). Some results can't be baked, each said at the `#run`, which then has no value:
 
-- Any other pointer, the result itself or one inside it, points into the compiler's own memory, which the program won't have: `#run's result holds a pointer, which can't be baked, for now`. That includes a `*u8` pointing at a string's bytes, a procedure value that names no procedure of the program (one made from an integer), a type's description's address, `type_info(T)`, and an `Any`, which holds two addresses (section 3.16). A table of C strings can hold `string`s instead, or be a constant written as a literal (section 4.2).
-- A resizable array (section 3.17), the result itself or one inside it, empty or not, would grow from memory and an allocator of the compile-time world's: `#run's result holds a resizable array, which can't be baked, for now`. A view of its elements is baked as any view is.
+- Any other pointer, the result itself or one inside it (but in a union's bytes, above), points into the compiler's own memory, which the program won't have: `#run's result holds a pointer, which can't be baked, for now`. That includes a `*u8` pointing at a string's bytes, a procedure value that names no procedure of the program (one made from an integer), a type's description's address, `type_info(T)`, and an `Any`, which holds two addresses (section 3.16). A table of C strings can hold `string`s instead, or be a constant written as a literal (section 4.2).
+- A resizable array (section 3.17), the result itself or one inside it (but in a union's bytes, above), empty or not, would grow from memory and an allocator of the compile-time world's: `#run's result holds a resizable array, which can't be baked, for now`. A view of its elements is baked as any view is.
 - A view or a string whose count is below zero has no elements to copy: `#run failed: its result holds a view with a negative count` (`a string with a negative count` for a string).
 - A view is baked as the array of its elements, `[N]T` for a count of `N`: one whose elements would make that array larger than any type may be (section 3.11) is `'[N]T' is too big`, as `'[1152921504606846976]int' is too big` for a `[]int` counting 2^60.
 
-A baked value is a constant, or constant data, as a written one is (section 5.9). A number, an enum's value or a `bool` folds, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count); an integer sizes arrays, and a body's `#if` may decide on any of these (a top-level `#if` can't run code, section 4.9). A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
+A baked value is a constant, or constant data, as a written one is (section 5.9). A number, an enum's value or a `bool` folds, and so does a part of a string, a struct or an array that is one (a field, an element at a constant index, a string's byte or count), but not a baked union's member, which is read from its bytes at run time, whichever it is (section 3.19); an integer sizes arrays, and a body's `#if` may decide on any of these (a top-level `#if` can't run code, section 4.9). A procedure value stands for its procedure, as a constant naming it does. A string, at any depth, converts to `*u8` and passes C's `...` as a string literal does (sections 3.8, 7.6). A view's parts don't fold: its count and its elements are read at run time, as any view's are. A constant may hold a baked view, which a written constant can't (section 4.2).
 
 **Where baked data lives.** A `#run`'s value used in a constant, a local's value or anywhere else in a body is read-only data, as constant data is (section 4.2), the bytes of its strings and the elements of its views included: writing them, through the view or a pointer, is a memory error that no check catches (section 8.6). A `#run`'s value used as a global's, directly or through a constant holding it, is the global's own copy, writable, the bytes of its strings and the elements of its views included, each copied into data of the global's own (section 4.3). So after `numbers : []int = #run make();` and `text := #run name();`, the program may write `numbers[0] = 10;` and `text[0] = 82;`.
 
@@ -3239,9 +3402,9 @@ example.rig:4:1: error: expected ';', found '}'
     ^
 ```
 
-An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body, a struct or an enum whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields or an enum's members, which can't hold one. A struct's or an enum's declaration in column 1 ends any of them too, as a procedure's does. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing. So is a top-level `#if` whose condition has an error, whose branches might have declared any name (section 4.9).
+An identifier found is named: `counter int = 0;` is `expected '::', found identifier 'int'`. After a syntax error the compiler gives up on the declaration it was in and goes on at the next one, so the errors in the rest of the file, and in the program's other files, are reported too, type errors included. The declaration given up on keeps its name when the text still looks like a declaration of it, and nothing more is reported about it or its uses, so one mistake gives one message. A missing `main` is not reported when a declaration with a syntax error might have been it. A `#load`, an `#import` or a `#run` that starts a line is the next top-level declaration too, as section 2.13 says of a `#load`: the declaration left unfinished before it is given up there, and the load, the import or the run is kept, unless a value is still expected there (`N ::` on the line before), where the `#run` is that value. A body, a struct or an enum whose `}` is missing ends before the `#import`s and the `#run`s in column 1 as it ends before the `#load`s, a `#run {` in column 1 ends a body as a procedure's declaration does, and any `#run` in column 1 ends a struct's fields or an enum's members, which can't hold one. A struct's, a union's or an enum's declaration in column 1 ends any of them too, as a procedure's does. A `#load` or an `#import` that failed (sections 2.13, 2.14) is the same for the whole program: the file it names might have declared any name, so while one has failed no name anywhere is reported as unknown (`unknown identifier`, `unknown type`), nor `main` as missing. So is a top-level `#if` whose condition has an error, whose branches might have declared any name (section 4.9).
 
-Recovery treats an `#if` (section 4.9) as it treats a `#run`: one that starts a line outside any braces is the next top-level declaration, and after a signature it is where the body's `{` should be. One in column 1 is among the column-1 declarations that a body whose `}` is missing ends before, and the skipping after an error resumes at it inside braces too, as at a procedure's declaration in column 1. It doesn't end a body by itself, since unindented it is a statement there, unless a branch of it (or of an `#if` right inside one of its branches, at any depth) declares a procedure, a struct or an enum, or holds a `#run { }`, right inside its braces (not in a block inside the branch), which a body can't hold: it then ends the body as a procedure's declaration in column 1 does. Any `#if` in column 1 ends a struct's fields or an enum's members, and any other among them is `#if can't be among a struct's fields, for now` (`#if can't be among an enum's members, for now`). Inside a top-level `#if`'s branch, a declaration with an error is given up as at the top level, but the skipping stops at the `}` that closes the branch, so the declarations after the `#if` are read as the top level's. No column-1 rule ends a branch, whose declarations may be unindented: only its `}` does. A branch whose `}` is missing at the end of the file is `expected '}'` there (unless a body never closed in it said so already), and the whole `#if` is given up. A branch not taken is parsed as any other, so its syntax errors are reported.
+Recovery treats an `#if` (section 4.9) as it treats a `#run`: one that starts a line outside any braces is the next top-level declaration, and after a signature it is where the body's `{` should be. One in column 1 is among the column-1 declarations that a body whose `}` is missing ends before, and the skipping after an error resumes at it inside braces too, as at a procedure's declaration in column 1. It doesn't end a body by itself, since unindented it is a statement there, unless a branch of it (or of an `#if` right inside one of its branches, at any depth) declares a procedure, a struct, a union or an enum, or holds a `#run { }`, right inside its braces (not in a block inside the branch), which a body can't hold: it then ends the body as a procedure's declaration in column 1 does. Any `#if` in column 1 ends a struct's fields or an enum's members, and any other among them is `#if can't be among a struct's fields, for now` (`#if can't be among a union's members, for now`, `#if can't be among an enum's members, for now`). Inside a top-level `#if`'s branch, a declaration with an error is given up as at the top level, but the skipping stops at the `}` that closes the branch, so the declarations after the `#if` are read as the top level's. No column-1 rule ends a branch, whose declarations may be unindented: only its `}` does. A branch whose `}` is missing at the end of the file is `expected '}'` there (unless a body never closed in it said so already), and the whole `#if` is given up. A branch not taken is parsed as any other, so its syntax errors are reported.
 
 ### 9.3 Representative messages
 
@@ -3346,7 +3509,7 @@ The sections defining each construct give its messages. Some of those met most o
 | `an enum's type must be an integer type, not 'float32'` | 3.18 |
 | `enums can only be declared at the top level, for now` | 3.18, 4.1 |
 | `#if can't be among an enum's members, for now` | 3.18, 9.2 |
-| `expected a member's name, found integer literal` | 3.18 |
+| `expected a member's name, found integer literal` | 3.18, 3.19 |
 | `can't assign to 'Mode.FREE': it's an enum's member` | 3.18, 6.4 |
 | `can't take the address of 'Mode.FREE': it's an enum's member` | 3.18, 5.13 |
 | `can't cast 'Small' to 'Mode'` | 3.14, 3.18 |
@@ -3364,6 +3527,13 @@ The sections defining each construct give its messages. Some of those met most o
 | `#through can't end the last case: there's no case after it` | 6.14 |
 | `#through can only end a switch's case, as in case 1; a(); #through;` | 2.7, 6.14 |
 | `a switch takes no else; its 'case;' runs when no case does` | 6.14 |
+| `unions can only be declared at the top level, for now` | 3.19, 4.1 |
+| `#if can't be among a union's members, for now` | 3.19, 9.2 |
+| `anonymous members are nested too deeply (more than 1000 levels)` | 3.19, 9.4 |
+| `'Value' has no member 'z'` | 3.19, 5.12 |
+| `a union's literal names its one member, as in Value.{f = 1.5}` | 3.19, 5.17 |
+| `a union's literal gives one member; 'i' is given already` | 3.19, 5.17 |
+| `member 'i' is given twice` | 3.19, 5.17 |
 
 ### 9.4 Limits
 
@@ -3371,6 +3541,7 @@ The compiler limits how deeply a program's constructs nest:
 
 - An expression nests at most 1000 levels: each parenthesis, prefix operator, cast, call, dereference, field, element, compound literal and binary operator is a level above what it holds, so a chain of 1001 `+` is too deep. Deeper is `this expression is nested too deeply (more than 1000 levels)`, at the start of the outermost expression.
 - Blocks nest at most 1000 levels, a procedure's body the first: `blocks are nested too deeply (more than 1000 levels)`, at the `{` one too many. A top-level `#if`'s branch is a block for this limit, so top-level `#if`s nest at most 1000 levels, and a procedure declared in branches has its body that many levels down already. In a body an `#if`'s branch is a block too, and so is each `defer`, whose statement is a block of its own (section 6.12): `defer { ... }` is two levels, the `defer` and its `{`, and the one too many is reported at whichever of them it is: a `defer` at its keyword, a `{` at the `{`. A switch's braces are a level, counted at their `{`, its cases' blocks inside it (section 6.14).
+- Anonymous members (section 3.19) nest at most 1000 levels inside one another, each one's braces a level: `anonymous members are nested too deeply (more than 1000 levels)`, at the keyword of the one too many. Working out a layout counts each anonymous member's braces as a level around its fields' types, against the limit on declarations worked out inside one another (below): 1000 anonymous members around an `a: [1]int;` are `'S' is nested too deeply in the declarations that need it (more than 1000 levels)`.
 - A written type nests at most 1000 levels, each `*`, `[]`, `[N]`, `[..]` and procedure type's `(` one: `types are nested too deeply (more than 1000 levels)`. Types and expressions inside each other count together: an array's count is inside its `[N]` level, and the type of `size_of`, of `type_info` and of a cast is a level below the expression.
 - Top-level declarations worked out inside one another (a constant whose value names a constant declared after it, and so on) nest at most 1000 levels: `'A1001' is nested too deeply in the declarations that need it (more than 1000 levels)`. Declared in the order they are needed, a chain of any length compiles. A body a `#run` needs (section 7.8) is worked out inside the declaration or the body holding the `#run`, its blocks, expressions and types counted together from where that one is: a chain of bodies each running the next goes no deeper than 1000 levels either, and the body one too many is reported at its procedure's name, in the same words.
 - The default values a call fills in (section 7.2), with those their own calls fill in, nest at most 1000 levels: a default counts its own levels as an expression does, plus the deepest that the default values go of any procedure whose direct call in it leaves parameters out, those the call gives included. So in a chain of procedures whose defaults each call the one before, `p0 :: (x: int = 0)` and `p1 :: (x: int = p0())` on to `p1000`, a call of `p1000()` fills in 1000 levels, and `p1001`'s default is one too many, even declared in that order, which the limit on declarations above lets be of any length: `this default value is nested too deeply with the default values its calls fill in (more than 1000 levels)`, at the start of the default.
@@ -3510,6 +3681,7 @@ After lowering, beside the LLVM and linker stages, a stage can run the IR rather
 - **bool** is one byte in memory, stored as 0 or 1 and read as "not 0".
 - **Pointers** are 64-bit addresses; `null` is 0.
 - **Structs** are laid out as C lays them out (section 3.9). A struct literal is built in zeroed memory, padding included.
+- **Unions** are laid out as C lays them out (section 3.19): every member at offset 0, the size the largest member's rounded up to the largest alignment. A union's literal is built in zeroed memory too, then its one member stored at 0, so the bytes it doesn't cover are zero. An anonymous member is a field of its own anonymous struct or union type, at its offset in its outer type, its fields at their offsets in it; nothing is flattened. A `#run`'s union is its bytes, copied (section 7.8).
 - **Arrays** are their elements one after another.
 - **Views and strings** are 16 bytes: the count, a 64-bit signed integer, at offset 0, and the data pointer at offset 8.
 - **Resizable arrays** are 40 bytes, laid out as Preload's `Resizable_Array` (section 3.17): a view's 16, the count at offset 0 and the data pointer at 8, then `allocated`, a 64-bit signed integer, at 16, and the allocator, an `Allocator`, at 24. Once they have grown, their elements lie in memory their allocator gave, but for elements of 0 bytes, which take none; before, an array whose `data` a program set by hand has them wherever the program put them (section 3.17).
@@ -3637,13 +3809,13 @@ The debug information holds:
 
 - **Variables:** every local variable, parameter, loop iterator (`it`, `it_index` or a named one) and global variable, by its Rig name and with its type. A local is in the lexical block that declares it, or, when it hides a name a debugger shows (a variable, a procedure, or a constant below), in the one its declaration starts, since a debugger shows a block's variables over the whole block, but a declaration hides a name only from its end: so before `g := 10;` a debugger shows the variable `g` it hides, from the declaration on the new one (its initializer is still in the block around it, and reads the outer one), and on leaving its block the outer one again. Parameters are stored in their own stack slots before the body's first line, so a breakpoint at a procedure already shows them. A scalar parameter's slot is where the program itself reads it from, as clang's code does at `-O0`: a value a debugger writes there (gdb's `set var n = 2`, cdb's `?? n = 2`) is the one the program goes on with. A parameter passed by address (a struct, array, view, resizable array or string, a `..T` parameter's view included: a `..T` parameter is shown as the `[]T` it is, section 7.2) is described as what is passed, the same in DWARF and CodeView: a pointer to the value, held in its slot. So a debugger shows the address and names the fields through it (gdb's `p->a`, `*p`, and `p.a`, which gdb reads through a pointer too; cdb's `a->count`; Visual Studio's `a.count`), and calls the procedure with an address (see **Types**). Each hidden result pointer is a parameter too, before the visible ones, named `result$` (`result$1`, `result$2`, ... when there are several), a name no Rig variable can have but both debuggers take in an expression (gdb's `print result$`, cdb's `?? result$`). It points at the caller's temporary, which holds the value only once `return` has copied it there. The context a procedure is given (sections 7.10, 10.4) is a parameter after them, before the visible ones, named `context`, a `*Context` marked artificial, as clang marks C++'s `this`: so gdb's `print context->allocator` and cdb's `?? context->allocator` show the current allocator, and a frame line shows it (`twice (context=0x..., n=4)`). `main`'s is a local `context`, holding `default_context`'s address, set before its first line, so `break main` already shows it. A `push_context` block's is a local `context` in the block's lexical block, the address of what it pushed, hiding the one around it. A `#c_call` procedure has one only in its `push_context` blocks: outside them, gdb's `print context` is `No symbol "context" in current context.`, and cdb's `dx context` can't bind the name.
 - **Constants:** every constant the program declares (section 4.2), at the top level or in a body, used or not, by its Rig name and with its type, but one naming a procedure (`OP :: add;`: a debugger knows the procedure by its own name) unless it hides a name a debugger shows, the predeclared `OS` (section 4.9), which the program doesn't declare, one in a nested block that can't run, after code that can't go on in the block around it (as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one: section 4.2), which has no code for a debugger to stop in, and one that hides a name, after such code in its own block, which would hide it only where there is no code. An untyped integer constant is shown as an `int`, an untyped float as a `float64`, so its value shows whole (section 3.12), and `N :: null;` as a `*void`. A number, an enum's value, a `bool` or `null` is a constant value with no storage (CodeView's `S_CONSTANT`, DWARF's `DW_AT_const_value`); a constant holding data (a string, a struct, an array, a `#run`'s view) is a variable at its read-only data (section 10.3), and so is a pointer to a string literal (`GREETING :: cast(*u8) "hi";`), at the 8 bytes holding its address there, since CodeView can't give an address as a value, and so is a body's constant naming a procedure that hides a name a debugger shows, at 8 bytes holding the procedure's address, so a debugger shows the procedure where the constant hides the name (under a top-level `OP :: 5;`, cdb's `?? OP` after `OP :: add;` is `add`'s address, not `0n5`). A body's constant that hides nothing is in the lexical block that declares it, even after a declaration that started one inside it: it needs no code where it is declared, and a debugger shows it wherever its block has code. One that hides a name a debugger shows is in the block its declaration starts, as a local is, and so is shown only where code follows it in its block: so in `{ y := x + STEP; LIMIT :: 99; z := LIMIT + y; }` under a top-level `LIMIT :: 12;`, a debugger shows `LIMIT` as 12 at `y`'s line, 99 at `z`'s, and 12 again after the block (on Windows, not when a `return`, `break` or `continue` leaves the block through deferred code: see below). A copy of deferred code (section 6.12) declares its constants anew, as it does its variables. gdb's `print` and `info locals`, cdb's `??` and `dv /t`, and VS Code's Watch, hover and Debug Console show them, on both systems (gdb's `print LIMIT` is `12`, and for `RATIO :: 0.1;`, an untyped float shown as a `float64`, `print RATIO` is `0.10000000000000001`; cdb's `?? LIMIT` is `int64 0n12`). cdb's `dx` doesn't find a top-level number constant, where `??` does; and VS Code's Variables view lists only what has storage: a body's constants holding data, its pointers to a string literal and its procedure constants that hide a name, not its numbers, `bool`s and `null`s.
-- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; enums (section 3.18) as enumeration types, as a C `enum` with a fixed type is described: named as the enum, at its declaration, over its integer type, with an enumerator for each member, in order, of the member's value (read as unsigned for an unsigned integer type, so an `enum u64`'s largest member is 18446744073709551615), so a debugger shows a value by its member's name and one that no member has as its number, and an `enum_flags` value as it shows a C `enum` of flags (gdb's `(VISIBLE | GLOWING)`, when each member is a bit of its own); `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
+- **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; unions (section 3.19) as union types, as C's are described, with their members, all at offset 0, so a debugger shows every member over the same bytes (gdb's `print v` of a `Value` holding 1.5 is `{i = 4609434218613702656, f = 1.5, p = 0x3ff8000000000000}`, its `ptype v` `union Value {...}`; cdb's `?? v` lists `i`, `f` and `p`, each at `+0x000`); an anonymous member as a member with no name, at its offset, of a struct or union type with no name, declared at the member's keyword, as clang describes C's, so a debugger reaches its fields as the outer type's (gdb's `print e.key.code`, cdb's `?? e.key.code`): gdb shows it as a value with no name among the outer one's (`{kind = 2, {key = {code = 65}, mouse = {x = 65, y = 0}}}`), and on Windows LLVM's CodeView lists its fields in the outer type, at their offsets, as Microsoft's compiler does C's, so cdb's `?? e` shows `key` and `mouse` at `+0x004`, after `kind`; enums (section 3.18) as enumeration types, as a C `enum` with a fixed type is described: named as the enum, at its declaration, over its integer type, with an enumerator for each member, in order, of the member's value (read as unsigned for an unsigned integer type, so an `enum u64`'s largest member is 18446744073709551615), so a debugger shows a value by its member's name and one that no member has as its number, and an `enum_flags` value as it shows a C `enum` of flags (gdb's `(VISIBLE | GLOWING)`, when each member is a bit of its own); `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
 A line of deferred code that runs at more than one way out of its block has its code in several places, one per copy, and the debuggers treat a breakpoint on it by their own rules and LLVM's, not Rig's. cdb takes a breakpoint on a line only when the line's code is in one piece, as it refuses one on a `for` line, so it refuses one on such a line (`Ambiguous symbol error`). gdb keeps one place of a line per lexical block, and LLVM writes a lexical block only for a scope that declares a variable itself (a scope that holds only other scopes is folded into the one around it too): so the copies of a deferred line are one place, the first copy in the code, where a breakpoint stops only when that copy runs, unless the line is in a block of the deferred code that declares a variable itself. Both statements of `defer { t := f(); g(t); }` have a place per copy, but the `if` line of `defer if c { t := f(); g(t); }` one, since `t` is in a block inside it. Stepping goes through every copy that runs, in both debuggers.
 
 A `return`, `break` or `continue` that runs the deferred statements of a block around the blocks it leaves puts their copies among those blocks' code, but outside them, so each block it leaves that declares a variable has its code in pieces. DWARF describes a block in pieces, and gdb shows each variable in its own block. LLVM's CodeView writer describes no block in pieces: it puts the variables such a block declares in the block around it, so on Windows a debugger shows them over that whole block, outside their own as `<value unavailable>`. A constant such a block declares has no range in CodeView, a number, `bool` or `null` (`S_CONSTANT`) or one at its read-only data (a static local: a constant holding data, a pointer to a string literal, a procedure constant that hides a name), so none to be unavailable outside: on Windows a debugger shows it with its value over the whole block around it, and one that hides an outer name hides it there too. In `main :: () { a := 1; defer putchar(97); putchar(10); { y := 5; LIMIT :: 99; LABEL :: "inner"; if y == 5 { return; } putchar(98); } }` under a top-level `LIMIT :: 12;` and `LABEL :: "outer";`, cdb's `dv /t` at `putchar(10);` lists `y`, `LIMIT` and `LABEL` as well as `a`, `?? LIMIT` there is `int64 0n99` and `?? LABEL` `"inner"`, where gdb's `print LIMIT` is `12` and `print LABEL` `"outer"`. A procedure's `defer free(p);` with a `return` in a loop does it to the loop's iterators.
 
-A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields, so the compiler's work stays bounded.
+A debug type is made at most 1000 levels deep (the limit of section 9.4), counting each type along its longest chain of fields, pointees and elements. A program can chain types more deeply (structs held by value, each declared after the one it holds, or each holding a pointer to the next); past the limit a pointer is described as `void *` and any other type as a declared struct of its name with no fields (a union as a declared union, an anonymous one with no name), so the compiler's work stays bounded.
 
 Frame pointers are kept (section 10.4), so the stack can be walked without unwind tables.
 
@@ -3757,8 +3929,9 @@ Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
 Param         = identifier ":" [ ".." ] Type [ "=" Expression ] .
 
-StructDecl    = identifier "::" "struct" "{" { FieldDecl } "}" .
-FieldDecl     = identifier ":" Type ";" .
+StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
+FieldDecl     = identifier ":" Type ";"
+              | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 
 EnumDecl      = identifier "::" ( "enum" | "enum_flags" ) [ identifier ] "{" { MemberDecl } "}" .
 MemberDecl    = identifier [ "::" Expression ] ";" .
@@ -3860,14 +4033,15 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `else` | alternative of `if` and of `#if` | 6.5, 4.9 |
 | `enum` | enum type | 3.18 |
 | `enum_flags` | enum type of flags | 3.18 |
-| `union`, `using` | reserved | 2.6 |
+| `union` | union type; an anonymous member, `union { ... };` | 3.19, 4.5 |
+| `using` | reserved | 2.6 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional; with `x == {`, a switch | 6.5, 6.14 |
 | `null` | the null pointer; the null procedure value | 3.5, 3.15 |
 | `push_context` | run a block with another context | 6.13 |
 | `return` | return from a procedure | 6.10 |
-| `struct` | struct type | 3.9, 4.5 |
+| `struct` | struct type; an anonymous member, `struct { ... };` | 3.9, 4.5, 3.19 |
 | `while` | loop on a condition | 6.6 |
 | `#foreign` | C procedure | 7.6 |
 | `#c_call` | procedure that C can call; its procedure type | 7.6, 3.15 |
@@ -3905,7 +4079,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `=` | assignment, initialiser, named field, default value | 6.4, 4.3, 5.17, 7.2 |
 | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | compound assignment | 6.4 |
 | `:` | variable's type, parameter, field, named iterator | 4.3, 7.1, 4.5, 6.7 |
-| `::` | constant, procedure, struct or enum declaration; an enum member's value | 4.1, 3.18 |
+| `::` | constant, procedure, struct, union or enum declaration; an enum member's value | 4.1, 3.18 |
 | `:=` | variable declaration with its value's type | 4.3, 6.2 |
 | `->` | results of a procedure or of a procedure type | 7.1, 3.15 |
 | `..` | range; a `..T` parameter and a spread; a variadic foreign procedure's other arguments; `[..]T` | 6.7, 7.2, 5.10, 7.6, 3.17 |

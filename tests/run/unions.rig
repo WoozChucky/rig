@@ -1,0 +1,89 @@
+// Unions (issue #223, spec 3.19), compiled and interpreted: every member at
+// offset 0, the size the largest member's rounded up to the largest
+// alignment; any member read or written at any time, its bytes reinterpreted
+// as in C; a union copied whole, by assignment, as an argument and as a
+// result, held in structs, arrays and resizable arrays; a literal giving one
+// member and zeroing the rest.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Value :: union { i: s64; f: float64; p: *void; }
+Odd :: union { a: [5]u8; b: u32; }
+Empty :: union { }
+Wide :: union { b: u8; all: u64; }
+Holder :: struct { tag: u8; v: Value; }
+
+twice :: (v: Value) -> Value {
+    copy := v;
+    copy.i = v.i * 2;
+    return copy;
+}
+
+set_float :: (p: *Value, f: float64) {
+    p.f = f;
+}
+
+// A literal meeting a union as a result, alone and beside another.
+narrow :: () -> Wide {
+    return .{b = 1};
+}
+
+float_and_count :: () -> Value, int {
+    return .{f = 1.5}, 3;
+}
+
+main :: () {
+    // The sizes: Value 8, Odd 8 (5 bytes rounded up to u32's alignment),
+    // Empty 0, and [3]Odd 24, each element 8 bytes from the last.
+    printf("%lld %lld %lld %lld\n", size_of(Value), size_of(Odd), size_of(Empty), size_of([3]Odd));
+    odds: [3]Odd;
+    printf("%lld\n", cast(int) *odds[1] - cast(int) *odds[0]);
+
+    // One member written, another read: the same bytes.
+    v: Value;
+    v.f = 1.5;
+    printf("%lld\n", v.i);
+    v.i = 0x4004000000000000;
+    printf("%g\n", v.f);
+
+    // Copied whole: by assignment, as an argument and as a result.
+    w := v;
+    w.i = 7;
+    printf("%g %lld\n", v.f, w.i);
+    doubled := twice(w);
+    printf("%lld %lld\n", w.i, doubled.i);
+
+    // Changed through a pointer.
+    set_float(*w, 0.25);
+    printf("%g\n", w.f);
+
+    // Held in a struct, an array and a resizable array.
+    h := Holder.{tag = 3, v = .{i = 42}};
+    printf("%d %lld\n", h.tag, h.v.i);
+    h.v.f = 3.5;
+    printf("%g\n", h.v.f);
+    vs := Value.[.{i = 1}, .{f = 2}];
+    printf("%lld %g\n", vs[0].i, vs[1].f);
+    grown: [..]Value;
+    array_add(*grown, Value.{i = 10});
+    array_add(*grown, .{f = 20.5});
+    printf("%lld %lld %g\n", grown.count, grown[0].i, grown[1].f);
+    array_free(*grown);
+
+    // A literal giving a narrow member zeroes the rest of the bytes.
+    wide := Wide.{b = 0xFF};
+    printf("%llu\n", wide.all);
+    wide = Wide.{all = 0xFFFF_FFFF_FFFF_FFFF};
+    wide = Wide.{b = 1};
+    printf("%llu\n", wide.all);
+    wide = Wide.{all = 0xFFFF_FFFF_FFFF_FFFF};
+    wide = narrow();
+    printf("%llu\n", wide.all);
+    result, count := float_and_count();
+    printf("%g %lld\n", result.f, count);
+
+    // .{} meeting a union: every byte zero.
+    wide.all = 99;
+    wide = .{};
+    zero : Value = .{};
+    printf("%llu %lld %g\n", wide.all, zero.i, zero.f);
+}

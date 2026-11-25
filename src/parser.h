@@ -6,7 +6,7 @@
 //
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
-//               | IDENT '::' 'struct' '{' {IDENT ':' type ';'} '}'   a struct and its fields
+//               | IDENT '::' ('struct' | 'union') members           a struct or a union and its fields
 //               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
 //                                                                   an enum: its integer type, its members
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
@@ -16,6 +16,9 @@
 //               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
 //               | if_directive                                      conditional: its blocks hold top_level*
+//   members     = '{' {member} '}'
+//   member      = IDENT ':' type ';'
+//               | ('struct' | 'union') members ';'                 an anonymous member
 //   run         = '#run' block | '#run' expression ';'
 //   if_directive = '#if' expression block ['else' (block | if_directive)]
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
@@ -84,6 +87,14 @@
 // has no type written, and takes the one it meets. Named and in order don't
 // mix: "a struct literal's fields are all named or all in order, not both",
 // at the first that breaks the pattern.
+//
+// Unions (spec 3.19) are declared as structs are, `Value :: union { i: s64;
+// f: float64; }`, at the top level only ("unions can only be declared at the
+// top level, for now"). Among a struct's or a union's fields, `union {` or
+// `struct {` starts an anonymous member, its fields in its braces, ended by
+// a ';' after its '}'; its braces inside another's are levels, at most
+// MAX_DEPTH of them. Which member a literal gives, and how a field reached
+// through anonymous members is found, are the checker's.
 //
 // Enums are Jai's (spec 3.18): `Mode :: enum { ALLOCATE; RESIZE; }`, or
 // `Look :: enum_flags u8 { VISIBLE; SOLID; }` with its integer type named,

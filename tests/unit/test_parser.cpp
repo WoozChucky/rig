@@ -1423,6 +1423,122 @@ TEST(struct_in_a_body_is_reported) {
     arena_free(&a);
 }
 
+// Issue #223: unions and anonymous members (spec 3.19).
+
+TEST(parses_union_declarations) {
+    // A union is declared as a struct is; among either's fields, `union {`
+    // or `struct {` starts an anonymous member, its fields in its braces,
+    // then its ';', nested to any depth. The dump writes one as its struct
+    // with no name.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "Value :: union { i: s64; f: float64; p: *void; }\n"
+                        "Empty :: union {}\n"
+                        "Event :: struct {\n"
+                        "    kind: s32;\n"
+                        "    union { key: Key; mouse: Mouse; };\n"
+                        "}\n"
+                        "Word :: union { struct { lo: u16; hi: u16; }; all: u32; }\n"
+                        "Deep :: struct { union { struct { union { a: u8; }; }; }; }\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(union Value (i s64) (f float64) (p (ptr void)))\n"
+              "(union Empty)\n"
+              "(struct Event (kind s32) (union (key Key) (mouse Mouse)))\n"
+              "(union Word (struct (lo u16) (hi u16)) (all u32))\n"
+              "(struct Deep (union (struct (union (a u8)))))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    // Event's anonymous member is a field with no name, at its keyword,
+    // whose struct, unnamed too, is a union; a declared union is a struct
+    // with is_union.
+    Token_List *list = src("Event :: struct {\n    kind: s32;\n    union { key: Key; mouse: Mouse; };\n}\n"
+                           "Value :: union { i: s64; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->globals.count, 2);
+    Ast_Struct *event = (Ast_Struct *)file->globals[0];
+    CHECK(!event->is_union);
+    CHECK_EQ(event->fields.count, 2);
+    if (event->fields.count == 2) {
+        Ast_Field *member = event->fields[1];
+        CHECK_STR(member->name, "");
+        CHECK(!member->type_expr);
+        CHECK_EQ(member->pos.line, 3);
+        CHECK_EQ(member->pos.col, 5);
+        CHECK(member->anonymous && member->anonymous->is_union);
+        if (member->anonymous) {
+            CHECK_STR(member->anonymous->name, "");
+            CHECK_EQ(member->anonymous->fields.count, 2);
+            CHECK_EQ(member->anonymous->pos.col, 5);
+        }
+    }
+    CHECK(((Ast_Struct *)file->globals[1])->is_union);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(union_declaration_mistakes) {
+    // Each alone: a union in a body, something else where a member's name
+    // goes, an #if among the members, an anonymous member without its ';'
+    // or its '{', a named field of an anonymous type (no type is written
+    // so), and anonymous members nested past the limit.
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "main :: () {\n    U :: union { a: int; }\n}\n", &errors);
+    CHECK_STR(errors, "2:5: unions can only be declared at the top level, for now\n");
+    parse_src(&a, "U :: union { 5; }\n", &errors);
+    CHECK_STR(errors, "1:14: expected a member's name, found integer literal\n");
+    parse_src(&a, "U :: union { #if X { a: int; } }\n", &errors);
+    CHECK_STR(errors, "1:14: #if can't be among a union's members, for now\n");
+    parse_src(&a, "S :: struct { union { a: int; } }\n", &errors);
+    CHECK_STR(errors, "1:33: expected ';', found '}'\n");
+    parse_src(&a, "S :: struct { union a: int; }\n", &errors);
+    CHECK_STR(errors, "1:21: expected '{', found identifier 'a'\n");
+    parse_src(&a, "S :: struct { x: union { a: int; }; }\n", &errors);
+    CHECK_STR(errors, "1:18: expected a type, found 'union'\n");
+    // Inside an anonymous member, its own keyword says which messages.
+    parse_src(&a, "U :: union { struct { 5; }; }\n", &errors);
+    CHECK_STR(errors, "1:23: expected a field's name, found integer literal\n");
+    parse_src(&a, "S :: struct { union { #if X { a: int; } }; }\n", &errors);
+    CHECK_STR(errors, "1:23: #if can't be among a union's members, for now\n");
+    // Each anonymous member's braces are a level: 1000 nest, and check; 1001
+    // are one message, at the keyword of the 1001st, 15 + 1000 * 8 columns
+    // in.
+    CHECK_STR(check_source(&a, nested_source(&a, "S :: struct { ", "union { ", 1000, "a: u8; ", "}; ",
+                                             "}\nmain :: () { }\n")),
+              "");
+    parse_src(&a, nested_source(&a, "S :: struct { ", "union { ", 1001, "a: u8; ", "}; ", "}\nmain :: () { }\n"),
+              &errors);
+    CHECK_STR(errors, "1:8015: anonymous members are nested too deeply (more than 1000 levels)\n");
+    // A union in a top-level #if's branch is the top level's.
+    CHECK_STR(parse_src(&a, "#if X {\nU :: union { a: int; }\n}\n", &errors),
+              "(#if (name X) (block (union U (a int))))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(unclosed_body_ends_at_a_union) {
+    // A union's declaration in column 1, as a struct's, can't be a
+    // statement: a body still open there was never closed, and the union
+    // and what follows are the top level's. So is a column-1 #if whose
+    // branch declares one.
+    Arena a = arena_make();
+    String errors;
+    String dump = parse_src(&a,
+                            "main :: () {\n"
+                            "    x := 1;\n"
+                            "Value :: union { i: s64; }\n"
+                            "g :: () { }\n",
+                            &errors);
+    CHECK_STR(errors, "3:1: expected '}', found identifier 'Value'\n");
+    CHECK_STR(dump, "(broken main)\n(union Value (i s64))\n(proc g (params) (block))\n");
+    dump = parse_src(&a, "main :: () {\n    x := 1;\n#if X {\nU :: union { a: int; }\n}\ng :: () { }\n", &errors);
+    CHECK_STR(errors, "3:1: expected '}', found directive\n");
+    CHECK_STR(dump, "(broken main)\n(#if (name X) (block (union U (a int))))\n(proc g (params) (block))\n");
+    arena_free(&a);
+}
+
 TEST(unclosed_body_ends_at_a_struct) {
     // A struct's declaration in column 1, like a procedure's, can't be a
     // statement, so a body still open there was never closed: the struct

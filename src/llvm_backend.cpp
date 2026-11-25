@@ -626,8 +626,8 @@ static LLVMValueRef llvm_global(Body *body, s32 n) {
 //   body's first line, which is where a debugger's breakpoint on the
 //   procedure stops.
 // - Types (DIType): how to read a variable's bytes, a number of some size
-//   and encoding (DIBasicType), a pointer or a struct's member
-//   (DIDerivedType), a struct or an array (DICompositeType).
+//   and encoding (DIBasicType), a pointer or a struct's or a union's member
+//   (DIDerivedType), a struct, a union or an array (DICompositeType).
 // - Variables: a local or a parameter (DILocalVariable) in its scope, with
 //   its name, line and type, and where it lives, said by a declare record
 //   (#dbg_declare) naming its stack slot; a global (DIGlobalVariable)
@@ -766,9 +766,10 @@ static const unsigned DW_ATE_float = 0x04;
 static const unsigned DW_ATE_signed = 0x05;
 static const unsigned DW_ATE_unsigned = 0x07;
 static const unsigned DW_ATE_unsigned_char = 0x08;
-// The tag of a struct type, which a replaceable composite and a declaration
-// are made with.
+// The tags of a struct type and of a union type (spec 3.19), which a
+// replaceable composite and a declaration are made with (composite_tag).
 static const unsigned DW_TAG_structure_type = 0x13;
+static const unsigned DW_TAG_union_type = 0x17;
 
 // How many levels a debug type may have, as debug_type counts them: the
 // types in its longest chain of parts (a field's type, a pointee, an
@@ -860,21 +861,35 @@ static LLVMMetadataRef debug_member(Backend *b, LLVMMetadataRef in, LLVMMetadata
                                          (u64)size * 8, 0, (u64)offset * 8, LLVMDIFlagZero, type);
 }
 
+// The tag of t's composite debug type: a union's for a union, an anonymous
+// one too (spec 3.19); a struct's for a struct, a view, a string, a
+// resizable array, and an array's stand-in.
+static unsigned composite_tag(Type *t) {
+    return t->kind == TYPE_STRUCT && t->is_union ? DW_TAG_union_type : DW_TAG_structure_type;
+}
+
+// The name of t's composite debug type: a struct's or a union's own, empty
+// for an anonymous member's, which C's have none of either (spec 3.19); any
+// other type's as Rig names it ("[]int", "string").
+static String composite_name(Backend *b, Type *t) {
+    return t->kind == TYPE_STRUCT ? t->name : type_name(b->arena, t);
+}
+
 // What stands for t below DEBUG_TYPE_LEVELS levels: one level, with no
 // parts. A pointer is a pointer to no type, as *void's (a debugger shows
-// the address). Anything else, a struct, a view, a string, a resizable
-// array or an array, is a declaration (DW_AT_declaration; LLVMDIFlagFwdDecl)
-// of its name, as Rig names it, and its size, with no members: a debugger
-// shows it as a struct it doesn't know the inside of, unless it finds a
-// struct of that name defined (gdb looks a declared struct up by name).
+// the address). Anything else, a struct, a union, a view, a string, a
+// resizable array or an array, is a declaration (DW_AT_declaration;
+// LLVMDIFlagFwdDecl) of its name (composite_name) and its size, with no
+// members, a union's as a union (composite_tag): a debugger shows it as a
+// struct or a union it doesn't know the inside of, unless it finds one of
+// that name defined (gdb looks a declared struct up by name).
 static Debug_Type stand_in_debug_type(Backend *b, Type *t) {
     if (t->kind == TYPE_POINTER) return {LLVMDIBuilderCreatePointerType(b->debug, nullptr, 64, 0, 0, nullptr, 0), 1};
-    String name = type_name(b->arena, t);
+    String name = composite_name(b, t);
     unsigned line = type_debug_line(t);
     LLVMMetadataRef file = type_debug_file(b, t);
-    return {LLVMDIBuilderCreateForwardDecl(b->debug, DW_TAG_structure_type, (const char *)name.data,
-                                           (size_t)name.count, file, file, line, 0, (u64)t->size * 8,
-                                           (u32)t->align * 8, "", 0),
+    return {LLVMDIBuilderCreateForwardDecl(b->debug, composite_tag(t), (const char *)name.data, (size_t)name.count,
+                                           file, file, line, 0, (u64)t->size * 8, (u32)t->align * 8, "", 0),
             1};
 }
 
@@ -895,10 +910,12 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 // A struct type, t, named `name`, made `depth` levels down, in its file at
 // its line (type_debug_file, type_debug_line: a view, a string or a
 // resizable array, which no line declares, is in the main file at line 0).
-// A struct can hold a pointer to itself (Node's next: *Node), or a view or a
-// resizable array of itself (Tree's children: []Tree), so making a
-// member's type can lead back to the struct before it's made. So it's made
-// in three steps:
+// A union is made the same way as a union type (composite_tag, spec 3.19),
+// and an anonymous member's struct or union has no name, as C's has none,
+// at its keyword's line (its declaration, Type.decl). A struct can hold a
+// pointer to itself (Node's next: *Node), or a view or a resizable array of
+// itself (Tree's children: []Tree), so making a member's type can lead back
+// to the struct before it's made. So it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
 //      as t's debug type (of one level: a part that leads back to it adds
 //      none, then and after, see DEBUG_TYPE_LEVELS), it's what a pointer
@@ -918,17 +935,22 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
     LLVMMetadataRef file = type_debug_file(b, t);
     unsigned line = type_debug_line(t);
     LLVMMetadataRef temporary = LLVMDIBuilderCreateReplaceableCompositeType(
-        b->debug, DW_TAG_structure_type, (const char *)name.data, (size_t)name.count, file, file, line, 0,
+        b->debug, composite_tag(t), (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
     remember_debug_type(b, t, Debug_Type{temporary, 1});
     s64 most = t->kind == TYPE_STRUCT ? t->fields.count : t->kind == TYPE_RESIZABLE ? 4 : 2;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, most ? most : 1);
     s32 levels = 1;
     s64 count = make_members(b, t, depth, temporary, file, members, &levels);
+    // A union is a union type, its members all at offset 0 (spec 3.19).
     LLVMMetadataRef real =
-        LLVMDIBuilderCreateStructType(b->debug, file, (const char *)name.data, (size_t)name.count, file, line,
-                                      (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, nullptr, members,
-                                      (unsigned)count, 0, nullptr, "", 0);
+        composite_tag(t) == DW_TAG_union_type
+            ? LLVMDIBuilderCreateUnionType(b->debug, file, (const char *)name.data, (size_t)name.count, file, line,
+                                           (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, members,
+                                           (unsigned)count, 0, "", 0)
+            : LLVMDIBuilderCreateStructType(b->debug, file, (const char *)name.data, (size_t)name.count, file, line,
+                                            (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, nullptr, members,
+                                            (unsigned)count, 0, nullptr, "", 0);
     LLVMMetadataReplaceAllUsesWith(temporary, real);
     // The table's entry becomes the real type, in place: the pointer is used
     // at once, before anything puts a key.
@@ -942,7 +964,10 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
 // its declaration's line. The checker adds a struct's fields (Type.fields)
 // in the order its declaration has them (Ast_Struct.fields), and a second
 // field of one name is an error, which stops the build before this: so
-// field i is the declaration's field i.
+// field i is the declaration's field i. So for a union, all at offset 0,
+// and an anonymous member's struct or union, whose declaration is its own
+// fields' (spec 3.19); the anonymous member itself is a member with no
+// name, at its keyword's line, of that type, as clang describes C's.
 static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef file,
                           LLVMMetadataRef *members, s32 *levels) {
     RIG_ASSERT(t->fields.count == t->decl->fields.count);
@@ -1089,7 +1114,10 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 //   string's data, as text), bool a boolean, float32 and float64 floats.
 // - *T is a pointer to T's debug type; *void to none (C's void *, which a
 //   debugger shows as an address only).
-// - A struct is a struct type of its fields, each a member at its offset.
+// - A struct is a struct type of its fields, each a member at its offset;
+//   a union, a union type of its members, all at offset 0. An anonymous
+//   member is a member with no name, of its own struct or union type with
+//   no name, which a debugger shows as C's (spec 3.19).
 // - An enum is an enumeration type of its members (debug_enum).
 // - [N]T is an array of N T's.
 // - []T, string and [..]T are the structs they're laid out as, named as

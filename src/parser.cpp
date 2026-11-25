@@ -26,8 +26,10 @@ struct Parser {
     s32 body_deepest;           // the most levels reached in the body being read, the body's own
                                 // blocks open around each counted too, not the top-level #if
                                 // branches around the body (body_blocks, reach_in_body)
+    s32 anonymous;              // the anonymous members' braces open around the next token
+                                // (parse_members, spec 3.19)
     // After a body or a struct's braces found never closed: the token where
-    // the top level resumes (parse_block_rest, parse_struct), or -1.
+    // the top level resumes (parse_block_rest, parse_members), or -1.
     s64 resume;
     s64 declaration;  // the token the top-level declaration being read began at
     // Whether a #load named no file the parser could keep, so the program
@@ -743,26 +745,27 @@ static bool procedure_follows(Parser *p, s64 ahead) {
 }
 
 // Whether the token `ahead` of the next one starts a type's declaration
-// after its '::': 'struct', 'enum' or 'enum_flags' (spec 3.18).
+// after its '::': 'struct', 'union', 'enum' or 'enum_flags' (spec 3.18,
+// 3.19).
 static bool type_declaration_follows(Parser *p, s64 ahead) {
     Token_Kind kind = peek(p, ahead)->kind;
-    return kind == TOKEN_STRUCT || kind == TOKEN_ENUM || kind == TOKEN_ENUM_FLAGS;
+    return kind == TOKEN_STRUCT || kind == TOKEN_UNION || kind == TOKEN_ENUM || kind == TOKEN_ENUM_FLAGS;
 }
 
-// Whether the next tokens are a procedure's, a struct's or an enum's
-// declaration with the name in column 1, IDENT '::' '(' ... or IDENT '::'
-// 'struct' (or 'enum', 'enum_flags'), the way a top-level one starts, or a
-// #run { in column 1: inside a body (or a struct's or an enum's braces), a
-// body that was never closed. A constant (`N :: 5;`) isn't, in column 1 or
-// not: it's a local constant, a statement of the body, and indentation
-// means nothing to the language. Procedures, structs and enums are
-// declared only at the top level, so none can be a statement; nor can
-// #run { ... }, which only the top level has (a #run in a body takes an
-// expression, and a block isn't one). An #if in column 1 isn't one either:
-// in a body it's a statement, unindented, as a constant may be (spec 4.9);
-// unless a branch of it declares a procedure, a struct or an enum, or holds
-// a #run { } (branch_declares_top_level), which only a top-level #if's
-// branch can.
+// Whether the next tokens are a procedure's or a type's (a struct's, a
+// union's or an enum's) declaration with the name in column 1, IDENT '::'
+// '(' ... or IDENT '::' 'struct' (or 'union', 'enum', 'enum_flags'), the
+// way a top-level one starts, or a #run { in column 1: inside a body (or a
+// struct's, a union's or an enum's braces), a body that was never closed.
+// A constant (`N :: 5;`) isn't, in column 1 or not: it's a local constant,
+// a statement of the body, and indentation means nothing to the language.
+// Procedures, structs, unions and enums are declared only at the top
+// level, so none can be a statement; nor can #run { ... }, which only the
+// top level has (a #run in a body takes an expression, and a block isn't
+// one). An #if in column 1 isn't one either: in a body it's a statement,
+// unindented, as a constant may be (spec 4.9); unless a branch of it
+// declares a procedure or a type, or holds a #run { }
+// (branch_declares_top_level), which only a top-level #if's branch can.
 static bool branch_declares_top_level(Parser *p);
 
 static bool starts_declaration(Parser *p) {
@@ -773,13 +776,13 @@ static bool starts_declaration(Parser *p) {
            (procedure_follows(p, 2) || type_declaration_follows(p, 2));
 }
 
-// Whether a branch of the #if chain at the next token declares a procedure,
-// a struct or an enum, or holds a #run { }, right inside its braces, IDENT
-// '::' '(' ... or IDENT '::' 'struct' (or 'enum', 'enum_flags') or #run
-// '{', indented or not: no body can hold any of them (a #run in a body
-// takes an expression), so it can only be a top-level #if, its branches
-// holding declarations, as the writer's indentation says (an #if written
-// after a body whose '}' was forgotten).
+// Whether a branch of the #if chain at the next token declares a procedure
+// or a type (a struct, a union or an enum), or holds a #run { }, right
+// inside its braces, IDENT '::' '(' ... or IDENT '::' 'struct' (or 'union',
+// 'enum', 'enum_flags') or #run '{', indented or not: no body can hold any
+// of them (a #run in a body takes an expression), so it can only be a
+// top-level #if, its branches holding declarations, as the writer's
+// indentation says (an #if written after a body whose '}' was forgotten).
 // A branch of an #if right inside a branch counts too (`#if OS == .. {
 // #if DEBUG { f :: () {} } }`), at any depth: its braces are a branch's
 // as well. A block in a branch isn't one, nor is anything in it.
@@ -886,6 +889,10 @@ static Ast *parse_local_declaration(Parser *p) {
     }
     if (peek(p)->kind == TOKEN_STRUCT) {
         diag_error(p->diag, name->pos, "structs can only be declared at the top level, for now");
+        return nullptr;
+    }
+    if (peek(p)->kind == TOKEN_UNION) {
+        diag_error(p->diag, name->pos, "unions can only be declared at the top level, for now");
         return nullptr;
     }
     if (peek(p)->kind == TOKEN_ENUM || peek(p)->kind == TOKEN_ENUM_FLAGS) {
@@ -1436,7 +1443,7 @@ static bool declares_in_column_1(Parser *p) {
 
 // A #load where a statement or a struct's field starts: "#load can only be
 // at the top level", at its '#', whose token is returned for the caller to
-// report (parse_block_rest and parse_struct say when). Other mistakes in a body
+// report (parse_block_rest and parse_members say when). Other mistakes in a body
 // give the declaration up (parser.h says why), but a load declares nothing
 // the body could use, so the body loses nothing by leaving it out: the
 // parser skips it up to its ';' and goes on with the body or the fields,
@@ -2011,7 +2018,7 @@ enum Braced_Next : u8 {
 // Before a struct's field or an enum's member, with the column-1 loads up
 // to here starting at *first_load (-1 for none) and kept, not reported yet,
 // in *loads: the braces' end without their '}', or a load among them, as
-// parse_struct says.
+// parse_members says.
 static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads) {
     // A #run or an #if in column 1: the top level's.
     Token *t = peek(p);
@@ -2039,21 +2046,24 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
     return BRACED_ITEM;
 }
 
-// struct = 'struct' '{' {IDENT ':' type ';'} '}'
+// members = '{' {member} '}'
+// member  = IDENT ':' type ';' | ('struct' | 'union') members ';'
 //
-// A struct's fields, after IDENT '::' (the caller read them, and saw
-// 'struct'). Every field ends with its ';', the last too. A column-1
-// declaration of a procedure, a struct or an enum, or a #run {
-// (starts_declaration), before the '}' means the braces were never closed:
-// "expected '}'" there, where the top level resumes (p->resume). So does
-// any #run in column 1: a struct holds no code, so it can only be the top
-// level's. A #run anywhere else among the fields is "expected a field's
-// name". An #if in column 1 ends the fields too, read as the top level's;
-// anywhere else, fields compiled conditionally aren't in the language yet
-// (spec 4.9): "#if can't be among a struct's fields, for now", at the
-// '#if', and the struct is given up. A #load among the fields is reported
-// and skipped, as in a body (skip_misplaced_load), and the fields after it
-// are kept.
+// The braces of struct s, after its keyword: a struct's fields or a union's
+// members (parse_struct), or an anonymous member's (spec 3.19), read alike,
+// by the same rules, s's own keyword saying which messages. Every field
+// ends with its ';', the last too. A column-1 declaration of a procedure or
+// a type, or a #run { (starts_declaration), before the '}' means the braces
+// were never closed: "expected '}'" there, where the top level resumes
+// (p->resume). So does any #run in column 1: a struct holds no code, so it
+// can only be the top level's. A #run anywhere else among the fields is
+// "expected a field's name" ("a member's name" in a union). An #if in
+// column 1 ends the fields too, read as the top level's; anywhere else,
+// fields compiled conditionally aren't in the language yet (spec 4.9): "#if
+// can't be among a struct's fields, for now" ("... among a union's members
+// ..."), at the '#if', and the declaration is given up. A #load among the
+// fields is reported and skipped, as in a body (skip_misplaced_load), and
+// the fields after it are kept.
 //
 // The #loads in column 1 right before such an end are read again at the
 // top level, as after a body never closed (parse_block_rest): "expected
@@ -2065,39 +2075,79 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 // as a global is, so nothing tells a forgotten '}' before a global from a
 // field that wasn't indented.
 //
+// 'union' or 'struct' where a field's name goes starts an anonymous
+// member: an Ast_Field with no name, at the keyword, whose `anonymous` is
+// the struct its braces hold, ended by its ';' as any field is. A named
+// field of an anonymous type (x: union { ... };) isn't in the language: its
+// type is "expected a type", as `x: struct` is. Anonymous members' braces
+// inside each other are levels (MAX_DEPTH), as blocks are: past the limit,
+// "anonymous members are nested too deeply (more than 1000 levels)", at the
+// keyword of the one too deep.
+//
 // An enum's members are in braces too (parse_enum), which end the same way:
-// braced_next is what both do before each field or member.
-static Ast *parse_struct(Parser *p, Token *name) {
-    advance(p);  // 'struct'
-    Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
-    s->name = name->text;
-    if (!expect(p, TOKEN_LBRACE)) return nullptr;
+// braced_next is what both do before each field or member. False after an
+// error, reported: the declaration is given up.
+static bool parse_members(Parser *p, Ast_Struct *s) {
+    if (!expect(p, TOKEN_LBRACE)) return false;
     s64 first_load = -1;        // where the column-1 loads up to here start, or -1
     Array<Token *> loads = {};  // those loads, not reported yet
     while (peek(p)->kind != TOKEN_RBRACE) {
         Braced_Next next = braced_next(p, &first_load, &loads);
-        if (next == BRACED_ENDED) return nullptr;
+        if (next == BRACED_ENDED) return false;
         if (next == BRACED_SKIPPED) continue;
         Token *field_name = peek(p);
         if (is_directive(field_name, "if")) {
-            diag_error(p->diag, field_name->pos, "#if can't be among a struct's fields, for now");
-            return nullptr;
+            diag_error(p->diag, field_name->pos,
+                       s->is_union ? "#if can't be among a union's members, for now"
+                                   : "#if can't be among a struct's fields, for now");
+            return false;
+        }
+        if (field_name->kind == TOKEN_UNION || field_name->kind == TOKEN_STRUCT) {
+            if (p->anonymous == MAX_DEPTH) {
+                diag_error(p->diag, field_name->pos, "anonymous members are nested too deeply (more than %d levels)",
+                           MAX_DEPTH);
+                return false;
+            }
+            advance(p);
+            Ast_Struct *inner = ast_new<Ast_Struct>(p->arena, AST_STRUCT, field_name->pos);
+            inner->is_union = field_name->kind == TOKEN_UNION;
+            Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
+            field->anonymous = inner;
+            p->anonymous++;
+            bool fine = parse_members(p, inner);
+            p->anonymous--;
+            if (!fine || !expect(p, TOKEN_SEMICOLON)) return false;
+            array_add(&s->fields, field);
+            continue;
         }
         if (field_name->kind != TOKEN_IDENT) {
-            error_expected(p, "a field's name");
-            return nullptr;
+            error_expected(p, s->is_union ? "a member's name" : "a field's name");
+            return false;
         }
         advance(p);
-        if (!expect(p, TOKEN_COLON)) return nullptr;
+        if (!expect(p, TOKEN_COLON)) return false;
         Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
         field->name = field_name->text;
         field->type_expr = parse_whole_type(p);
-        if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return nullptr;
+        if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return false;
         array_add(&s->fields, field);
     }
     report_misplaced_loads(p, &loads);
     advance(p);  // the '}'
-    return s;
+    return true;
+}
+
+// struct = ('struct' | 'union') members
+//
+// A struct's declaration, or a union's (spec 3.19), after IDENT '::' (the
+// caller read them, and saw 'struct' or 'union'): its fields as
+// parse_members reads them, the members of the grammar (parser.h).
+static Ast *parse_struct(Parser *p, Token *name) {
+    Token *keyword = advance(p);  // 'struct' or 'union'
+    Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
+    s->name = name->text;
+    s->is_union = keyword->kind == TOKEN_UNION;
+    return parse_members(p, s) ? s : nullptr;
 }
 
 // enum = ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
@@ -2109,7 +2159,7 @@ static Ast *parse_struct(Parser *p, Token *name) {
 // (enum *u8 {) is "expected '{'". Each member is a name, alone or with '::'
 // and its value, and ends with its ';', the last too: an Ast_Const at its
 // name, its value null when none is written. The braces end as a struct's
-// do (parse_struct, braced_next): a column-1 declaration, #run or #if
+// do (parse_members, braced_next): a column-1 declaration, #run or #if
 // before the '}' means they were never closed, and a #load among the
 // members is reported and skipped. An #if anywhere else is "#if can't be
 // among an enum's members, for now", at the '#if', and anything else where
@@ -2126,7 +2176,7 @@ static Ast *parse_enum(Parser *p, Token *name) {
         e->type_expr->name = type->text;
     }
     if (!expect(p, TOKEN_LBRACE)) return nullptr;
-    s64 first_load = -1;        // as parse_struct's
+    s64 first_load = -1;        // as parse_members'
     Array<Token *> loads = {};
     while (peek(p)->kind != TOKEN_RBRACE) {
         Braced_Next next = braced_next(p, &first_load, &loads);
@@ -2317,7 +2367,7 @@ static Ast *parse_declaration(Parser *p) {
     }
     if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
     if (procedure_follows(p, 0)) return parse_procedure(p, name);
-    if (peek(p)->kind == TOKEN_STRUCT) return parse_struct(p, name);
+    if (peek(p)->kind == TOKEN_STRUCT || peek(p)->kind == TOKEN_UNION) return parse_struct(p, name);
     if (peek(p)->kind == TOKEN_ENUM || peek(p)->kind == TOKEN_ENUM_FLAGS) return parse_enum(p, name);
     return parse_constant(p, name);
 }
@@ -2697,7 +2747,7 @@ static void parse_top_level_declaration(Parser *p, Array<Ast *> *into) {
     Ast *decl = parse_declaration(p);
     if (!decl && p->resume >= 0) {
         // A body or a struct never closed said where the top level goes
-        // on (parse_block_rest, parse_struct), inside its braces, so
+        // on (parse_block_rest, parse_members), inside its braces, so
         // after start; the declaration it was in is broken.
         RIG_ASSERT(p->resume > start);
         decl = broken_entry(p, start);
@@ -2789,7 +2839,7 @@ static Ast_Block *parse_top_level_block(Parser *p) {
 
 void parse_into(Ast_File *file, Array<Token> tokens, Arena *a, Diagnostics *d) {
     RIG_ASSERT(tokens.count > 0 && tokens[tokens.count - 1].kind == TOKEN_EOF);
-    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, 0, 0, -1, 0, false, nullptr};
+    Parser p = {tokens, 0, a, d, 0, 0, {}, 0, 0, 0, 0, 0, 0, -1, 0, false, nullptr};
     Array<Ast *> declarations = {};
     while (peek(&p)->kind != TOKEN_EOF) parse_top_level_declaration(&p, &declarations);
     for (s64 i = 0; i < declarations.count; i++) ast_add_declaration(file, declarations[i]);

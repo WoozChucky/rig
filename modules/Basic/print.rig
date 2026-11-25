@@ -163,7 +163,10 @@ print_quoted :: (builder: *String_Builder, s: string) {
 //     procedure's address is the interpreter's stand-in (spec 10.8).
 //   - A struct, {name = value, ...}, its fields in order, and {} for one
 //     with none. An Any field is the value it holds, written as the field
-//     would be.
+//     would be. An anonymous member (spec 3.19) is its value alone, with
+//     no name: {kind = 1, union(4 bytes)}, {n = 1, {a = 2, b = 3}}.
+//   - A union, by its size alone, union(8 bytes), never its members:
+//     which one holds the value is the program's to know.
 //   - An array, a view or a resizable array, [value, ...]; [] for one with
 //     no elements, or a view or resizable array whose count is 0 or less.
 //   - An enum, by its members' names, through print_enum: FREE, or
@@ -254,11 +257,25 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             return;
         }
         s := cast(*Type_Info_Struct) t;
+        // A union is written by its size alone: which member holds the
+        // value is the program's to know (spec 3.19), and writing another
+        // would read its bytes as what they aren't: a string's or a view's
+        // data pointer may be an integer's bits, null or pointing nowhere.
+        if s.is_union {
+            buffer : [INT_TEXT_MAX]u8;
+            print_or_append(builder, "union(");
+            print_or_append(builder, format_int(buffer, t.size, 10));
+            print_or_append(builder, " bytes)");
+            return;
+        }
         print_or_append(builder, "{");
         for s.members {
             if it_index > 0 { print_or_append(builder, ", "); }
-            print_or_append(builder, it.name);
-            print_or_append(builder, " = ");
+            // An anonymous member has no name to write: just its value.
+            if it.name.count > 0 {
+                print_or_append(builder, it.name);
+                print_or_append(builder, " = ");
+            }
             print_item(builder, Any.{it.type, cast(*u8) p + it.offset}, true);
         }
         print_or_append(builder, "}");

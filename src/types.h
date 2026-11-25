@@ -69,11 +69,14 @@ struct Type {
     s32 align;       // in bytes, a power of 2: where in memory a value of the type may start
     bool is_signed;  // TYPE_INTEGER, and TYPE_ENUM (its integer type's)
     Type *pointee;   // TYPE_POINTER
-    String name;     // a built-in type's name, or a struct's or an enum's (its declaration's)
+    String name;     // a built-in type's name, or a struct's or an enum's (its declaration's);
+                     // empty for an anonymous member's struct (spec 3.19)
     Type *pointer;   // the type *this, once asked for
     Type *alias_of;  // a second name for another type (float for float32): the type it names
-    Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory
-    Ast_Struct *decl;          // TYPE_STRUCT: its declaration
+    Array<Type_Field> fields;  // TYPE_STRUCT: in order, which is their order in memory (a
+                               // union's all at 0); an anonymous member is a field with no name,
+                               // of its anonymous struct's type
+    Ast_Struct *decl;          // TYPE_STRUCT: its declaration (an anonymous member's struct)
     Arena *arena;    // where this type lives, and the types made from it (pointers, arrays,
                      // ...): a struct's or an enum's is the compilation's arena (and so
                      // theirs), freed with it; a built-in type's, null: it and the types made
@@ -98,6 +101,7 @@ struct Type {
     Type *underlying;     // TYPE_ENUM: its integer type, whose size, alignment and sign it has
     bool is_flags;        // TYPE_ENUM: enum_flags
     Ast_Enum *enum_decl;  // TYPE_ENUM: its declaration, its members' names and values
+    bool is_union;        // TYPE_STRUCT: a union, every field at offset 0 (spec 3.19)
 };
 
 // The largest size a type may have, 2^40 bytes (a terabyte): an array over
@@ -159,9 +163,10 @@ const s64 TYPE_INFO_POINTER_TO_OFFSET = 24, TYPE_INFO_POINTER_SIZE = 32;
 // *Type_Info), then the bools is_c_call and is_variadic.
 const s64 TYPE_INFO_PARAMETERS_OFFSET = 24, TYPE_INFO_RESULTS_OFFSET = 40, TYPE_INFO_IS_C_CALL_OFFSET = 56,
           TYPE_INFO_IS_VARIADIC_OFFSET = 57, TYPE_INFO_PROCEDURE_SIZE = 64;
-// Type_Info_Struct: info, name, a string, then members, a view of
-// Type_Info_Struct_Member.
-const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_STRUCT_SIZE = 56;
+// Type_Info_Struct: info, name, a string, members, a view of
+// Type_Info_Struct_Member, then is_union, a bool (spec 3.19), padded to 8.
+const s64 TYPE_INFO_NAME_OFFSET = 24, TYPE_INFO_MEMBERS_OFFSET = 40, TYPE_INFO_STRUCT_IS_UNION_OFFSET = 56,
+          TYPE_INFO_STRUCT_SIZE = 64;
 // Type_Info_Struct_Member: name, a string; type, a *Type_Info; offset, an int.
 const s64 TYPE_INFO_MEMBER_NAME_OFFSET = 0, TYPE_INFO_MEMBER_TYPE_OFFSET = 16, TYPE_INFO_MEMBER_OFFSET_OFFSET = 24,
           TYPE_INFO_MEMBER_SIZE = 32;
@@ -231,7 +236,8 @@ bool type_proc_same_but_c_call(Type *a, Type *b);
 // How a message names t: "s32", "*u8", "string", "[3]int", "[]*u8",
 // "[..]int", and a procedure type as its signature is written:
 // "(int, int) -> int", "(int) -> (int, int)",
-// "(*void, *void) -> s32 #c_call", "(int, ..int)", "()".
+// "(*void, *void) -> s32 #c_call", "(int, ..int)", "()"; an anonymous
+// member's struct, which has no name, "union" or "struct" (spec 3.19).
 String type_name(Arena *a, Type *t);
 
 // t's alignment, in bytes: where in memory a value of type t may start.
@@ -270,8 +276,12 @@ bool type_has_view_fields(Type *t);
 // lets a variadic call pass (checker.h).
 Type *type_c_promoted(Type *t);
 
-// The index in struct type t's fields of the one called `name`, or -1.
-s32 type_field_index(Type *t, String name);
+// Where member `name` of struct or union t is (spec 3.19): t's own named
+// fields first, then its anonymous members' fields, depth by depth (#225
+// adds using fields to the same walk). *path gets the field indices from t
+// down; it's left empty when no field has the name. t is laid out
+// (check_layout).
+void type_find_member(Type *t, String name, Array<s32> *path);
 
 // void: what a procedure without -> returns (the type of a call of one,
 // which has no value), and what a *void points at. A *void is a pointer to
