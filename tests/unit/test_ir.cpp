@@ -7475,16 +7475,22 @@ TEST(a_complete_switch_without_a_default_calls_no_case) {
         CHECK(main);
         if (!main) continue;
         Ir_Instr *dispatch = nullptr;
+        s64 dispatch_block = -1;
         for (s64 k = 0; k < main->blocks.count && !dispatch; k++) {
             Ir_Block *b = main->blocks[k];
             if (b->instrs.count && b->instrs[b->instrs.count - 1].op == IR_SWITCH) {
                 dispatch = &b->instrs[b->instrs.count - 1];
+                dispatch_block = k;
             }
         }
         CHECK(dispatch);
         if (!dispatch) continue;
         CHECK_EQ(dispatch->type, IR_I8);
         CHECK_EQ(dispatch->cases.count, 2);
+        // The no-case block is laid out right after the dispatch's, before
+        // the cases', so all of the `if` line's code is one piece, where
+        // cdb can break.
+        CHECK_EQ(dispatch->target, dispatch_block + 1);
         Ir_Block *fail = main->blocks[dispatch->target];
         Ir_Op widen = signed_enum ? IR_SEXT : IR_ZEXT;
         bool widened = false, sign_passed = false;

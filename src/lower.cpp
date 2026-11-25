@@ -3080,34 +3080,35 @@ static s32 no_case_proc(Lowering *l);
 
 // The block a #complete switch without `case;`, or a tagged union's switch
 // without one (spec 3.20), sends a value no case has to
-// (Ast_Switch.checks_no_case, spec 6.14, 8.1), made here and current
-// after it; its index. %value is what the switch dispatches on, of type t:
-// the switched value, or a tagged union's tag, of its tag type, whose
-// message names the union, s's own type, as an enum's names the enum. It
-// calls __rig_no_case, which writes "PATH:L:C: runtime error: no case for
-// value V of 'T'" and panics, so it never returns:
+// (Ast_Switch.checks_no_case, spec 6.14, 8.1), made here and current after
+// it; its index. %value is what the switch dispatches on, of type t: the
+// switched value, or a tagged union's tag, of its tag type, whose message
+// names the union, s's own type, as an enum's names the enum. It calls
+// __rig_no_case, which writes "PATH:L:C: runtime error: no case for value V
+// of 'T'" and panics, so it never returns:
 //
 //   fail:
 //     %b = local N align 1          the message's buffer
 //     %w = addr @str.N              "PATH:L:C: runtime error: "
 //     %wl = const i64 LENGTH
-//     %v = sext i8 %value to i64    (or zext, by the enum's sign; none for an i64)
+//     %v = sext i8 %value to i64    (or zext, by t's sign; none for an i64)
 //     %s = const i1 SIGNED
 //     %t = addr @str.M              " of 'Mode'\n"
 //     %tl = const i64 LENGTH
 //     call @__rig_no_case(%b, %w, %wl, %v, %s, %t, %tl)
 //     unreachable
 //
-// The message's start and its end, the enum's name, are this switch's own
-// globals, as a bounds check's start is (emit_bounds_check); only the
-// value is known at run time, and __rig_no_case writes it, signed or
-// unsigned as the enum's integer type, or the tag's type, is. The buffer
-// is this block's: the two texts and 38 bytes ("no case for value " is 18,
-// a number at most 20), so __rig_no_case needs no size of its own, and is
-// the same for every program. Its instructions are at l->pos, the switch's `if` (a switch is a
-// statement, never in a call's default value, whose code emitted_at puts
-// elsewhere). Neither --no-bounds-checks nor #no_abc leaves it out: it's no
-// bounds check.
+// The message's start and its end, the enum's or the union's name, are
+// this switch's own globals, as a bounds check's start is
+// (emit_bounds_check); only the value is known at run time, and
+// __rig_no_case writes it, signed or unsigned as t, the enum's integer type
+// or the tag's type, is. The buffer is this block's: the two texts and 38
+// bytes ("no case for value " is 18, a number at most 20), so __rig_no_case
+// needs no size of its own, and is the same for every program. Its
+// instructions are at l->pos, the switch's `if` (a switch is a statement,
+// never in a call's default value, whose code emitted_at puts elsewhere).
+// Neither --no-bounds-checks nor #no_abc leaves it out: it's no bounds
+// check.
 static s32 emit_no_case(Lowering *l, Ast_Switch *s, Type *t, s32 value) {
     String where = runtime_error_prefix(l, s->pos);
     String tail = string_printf(l->arena, " of '" STR_FMT "'\n", STR_ARG(type_name(l->arena, s->value->type)));
@@ -3162,16 +3163,16 @@ static bool first_code_position(Ast_Block *block, Position *at) {
 // it as a *M, a variable of its own in a slot of its own, %slot, holding
 // the address, as it shows an aggregate parameter (spec 10.7): a
 // variable's record needs storage of its own. lower_switch stored the
-// address in the slot at the switch's `if`, with the dispatch, before it,
-// so all of the `if` line's code is in one piece, where cdb can break
-// (runner.cpp). The case reads it back from the slot, at its first
-// statement with code (first_code_position), in its scope: the case's
-// first instruction is then that line's, inside the case's scope, where it
-// is shown, so a breakpoint there shows it. (Using the dispatch's own value
-// instead, the code generator would reload it from the stack first, with
-// no line of its own, before the case's scope starts.) Stepping from the
-// `if` goes straight to the first statement, never to a `case` line (spec
-// 10.7's line table).
+// address in the slot at the switch's `if`, before the dispatch, so all of
+// the `if` line's code (the no-case block, if any, follows the dispatch) is
+// in one piece, where cdb can break (runner.cpp). The case reads it back
+// from the slot, at its first statement with code (first_code_position), in
+// its scope: the case's first instruction is then that line's, inside the
+// case's scope, where it is shown, so a breakpoint there shows it. (Using
+// the dispatch's own value instead, the code generator would reload it from
+// the stack first, with no line of its own, before the case's scope
+// starts.) Stepping from the `if` goes straight to the first statement,
+// never to a `case` line (spec 10.7's line table).
 //
 //     %7 = load ptr %slot        (it, a *Circle)
 static void lower_tagged_case(Lowering *l, Ast_Case *k, s32 slot, Ast_Proc *source) {
@@ -3227,20 +3228,21 @@ static void lower_tagged_case(Lowering *l, Ast_Case *k, s32 slot, Ast_Proc *sour
 //   after:
 //
 // Each case's statements are a block and a scope of their own, at its
-// `case` (lower_scoped_block), whose defers run at its end, before the
-// jump out: to `after`, at the switch's '}', in the scope around, as an if
-// block's jump is at its own '}' (lower_if), so a debugger steps from a
-// case's last line to the '}', then to the code after, never through
-// another case's line; or, ending with #through, into the next case's
-// block, at the #through, a jump to the block laid out right after it,
-// which has no instruction ("What a debugger needs" above). A #complete
-// switch without `case;`, or a tagged union's without one, sends every
-// other value to a block that stops the program (emit_no_case), after the
-// cases' blocks. `after` is made when a
-// case gets to its end, or some value finds no case and there's neither a
-// `case;` nor a no-case block; otherwise the current block has ended, as
-// after an if that always returns, and nothing after the switch is
-// lowered.
+// `case` (lower_scoped_block, or lower_tagged_case for a case declaring
+// it), whose defers run at its end, before the jump out: to `after`, at the
+// switch's '}', in the scope around, as an if block's jump is at its own
+// '}' (lower_if), so a debugger steps from a case's last line to the '}',
+// then to the code after, never through another case's line; or, ending
+// with #through, into the next case's block, at the #through, a jump to the
+// block laid out right after it, which has no instruction ("What a debugger
+// needs" above). A #complete switch without `case;`, or a tagged union's
+// without one, sends every other value to a block that stops the program
+// (emit_no_case), at the `if`, laid out right after the dispatch, before
+// the cases' blocks, so all of the `if` line's code is in one piece, where
+// cdb can break (runner.cpp). `after` is made when a case gets to its end,
+// or some value finds no case and there's neither a `case;` nor a no-case
+// block; otherwise the current block has ended, as after an if that always
+// returns, and nothing after the switch is lowered.
 static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
     s32 outer = l->scope;
     place(l, s->pos, outer);
@@ -3322,6 +3324,9 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
         for (s64 i = 0; i < dispatch->cases.count; i++) array_add(&entries, &dispatch->cases[i].block);
         otherwise = &dispatch->target;
     }
+    // The no-case block comes right after the dispatch, before the cases'
+    // blocks, so all of the `if` line's code is in one piece.
+    if (s->checks_no_case) *otherwise = emit_no_case(l, s, t, value);
 
     s64 entry = 0;
     s32 through = -1;      // the block ending in the last case's #through, its jump not
@@ -3357,7 +3362,6 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
 
     place(l, s->pos, outer);
     bool goes_on = !s->default_case && !s->checks_no_case;  // a value with no case goes past the switch
-    if (s->checks_no_case) *otherwise = emit_no_case(l, s, t, value);
     if (ends.count > 0 || goes_on) {
         s32 after = new_block(l);
         for (s64 i = 0; i < ends.count; i++) terminator_of(l, ends[i])->target = after;

@@ -6,9 +6,12 @@
 // pointer to the member in the union itself, so a write through it shows
 // in s. Each case's `it` is a variable of its own, of its own member's
 // type, in the case's block only: the second switch's `.rect` case shows a
-// *Rect, and after the switch there is no `it`. A void member's union
-// shows its other members over zeroed bytes (e's key is 0). A member named
-// tag is listed as tag$, so k.tag is the tag and k.tag$ the member (a
+// *Rect, and after the switches there is no `it`. The third switch has no
+// `case;`, so its no-case failure is at its `if` too, laid out right after
+// the dispatch: the `if` line is still one piece, where cdb can break, and
+// a step from it goes into the case that runs, `it` set. A void member's
+// union shows its other members over zeroed bytes (e's key is 0). A member
+// named tag is listed as tag$, so k.tag is the tag and k.tag$ the member (a
 // second `tag` crashes gdb). gdb writes the tag as its enumerator's name
 // (`tag = circle`), and ptype the tag's type as `enum {circle, rect,
 // empty}`; cdb's `??` writes it as its number and name, `0 ( circle )`,
@@ -40,6 +43,14 @@ main :: () {
             it.w = 6;
             putchar(10);
         case;
+    }
+    if s == {
+        case .circle;
+            putchar(67);
+        case .rect;
+            putchar(10);
+        case .empty;
+            putchar(69);
     }
     putchar(10);
 }

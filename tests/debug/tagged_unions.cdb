@@ -1,7 +1,7 @@
 l+t
 l+s
 l+l
-bp `tagged_unions.rig:34`
+bp `tagged_unions.rig:37`
 g
 dv /t
 ?? s
@@ -11,12 +11,17 @@ dv /t
 ?? k
 ?? k.tag
 ?? k.tag$
-bp `tagged_unions.rig:41`
+bp `tagged_unions.rig:44`
 g
 dv /t
 ?? it->w
 ?? s
-bp `tagged_unions.rig:44`
+bp `tagged_unions.rig:47`
+g
+p
+dv /t
+?? it->h
+bp `tagged_unions.rig:55`
 g
 ?? it
 q
