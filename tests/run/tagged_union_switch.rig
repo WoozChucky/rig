@@ -1,0 +1,145 @@
+// Switches on tagged unions (issue #224, spec 3.20, 6.14), compiled and
+// interpreted: each case's it is the member the case names, in the union
+// itself, so writing it, a field of it, the whole of it or through *it,
+// writes the union, whether that is a local, what a pointer points at, a
+// struct's field, an array's element or each element of a for *; a call
+// switched on runs once; a defer in a case runs as the case is left;
+// continue and break in a case act on the loop around the switch; a switch
+// on it inside a case, a tagged union holding another, binds it again; a
+// loop inside a case has its own it, and the case's is back after it; in a
+// void member's case and in case;, it is the loop's element; case; takes
+// the members no case names; and a constant is switched on as any value is.
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Outer :: union #tagged { shape: Shape; none: void; }
+Holder :: struct { s: Shape; n: int; }
+
+K :: Shape.{rect = .{2, 5}};
+
+area :: (s: Shape) -> float {
+    if s == {
+        case .circle; return it.r * it.r * 3;
+        case .rect;   return it.w * it.h;
+        case .empty;  return 0;
+    }
+}
+
+// s's radius, or -1 when it holds no circle.
+radius :: (s: Shape) -> float {
+    if s == { case .circle; return it.r; case; return -1; }
+}
+
+grow :: (c: *Circle) { c.r += 1; }
+
+calls := 0;
+
+next_shape :: () -> Shape {
+    print("call\n");
+    calls += 1;
+    return .{circle = .{cast(float) calls}};
+}
+
+main :: () {
+    print("{} {} {}\n", area(.{circle = .{2}}), area(.{rect = .{2, 3}}), area(.empty));
+
+    // Writes through it land in the union: a local's member, a field of it,
+    // the whole member, and the member through *it.
+    s := Shape.{circle = .{1}};
+    if s == { case .circle; it.r = 3; case; }
+    print("{}\n", radius(s));
+    if s == { case .circle; it = Circle.{5}; case; }
+    print("{}\n", radius(s));
+    if s == { case .circle; grow(*it); case; }
+    print("{}\n", radius(s));
+
+    // What a pointer points at, switched on through .*.
+    p := *s;
+    if p.* == { case .circle; it.r *= 2; case; }
+    print("{}\n", radius(s));
+
+    // A struct's field.
+    h := Holder.{s = .{circle = .{1}}, n = 2};
+    if h.s == { case .circle; it.r = 7; case; }
+    print("{} {}\n", radius(h.s), h.n);
+
+    // An array's element, and each element through for *.
+    shapes := Shape.[.{circle = .{1}}, .{rect = .{2, 3}}, .empty, .{circle = .{4}}];
+    i := 1;
+    if shapes[i] == { case .rect; it.w = 10; case; }
+    print("{}\n", area(shapes[1]));
+    for * shapes { if it.* == { case .circle; it.r *= 2; case; } }
+    print("{} {}\n", radius(shapes[0]), radius(shapes[3]));
+
+    // A call switched on runs once, whichever case runs.
+    if next_shape() == {
+        case .circle; print("circle {}\n", it.r);
+        case .rect;   print("rect\n");
+        case .empty;  print("empty\n");
+    }
+    print("{}\n", calls);
+
+    // A defer in a case runs as the case is left.
+    if s == {
+        case .circle;
+            defer print("left\n");
+            print("in\n");
+        case;
+    }
+    print("after\n");
+
+    // continue and break in a case act on the loop: the rect's continue
+    // skips the rest of its iteration, the circle's case gets to it, and
+    // the empty's break stops before the last circle.
+    mixed := Shape.[.{rect = .{1, 1}}, .{circle = .{2}}, .empty, .{circle = .{3}}];
+    for mixed {
+        if it == {
+            case .rect;   continue;
+            case .empty;  break;
+            case .circle; print("circle {}\n", it.r);
+        }
+        print("next\n");
+    }
+    print("done\n");
+
+    // A switch on it inside a case: the inner case's it is the inner
+    // member.
+    outers := Outer.[.{shape = .{rect = .{1, 2}}}, .none, .{shape = .empty}];
+    for outers {
+        if it == {
+            case .shape;
+                if it == {
+                    case .rect; print("rect {} {}\n", it.w, it.h);
+                    case;       print("another shape\n");
+                }
+            case .none; print("none\n");
+        }
+    }
+
+    // A loop inside a case: its it is the loop's element, and after it the
+    // case's it is the member again.
+    if s == {
+        case .circle;
+            for 0..1 { print("loop {}\n", it); }
+            print("member {}\n", it.r);
+        case;
+    }
+
+    // In a void member's case and in case;, it is the loop's element;
+    // case; takes the rect, which no case names.
+    for shapes {
+        if it == {
+            case .circle; print("circle\n");
+            case .empty;  print("empty {}\n", it == .empty);
+            case;         print("other {}\n", it == .rect);
+        }
+    }
+
+    // A constant switched on: it reads the constant's data.
+    if K == {
+        case .rect; print("K {} {}\n", it.w, it.h);
+        case;       print("K holds no rect\n");
+    }
+}

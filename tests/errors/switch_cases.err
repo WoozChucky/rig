@@ -4,13 +4,13 @@ tests/errors/switch_cases.rig:13:33: error: a value of type 'string' doesn't con
 tests/errors/switch_cases.rig:14:41: error: a value of type 'string' doesn't convert to 'int' implicitly
     broken_word :: () -> string { x : int = "s"; return "a"; }
                                             ^
-tests/errors/switch_cases.rig:28:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'
+tests/errors/switch_cases.rig:28:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float64'
         if f == { case .FREE; }
            ^
-tests/errors/switch_cases.rig:29:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'Vec2'
+tests/errors/switch_cases.rig:29:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'Vec2'
         if v == { }
            ^
-tests/errors/switch_cases.rig:30:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not '[]int'
+tests/errors/switch_cases.rig:30:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not '[]int'
         if values == { }
            ^
 tests/errors/switch_cases.rig:31:8: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
@@ -79,10 +79,10 @@ tests/errors/switch_cases.rig:53:8: error: this switch is #complete, but 'Shared
 tests/errors/switch_cases.rig:54:8: error: #complete needs an enum, not the enum_flags 'Look'
         if #complete look == { case .A; case .B; }
            ^
-tests/errors/switch_cases.rig:55:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
+tests/errors/switch_cases.rig:55:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float32'
         if 2.5 == { }
            ^
-tests/errors/switch_cases.rig:56:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float32'
+tests/errors/switch_cases.rig:56:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float32'
         if 1e300 == { }
            ^
 tests/errors/switch_cases.rig:57:8: error: null needs a pointer type, as in p : *int = null;

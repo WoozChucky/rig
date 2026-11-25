@@ -396,11 +396,22 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_STRUCT: {
         // (struct Vec2 (x float32) (y float32)), (union Value (i s64)); an
         // anonymous member's has no name: (union (key Key) (mouse Mouse)).
+        // A tagged union's has its tag's type after the name, as an enum's
+        // has its integer type, _ for none: (union #tagged Shape _ (circle
+        // Circle) (empty void)).
         Ast_Struct *s = (Ast_Struct *)node;
-        out(buffer, s->is_union ? "(union" : "(struct");
+        out(buffer, s->is_tagged ? "(union #tagged" : s->is_union ? "(union" : "(struct");
         if (s->name.count) {
             out(buffer, " ");
             out(buffer, s->name);
+        }
+        if (s->is_tagged) {
+            out(buffer, " ");
+            if (s->tag_expr) {
+                dump_type(buffer, s->tag_expr);
+            } else {
+                out(buffer, "_");
+            }
         }
         for (s64 i = 0; i < s->fields.count; i++) {
             out(buffer, " ");

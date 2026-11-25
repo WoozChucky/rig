@@ -13,7 +13,7 @@ tests/errors/switch_reaching_the_end.rig:54:1: error: 'loop_break' must return a
 tests/errors/switch_reaching_the_end.rig:61:1: error: 'middle_reaches' must return a value on every path, and this one reaches its end
     }
     ^
-tests/errors/switch_reaching_the_end.rig:64:8: error: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'
+tests/errors/switch_reaching_the_end.rig:64:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float64'
         if f == {
            ^
 tests/errors/switch_reaching_the_end.rig:70:8: error: this switch is #complete, but 'Mode.B' has no case

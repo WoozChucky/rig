@@ -4397,3 +4397,78 @@ TEST(switches_nest_up_to_a_thousand_levels) {
               "3:16992: blocks are nested too deeply (more than 1000 levels)\n");
     arena_free(&a);
 }
+
+// Issue #224: tagged unions (spec 3.20).
+
+TEST(parses_tagged_unions) {
+    // `union #tagged`, then the tag's type's name if any, then the members
+    // as a union's. The dump writes the tag's type after the name, _ for
+    // none, as an enum's integer type.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
+                        "Big :: union #tagged u32 { a: int; }\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(union #tagged Shape _ (circle Circle) (rect Rect) (empty void))\n"
+              "(union #tagged Big u32 (a int))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    // A tagged union is a struct with is_tagged, not is_union; its tag's
+    // type is a name, at the name.
+    Token_List *list = src("Shape :: union #tagged { a: int; }\nBig :: union #tagged u32 { a: int; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->globals.count, 2);
+    if (file->globals.count == 2) {
+        Ast_Struct *shape = (Ast_Struct *)file->globals[0];
+        CHECK(shape->is_tagged && !shape->is_union);
+        CHECK(!shape->tag_expr);
+        Ast_Struct *big = (Ast_Struct *)file->globals[1];
+        CHECK(big->is_tagged && !big->is_union);
+        CHECK(big->tag_expr && big->tag_expr->kind == AST_TYPE_NAME);
+        if (big->tag_expr) {
+            CHECK_STR(big->tag_expr->name, "u32");
+            CHECK_EQ(big->tag_expr->pos.line, 2);
+            CHECK_EQ(big->tag_expr->pos.col, 22);
+        }
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(tagged_union_declaration_mistakes) {
+    // Each alone: #tagged after struct, an anonymous member inside a tagged
+    // union, a tagged union as an anonymous member, no members, something
+    // but a name or '{' after #tagged, a tagged union in a body, and
+    // #tagged after a signature, where the '{' goes.
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "S :: struct #tagged { a: int; }\n", &errors);
+    CHECK_STR(errors, "1:13: #tagged is for a union, as in Shape :: union #tagged { ... }\n");
+    parse_src(&a, "U :: union #tagged { struct { a: int; }; }\n", &errors);
+    CHECK_STR(errors, "1:22: a tagged union's member needs a name, as in circle: Circle;\n");
+    parse_src(&a, "S :: struct { union #tagged { a: int; }; }\n", &errors);
+    CHECK_STR(errors,
+              "1:21: a tagged union can't be an anonymous member; declare it, as in Shape :: union #tagged { ... }\n");
+    parse_src(&a, "U :: union #tagged {}\n", &errors);
+    CHECK_STR(errors, "1:1: a tagged union needs at least one member\n");
+    parse_src(&a, "U :: union #tagged *u8 { a: int; }\n", &errors);
+    CHECK_STR(errors, "1:20: expected '{', found '*'\n");
+    parse_src(&a, "main :: () {\n    U :: union #tagged { a: int; }\n}\n", &errors);
+    CHECK_STR(errors, "2:5: unions can only be declared at the top level, for now\n");
+    parse_src(&a, "f :: () #tagged { }\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    // Inside a tagged union, a union's words, as a union's own members.
+    parse_src(&a, "U :: union #tagged { 5; }\n", &errors);
+    CHECK_STR(errors, "1:22: expected a member's name, found integer literal\n");
+    parse_src(&a, "U :: union #tagged { #if X { a: int; } }\n", &errors);
+    CHECK_STR(errors, "1:22: #if can't be among a union's members, for now\n");
+    // struct #tagged as an anonymous member is #tagged after struct.
+    parse_src(&a, "U :: union { struct #tagged { a: int; }; }\n", &errors);
+    CHECK_STR(errors, "1:21: #tagged is for a union, as in Shape :: union #tagged { ... }\n");
+    // Where a value goes, #tagged is any directive that isn't one.
+    parse_src(&a, "main :: () { x := #tagged; }\n", &errors);
+    CHECK_STR(errors, "1:19: expected an expression, found directive\n");
+    arena_free(&a);
+}

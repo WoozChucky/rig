@@ -9,7 +9,8 @@
     {kind,    size,    align,   is_signed, nullptr, {(const u8 *)name, sizeof name - 1}, nullptr, \
      nullptr, {},      nullptr, nullptr,   nullptr, 0,                                    nullptr, \
      nullptr, nullptr, nullptr, nullptr,   0,       nullptr,                              0,       \
-     false,   false,   nullptr, nullptr,   nullptr, false,                                nullptr,      false}
+     false,   false,   nullptr, nullptr,   nullptr, false,                                nullptr, false,   \
+     false,   nullptr}
 // The numbers' alignment is their size, as in C on x86-64.
 #define INTEGER(name, size, is_signed) BUILT_IN(TYPE_INTEGER, name, size, size, is_signed)
 #define FLOAT(name, size) BUILT_IN(TYPE_FLOAT, name, size, size, false)
@@ -28,7 +29,7 @@ static Type integer_types[] = {
 Type type_string = {
     TYPE_STRING, 16, 8, false, nullptr, {(const u8 *)"string", 6}, nullptr, nullptr, {}, nullptr, nullptr,
     &integer_types[4], 0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
-    nullptr, false, nullptr, false,
+    nullptr, false, nullptr, false, false, nullptr,
 };
 
 // void's size is 0 (size_of says it has none) and its alignment 1, so a
@@ -59,7 +60,7 @@ Type type_untyped_member = BUILT_IN(TYPE_UNTYPED_MEMBER, ".NAME", 0, 1, false);
 static Type float_name = {
     TYPE_FLOAT, 4, 4,       false,   nullptr, {(const u8 *)"float", 5}, nullptr, &type_float32, {}, nullptr, nullptr,
     nullptr,    0, nullptr, nullptr, nullptr, nullptr, nullptr, 0, nullptr, 0, false, false, nullptr, nullptr,
-    nullptr,    false, nullptr, false,
+    nullptr,    false, nullptr, false, false, nullptr,
 };
 
 // Every type a program can name, by its built-in name: the one list

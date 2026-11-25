@@ -7475,16 +7475,22 @@ TEST(a_complete_switch_without_a_default_calls_no_case) {
         CHECK(main);
         if (!main) continue;
         Ir_Instr *dispatch = nullptr;
+        s64 dispatch_block = -1;
         for (s64 k = 0; k < main->blocks.count && !dispatch; k++) {
             Ir_Block *b = main->blocks[k];
             if (b->instrs.count && b->instrs[b->instrs.count - 1].op == IR_SWITCH) {
                 dispatch = &b->instrs[b->instrs.count - 1];
+                dispatch_block = k;
             }
         }
         CHECK(dispatch);
         if (!dispatch) continue;
         CHECK_EQ(dispatch->type, IR_I8);
         CHECK_EQ(dispatch->cases.count, 2);
+        // The no-case block is laid out right after the dispatch's, before
+        // the cases', so all of the `if` line's code is one piece, where
+        // cdb can break.
+        CHECK_EQ(dispatch->target, dispatch_block + 1);
         Ir_Block *fail = main->blocks[dispatch->target];
         Ir_Op widen = signed_enum ? IR_SEXT : IR_ZEXT;
         bool widened = false, sign_passed = false;
@@ -7542,5 +7548,138 @@ TEST(a_pointer_switch_switches_on_its_address) {
     s64 dispatch = index_of(main, "switch i64 %");
     CHECK(ptrtoint >= 0 && ptrtoint < dispatch);
     CHECK(contains(main, ", b2 [0: b1]\n"));
+    arena_free(&a);
+}
+
+// The value an IR line gives, "%N", from "  %N = ..."; {} for none.
+static String value_given(String line) {
+    s64 start = index_of(line, "%"), end = index_of(line, " = ");
+    if (start < 0 || end < start) return {};
+    return string_slice(line, start, end - start);
+}
+
+TEST(a_tagged_switch_reads_its_tag_once) {
+    // A switch on a tagged union (spec 3.20) works out the switched value's
+    // address once, at the `if`: through a pointer, s.*'s one null check,
+    // at its '.', 5:9. The tag is loaded from that address, at offset 0, an
+    // i8 for Shape's u8, and one switch on it sends each member's index to
+    // its case; with no case;, a tag no member has goes to __rig_no_case.
+    // A case's it is that address plus the members' offset, 4: the member
+    // in the union itself, not a copy, so g's it.r reads the caller's copy,
+    // the parameter %0, at 4.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "Circle :: struct { r: float; }\n"
+                                                "Rect :: struct { w: float; h: float; }\n"
+                                                "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
+                                                "f :: (s: *Shape) -> int {\n"
+                                                "    if s.* == { case .circle; return 1; case .rect; return 2; "
+                                                "case .empty; return 3; }\n"
+                                                "}\n"
+                                                "g :: (s: Shape) -> float {\n"
+                                                "    if s == { case .circle; return it.r; case; return 0; }\n"
+                                                "}\n"
+                                                "main :: () { }\n"));
+    String f = proc_ir(ir, "f");
+    CHECK_EQ(count_of(f, "panic @str."), 1);
+    CHECK(contains(line_with(f, "panic @str."), "  ; 5:9 "));
+    // s's value, loaded from its slot, %1, once: the union's address.
+    CHECK_EQ(count_of(f, "= load ptr %1  "), 1);
+    String address = value_given(line_with(f, "= load ptr %1  "));
+    CHECK(address.count > 0);
+    CHECK_EQ(count_of(f, "= load i8 "), 1);
+    CHECK(contains(f, string_cstr(&a, string_printf(&a, "= load i8 " STR_FMT "  ", STR_ARG(address)))));
+    String tag = value_given(line_with(f, "= load i8 "));
+    CHECK_EQ(count_of(f, "switch i8 "), 1);
+    String dispatch = line_with(f, "switch i8 ");
+    CHECK(contains(dispatch, string_cstr(&a, string_printf(&a, "switch i8 " STR_FMT ", b", STR_ARG(tag)))));
+    CHECK(contains(dispatch, " [0: b") && contains(dispatch, ", 1: b") && contains(dispatch, ", 2: b"));
+    CHECK_EQ(count_of(f, "call @__rig_no_case("), 1);
+    // The no-case block, where the tag no member has goes, is laid out
+    // right after the dispatch's, its call at f's `if`, 5:5: all of the
+    // `if` line's code is one piece, where cdb can break.
+    s64 open = index_of(dispatch, ", b") + 2, close = index_of(dispatch, " [");
+    CHECK(open > 1 && close > open);
+    if (open > 1 && close > open) {
+        String fail = string_slice(dispatch, open, close - open);
+        CHECK(contains(f, string_cstr(&a, string_printf(&a, STR_FMT "\n" STR_FMT ":\n", STR_ARG(dispatch),
+                                                        STR_ARG(fail)))));
+    }
+    CHECK(contains(line_with(f, "call @__rig_no_case("), "  ; 5:5 "));
+
+    String g = proc_ir(ir, "g");
+    CHECK(contains(g, "= load i8 %0  "));
+    CHECK(!contains(g, " copy "));
+    String four = value_given(line_with(g, "= const i64 4  "));
+    CHECK(four.count > 0);
+    String member = string_printf(&a, "= ptradd %%0, " STR_FMT "  ", STR_ARG(four));
+    CHECK(contains(g, string_cstr(&a, member)));
+    CHECK(!contains(g, "__rig_no_case"));
+    // it's slot gets that address at the `if`, 8:5, before the switch: all
+    // of the `if` line's code is one piece, the dispatch's block, where cdb
+    // can break, and it holds the member before its case runs. The case
+    // reads it back, at its first statement, 8:29, in its scope.
+    String address_of_it = value_given(line_with(g, string_cstr(&a, member)));
+    String store = line_with(g, string_cstr(&a, string_printf(&a, "store ptr " STR_FMT ", %%", STR_ARG(address_of_it))));
+    CHECK(store.count > 0);
+    CHECK(contains(store, "  ; 8:5 s0"));
+    s64 switch_at = index_of(g, "switch i8 ");
+    CHECK(index_of(g, string_cstr(&a, member)) < switch_at);
+    CHECK(index_of(g, string_cstr(&a, store)) < switch_at);
+    String slot = value_given(line_with(g, "= local ptr  "));
+    CHECK(slot.count > 0);
+    String read = line_with(g, string_cstr(&a, string_printf(&a, "= load ptr " STR_FMT "  ", STR_ARG(slot))));
+    CHECK(contains(read, "  ; 8:29 s1"));
+    CHECK(index_of(g, string_cstr(&a, read)) > switch_at);
+    arena_free(&a);
+}
+
+TEST(a_tagged_case_reads_it_back_at_its_first_line_with_code) {
+    // A defer, a constant and an #if add no code of their own (spec 10.7),
+    // so a case's it is read back from its slot at the first statement
+    // that has some, the return at 10:9, past them and into the #if's
+    // branch: nothing is at 7:9, 8:9 or 9:9, and the deferred copies are at
+    // g()'s own column. A case with no such statement reads it back at its
+    // end, the switch's '}', 14:5.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "Circle :: struct { r: float; }\n"
+                                                       "Shape :: union #tagged { circle: Circle; rect: Circle; }\n"
+                                                       "g :: () {}\n"
+                                                       "f :: (s: Shape) -> float {\n"
+                                                       "    if s == {\n"
+                                                       "    case .circle;\n"
+                                                       "        defer g();\n"
+                                                       "        K :: 2;\n"
+                                                       "        #if true { defer g(); }\n"
+                                                       "        return it.r;\n"
+                                                       "    case .rect;\n"
+                                                       "        defer g();\n"
+                                                       "        K :: 3;\n"
+                                                       "    }\n"
+                                                       "    return 0;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(!contains(f, "  ; 7:9 "));
+    CHECK(!contains(f, "  ; 8:9 "));
+    CHECK(!contains(f, "  ; 9:9 "));
+    CHECK(!contains(f, "  ; 12:9 "));
+    CHECK(!contains(f, "  ; 13:9 "));
+    Array<String> slots = {};
+    for (String rest = f; contains(rest, "= local ptr  ");) {
+        String line = line_with(rest, "= local ptr  ");
+        array_add(&slots, value_given(line));
+        s64 at = index_of(rest, string_cstr(&a, line)) + line.count;
+        rest = string_slice(rest, at, rest.count - at);
+    }
+    CHECK_EQ(slots.count, 2);
+    if (slots.count == 2) {
+        String circle = line_with(f, string_cstr(&a, string_printf(&a, "= load ptr " STR_FMT "  ", STR_ARG(slots[0]))));
+        String rect = line_with(f, string_cstr(&a, string_printf(&a, "= load ptr " STR_FMT "  ", STR_ARG(slots[1]))));
+        CHECK(contains(circle, "  ; 10:9 s"));
+        CHECK(contains(rect, "  ; 14:5 s"));
+    }
+    array_free(&slots);
     arena_free(&a);
 }

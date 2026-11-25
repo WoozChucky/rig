@@ -101,8 +101,9 @@ HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
 // struct: cast(*Type_Info_Struct) t when t.tag == .STRUCT.
 
 // The kinds, a Type_Info's tag, numbered as Jai's tags are: ENUM is Jai's
-// 11, the numbers between being kinds of Jai's that Rig doesn't have. Over
-// int, so a tag is 8 bytes, as types.h writes it.
+// 11, the numbers between being kinds of Jai's that Rig doesn't have.
+// TAGGED_UNION is a kind Jai doesn't have: 32, past every number Jai uses.
+// Over int, so a tag is 8 bytes, as types.h writes it.
 Type_Info_Tag :: enum {
     INTEGER;
     FLOAT;
@@ -114,6 +115,7 @@ Type_Info_Tag :: enum {
     STRUCT;
     ARRAY;
     ENUM :: 11;
+    TAGGED_UNION :: 32;
 }
 
 // What every description starts with: its kind, then the type's size and
@@ -155,9 +157,10 @@ Type_Info_Struct :: struct {
     is_union: bool;
 }
 
-// One field of a struct or a union: its name, empty for an anonymous
-// member, its type's description, and where it is in the struct, in bytes
-// from its start (spec 3.9, 3.19).
+// One field of a struct or a union, or one member of a tagged union
+// (Type_Info_Tagged_Union.members): its name, empty for an anonymous
+// member, its type's description, and where it is in the struct or the
+// tagged union, in bytes from its start (spec 3.9, 3.19, 3.20).
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
 
 // .ARRAY: an array, [N]T, a view, []T, or a resizable array, [..]T, which
@@ -185,6 +188,21 @@ Type_Info_Enum :: struct {
     is_flags: bool;
     names: []string;
     values: []s64;
+}
+
+// .TAGGED_UNION: a tagged union (spec 3.20), by its declared name; the
+// description of its tag's integer type, whose size and sign the tag has;
+// the tag's offset, 0 in every Rig tagged union, there for a C layout that
+// puts it elsewhere; and its members, in order, as a struct's: each one's
+// name, its type's description, void's for a member that holds nothing,
+// and its offset, the same for all, past the tag. The member a value holds
+// is members[tag], when its tag, read at tag_offset, is one of theirs.
+Type_Info_Tagged_Union :: struct {
+    info: Type_Info;
+    name: string;
+    tag_type: *Type_Info;
+    tag_offset: int;
+    members: []Type_Info_Struct_Member;
 }
 
 // A value of any type: its type's description and its address. Every value

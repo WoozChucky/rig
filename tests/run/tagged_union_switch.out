@@ -1,0 +1,28 @@
+12.0 6.0 0.0
+3.0
+5.0
+6.0
+12.0
+7.0 2
+30.0
+2.0 8.0
+call
+circle 1.0
+1
+in
+left
+after
+circle 2.0
+next
+done
+rect 1.0 2.0
+none
+another shape
+loop 0
+loop 1
+member 12.0
+circle
+other true
+empty true
+circle
+K 2.0 5.0

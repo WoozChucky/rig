@@ -1,0 +1,22 @@
+// A switch without case; on a tagged union whose tag is an s32 (issue
+// #224, spec 3.20, 6.14, 8.1) that meets a tag no member has, here all four
+// of its bytes 0x80, written by C's memset: the program stops at its `if`,
+// the tag read whole and written as an s32 reads it, -2139062144 (its low
+// byte alone would be -128).
+#import "Basic";
+
+Wide4 :: union #tagged s32 { a: u8; b: int; none: void; }
+
+memset :: (dest: *Wide4, c: s32, count: u64) -> *Wide4 #foreign libc;
+
+main :: () {
+    print("before\n");
+    w: Wide4;
+    memset(*w, 0x80, 4);
+    if w == {
+        case .a;    print("a\n");
+        case .b;    print("b\n");
+        case .none; print("none\n");
+    }
+    print("after\n");
+}

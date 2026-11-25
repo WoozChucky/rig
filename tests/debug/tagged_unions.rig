@@ -1,0 +1,56 @@
+// A debugger's view of tagged unions (bin/run-tests runs it under gdb with
+// tagged_unions.gdb and under cdb with tagged_unions.cdb; issue #224,
+// spec 10.7): a tagged union shown as the C struct it is laid out as, a
+// `tag` naming the member it holds and an anonymous union of its members
+// that aren't void, so s.circle is reached as in C, and a switch's `it` a
+// pointer to the member in the union itself, so a write through it shows
+// in s. Each case's `it` is a variable of its own, of its own member's
+// type, in the case's block only: the second switch's `.rect` case shows a
+// *Rect, and after the switches there is no `it`. The third switch has no
+// `case;`, so its no-case failure is at its `if` too, laid out right after
+// the dispatch: the `if` line is still one piece, where cdb can break, and
+// a step from it goes into the case that runs, `it` set. A void member's
+// union shows its other members over zeroed bytes (e's key is 0). A member
+// named tag is listed as tag$, so k.tag is the tag and k.tag$ the member (a
+// second `tag` crashes gdb). gdb writes the tag as its enumerator's name
+// (`tag = circle`), and ptype the tag's type as `enum {circle, rect,
+// empty}`; cdb's `??` writes it as its number and name, `0 ( circle )`,
+// and lists the anonymous union's members in the struct itself, at the
+// members' offset (circle and rect at +0x004), as it does any anonymous
+// member's; its `dv /t` lists `it`, in the case's block, before main's own
+// variables.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Event :: union #tagged { key: s32; quit: void; }
+Token :: union #tagged { word: s32; tag: s32; }
+
+main :: () {
+    s := Shape.{circle = .{2}};
+    e := Event.quit;
+    k := Token.{tag = 5};
+    if s == {
+        case .circle;
+            it.r = 3;
+            putchar(10);
+        case;
+    }
+    s = .{rect = .{4, 5}};
+    if s == {
+        case .rect;
+            it.w = 6;
+            putchar(10);
+        case;
+    }
+    if s == {
+        case .circle;
+            putchar(67);
+        case .rect;
+            putchar(10);
+        case .empty;
+            putchar(69);
+    }
+    putchar(10);
+}

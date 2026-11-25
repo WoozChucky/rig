@@ -1,0 +1,30 @@
+// Tagged unions and C (issue #224, spec 3.20, 7.6): a pointer to a tagged
+// union is a pointer to the C struct of its tag and an anonymous union of
+// its members, so C's memcpy copies one and memset writes its tag, compiled
+// and through the interpreter's calls into C. A tag no member has, as C
+// may write, goes to the switch's case;, and tests equal to no member. (By
+// value, a tagged union isn't passed to C yet, as a struct isn't.)
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+
+memset :: (dest: *Shape, c: s32, count: u64) -> *Shape #foreign libc;
+memcpy :: (dest: *Shape, source: *Shape, count: u64) -> *Shape #foreign libc;
+
+main :: () {
+    r := Shape.{rect = .{2, 3}};
+    s: Shape;
+    memcpy(*s, *r, size_of(Shape));
+    if s == { case .rect; print("rect {} {}\n", it.w, it.h); case; print("not a rect\n"); }
+
+    memset(*s, 7, 1);
+    if s == {
+        case .circle; print("circle\n");
+        case .rect;   print("rect\n");
+        case .empty;  print("empty\n");
+        case;         print("no member's tag\n");
+    }
+    print("{} {}\n", s == .circle, s != .empty);
+}

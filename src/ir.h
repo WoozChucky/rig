@@ -164,21 +164,24 @@
 //   scalar parameter in its stack slot (an IR_LOCAL; a parameter's is stored
 //   on entry, and every use reads it, so a debugger that changes it changes
 //   what the program reads), an aggregate parameter as the pointer it's
-//   passed as. And the context (spec 7.10), which the source doesn't declare,
-//   so it's artificial (Ir_Var.artificial): the hidden parameter, the first
-//   parameter after the result pointers (arg 1, the visible ones from 2), in
-//   its slot, at the procedure's name; in main and a run's procedure, the
-//   slot holding default_context's address, a local of the body's scope; and
-//   in a push_context's block, the slot holding the pushed context's address,
-//   a local of the block's scope at the keyword (lower.cpp's
-//   lower_push_context). A #c_call procedure has one only inside its pushes.
-//   Each is a *Context, and named context, so a debugger shows it and passes
-//   it to a procedure it calls (gdb's `print twice(context, 4)`). Temporaries,
-//   hidden result pointers and main's argc and argv (C's, which its prologue
-//   hands to Preload's __save_command_line) aren't variables here: the source
-//   has no name for them. (The backend still describes each hidden result
-//   pointer to a debugger, from Ir_Proc.source_results, as an artificial
-//   parameter named result$: llvm_backend.cpp's declare_variables.)
+//   passed as; a tagged union's case's it as a slot holding the member's
+//   address, a *M, as an aggregate parameter is described as its pointer
+//   (lower.cpp's lower_tagged_case). And the context (spec 7.10), which the
+//   source doesn't declare, so it's artificial (Ir_Var.artificial): the
+//   hidden parameter, the first parameter after the result pointers (arg 1,
+//   the visible ones from 2), in its slot, at the procedure's name; in main
+//   and a run's procedure, the slot holding default_context's address, a
+//   local of the body's scope; and in a push_context's block, the slot
+//   holding the pushed context's address, a local of the block's scope at
+//   the keyword (lower.cpp's lower_push_context). A #c_call procedure has
+//   one only inside its pushes. Each is a *Context, and named context, so a
+//   debugger shows it and passes it to a procedure it calls (gdb's `print
+//   twice(context, 4)`). Temporaries, hidden result pointers and main's argc
+//   and argv (C's, which its prologue hands to Preload's
+//   __save_command_line) aren't variables here: the source has no name for
+//   them. (The backend still describes each hidden result pointer to a
+//   debugger, from Ir_Proc.source_results, as an artificial parameter named
+//   result$: llvm_backend.cpp's declare_variables.)
 // - Constants (spec 4.2, issue #172): every one the program declares, used
 //   or not, so a debugger shows each by its name, as C's debuggers show an
 //   enum's values. A constant naming a procedure isn't one (the debugger
@@ -457,9 +460,11 @@ enum Ir_Var_Kind : u8 {
 struct Ir_Var {
     String name;       // as in the source: "x", "it", "it_index"
     Type *type;        // its Rig type; a constant's, the type a debugger shows it as (an
-                       // untyped integer's int, an untyped float's float64, null's *void)
-    Position pos;      // where it's declared: its name (it and it_index: the `for`; the
-                       // context, the procedure's name, a run's #run, or the push_context)
+                       // untyped integer's int, an untyped float's float64, null's *void); a
+                       // tagged union's case's it's, a pointer to the member's type (spec 10.7)
+    Position pos;      // where it's declared: its name (it and it_index: the `for`; a tagged
+                       // union's case's it: the `case`; the context, the procedure's name, a
+                       // run's #run, or the push_context)
     s32 scope;         // the Ir_Scope that declares it; -1 for a top-level constant
     Ir_Var_Kind kind;
     s32 value;         // a value's number, or a global's index: what, Ir_Var_Kind says
@@ -523,11 +528,11 @@ struct Ir_Module {
     Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
                              // __rig_bounds_failed when a bounds check calls it,
                              // __rig_string_equal when == on strings or a switch on a string
-                             // does and __rig_no_case when a #complete switch without `case;`
-                             // does (lower.cpp, in the order first needed); a compile-time
-                             // module lowered on demand has the three helpers first, then the
-                             // runs' procedures and what they reach, in the order needed
-                             // (ir_lower_run)
+                             // does and __rig_no_case when a #complete switch without `case;`,
+                             // or a tagged union's, does (lower.cpp, in the order first
+                             // needed); a compile-time module lowered on demand has the three
+                             // helpers first, then the runs' procedures and what they reach,
+                             // in the order needed (ir_lower_run)
     // The source files, for a debugger. A module built by hand has none,
     // and gets no debug information.
     Array<Ir_Source> sources;  // indexed by Position.file

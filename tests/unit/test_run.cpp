@@ -658,6 +658,61 @@ TEST(run_negative_counts_are_refused) {
     arena_free(&a);
 }
 
+TEST(a_run_bakes_a_tagged_union_as_its_tag_and_member) {
+    // A #run's tagged union (spec 3.20, 7.8) is baked as a literal of its
+    // tag (Ast_Literal.tag) and, unless its member holds nothing, the
+    // member's value, baked as any value of its type is: a pointer that
+    // isn't null is refused, as a struct's field is. A tag no member has,
+    // as C may write one, fails the run, at the #run: nothing says which
+    // member's bytes to bake. A tag is read whole: Wide4's s32 257, whose
+    // low byte alone would be none's tag, 1.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Circle :: struct { r: float; }\n"
+                                 "Shape :: union #tagged { circle: Circle; empty: void; }\n"
+                                 "Pointing :: union #tagged { p: *int; none: void; }\n"
+                                 "make_circle :: () -> Shape { return .{circle = .{2}}; }\n"
+                                 "make_empty :: () -> Shape { return .empty; }\n"
+                                 "make_wrong :: () -> Shape { s: Shape; t := cast(*u8) *s; t.* = 9; return s; }\n"
+                                 "make_pointing :: () -> Pointing { x := 1; return .{p = *x}; }\n"
+                                 "make_none :: () -> Pointing { return .none; }\n"
+                                 "C :: #run make_circle();\n"
+                                 "E :: #run make_empty();\n"
+                                 "W :: #run make_wrong();\n"
+                                 "P :: #run make_pointing();\n"
+                                 "N :: #run make_none();\n"
+                                 "Wide4 :: union #tagged s32 { a: u8; none: void; }\n"
+                                 "make_high :: () -> Wide4 { w: Wide4; t := cast(*u16) *w; t.* = 257; return w; }\n"
+                                 "H :: #run make_high();\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "11:6: #run failed: its result holds a tagged union whose tag names no member\n"
+              "12:6: #run's result holds a pointer, which can't be baked, for now\n"
+              "16:6: #run failed: its result holds a tagged union whose tag names no member\n");
+    const char *names[] = {"C", "E", "N"};
+    s32 tags[] = {0, 1, 1};
+    s64 values[] = {1, 0, 0};
+    for (s64 i = 0; i < 3; i++) {
+        Ast_Const *baked = (Ast_Const *)top_level_named(tree, names[i]);
+        CHECK(baked->is_data && baked->data && baked->data->kind == AST_LITERAL);
+        if (!baked->is_data || !baked->data || baked->data->kind != AST_LITERAL) continue;
+        Ast_Literal *literal = (Ast_Literal *)baked->data;
+        CHECK_EQ(literal->tag, tags[i]);
+        CHECK_EQ(literal->values.count, values[i]);
+        CHECK(!literal->bytes.count);
+    }
+    Ast_Literal *circle = (Ast_Literal *)((Ast_Const *)top_level_named(tree, "C"))->data;
+    if (circle && circle->values.count == 1) {
+        CHECK_EQ(circle->fields[0], 0);
+        CHECK(circle->values[0]->kind == AST_LITERAL);
+    }
+    CHECK(!top_level_named(tree, "W")->type);
+    CHECK(!top_level_named(tree, "P")->type);
+    CHECK(!top_level_named(tree, "H")->type);
+    arena_free(&a);
+}
+
 TEST(run_strings_convert_as_literals) {
     // A baked string is a string literal's bytes, with the zero after them:
     // it converts to *u8, and passes C's '...', as a literal does.

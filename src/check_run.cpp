@@ -78,7 +78,9 @@ static void reach_described(Reach *r, Type *t) {
 // #caller_location, a #run, whose operand was checked as it was, or an
 // enum's member, Mode.FREE (Ast_Member.of_enum) or .FREE: a constant,
 // whose enum's name in Mode.FREE (no value, so no type) is nothing to
-// walk, and .FREE has no operand.
+// walk, and .FREE has no operand. Nor for a tagged union's member written
+// with its type's name, Shape.empty (Ast_Member.of_tagged), whose name is
+// a type's too: a value made on the spot, or a tag test's or a case's name.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -95,9 +97,11 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
         break;
     case AST_CAST: array_add(list, ((Ast_Cast *)e)->value); break;
     case AST_DEREF: array_add(list, ((Ast_Deref *)e)->operand); break;
-    case AST_MEMBER:
-        if (!((Ast_Member *)e)->of_enum) array_add(list, ((Ast_Member *)e)->operand);
+    case AST_MEMBER: {
+        Ast_Member *m = (Ast_Member *)e;
+        if (!m->of_enum && !m->of_tagged) array_add(list, m->operand);
         break;
+    }
     case AST_INDEX:
         array_add(list, ((Ast_Index *)e)->index);
         array_add(list, ((Ast_Index *)e)->operand);
@@ -114,12 +118,14 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
 // What a name whose declaration is `decl` is, when it doesn't exist while
 // compiling, in name_is_place's words: "a local", "a parameter", "the
 // loop's iterator" (a named one too), "the loop's index"
-// (loop_variable_kind); null for anything else, which does.
+// (loop_variable_kind); null for anything else, which does. A tagged
+// union's switch's it (spec 3.20) is "a local", read-only or not: why it
+// can't be written is no matter here.
 static const char *local_kind(Ast *decl) {
     if (decl && decl->kind == AST_PARAM) return "a parameter";
     if (!decl || decl->kind != AST_VAR || ((Ast_Var *)decl)->is_global) return nullptr;
     Ast_Var *var = (Ast_Var *)decl;
-    return var->is_iterator ? loop_variable_kind(var) : "a local";
+    return var->is_iterator && !var->is_case_member ? loop_variable_kind(var) : "a local";
 }
 
 // The operand of an expression #run runs while compiling, before any call
@@ -450,7 +456,10 @@ static bool walk_type(Reach *r, Type *t) {
 // pointer, before resolve_late_fields. An enum (spec 3.18) has its
 // members' values worked out now (walk_enum), which walk_type doesn't,
 // since its description holds them, and its integer type is described
-// too. Each type is walked once, so a struct that points at itself ends.
+// too. A tagged union (spec 3.20) has its tag type described, and its
+// members walked as a struct's fields are (a void member's type, void,
+// needing nothing more). Each type is walked once, so a struct that
+// points at itself ends.
 // False when a struct has no layout, or is still being laid out
 // (describing *S in one of S's counts is a circle, as reaching S by value
 // is), or a field has no type, or an enum's member has no value: errors,
@@ -468,7 +477,11 @@ static bool walk_described(Reach *r, Type *t) {
         for (s64 i = 0; i < t->param_count; i++) reach_described(r, t->params[i]);
         for (s64 i = 0; i < t->result_count; i++) reach_described(r, t->results[i]);
         return true;
-    case TYPE_STRUCT: return walk_struct(r, t, reach_described);
+    case TYPE_STRUCT:
+        if (!walk_struct(r, t, reach_described)) return false;
+        // Laid out now, a tagged union has its tag type (lay_out_tag).
+        if (t->is_tagged) reach_described(r, t->tag_type);
+        return true;
     case TYPE_ENUM:
         reach_described(r, t->underlying);
         return walk_enum(r, t);

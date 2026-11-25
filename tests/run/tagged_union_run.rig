@@ -1,0 +1,91 @@
+// Tagged unions baked from #run (issue #224, spec 7.8): a tagged union is
+// baked as its tag and the value of the member it holds, baked as any value
+// of that member's type is: a string's bytes copied, so a baked string
+// member is the program's own; a member that holds nothing gives no value.
+// One in a struct's field or an array's element is baked the same way.
+// A switch inside a #run's procedure writes through its it as at run time.
+// A #run's procedure names members with the type too, as in Shape.empty, in
+// a case and in a tag test; and a switch there can be the first to need a
+// pointer member, whose type is made late, so its it has that type.
+// A top-level #run sees the layout too (its output is the .build.out).
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Label :: union #tagged { text: string; none: void; }
+
+make :: () -> Shape { return .{rect = .{2, 3}}; }
+
+label :: () -> Label { return .{text = "baked"}; }
+
+nothing :: () -> Label { return .none; }
+
+Box :: struct { a: Label; b: Label; k: int; }
+
+boxed :: () -> Box { return .{a = .{text = "first"}, b = .none, k = 7}; }
+
+labels :: () -> [3]Label { return .[.none, .{text = "second"}, .{text = "third"}]; }
+
+// make's rect, twice as wide, written through a switch's it.
+doubled :: () -> Shape {
+    s := make();
+    if s == { case .rect; it.w *= 2; case; }
+    return s;
+}
+
+// Shape's members named with the type: 2 from the case, 10 and 20 from
+// the tag tests.
+named :: () -> int {
+    s := Shape.empty;
+    n := 0;
+    if s == { case Shape.rect; n = 1; case Shape.empty; n = 2; case; }
+    if s == Shape.empty { n += 10; }
+    if Shape.rect != s { n += 20; }
+    return n;
+}
+
+Chain :: union #tagged { next: *Chain; end: void; }
+
+// The switch is the first to need Chain.next's type: a constant's #run is
+// checked before the late members are made.
+chain_end :: (l: Chain) -> int {
+    if l == {
+        case .next; if it.* == { case .end; return 7; case; return 1; }
+        case .end; return 2;
+    }
+    return 0;
+}
+
+T :: #run named();
+C :: #run chain_end(Chain.end);
+B :: #run make();
+L :: #run label();
+N :: #run nothing();
+D :: #run doubled();
+X :: #run boxed();
+A :: #run labels();
+
+show :: (l: Label) {
+    if l == {
+        case .text; print("text {}\n", it);
+        case .none; print("none\n");
+    }
+}
+
+#run {
+    print("{}\n", size_of(Shape));
+}
+
+main :: () {
+    if B == { case .rect; print("rect {} {}\n", it.w, it.h); case; print("not a rect\n"); }
+    show(L);
+    show(N);
+    if D == { case .rect; print("rect {} {}\n", it.w, it.h); case; print("not a rect\n"); }
+    print("{} {}\n", B == .rect, N == .none);
+    show(X.a);
+    show(X.b);
+    print("{}\n", X.k);
+    for A { show(it); }
+    print("{} {}\n", T, C);
+}

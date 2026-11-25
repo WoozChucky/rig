@@ -1,0 +1,43 @@
+37:             putchar(10);
+struct Circle * it
+struct Shape s = struct Shape
+struct Event e = struct Event
+struct Token k = struct Token
+struct Shape
++0x000 tag              : 0 ( circle )
++0x004 circle           : Circle
++0x004 rect             : Rect
+struct Circle
++0x000 r                : 3
+struct Event
++0x000 tag              : 1 ( quit )
++0x004 key              : 0n0
+float 3
+struct Token
++0x000 tag              : 1 ( tag )
++0x004 word             : 0n5
++0x004 tag$             : 0n5
+<unnamed-tag> tag (0n1)
+int 0n5
+44:             putchar(10);
+struct Rect * it
+struct Shape s = struct Shape
+struct Event e = struct Event
+struct Token k = struct Token
+float 6
+struct Shape
++0x000 tag              : 1 ( rect )
+47:     if s == {
+51:             putchar(10);
+struct Rect * it
+float 5
+55:     putchar(10);
+Couldn't resolve error at 'it'
+!Couldn't resolve error at 's
+!Couldn't resolve error at 'e'
+!Couldn't resolve error at 'it->
+!Couldn't resolve error at 'k
+!Ambiguous symbol error
+!48:         case .circle;
+!49:             putchar(67);
+!50:         case .rect;

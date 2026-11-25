@@ -743,9 +743,11 @@
 //   and what needs it says nothing more, as after an error it reaches. So
 //   is a result that can't be baked: one holding a pointer that isn't null,
 //   but in a union's bytes, which are baked as they are, "#run's result
-//   holds a pointer, which can't be baked, for now", or a view or a string
+//   holds a pointer, which can't be baked, for now", a view or a string
 //   whose count is below zero, "#run failed: its result holds a view with a
-//   negative count" ("a string").
+//   negative count" ("a string"), or a tagged union whose tag names no
+//   member, "#run failed: its result holds a tagged union whose tag names
+//   no member" (spec 3.20).
 // - A baked string is a string literal's bytes: it converts to a *u8 and
 //   passes C's '...' as a literal does (is_literal_string). A constant may
 //   hold a baked view, its elements read-only data, as the #run's value or
@@ -1031,8 +1033,9 @@
 // The switch (issue #222, spec 6.14).
 // - `if x == { case 1; ... case; ... }` checks x once, as an operand, an
 //   untyped integer given its default type: an integer, an enum, a bool,
-//   a string or a pointer, or "a switch needs an integer, an enum, a bool,
-//   a string or a pointer, not 'float64'" (checker.cpp's check_switch).
+//   a string, a pointer or a tagged union (below), or "a switch needs an
+//   integer, an enum, a bool, a string, a pointer or a tagged union, not
+//   'float64'" (checker.cpp's check_switch).
 // - Each case's value converts to x's type as an assignment's value does,
 //   and must be known while compiling: a constant for an integer, an enum
 //   or a bool; constant data for a string; null for a pointer ("a
@@ -1042,14 +1045,16 @@
 //   PATH:L:C", and two `case;`s "this switch already has a 'case;' at
 //   PATH:L:C".
 // - #complete takes an enum ("#complete needs an enum, not 'int'"), but
-//   not an enum_flags ("... not the enum_flags 'Look'"). Every value of
+//   not an enum_flags ("... not the enum_flags 'Look'"), and a tagged
+//   union, where it adds nothing (below). Every value of
 //   the enum's members must have a case, `case;` or not: "this switch is
 //   #complete, but 'Mode.FREE_ALL' has no case", the missing values named
 //   by their first members, in one message.
 // - Each case's statements are a block and a scope of their own. A break
 //   or continue in one acts on the loop around the switch. The switch
 //   reaches its end as spec 6.11 says (goes_past).
-// - What lowering may rely on: x's type is one of the five; every case's
+// - What lowering may rely on: x's type is one of the five, or a tagged
+//   union, whose switch is the tagged unions' (below); every case's
 //   value but `case;`'s is a constant whose value is one of x's type's
 //   (is_constant, its bits in Ast.constant as 64 bits): its type is x's,
 //   or one that widens to it (a u8 constant in an int's switch, a *int
@@ -1106,6 +1111,58 @@
 //   Ast_Literal.written, on a literal holding such a group and on each
 //   group, is where each value was written, the order to evaluate them in;
 //   bytes only on a baked union.
+//
+// Tagged unions (issue #224, spec 3.20).
+// - `Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }`
+//   declares a type at the top level, as a union is: a struct with a flag
+//   (Type.is_tagged, not is_union), so copies, pointers, places, Any,
+//   arrays and fields of it, circles ("'T' contains itself; ..."), and C
+//   only through a pointer, are a struct's. Its tag comes first, then its
+//   members over each other (checker.cpp's lay_out, lay_out_tag): C's
+//   `struct { T tag; union { ... }; }`. The tag's type is written after
+//   #tagged, any integer type ("a tagged union's tag must be an integer
+//   type, not 'float32'") holding the last member's number ("a 'u8' tag
+//   can't count the 257 members of 'Big'"), or else the smallest unsigned
+//   type that does. A member may be void, holding nothing.
+// - A value is made with one member by name: Shape.{circle = c}, .{rect =
+//   r} where the type is known ("a tagged union's literal names its one
+//   member, as in Shape.{circle = c}"; "a tagged union's literal gives one
+//   member; 'circle' is given already"); a void member's as Shape.empty or
+//   .empty ("'Shape.empty' holds nothing; write Shape.empty" for
+//   Shape.{empty = x}; "'Shape.circle' holds a 'Circle'; make one with
+//   Shape.{circle = ...}" for Shape.circle as a value). A zeroed one holds
+//   its first member, zeroed.
+// - Its members are never reached by '.' ("a tagged union's member is
+//   read in a switch: if s == { case .circle; ... it ... }"): a switch on
+//   it names every member or has `case;` ("this switch doesn't handle
+//   'Shape.empty'; add its case or a 'case;'"), each case one member
+//   ("a tagged union's case names one of its members, as in case
+//   .circle;", "'Shape.circle' already has a case at PATH:L:C"), with no
+//   #through ("#through can't end a tagged union's case: the next case's
+//   'it' is another member"); #complete adds nothing. In a case, `it` is
+//   the member in the union itself: a place when the switched value is
+//   one, read-only otherwise ("can't assign to 'it': it's a member of a
+//   switched value that isn't a place"). A void member's case and `case;`
+//   declare no it. A name the union has no member of is "'Shape' has no
+//   member 'z'", as a case's, a literal's, Shape.z or s.z.
+// - s == .empty and s != .circle (Shape.empty too, either order, beside a
+//   .NAME or a Shape.NAME) test the tag, a bool, folded when s is constant
+//   data. A tagged union is compared with nothing else ("'==' compares a
+//   tagged union only with a member's name, as in s == .empty").
+// - What lowering may rely on: a tagged union is a TYPE_STRUCT with
+//   is_tagged, its tag of tag_type at offset 0, its fields its members,
+//   all at fields[0].offset, a void member's of type void (size 0). A
+//   literal of one has its member's index in Ast_Literal.tag, and fields
+//   {index} with its one value, or no value for a void member: those made
+//   by the checker for Shape.empty and .empty are in Ast_Member.made and
+//   Ast_Dot_Name.made, which lowering lowers in the node's place (a member
+//   with of_tagged set, its operand a type's name with no type). A tagged
+//   union's switch has Ast_Case.member, each member named once, -1 for
+//   `case;`, and Ast_Case.it, the member's variable, or null for `case;`
+//   and a void member; checks_no_case and covers_every_value as an enum's
+//   #complete switch has them. A tag test is an Ast_Binary == or != whose
+//   operand_type is the tagged union and tag_member the member, its name
+//   side typed as the union but no value to work out.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
@@ -1239,7 +1296,10 @@ bool is_literal_string(Ast *e);
 //   null, which are constants: a procedure value's name, which
 //   procedure_address walks on from, a string literal, or a struct or
 //   array literal of constant data (is_data already); a view's is the
-//   array literal of its elements, typed [count]T where the #run is a []T.
+//   array literal of its elements, typed [count]T where the #run is a []T;
+// - a tagged union's void member written as a value, Shape.empty or .empty
+//   (spec 3.20): the literal the checker made for it (Ast_Member.made,
+//   Ast_Dot_Name.made).
 // A field's or element's value node that is itself constant data is
 // followed in turn. So *value is a string or struct or array literal, or a
 // scalar field's or element's value node as the literal wrote it (a

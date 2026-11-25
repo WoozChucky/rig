@@ -1,0 +1,60 @@
+// A tagged union whose tag is wider than a byte (issue #224, spec 3.20,
+// 7.6, 7.8), an s32, as a C binding's int tag is: its four bytes, at
+// offset 0, written whole by literals, a global's and a constant's data
+// and a #run's bake, and read whole by tag tests and switches, compiled
+// and interpreted. The members are at 8, after the tag, b's int aligned
+// to 8, so Wide4 is 16 bytes. C's memset writes the tag 257, its two low
+// bytes 1, which no member has: read whole, it goes to the switch's
+// case;, and tests equal to no member (its low byte alone would be b's).
+#import "Basic";
+
+Wide4 :: union #tagged s32 { a: u8; b: int; none: void; }
+
+memset :: (dest: *Wide4, c: s32, count: u64) -> *Wide4 #foreign libc;
+
+make :: () -> Wide4 { return .{b = -5}; }
+
+nothing :: () -> Wide4 { return .none; }
+
+show :: (w: Wide4) {
+    if w == {
+        case .a;    print("a {}\n", it);
+        case .b;    print("b {}\n", it);
+        case .none; print("none\n");
+        case;       print("no member's tag\n");
+    }
+}
+
+g : Wide4 = .{b = 7};
+K :: Wide4.{a = 200};
+N :: Wide4.none;
+B :: #run make();
+E :: #run nothing();
+
+main :: () {
+    print("{}\n", size_of(Wide4));
+
+    // A literal, a local, the global, the constants and the #run's.
+    w := Wide4.{a = 9};
+    show(w);
+    show(.{b = 1000000});
+    show(g);
+    show(K);
+    show(N);
+    show(B);
+    show(E);
+    print("{} {} {} {}\n", w == .a, g != .b, N == .none, B == .b);
+
+    // The global changed through a switch's it, and whole.
+    if g == { case .b; it += 1; case; }
+    show(g);
+    g = .none;
+    show(g);
+
+    // C's tag, 257: no member's.
+    memset(*w, 1, 2);
+    show(w);
+    print("{} {} {}\n", w == .a, w == .b, w == .none);
+    w = .{b = 3};
+    show(w);
+}

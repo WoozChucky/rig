@@ -723,6 +723,9 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
         binary->op = op->kind;
         binary->left = left;
         binary->right = right;
+        Token *last = &p->tokens[p->next - 1];  // the right operand's last token
+        s32 width = (s32)last->text.count + (last->kind == TOKEN_DIRECTIVE ? 1 : 0);  // a directive's '#'
+        binary->end = {last->pos.file, last->pos.line, last->pos.col + width};
         left = binary;
     }
     return left;
@@ -1871,18 +1874,18 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
 // what's missing (error_expected_or_load). A #run, an #if, a
-// #caller_location, a #complete or a #through there is "expected '{'" (on
-// the next line, a #run or an #if is the top-level declaration the
-// recovery resumes at). A string after #foreign's library is the C
-// function's name, when it isn't the procedure's own (c_free :: (p: *void)
-// #foreign libc "free";): the procedure keeps its name in Rig. #compiler,
-// Jai's directive, declares a procedure the compiler does itself, while
-// compiling (spec 7.9), with no body: `create_workspace :: (name: string)
-// -> Workspace #compiler;`. It's no C function, so it takes no #c_call
-// either ("a #compiler procedure is the compiler's: it takes no
-// '#c_call'"), #no_abc before it is "expected '{'", as before #foreign,
-// and the ';' must follow it. Any other directive but these is "unknown
-// directive '#foo'".
+// #caller_location, a #complete, a #through or a #tagged there is
+// "expected '{'" (on the next line, a #run or an #if is the top-level
+// declaration the recovery resumes at). A string after #foreign's
+// library is the C function's name, when it isn't the procedure's own
+// (c_free :: (p: *void) #foreign libc "free";): the procedure keeps its
+// name in Rig. #compiler, Jai's directive, declares a procedure the
+// compiler does itself, while compiling (spec 7.9), with no body:
+// `create_workspace :: (name: string) -> Workspace #compiler;`. It's no C
+// function, so it takes no #c_call either ("a #compiler procedure is the
+// compiler's: it takes no '#c_call'"), #no_abc before it is "expected
+// '{'", as before #foreign, and the ';' must follow it. Any other
+// directive but these is "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, C's bare '..'
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign
@@ -1952,11 +1955,12 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         // Where the '{' should be: parse_block reports it. A #run or an #if
         // starting the next line is where the recovery resumes, as a #load
-        // is. A #caller_location is a value, as a #run is, and a #complete
-        // or a #through is part of a switch, so none is an unknown
-        // directive here either (spec 2.7).
+        // is. A #caller_location is a value, as a #run is, a #complete or a
+        // #through is part of a switch, and a #tagged part of a union's
+        // declaration, so none is an unknown directive here either (spec
+        // 2.7).
         if (is_top_level_directive(t) || is_directive(t, "caller_location") || is_directive(t, "complete") ||
-            is_directive(t, "through")) {
+            is_directive(t, "through") || is_directive(t, "tagged")) {
             break;
         }
         bool compiler = is_directive(t, "compiler");
@@ -2084,6 +2088,16 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 // "anonymous members are nested too deeply (more than 1000 levels)", at the
 // keyword of the one too deep.
 //
+// A tagged union's members (spec 3.20) are read as a union's, by its
+// messages, but named ones only: 'union' or 'struct' among them is "a
+// tagged union's member needs a name, as in circle: Circle;", at the
+// keyword. Nor is a tagged union an anonymous member anywhere: `union
+// #tagged {` among a struct's or a union's fields is "a tagged union can't
+// be an anonymous member; declare it, as in Shape :: union #tagged { ...
+// }", at the directive (among a tagged union's members, the message above,
+// at the `union`; `struct #tagged {` is parse_struct's "#tagged is for a
+// union"). Either gives the declaration up.
+//
 // An enum's members are in braces too (parse_enum), which end the same way:
 // braced_next is what both do before each field or member. False after an
 // error, reported: the declaration is given up.
@@ -2091,6 +2105,7 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
     if (!expect(p, TOKEN_LBRACE)) return false;
     s64 first_load = -1;        // where the column-1 loads up to here start, or -1
     Array<Token *> loads = {};  // those loads, not reported yet
+    bool members = s->is_union || s->is_tagged;  // a union's words, "member", not "field"
     while (peek(p)->kind != TOKEN_RBRACE) {
         Braced_Next next = braced_next(p, &first_load, &loads);
         if (next == BRACED_ENDED) return false;
@@ -2098,17 +2113,29 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
         Token *field_name = peek(p);
         if (is_directive(field_name, "if")) {
             diag_error(p->diag, field_name->pos,
-                       s->is_union ? "#if can't be among a union's members, for now"
-                                   : "#if can't be among a struct's fields, for now");
+                       members ? "#if can't be among a union's members, for now"
+                               : "#if can't be among a struct's fields, for now");
             return false;
         }
         if (field_name->kind == TOKEN_UNION || field_name->kind == TOKEN_STRUCT) {
+            if (s->is_tagged) {
+                diag_error(p->diag, field_name->pos, "a tagged union's member needs a name, as in circle: Circle;");
+                return false;
+            }
             if (p->anonymous == MAX_DEPTH) {
                 diag_error(p->diag, field_name->pos, "anonymous members are nested too deeply (more than %d levels)",
                            MAX_DEPTH);
                 return false;
             }
             advance(p);
+            if (is_directive(peek(p), "tagged")) {
+                diag_error(p->diag, peek(p)->pos,
+                           field_name->kind == TOKEN_UNION
+                               ? "a tagged union can't be an anonymous member; declare it, as in Shape :: union "
+                                 "#tagged { ... }"
+                               : "#tagged is for a union, as in Shape :: union #tagged { ... }");
+                return false;
+            }
             Ast_Struct *inner = ast_new<Ast_Struct>(p->arena, AST_STRUCT, field_name->pos);
             inner->is_union = field_name->kind == TOKEN_UNION;
             Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
@@ -2121,7 +2148,7 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
             continue;
         }
         if (field_name->kind != TOKEN_IDENT) {
-            error_expected(p, s->is_union ? "a member's name" : "a field's name");
+            error_expected(p, members ? "a member's name" : "a field's name");
             return false;
         }
         advance(p);
@@ -2137,17 +2164,46 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
     return true;
 }
 
-// struct = ('struct' | 'union') members
+// struct = ('struct' | 'union' ['#tagged' [IDENT]]) members
 //
 // A struct's declaration, or a union's (spec 3.19), after IDENT '::' (the
 // caller read them, and saw 'struct' or 'union'): its fields as
 // parse_members reads them, the members of the grammar (parser.h).
+//
+// `union #tagged` declares a tagged union (spec 3.20): a name after the
+// directive is its tag's type, only a name, as an enum's integer type is
+// (parse_enum), which type it may be being the checker's to say; anything
+// else there but the '{' (union #tagged *u8 {) is "expected '{'". Its
+// members are named ones only (parse_members), at least one: with none
+// there would be no zero value, its first member's, so empty braces are "a
+// tagged union needs at least one member", at its name. After 'struct',
+// "#tagged is for a union, as in Shape :: union #tagged { ... }", at the
+// directive. Either mistake gives the declaration up.
 static Ast *parse_struct(Parser *p, Token *name) {
     Token *keyword = advance(p);  // 'struct' or 'union'
     Ast_Struct *s = ast_new<Ast_Struct>(p->arena, AST_STRUCT, name->pos);
     s->name = name->text;
     s->is_union = keyword->kind == TOKEN_UNION;
-    return parse_members(p, s) ? s : nullptr;
+    if (is_directive(peek(p), "tagged")) {
+        Token *tagged = advance(p);
+        if (!s->is_union) {
+            diag_error(p->diag, tagged->pos, "#tagged is for a union, as in Shape :: union #tagged { ... }");
+            return nullptr;
+        }
+        s->is_union = false;
+        s->is_tagged = true;
+        if (peek(p)->kind == TOKEN_IDENT) {
+            Token *type = advance(p);
+            s->tag_expr = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, type->pos);
+            s->tag_expr->name = type->text;
+        }
+    }
+    if (!parse_members(p, s)) return nullptr;
+    if (s->is_tagged && !s->fields.count) {
+        diag_error(p->diag, s->pos, "a tagged union needs at least one member");
+        return nullptr;
+    }
+    return s;
 }
 
 // enum = ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'

@@ -11,17 +11,22 @@
 // - A switch (spec 6.14) works its value out once, then goes to the case
 //   holding it: one IR_SWITCH for an integer, an enum, a bool or a pointer
 //   (its address), the cases' constants its values; for a string, the
-//   comparison == makes with each case's, in source order. Each case is a
-//   scoped block, whose defers run when it's left; one ending in #through
-//   jumps on into the next case's block. A #complete switch without
-//   `case;` sends a value no case has to a call of __rig_no_case, an IR
-//   procedure lowering adds to a module, which writes "PATH:L:C: runtime
-//   error: no case for value V of 'T'" and panics (emit_no_case,
-//   lower_no_case), with bounds checks on or off.
+//   comparison == makes with each case's, in source order; for a tagged
+//   union (spec 3.20), one IR_SWITCH on its tag, each case's it the member
+//   in the union itself. Each case is a scoped block, whose defers run when
+//   it's left; one ending in #through jumps on into the next case's block.
+//   A #complete switch without `case;`, or a tagged union's without one,
+//   sends a value no case has to a call of __rig_no_case, an IR procedure
+//   lowering adds to a module, which writes "PATH:L:C: runtime error: no
+//   case for value V of 'T'" and panics (emit_no_case, lower_no_case), with
+//   bounds checks on or off.
 // - Every local variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
-//   IR_LOAD, assigning it an IR_STORE.
+//   IR_LOAD, assigning it an IR_STORE. A tagged union's case's it (spec
+//   3.20) is the one exception: it is the member's address in the
+//   switched union, not a slot holding a value of its own; its slot holds
+//   that address, for a debugger (lower_tagged_case).
 // - Parameters. A scalar parameter arrives as a value, %0 to %(count-1)
 //   (after the hidden ones for struct results and the context's, below).
 //   Parameters are read-only, so the value could be used as it is; but a
@@ -369,8 +374,9 @@
 #include "types.h"
 
 // Where a procedure's variable or parameter lives: a variable's or a scalar
-// parameter's slot (the address an IR_LOCAL gave), or the pointer an
-// aggregate parameter is.
+// parameter's slot (the address an IR_LOCAL gave), the pointer an
+// aggregate parameter is, or, for a tagged union's case's it, the member's
+// address in the union.
 struct Local {
     Ast *decl;  // the Ast_Var or Ast_Param
     s32 value;
@@ -470,8 +476,9 @@ struct Lowering {
     s32 string_equal;         // __rig_string_equal's index in module->procs, once == on strings
                               // or a switch on a string needs it; -1 (on demand, 1 from the
                               // start)
-    s32 no_case;              // __rig_no_case's index in module->procs, once a #complete switch
-                              // without `case;` needs it; -1 (on demand, 2 from the start)
+    s32 no_case;              // __rig_no_case's index in module->procs, once a #complete switch,
+                              // or a tagged union's, without `case;` needs it; -1 (on demand, 2
+                              // from the start)
     // Types' descriptions (spec 3.16), type_info.N, each made the first time
     // something needs it (type_info_global) and filled by a worklist
     // (describe_type), so a chain or a cycle of types needs no recursion.
@@ -1735,6 +1742,34 @@ static s32 lower_string_comparison(Lowering *l, Ast_Binary *b) {
     return emit_binary(l, IR_XOR, IR_I1, equal, emit_constant(l, IR_I1, 1));
 }
 
+// Whether e is the member's name of a tag test (spec 3.20), not its union:
+// a .NAME or a Shape.NAME the checker found a member by
+// (tagged_member_named), which has nothing to work out. Shape.empty and
+// .empty written as the union's value have the literal they mean (made).
+static bool is_member_name(Ast *e) {
+    if (e->kind == AST_DOT_NAME) return !((Ast_Dot_Name *)e)->made;
+    return e->kind == AST_MEMBER && ((Ast_Member *)e)->of_tagged && !((Ast_Member *)e)->made;
+}
+
+// s == .empty or s != .circle, a tag test (spec 3.20): the union's value,
+// on whichever side it is, worked out as any aggregate's is, its address
+// (a place's own, its checks included, or a temporary's); then its tag,
+// loaded from offset 0 as the tag's type, compared with the member's index
+// (Ast_Binary.tag_member). A test the checker folded never gets here.
+//
+//     %s = ...                   (the union's address)
+//     %t = load i8 %s
+//     %m = const i8 2            (empty)
+//     %e = cmp eq i8 %t, %m      (ne for !=)
+static s32 lower_tag_test(Lowering *l, Ast_Binary *b) {
+    Type *t = b->operand_type;
+    Ast *value = is_member_name(b->left) ? b->right : b->left;
+    Ir_Type type = ir_type_of(t->tag_type);
+    s32 tag = emit_load(l, type, lower_expr(l, value));
+    s32 member = emit_constant(l, type, (u64)b->tag_member);
+    return emit_compare(l, b->op == TOKEN_EQUAL_EQUAL ? IR_EQ : IR_NE, type, tag, member);
+}
+
 // The address of the field e.x. Through a pointer, p.x is p.*.x: p's value,
 // checked not to be null at the field's name (as p.* is at its '.'), before
 // anything is read or written. Otherwise e is a struct, or a view, a string
@@ -1976,10 +2011,22 @@ static void literal_parts(Ast_Literal *literal, Array<Literal_Part> *parts) {
 //
 // Each value goes to the field the checker found for it (Ast_Literal.fields).
 // A union's literal is zeroed the same way, then its one member stored at 0
-// (spec 3.19). A literal whose names reach through anonymous members holds
-// the checker's groups, literals of the members' anonymous types
-// (Ast_Literal.written): it's still built in one temporary, zeroed once, its
-// values stored through the groups at their whole paths' offsets
+// (spec 3.19). A tagged union's (spec 3.20) is zeroed, then its tag, the
+// index of the member it holds (Ast_Literal.tag), stored at 0 as the tag's
+// type, then that member's value, if it has one, at the members' offset:
+//
+//     %t = local 12 align 4      (Shape.{circle = c})
+//     zero %t, 12
+//     %0 = const i8 0
+//     store i8 %0, %t            (the tag)
+//     %4 = const i64 4
+//     %5 = ptradd %t, %4
+//     copy %5, %c, 4             (circle, at 4)
+//
+// A literal whose names reach through anonymous members holds the
+// checker's groups, literals of the members' anonymous types
+// (Ast_Literal.written): it's still built in one temporary, zeroed once,
+// its values stored through the groups at their whole paths' offsets
 // (literal_parts), in the order the program wrote them, not the groups'.
 static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
     Type *t = literal->type;  // the checker gave an untyped literal the type it met
@@ -1993,6 +2040,10 @@ static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
     }
     s32 temporary = emit_slot(l, t);
     emit_zero(l, t, temporary);
+    if (t->is_tagged) {
+        Ir_Type tag = ir_type_of(t->tag_type);
+        emit_store(l, tag, emit_constant(l, tag, (u64)literal->tag), temporary);
+    }
     if (literal->written.count) {
         Array<Literal_Part> parts = {};
         literal_parts(literal, &parts);
@@ -2054,9 +2105,12 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
     case AST_DEREF: return emit_get(l, e->type, lower_address(l, e));
     case AST_MEMBER: {
+        // A tagged union's member that holds nothing written as a value,
+        // Shape.empty (spec 3.20), is the literal the checker made for it.
         // An array's .data is the array's address, its value; its .count
         // is a constant, never lowered here.
         Ast_Member *m = (Ast_Member *)e;
+        if (m->made) return lower_literal(l, m->made);
         if (m->operand->type->kind == TYPE_ARRAY) {
             RIG_ASSERT(string_eq(m->name, str("data")));
             return lower_expr(l, m->operand);
@@ -2065,6 +2119,14 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     }
     case AST_INDEX: return emit_get(l, e->type, lower_index_address(l, (Ast_Index *)e));
     case AST_LITERAL: return lower_literal(l, (Ast_Literal *)e);
+    case AST_DOT_NAME: {
+        // .empty meeting a tagged union (spec 3.20), as Shape.empty: the
+        // literal the checker made for it. An enum's member is a constant,
+        // never lowered here.
+        Ast_Literal *made = ((Ast_Dot_Name *)e)->made;
+        RIG_ASSERT(made);
+        return lower_literal(l, made);
+    }
     case AST_UNARY: {
         Ast_Unary *u = (Ast_Unary *)e;
         if (u->op == TOKEN_STAR) return lower_address(l, u->operand);
@@ -2086,6 +2148,9 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         Ast_Binary *b = (Ast_Binary *)e;
         if (b->op == TOKEN_AMP_AMP || b->op == TOKEN_PIPE_PIPE) return lower_logical(l, b);
         if (e->type == &type_bool && b->operand_type == &type_string) return lower_string_comparison(l, b);
+        if (b->operand_type && b->operand_type->kind == TYPE_STRUCT && b->operand_type->is_tagged) {
+            return lower_tag_test(l, b);
+        }
         if (e->type == &type_bool) {
             // A comparison: both operands at the type they meet at (the
             // checker's operand_type), then a cmp (an fcmp for floats),
@@ -3013,37 +3078,40 @@ static void lower_if(Lowering *l, Ast_If *first, Ast_Proc *source) {
 
 static s32 no_case_proc(Lowering *l);
 
-// The block a #complete switch without `case;` sends a value no case has
-// to (Ast_Switch.checks_no_case, spec 6.14, 8.1), made here and current
-// after it; its index. It calls __rig_no_case, which writes "PATH:L:C:
-// runtime error: no case for value V of 'T'" and panics, so it never
-// returns:
+// The block a #complete switch without `case;`, or a tagged union's switch
+// without one (spec 3.20), sends a value no case has to (spec 6.14, 8.1;
+// Ast_Switch.checks_no_case), made here and current after it; its index.
+// %value is what the switch dispatches on, of type t: the switched value,
+// or a tagged union's tag, of its tag type, whose message names the union,
+// s's own type, as an enum's names the enum. It calls __rig_no_case, which
+// writes "PATH:L:C: runtime error: no case for value V of 'T'" and panics,
+// so it never returns:
 //
 //   fail:
 //     %b = local N align 1          the message's buffer
 //     %w = addr @str.N              "PATH:L:C: runtime error: "
 //     %wl = const i64 LENGTH
-//     %v = sext i8 %value to i64    (or zext, by the enum's sign; none for an i64)
+//     %v = sext i8 %value to i64    (or zext, by t's sign; none for an i64)
 //     %s = const i1 SIGNED
 //     %t = addr @str.M              " of 'Mode'\n"
 //     %tl = const i64 LENGTH
 //     call @__rig_no_case(%b, %w, %wl, %v, %s, %t, %tl)
 //     unreachable
 //
-// The message's start and its end, the enum's name, are this switch's own
-// globals, as a bounds check's start is (emit_bounds_check); only the
-// value is known at run time, and __rig_no_case writes it, signed or
-// unsigned as the enum's integer type is. The buffer is this block's: the
-// two texts and 38 bytes ("no case for value " is 18, a number at most
-// 20), so __rig_no_case needs no size of its own, and is the same for every
-// program. Its instructions are at l->pos, the switch's `if` (a switch is a
-// statement, never in a call's default value, whose code emitted_at puts
-// elsewhere). Neither --no-bounds-checks nor #no_abc leaves it out: it's no
-// bounds check.
-static s32 emit_no_case(Lowering *l, Ast_Switch *s, s32 value) {
-    Type *t = s->value->type;
+// The message's start and its end, the enum's or the union's name, are
+// this switch's own globals, as a bounds check's start is
+// (emit_bounds_check); only the value is known at run time, and
+// __rig_no_case writes it, signed or unsigned as t, the enum's integer type
+// or the tag's type, is. The buffer is this block's: the two texts and 38
+// bytes ("no case for value " is 18, a number at most 20), so __rig_no_case
+// needs no size of its own, and is the same for every program. Its
+// instructions are at l->pos, the switch's `if` (a switch is a statement,
+// never in a call's default value, whose code emitted_at puts elsewhere).
+// Neither --no-bounds-checks nor #no_abc leaves it out: it's no bounds
+// check.
+static s32 emit_no_case(Lowering *l, Ast_Switch *s, Type *t, s32 value) {
     String where = runtime_error_prefix(l, s->pos);
-    String tail = string_printf(l->arena, " of '" STR_FMT "'\n", STR_ARG(type_name(l->arena, t)));
+    String tail = string_printf(l->arena, " of '" STR_FMT "'\n", STR_ARG(type_name(l->arena, s->value->type)));
     s32 fail = new_block(l);
     l->block = fail;
     Ir_Instr *buffer = emit(l, IR_LOCAL, IR_VOID);
@@ -3066,6 +3134,65 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, s32 value) {
     return fail;
 }
 
+// Where the first of a block's statements that has code of its own is
+// (statement_position), into `at`: a defer, a constant and an #if add none
+// (lower_statement), but an #if's taken branch may. False, `at` untouched,
+// when none has.
+static bool first_code_position(Ast_Block *block, Position *at) {
+    for (s64 i = 0; i < block->statements.count; i++) {
+        Ast *s = block->statements[i];
+        if (s->kind == AST_DEFER || s->kind == AST_CONST) continue;
+        if (s->kind == AST_IF_DIRECTIVE) {
+            Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+            if (taken && first_code_position(taken, at)) return true;
+            continue;
+        }
+        *at = statement_position(s);
+        return true;
+    }
+    return false;
+}
+
+// The statements of case k of a switch on a tagged union (spec 3.20), when
+// the case declares it: a block and a scope of their own, starting at the
+// `case`, as lower_scoped_block makes a case's, with it declared first. it
+// is the member the case names in the union itself, at the union's address
+// plus the members' offset: its Local is that address, so reading it,
+// writing it or taking *it reads or writes the union, with no copy (the
+// checker made it read-only where the union is no place). A debugger shows
+// it as a *M, a variable of its own in a slot of its own, %slot, holding
+// the address, as it shows an aggregate parameter (spec 10.7): a
+// variable's record needs storage of its own. lower_switch stored the
+// address in the slot at the switch's `if`, before the dispatch, so all of
+// the `if` line's code (the no-case block, if any, follows the dispatch) is
+// in one piece, where cdb can break (runner.cpp). The case reads it back
+// from the slot, at its first statement with code (first_code_position), in
+// its scope: the case's first instruction is then that line's, inside the
+// case's scope, where it is shown, so a breakpoint there shows it. (Using
+// the dispatch's own value instead, the code generator would reload it from
+// the stack first, with no line of its own, before the case's scope
+// starts.) Stepping from the `if` goes straight to the first statement,
+// never to a `case` line (spec 10.7's line table).
+//
+//     %7 = load ptr %slot        (it, a *Circle)
+static void lower_tagged_case(Lowering *l, Ast_Case *k, s32 slot, Ast_Proc *source) {
+    s32 outer = l->scope;
+    s64 mark = l->defers.count;
+    Ast_Block *block = k->block;
+    l->scope = new_scope(l, block->pos);
+    Position at = block->end;  // the switch's '}', when no statement has code
+    first_code_position(block, &at);
+    place(l, at, l->scope);
+    s32 member = emit_load(l, IR_PTR, slot);
+    Ast_Var *it = k->it;
+    array_add(&l->locals, {it, member});
+    array_add(&l->proc->vars,
+              Ir_Var{it->name, type_pointer_to(it->type), it->pos, l->scope, IR_VAR_SLOT, slot, 0, 0, false});
+    lower_block(l, block, source);
+    leave_block(l, mark, source);
+    l->scope = outer;
+}
+
 // if x == { case 1; A; case 2; B; #through; case; C; }, a switch (spec
 // 6.14). x is worked out once, at the `if`, in the scope around the switch
 // (lower_value), and the dispatch follows it there:
@@ -3080,7 +3207,15 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, s32 value) {
 //   order the comparison == makes (emit_string_equal, its null check at the
 //   switch's `==`), to the case's block when it's equal, else on to the
 //   next comparison; after the last, on to where an integer switch's other
-//   values go.
+//   values go;
+// - a tagged union (spec 3.20): x's value, as any aggregate's, is its
+//   address, a place's own (its checks included: p.*'s null check, an
+//   index's bounds check) or a temporary's; its tag, loaded from there at
+//   offset 0, is dispatched on as an integer is, each case's value the
+//   index of the member it names (Ast_Case.member). A case's it is the
+//   member at that same address (lower_tagged_case): x is worked out once,
+//   and never copied. The members' address, and each it's slot holding it,
+//   are set there too, before the dispatch.
 //
 //     %x = ...
 //     switch i64 %x, b3 [1: b1, 2: b2]
@@ -3093,24 +3228,48 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, s32 value) {
 //   after:
 //
 // Each case's statements are a block and a scope of their own, at its
-// `case` (lower_scoped_block), whose defers run at its end, before the
-// jump out: to `after`, at the switch's '}', in the scope around, as an if
-// block's jump is at its own '}' (lower_if), so a debugger steps from a
-// case's last line to the '}', then to the code after, never through
-// another case's line; or, ending with #through, into the next case's
+// `case` (lower_scoped_block, or lower_tagged_case for a case declaring
+// it), whose defers run at its end, before the jump out: to `after`, at the
+// switch's '}', in the scope around, as an if block's jump is at its own
+// '}' (lower_if), so a debugger steps from a case's last line to the '}',
+// then to the code after, never through another case's line, but from the
+// case laid out last straight to the code after: its jump is to the block
+// laid out right after it, `after`, and has no instruction ("What a
+// debugger needs" above); or, ending with #through, into the next case's
 // block, at the #through, a jump to the block laid out right after it,
-// which has no instruction ("What a debugger needs" above). A #complete
-// switch without `case;` sends every other value to a block that stops the
-// program (emit_no_case), after the cases' blocks. `after` is made when a
-// case gets to its end, or some value finds no case and there's neither a
-// `case;` nor a no-case block; otherwise the current block has ended, as
-// after an if that always returns, and nothing after the switch is
-// lowered.
+// which has no instruction either. A #complete switch without `case;`, or a tagged union's
+// without one, sends every other value to a block that stops the program
+// (emit_no_case), at the `if`, laid out right after the dispatch, before
+// the cases' blocks, so all of the `if` line's code is in one piece, where
+// cdb can break (runner.cpp). `after` is made when a case gets to its end,
+// or some value finds no case and there's neither a `case;` nor a no-case
+// block; otherwise the current block has ended, as after an if that always
+// returns, and nothing after the switch is lowered.
 static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
     s32 outer = l->scope;
     place(l, s->pos, outer);
-    Type *t = s->value->type;
-    s32 value = lower_value(l, s->value, t);
+    Type *switched = s->value->type;
+    bool tagged = switched->kind == TYPE_STRUCT && switched->is_tagged;
+    s32 address = lower_value(l, s->value, switched);  // a tagged union's: its address
+    // What's dispatched on, and its type: the value itself, or a tagged
+    // union's tag.
+    Type *t = tagged ? switched->tag_type : switched;
+    s32 value = tagged ? emit_load(l, ir_type_of(t), address) : address;
+    // A tagged union's members' address, the same for every member, stored
+    // for each case that declares it in a slot of its own, its it's
+    // (lower_tagged_case): here, at the `if`, before the dispatch, so every
+    // case finds it set. -1 for a case without it.
+    Array<s32> slots = {};
+    s32 members = -1;
+    for (s64 i = 0; tagged && i < s->cases.count; i++) {
+        s32 slot = -1;
+        if (s->cases[i]->it) {
+            if (members < 0) members = emit_field_address(l, address, switched->fields[0].offset);
+            slot = emit(l, IR_LOCAL, IR_PTR)->result;
+            emit_store(l, IR_PTR, members, slot);
+        }
+        array_add(&slots, slot);
+    }
     // The field of the dispatch's terminators that names each case's block,
     // for the cases with a value, in source order, and the one that names
     // where every other value goes: filled in as those blocks are made. A
@@ -3158,14 +3317,18 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
             if (!case_value) continue;
             // Ast.constant is extended to 64 bits by the sign of the
             // constant's type; cut to the switch type's width, the bits are
-            // zero-extended from it, as IR_CONST's are.
-            u64 bits = case_value->constant;
+            // zero-extended from it, as IR_CONST's are. A tagged union's
+            // case's is its member's index, which every tag type holds.
+            u64 bits = tagged ? (u64)s->cases[i]->member : case_value->constant;
             if (ir_bits(type) < 64) bits &= ((u64)1 << ir_bits(type)) - 1;
             array_add(&dispatch->cases, Ir_Case{bits, -1});
         }
         for (s64 i = 0; i < dispatch->cases.count; i++) array_add(&entries, &dispatch->cases[i].block);
         otherwise = &dispatch->target;
     }
+    // The no-case block comes right after the dispatch, before the cases'
+    // blocks, so all of the `if` line's code is in one piece.
+    if (s->checks_no_case) *otherwise = emit_no_case(l, s, t, value);
 
     s64 entry = 0;
     s32 through = -1;      // the block ending in the last case's #through, its jump not
@@ -3182,7 +3345,11 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
         if (through >= 0) terminator_of(l, through)->target = block;
         through = -1;
         l->block = block;
-        lower_scoped_block(l, k->block, source);
+        if (k->it) {
+            lower_tagged_case(l, k, slots[i], source);
+        } else {
+            lower_scoped_block(l, k->block, source);
+        }
         if (has_ended(l, l->block)) continue;
         if (k->through.line) {
             place(l, k->through, outer);
@@ -3197,7 +3364,6 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
 
     place(l, s->pos, outer);
     bool goes_on = !s->default_case && !s->checks_no_case;  // a value with no case goes past the switch
-    if (s->checks_no_case) *otherwise = emit_no_case(l, s, value);
     if (ends.count > 0 || goes_on) {
         s32 after = new_block(l);
         for (s64 i = 0; i < ends.count; i++) terminator_of(l, ends[i])->target = after;
@@ -3206,6 +3372,7 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
     }
     array_free(&ends);
     array_free(&entries);
+    array_free(&slots);
 }
 
 // The loop's body, with the loop the innermost one for break and continue;
@@ -3754,9 +3921,10 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // with no rig_type (the compiler makes it). What a description points at is
 // a relocation: another type's description, a name's bytes (a str.N of its
 // own, add_bytes), or a read-only array of its own, type_info.N.members for
-// a struct, type_info.N.parameters and .results for a procedure type,
-// type_info.N.names and .values for an enum, made only when not empty (an
-// empty view is zeros). Names with a '.' are no Rig global's.
+// a struct or a tagged union, type_info.N.parameters and .results for a
+// procedure type, type_info.N.names and .values for an enum, made only
+// when not empty (an empty view is zeros). Names with a '.' are no Rig
+// global's.
 //
 // Descriptions point at each other, in cycles too (a struct holding a
 // pointer to itself), so a description is made empty first, cached by its
@@ -3767,11 +3935,12 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // returns.
 
 // The tag of the description of a type of t's kind: integers, floats, bool,
-// string, pointers, procedure types, void, structs, arrays, views and
-// resizable arrays (spec 3.17), which share one, and enums (spec 3.18),
-// enum_flags too. The checker gave every value a type of its own before
-// lowering, so the untyped types, null's and a literal's without its type
-// never get here.
+// string, pointers, procedure types, void, structs (unions too), arrays,
+// views and resizable arrays (spec 3.17), which share one, enums (spec
+// 3.18), enum_flags too, and tagged unions (spec 3.20), structs with a flag
+// to the checker but a kind of their own here. The checker gave every
+// value a type of its own before lowering, so the untyped types, null's
+// and a literal's without its type never get here.
 static Type_Info_Tag type_info_tag(Type *t) {
     RIG_ASSERT(!type_is_untyped(t));
     switch (t->kind) {
@@ -3782,7 +3951,7 @@ static Type_Info_Tag type_info_tag(Type *t) {
     case TYPE_POINTER: return TYPE_INFO_POINTER;
     case TYPE_PROC: return TYPE_INFO_PROCEDURE;
     case TYPE_VOID: return TYPE_INFO_VOID;
-    case TYPE_STRUCT: return TYPE_INFO_STRUCT;
+    case TYPE_STRUCT: return t->is_tagged ? TYPE_INFO_TAGGED_UNION : TYPE_INFO_STRUCT;
     case TYPE_ARRAY:
     case TYPE_VIEW:
     case TYPE_RESIZABLE: return TYPE_INFO_ARRAY;
@@ -3802,6 +3971,7 @@ static s64 type_info_size(Type_Info_Tag tag) {
     case TYPE_INFO_STRUCT: return TYPE_INFO_STRUCT_SIZE;
     case TYPE_INFO_ARRAY: return TYPE_INFO_ARRAY_SIZE;
     case TYPE_INFO_ENUM: return TYPE_INFO_ENUM_SIZE;
+    case TYPE_INFO_TAGGED_UNION: return TYPE_INFO_TAGGED_UNION_SIZE;
     default: return TYPE_INFO_SIZE;
     }
 }
@@ -3871,12 +4041,14 @@ static void describe_types(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, s64 
     array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, array, false});
 }
 
-// A struct's members, written at TYPE_INFO_MEMBERS_OFFSET in its
-// description's `bytes`: a view of a read-only array of its own,
+// A struct's members, or a tagged union's, written at `offset` in its
+// description's `bytes` (TYPE_INFO_MEMBERS_OFFSET, or
+// TYPE_INFO_TAGGED_MEMBERS_OFFSET): a view of a read-only array of its own,
 // type_info.N.members (`name`), a Type_Info_Struct_Member per field, in
 // order: the field's name (its bytes a str.N of their own), its type's
-// description and its offset. No fields: the empty view, zeros.
-static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
+// description (void's for a tagged union's void member) and its offset. No
+// fields: the empty view, zeros.
+static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, s64 offset, String name, Type *t) {
     s64 count = t->fields.count;
     if (count == 0) return;
     s64 size = count * TYPE_INFO_MEMBER_SIZE;
@@ -3892,8 +4064,8 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, St
         write_bits(members + at + TYPE_INFO_MEMBER_OFFSET_OFFSET, (u64)field->offset, 8);
     }
     s32 array = add_type_info_global(l, name, size, {members, size}, member_relocs);
-    write_bits(bytes + TYPE_INFO_MEMBERS_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);
-    array_add(relocs, Ir_Reloc{TYPE_INFO_MEMBERS_OFFSET + VIEW_DATA_OFFSET, array, false});
+    write_bits(bytes + offset + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, array, false});
 }
 
 // An enum's members, written at TYPE_INFO_ENUM_NAMES_OFFSET and
@@ -3939,15 +4111,17 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // or a resizable array's element's description, its kind and its count (-1
 // for a view or a resizable array, whose count is its value's); a struct's
 // name and members, and whether it's a union (an anonymous member's type
-// has an empty name, as its member has); a procedure type's parameters'
-// and results' descriptions (a ..T parameter's []T), #c_call and whether
-// its last parameter is a ..T; an enum's name, its integer type's
-// description, whether it's an enum_flags, and its members' names and
-// values. Its names' str.N and its arrays' globals are made first; the
-// descriptions it points at are asked for through type_info_global, which
-// only queues them. The relocations go in increasing offset, as the
-// backend wants. The bytes are put in the global last, through its index:
-// the globals array may move while they're made.
+// has an empty name, as its member has); a tagged union's name, its tag
+// type's description, the tag's offset (0) and its members, as a struct's;
+// a procedure type's parameters' and results' descriptions (a ..T
+// parameter's []T), #c_call and whether its last parameter is a ..T; an
+// enum's name, its integer type's description, whether it's an
+// enum_flags, and its members' names and values. Its names' str.N and its
+// arrays' globals are made first; the descriptions it points at are asked
+// for through type_info_global, which only queues them. The relocations go
+// in increasing offset, as the backend wants. The bytes are put in the
+// global last, through its index: the globals array may move while they're
+// made.
 static void describe_type(Lowering *l, s32 global, Type *t) {
     String name = l->module->globals[global].name;
     s64 size = l->module->globals[global].size;
@@ -3971,9 +4145,21 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
         break;
     }
     case TYPE_STRUCT:
+        if (t->is_tagged) {
+            // The tag is at 0 in every Rig tagged union (spec 3.20):
+            // tag_offset stays the zero it was made.
+            write_bits(bytes + TYPE_INFO_TAGGED_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
+            array_add(&relocs,
+                      Ir_Reloc{TYPE_INFO_TAGGED_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
+            array_add(&relocs, Ir_Reloc{TYPE_INFO_TAGGED_TAG_TYPE_OFFSET, type_info_global(l, t->tag_type), false});
+            describe_members(l, bytes, &relocs, TYPE_INFO_TAGGED_MEMBERS_OFFSET,
+                             string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
+            break;
+        }
         write_bits(bytes + TYPE_INFO_NAME_OFFSET + VIEW_COUNT_OFFSET, (u64)t->name.count, 8);
         array_add(&relocs, Ir_Reloc{TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET, add_bytes(l, t->name), false});
-        describe_members(l, bytes, &relocs, string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
+        describe_members(l, bytes, &relocs, TYPE_INFO_MEMBERS_OFFSET,
+                         string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
         bytes[TYPE_INFO_STRUCT_IS_UNION_OFFSET] = t->is_union;
         break;
     case TYPE_PROC:
@@ -4038,17 +4224,19 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // global's `bytes`: a struct literal's values at their fields' offsets (the
 // fields not given, and the padding, stay zero; a union's literal gives one
 // member at most, at 0, and a #run's baked union is its bytes as they were,
-// Ast_Literal.bytes, spec 3.19), an array literal's at i times the element's
-// size, an integer's low bytes, a bool's 0 or 1, a float's IEEE 754 bits (a
-// float32's rounded from the double the constant keeps, as the backend
-// rounds an f32 constant), a pointer's address (null's zeros). Constant data
-// is written as the literal holding it (literal_of): `origin := ORIGIN;`
-// gets ORIGIN's bytes, copied into the global, and a part a literal leaves
-// out writes nothing, zeros. A view's value is an array, a literal or
-// constant data (the checker allows nothing else in a global, but a string
-// literal), which becomes a global array of its own: the view's count is
-// written here, and its data is that array's address, which only the linker
-// knows, so a relocation says where it goes. A string literal, as a string,
+// Ast_Literal.bytes, spec 3.19; a tagged union's literal is its tag, at 0,
+// and its member's value, if it has one, spec 3.20, a #run's baked one too),
+// an array literal's at i times the element's size, an integer's low
+// bytes, a bool's 0 or 1, a float's IEEE 754 bits (a float32's rounded from
+// the double the constant keeps, as the backend rounds an f32 constant), a
+// pointer's address (null's zeros). Constant data is written as the
+// literal holding it (literal_of): `origin := ORIGIN;` gets ORIGIN's bytes,
+// copied into the global, and a part a literal leaves out writes nothing,
+// zeros. A view's value is an array, a literal or constant data (the
+// checker allows nothing else in a global, but a string literal), which
+// becomes a global array of its own: the view's count is written here, and
+// its data is that array's address, which only the linker knows, so a
+// relocation says where it goes. A string literal, as a string,
 // a []u8 or a pointer (literal_address), constant data holding one included,
 // is written the same way: its count, for a string or a view, and a
 // relocation to its constant bytes, str.N (literal_global), where the data
@@ -4148,8 +4336,13 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
             memcpy(bytes + offset, literal->bytes.data, (size_t)literal->bytes.count);
             return;
         }
+        // A tagged union's tag first, at 0 (spec 3.20): the index of the
+        // member its literal holds (Ast_Literal.tag), then that member's
+        // value, below, if it has one.
+        if (t->is_tagged) write_bits(bytes + offset, (u64)literal->tag, t->tag_type->size);
         // Field by field, the literal's value for each, if it gives one
-        // (Ast_Literal.fields): a union's literal gives one member at most.
+        // (Ast_Literal.fields): a union's literal gives one member at most,
+        // and so does a tagged union's.
         for (s64 f = 0; f < t->fields.count; f++) {
             Ast *field_value = literal_field_value(literal, (s32)f);
             if (!field_value) continue;
@@ -4178,7 +4371,9 @@ static void constant_bytes(Lowering *l, u8 *bytes, s64 offset, Array<Ir_Reloc> *
 // (literal_of), a #run's baked value's included, and a part a literal
 // leaves out needs none. A baked view's is a view's whole size, as any
 // view's: its elements are in a global of their own; and so is a baked
-// union's, all of whose bytes it holds (Ast_Literal.bytes, spec 3.19).
+// union's, all of whose bytes it holds (Ast_Literal.bytes, spec 3.19). A
+// tagged union's literal covers its tag at least (spec 3.20), then its
+// member's value, if it gives one.
 static s64 constant_extent(Type *t, Ast *value) {
     if (!type_is_aggregate(t) || t->kind == TYPE_VIEW || literal_address(value)) return t->size;
     // A string here is one a literal leaves out: any other is a string
@@ -4186,7 +4381,7 @@ static s64 constant_extent(Type *t, Ast *value) {
     Ast_Literal *literal = literal_of(value);
     if (!literal) return 0;
     if (literal->bytes.count) return t->size;  // a baked union's, all its bytes
-    s64 extent = 0;
+    s64 extent = t->kind == TYPE_STRUCT && t->is_tagged ? t->tag_type->size : 0;
     for (s64 i = 0; i < literal->values.count; i++) {
         Type *field;
         s64 offset;
@@ -4557,11 +4752,12 @@ static void lower_string_equal(Lowering *l) {
 
 // __rig_no_case(ptr buffer, ptr where, i64 where_length, i64 value,
 // i1 value_is_signed, ptr tail, i64 tail_length): what a #complete switch
-// without `case;` calls for a value no case has (emit_no_case). Made the
-// first time a switch needs it, with no body yet (lower_no_case makes it,
-// once every procedure's is, as __rig_string_equal's is); its index in the
-// module's procedures, after the program's. On demand, it is made third,
-// body and all (ir_lowering_new).
+// without `case;`, or a tagged union's without one, calls for a value no
+// case has (emit_no_case). Made the first time a switch needs it, with no
+// body yet (lower_no_case makes it, once every procedure's is, as
+// __rig_string_equal's is); its index in the module's procedures, after
+// the program's. On demand, it is made third, body and all
+// (ir_lowering_new).
 static s32 no_case_proc(Lowering *l) {
     if (l->no_case < 0) {
         Ir_Proc *p = ir_new_proc(l->module, l->arena, str("__rig_no_case"));
@@ -4585,7 +4781,8 @@ static s32 no_case_proc(Lowering *l) {
 //
 // WHERE as the switch passed it ("PATH:L:C: runtime error: "), V the value
 // in decimal, signed or unsigned as value_is_signed says (the enum's
-// integer type's sign), TAIL the switch's " of 'Mode'\n". The buffer is the
+// integer type's sign, or the tag type's), TAIL the switch's " of
+// 'Mode'\n" (" of 'Shape'\n" for a tagged union's). The buffer is the
 // caller's, made to fit (emit_no_case), so this body is the same for every
 // program. WHERE is the message's prefix, so the panic's c is where_length
 // (ir.h).
@@ -4972,8 +5169,9 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // __rig_bounds_failed, if a check calls it: after every body, so the
     // longest message start is known. __rig_string_equal, if == on strings
     // or a switch on a string calls it, and __rig_no_case, if a #complete
-    // switch without `case;` does. None comes from the source: they have no
-    // scopes, and their instructions no position (line 0) and no scope (-1).
+    // switch without `case;`, or a tagged union's, does. None comes from
+    // the source: they have no scopes, and their instructions no position
+    // (line 0) and no scope (-1).
     place(&l, {}, -1);
     if (l.bounds_failed >= 0) lower_bounds_failed(&l);
     if (l.string_equal >= 0) lower_string_equal(&l);

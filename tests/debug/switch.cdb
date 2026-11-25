@@ -1,7 +1,7 @@
 l+t
 l+s
 l+l
-bp `switch.rig:10`
+bp `switch.rig:12`
 g
 p
 p
@@ -11,4 +11,7 @@ p
 p
 p
 ?? twice
+bp `switch.rig:26`
+g
+p
 q

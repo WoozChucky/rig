@@ -83,6 +83,12 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 // break, and they're printed after its caret (Diagnostic.lines).
 void diag_add_lines(Diagnostics *d, String lines);
 
+// Where line number `line` (from 1) of source text `text` starts, in bytes,
+// as the lexer counts positions: line 1 after the UTF-8 byte-order mark,
+// each later line after a '\n'. A column, from 1 and in bytes, is that
+// plus the column less one.
+s64 diag_line_start(String text, s32 line);
+
 // Sorts the errors by file, in load order (Source_File.order), then line,
 // then column, keeping the order of errors at the same place. Each stage
 // reports in its own order (the lexer the whole file before the parser

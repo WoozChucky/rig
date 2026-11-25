@@ -112,8 +112,9 @@ void check_late_field(Checker *c, Type *t, s32 index);
 // Makes sure struct t's layout is worked out before its fields are looked
 // at: a global's value may reach a struct through a pointer before its turn
 // in source order (checker.cpp's lay_out). False when t has no fields to
-// look at, its layout found wrong (a circle, too big: reported) or not
-// worked out yet (nested too deeply: reported).
+// look at, its layout found wrong (a circle, too big, a tagged union's tag
+// too small: reported) or not worked out yet (nested too deeply:
+// reported).
 bool check_layout(Checker *c, Type *t);
 
 // check_layout, for the code a #run reaches (check_run.cpp's walk), which
@@ -272,10 +273,45 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing);
 // expr_is_place (checker.h), and if not, why not.
 bool is_place(Checker *c, Ast *e, bool for_writing);
 
-// What a for loop's variable var (is_iterator set) is, as the messages
+// What a read-only variable var (is_iterator set) is, as the messages
 // about it say: "the loop's index" for it_index, "the loop's iterator" for
-// it or a named iterator.
+// it or a named iterator, "a member of a switched value that isn't a
+// place" for a tagged union's switch's it (spec 3.20).
 const char *loop_variable_kind(Ast_Var *var);
+
+// The member that e, `.NAME` or `T.NAME` with T naming tagged union t (spec
+// 3.20), names: its index; -1 after "'Shape' has no member 'z'", at the
+// name, or when t has no layout (said; check_layout, which lays out one
+// reached only through a pointer); -2 when e names no member that way
+// (nothing said). Found, e gets type t and no constant (a T.NAME its
+// of_tagged), as a case's value and a tag test's name side need:
+// check_run.cpp's walk_expression fails on any expression it reaches with
+// no type.
+s32 tagged_member_named(Checker *c, Type *t, Ast *e);
+
+// How a message writes the code from `from` up to `to`, as the program
+// wrote it, inner white space and all (`shapes[ 0 ]` stays so): without
+// the white space at its end, nor a `drop` there (a '.', or 0 for none)
+// and the white space before that. "s" when that is nothing, spans lines
+// or `to` is in another file.
+String source_text(Checker *c, Position from, Position to, u8 drop);
+
+// How a hint writes pointer e, whose source ends at `end`, before a .*:
+// its source text (source_text), in parentheses unless e is a name, a
+// member, an index, a call or a dereference, or in them already, so the
+// .* applies to all of it: `(p + 1).*`, `(*s).*`, `h.p.*`.
+String pointer_text(Checker *c, Ast *e, Position end);
+
+// A member's name e, .circle or Shape.circle, meeting a pointer to a
+// tagged union (spec 3.20), `to`, in tag test `test` or in switch s's case
+// (the other null): the test is on what it points at, so the hint writes
+// the pointer (pointer_text) with .* after it. A .NAME is "'.circle' needs
+// an enum type, not '*Shape'; write p.* == .circle", Shape.NAME
+// "'Shape.circle' names a member of 'Shape', not '*Shape'; write p.* ==
+// Shape.circle", a case's hint "if p.* == {", at the '.' or at the
+// member's name. True after saying it; false, nothing said, when `to` is
+// no such pointer, or e no name of a member of what it points at.
+bool report_member_on_pointer(Checker *c, Ast *e, Type *to, Ast_Binary *test, Ast_Switch *s);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
 // `pointer`, or the offset of p + n, n + p or p - n: n must be an integer

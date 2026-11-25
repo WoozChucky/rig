@@ -1,0 +1,13 @@
+// A tagged union's declaration's mistakes (issue #224, spec 3.20), one a
+// line: a member declared twice; a tagged union holding itself; a tag type
+// that isn't an integer type; a member of a type that isn't known; a
+// tagged union passed to C by value; and a tagged union's name used as a
+// value.
+Twice :: union #tagged { i: int; i: float; }
+Self :: union #tagged { s: Self; }
+Text :: union #tagged string { a: int; }
+Unknown :: union #tagged { n: Nope; }
+Circle :: struct { r: float; }
+Shape :: union #tagged { circle: Circle; empty: void; }
+bad :: (s: Shape) #foreign libc;
+main :: () { v := Shape; }

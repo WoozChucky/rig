@@ -238,6 +238,8 @@ struct Ast_Var : Ast {
     bool is_uninitialized;  // = ---
     bool is_global;         // declared at the top level: lives for the whole run, not on the stack
     bool is_iterator;       // a for loop's it, it_index or named iterator: read-only
+    bool is_case_member;    // a tagged union's switch's it (spec 3.20): the member in the union itself,
+                            // read-only (is_iterator) when the switched expression is no place
     Ast_Resolve resolve;    // a global's: how far the checker has got with it
     s32 levels;             // the deepest levels of its type and value (MAX_DEPTH): a global
                             // or a constant they need starts a level below
@@ -291,13 +293,16 @@ struct Ast_Field : Ast {
 };
 
 // A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, or a
-// union's, `Value :: union { i: s64; f: float64; }` (spec 3.19), at the
-// top level only (for now), at its name. A struct's name is a type, usable
-// anywhere, before its declaration too. An anonymous member's fields are an
-// Ast_Struct too, with no name, at its keyword (Ast_Field.anonymous).
+// union's, `Value :: union { i: s64; f: float64; }` (spec 3.19), or a
+// tagged union's, `Shape :: union #tagged { circle: Circle; empty: void; }`
+// (spec 3.20), at the top level only (for now), at its name. A struct's
+// name is a type, usable anywhere, before its declaration too. An anonymous
+// member's fields are an Ast_Struct too, with no name, at its keyword
+// (Ast_Field.anonymous).
 struct Ast_Struct : Ast {
     String name;                // empty for an anonymous member's
-    Array<Ast_Field *> fields;  // in order, which is their order in memory (a union's all at 0)
+    Array<Ast_Field *> fields;  // in order, which is their order in memory (a union's all at 0, a
+                                // tagged union's all at one offset after its tag)
     Ast_Resolve resolve;        // its layout is worked out where first needed (checker.cpp's
                                 // resolve_struct); a struct that holds itself is a cycle. An
                                 // anonymous member's is under way while its own fields are laid
@@ -307,6 +312,10 @@ struct Ast_Struct : Ast {
                                 // it's found to contain itself. An anonymous member's is made by
                                 // its outer struct's layout, and is null when that one's is
     bool is_union;              // union { ... }: every member at offset 0 (spec 3.19)
+    bool is_tagged;             // union #tagged { ... } (spec 3.20): a tag, then its members over each
+                                // other; is_union is false
+    Ast_Type *tag_expr;         // the tag's type written after #tagged, or null: the smallest that
+                                // counts the members
 };
 
 // An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`
@@ -332,10 +341,15 @@ struct Ast_Enum : Ast {
 // .FREE: a member written without its enum (spec 3.18), which takes the
 // enum it meets, as .{...} takes the struct it meets (check_expr.cpp's
 // check_convert); its type is type_untyped_member until then. Once it met
-// one, it's that member, a constant of the enum. pos is the '.'.
+// one, it's that member, a constant of the enum. pos is the '.'. Meeting a
+// tagged union (spec 3.20), .empty names a member that holds nothing: the
+// value holding it.
+struct Ast_Literal;
+
 struct Ast_Dot_Name : Ast {
     String name;
     Position name_pos;  // where the name after the '.' is written
+    Ast_Literal *made;  // .empty meeting a tagged union: as Ast_Member.made
 };
 
 // An assignment: `x = e;`, or a compound one, `x += e;` meaning x = x + e,
@@ -392,14 +406,21 @@ struct Ast_Type_Info : Ast {
 // null pointer's runtime error points; start is e's. A field reached
 // through anonymous members (spec 3.19), e.key, is made by the checker into
 // the chain of members it means, e.<anonymous>.key: a member with an empty
-// name for each anonymous member, at the name written.
+// name for each anonymous member, at the name written. When e names a
+// tagged union (spec 3.20), e.x names its member x: Shape.empty, a value
+// holding a member that holds nothing, or the name a tag test or a case
+// compares with.
 struct Ast_Member : Ast {
-    Ast *operand;       // e
-    String name;        // x
-    s32 index;          // the field's index in its struct's type, set by the checker; -1 for an
-                        // array's, a view's or a string's .count and .data, which lowering knows
-                        // by name; for an enum's member, the member's index in Ast_Enum.members
-    Ast_Enum *of_enum;  // e.x names member x of the enum e (Mode.FREE): a constant; null otherwise
+    Ast *operand;            // e
+    String name;             // x
+    s32 index;               // the field's index in its struct's type, set by the checker; -1 for an
+                             // array's, a view's or a string's .count and .data, which lowering knows
+                             // by name; for an enum's member, the member's index in Ast_Enum.members;
+                             // for a tagged union's, the member's index in its fields
+    Ast_Enum *of_enum;       // e.x names member x of the enum e (Mode.FREE): a constant; null otherwise
+    Ast_Struct *of_tagged;   // e.x names member x of tagged union e (Shape.empty): no place, no field
+    Ast_Literal *made;       // a void member written as a value (Shape.empty): the literal it means;
+                             // null otherwise
 };
 
 // A literal of a struct (Jai's): `T.{a, b}` gives T's fields in order,
@@ -440,6 +461,8 @@ struct Ast_Literal : Ast {
                                     // literal the program wrote, -1 for a group, so lowering evaluates them in
                                     // that order (spec 5.17); empty for any other literal
     String bytes;                   // a baked union (run.cpp): its whole size's bytes, the literal's only content
+    s32 tag;                        // a tagged union's literal: the index of the member it holds (checker,
+                                    // run.cpp)
 };
 
 // a[i]: element i of the array, view or string a, or what the pointer a
@@ -460,7 +483,12 @@ struct Ast_Binary : Ast {
                          // operand's); a comparison's, the type both are compared as (the
                          // result is a bool); && and ||'s, bool; pointer arithmetic's, the
                          // pointer's type (p + n, n + p, p - n: the result's too; p - q: both
-                         // operands', the result an int)
+                         // operands', the result an int); a tag test's (s == .empty, spec
+                         // 3.20), the tagged union
+    s32 tag_member;      // a tag test (operand_type is a tagged union): the member's index
+    Position end;        // just past its last token, the right operand's, as the parser read it
+                         // ({} for one made after parsing): where a message's copy of that
+                         // operand ends
 };
 
 // The procedures built into the language for resizable arrays (spec 3.17),
@@ -545,12 +573,17 @@ struct Ast_If : Ast {
 // optional `#through;` last, which goes on into the next case's statements
 // without comparing its value. The statements are a block of their own,
 // and a scope (checker.cpp's check_switch); the #through isn't one of them.
-// pos is the 'case'.
+// In a tagged union's switch (spec 3.20), VALUE names a member, and `it` is
+// that member inside the case. pos is the 'case'.
 struct Ast_Case : Ast {
     Ast *value;         // null for `case;`, the default
     Ast_Block *block;   // its statements; pos the 'case', end the switch's '}', where the jump out of
                         // the case is (spec 10.7)
     Position through;   // the '#through' that ends it; line 0 when none
+    s32 member;         // in a tagged union's switch (spec 3.20): the index of the member it names;
+                        // -1 for case;
+    Ast_Var *it;        // ...: that member, declared in the case's scope; null for case; and a void
+                        // member
 };
 
 // if x == { case 1; ... } or if #complete x == { ... }: a switch (spec
@@ -567,11 +600,15 @@ struct Ast_Switch : Ast {
     Position end;             // the '}'
     // The checker's (checker.cpp's check_switch):
     Ast_Case *default_case;   // the `case;`, or null
-    bool checks_no_case;      // a value no case has stops the program (#complete without case;)
-    bool covers_every_value;  // #complete, checked cleanly, every member's value has a case
+    bool checks_no_case;      // a value no case has stops the program (#complete without case;, or
+                              // a tagged union's switch without one)
+    bool covers_every_value;  // #complete, checked cleanly, every member's value has a case; or a
+                              // tagged union's switch, checked cleanly, every member has a case
     bool failed;              // the switched expression had an error, #complete was refused (not an
                               // enum, or an enum_flags), or a #complete switch doesn't cover every
-                              // value (said): taken not to go past (spec 6.11)
+                              // value (said), or a tagged union's switch had a mistake in a case's
+                              // value or doesn't handle every member (said): taken not to go past
+                              // (spec 6.11)
 };
 
 // while condition { ... }; pos is the 'while'.

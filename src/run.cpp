@@ -39,19 +39,21 @@
 // (is_constant), a procedure value a name bound to the procedure, a null
 // pointer null; a string a string literal, a struct or an array a literal of
 // constant data holding its parts, a union a literal of its bytes
-// (Ast_Literal.bytes), and a view the array literal of its elements
-// (bake_value). So the one reading of constant data (#113: constant_data,
-// procedure_address, literal_address, folding, and lowering's
-// constant_global and constant_bytes) takes a baked value as it takes a
-// written one, and the program never sees the compile-time module. A baked
-// value is a copy, made when its run ends: what its view or string pointed
-// at may change in a later run, and it stays as it was. The interpreter's
-// values are canonical (interp.h): a type's bits zero-extended from its
-// width, a float32's in the low 32 bits. Ast.constant wants a signed integer
-// sign-extended from its width, and every float as the bits of the double
-// holding its value: baking converts. An aggregate result is read from the
-// memory the run copied it into, which is laid out as the target's, as all
-// of the interpreter's memory is.
+// (Ast_Literal.bytes), a tagged union a literal of its tag and the value of
+// the member the tag names (bake_tagged), and a view the array literal of
+// its elements (bake_value). So the one reading of constant data (#113:
+// constant_data, procedure_address, literal_address, folding, and
+// lowering's constant_global and constant_bytes) takes a baked value as it
+// takes a written one, and the program never sees the compile-time module.
+// A baked value is a copy, made when its run ends: what its view or string
+// pointed at may change in a later run, and it stays as it was. The
+// interpreter's values are canonical (interp.h): a type's bits
+// zero-extended from its width, a float32's in the low 32 bits.
+// Ast.constant wants a signed integer sign-extended from its width, and
+// every float as the bits of the double holding its value: baking
+// converts. An aggregate result is read from the memory the run copied it
+// into, which is laid out as the target's, as all of the interpreter's
+// memory is.
 //
 // What can't be baked. A non-null pointer anywhere in the result but in a
 // union's bytes refers to the compiler's own memory: "#run's result holds a
@@ -59,11 +61,13 @@
 // is below zero has no elements: "#run failed: its result holds a view with
 // a negative count" (a string's says string). A resizable array anywhere in
 // it but in a union's bytes, whatever it holds, is "#run's result holds a
-// resizable array, which can't be baked, for now" (spec 3.17). A union's
-// bytes are baked as they are, whatever its members hold (spec 7.8). Baking
-// stops at the first part refused, and that is said at the #run, once,
-// after it (Baking); nothing of the value is kept, and the #run has no
-// value, as after a failure.
+// resizable array, which can't be baked, for now" (spec 3.17). A tagged
+// union whose tag names no member, as C may write one, is "#run failed: its
+// result holds a tagged union whose tag names no member" (spec 3.20). A
+// union's bytes are baked as they are, whatever its members hold (spec
+// 7.8). Baking stops at the first part refused, and that is said at the
+// #run, once, after it (Baking); nothing of the value is kept, and the #run
+// has no value, as after a failure.
 
 #include "check.h"
 #include "interp.h"
@@ -152,9 +156,19 @@ static Ast *refuse_pointer(Baking *b) {
     return refuse(b, "#run's result holds a pointer, which can't be baked, for now");
 }
 
+// The bits of a value of integer or enum type t, read from its bytes
+// (zero-extended), extended to 64 bits as Ast.constant keeps them: by its
+// sign.
+static u64 extend_bits(Type *t, u64 bits) {
+    if (!t->is_signed || t->size >= 8) return bits;
+    s32 shift = 64 - 8 * (s32)t->size;
+    return (u64)((s64)(bits << shift) >> shift);
+}
+
 // The node of a scalar value of type t, from its canonical bits, `bits`
 // (interp.h); null after a refusal (refuse). Each kind of scalar:
-// - An integer is an Ast_Int, a signed one sign-extended from its width.
+// - An integer is an Ast_Int, a signed one sign-extended from its width
+//   (extend_bits, as a tagged union's tag is: bake_tagged).
 //   So is an enum (spec 3.18), as its integer type, the node of the enum's
 //   type: a constant of the enum, as a member is, whether or not a member
 //   has its value.
@@ -175,10 +189,7 @@ static Ast *bake_scalar(Baking *b, Type *t, u64 bits) {
     case TYPE_INTEGER:
     case TYPE_ENUM: {
         Ast_Int *number = baked_node<Ast_Int>(b, AST_INT, t);
-        if (t->is_signed && t->size < 8) {
-            s32 shift = 64 - 8 * (s32)t->size;
-            bits = (u64)((s64)(bits << shift) >> shift);
-        }
+        bits = extend_bits(t, bits);
         number->value = bits;
         number->is_constant = true;
         number->constant = bits;
@@ -266,6 +277,35 @@ static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
 
 static Ast *bake_value(Baking *b, Type *t, const u8 *at);
 
+// A tagged union of type t whose bytes are at `at` (spec 3.20, 7.8): a
+// literal of t holding the member its tag names (Ast_Literal.tag, the tag
+// read as its type's sign reads it), and, unless that member holds
+// nothing, the member's value, baked as any value of its type is, at the
+// members' offset. The tag says which member's bytes are live, so they're
+// read as that member, where a union's are only bytes (bake_value): a
+// string or a view among them is copied, a pointer that isn't null
+// refused. A tag no member has, as C may write one, is "#run failed: its
+// result holds a tagged union whose tag names no member": nothing says
+// whose bytes to bake.
+static Ast *bake_tagged(Baking *b, Type *t, const u8 *at) {
+    Type *tag_type = t->tag_type;
+    s64 tag = (s64)extend_bits(tag_type, read_bits(at, tag_type->size));
+    if (tag < 0 || tag >= t->fields.count) {
+        return refuse(b, "#run failed: its result holds a tagged union whose tag names no member");
+    }
+    Type_Field *member = &t->fields[tag];
+    RIG_ASSERT(member->type);  // made by the walk (check_run.cpp's walk_type)
+    bool holds = member->type != &type_void;
+    Ast_Literal *literal = baked_literal(b, t, holds ? 1 : 0);
+    literal->tag = (s32)tag;
+    if (!holds) return literal;
+    Ast *value = bake_value(b, member->type, at + member->offset);
+    if (!value) return nullptr;
+    array_add(&literal->values, value);
+    array_add(&literal->fields, (s32)tag);
+    return literal;
+}
+
 // The string literal of the `count` bytes at `data`, copied, with a zero
 // after them as a written literal's have: is_baked, so a global holding it
 // gets bytes of its own (lower.cpp's string_copy_global).
@@ -317,6 +357,9 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 //   refused: an address from compile time in them means nothing at run
 //   time, the program's business, as reading the wrong member is (spec
 //   7.8).
+// - A tagged union is a literal of its tag and the value of the member the
+//   tag names, if it holds one (bake_tagged, spec 3.20): the tag says which
+//   member's bytes are live, so they're baked as that member.
 // - An array [N]T is a literal of its N elements.
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the
@@ -356,6 +399,7 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
     // A view of its elements bakes as any view does.
     case TYPE_RESIZABLE: return refuse(b, "#run's result holds a resizable array, which can't be baked, for now");
     case TYPE_STRUCT: {
+        if (t->is_tagged) return bake_tagged(b, t, at);
         if (t->is_union) {
             // Its bytes, all of them, whichever member wrote them (spec 3.19,
             // 7.8): copied into the checker's arena, the literal's only

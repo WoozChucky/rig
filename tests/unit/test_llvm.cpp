@@ -1513,6 +1513,15 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    kind: s32;\n"
                                 "    union { key: Key; mouse: Mouse; };\n"
                                 "}\n"
+                                "Circle :: struct { r: float; }\n"
+                                "Rect :: struct { w: float; h: float; }\n"
+                                "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
+                                "Bytes :: union #tagged { a: [3]u8; }\n"
+                                "Odd :: union #tagged s32 { odd_bytes: [3]u8; odd_half: u16; }\n"
+                                "Flags :: union #tagged { on: void; off: void; }\n"
+                                "List :: union #tagged { link: *List; end: void; }\n"
+                                "Branch :: union #tagged { leaf: int; kids: []Branch; }\n"
+                                "Token :: union #tagged { word: s32; tag: s32; }\n"
                                 "main :: () {\n"
                                 "    value: Value;\n"
                                 "    event: Event;\n"
@@ -1534,6 +1543,13 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    wide: u32;\n"
                                 "    v: []int;\n"
                                 "    s := \"hi\";\n"
+                                "    shape: Shape;\n"
+                                "    bytes: Bytes;\n"
+                                "    odd: Odd;\n"
+                                "    flags: Flags;\n"
+                                "    list: List;\n"
+                                "    branch: Branch;\n"
+                                "    token: Token;\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -1642,6 +1658,141 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(string_eq(attached(&a, key, "scope:"), inner_node));
         CHECK(string_eq(attached(&a, mouse, "scope:"), inner_node));
         CHECK(!contains(key, "offset:") && !contains(mouse, "offset:"));
+        // A tagged union (spec 10.7) is a struct named as it, of two members:
+        // tag, at 0, of an enumeration with no name of its members' names,
+        // numbered from 0, over the tag's type; and a member with no name,
+        // at the members' offset, of a union with no name of the members
+        // that hold something, each at 0. A void member is no member of it.
+        String shape_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Shape\"");
+        CHECK(contains(shape_line, "size: 96"));
+        String shape = defined_node(shape_line);
+        CHECK(shape.count > 0);
+        String tag = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                   "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                                   "scope: " STR_FMT ",",
+                                                                   STR_ARG(shape))));
+        CHECK(tag.count > 0);
+        CHECK(!contains(tag, "offset:"));
+        String tag_type = node_line(&a, text, attached(&a, tag, "baseType:"));
+        CHECK(contains(tag_type, "!DICompositeType(tag: DW_TAG_enumeration_type, "));
+        CHECK(!contains(tag_type, "name:"));
+        CHECK(contains(tag_type, "size: 8"));
+        CHECK(contains(node_line(&a, text, attached(&a, tag_type, "baseType:")), "!DIBasicType(name: \"u8\""));
+        String circle_tag = defined_node(line_with(text, "!DIEnumerator(name: \"circle\", value: 0, isUnsigned: true)"));
+        String rect_tag = defined_node(line_with(text, "!DIEnumerator(name: \"rect\", value: 1, isUnsigned: true)"));
+        String empty_tag = defined_node(line_with(text, "!DIEnumerator(name: \"empty\", value: 2, isUnsigned: true)"));
+        CHECK(circle_tag.count > 0 && rect_tag.count > 0 && empty_tag.count > 0);
+        CHECK(contains(node_line(&a, text, attached(&a, tag_type, "elements:")),
+                       string_cstr(&a, string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}",
+                                                     STR_ARG(circle_tag), STR_ARG(rect_tag), STR_ARG(empty_tag)))));
+        String members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                       "!DIDerivedType(tag: DW_TAG_member, scope: " STR_FMT
+                                                                       ",",
+                                                                       STR_ARG(shape))));
+        CHECK(contains(members, "size: 64, offset: 32)"));
+        String members_type = node_line(&a, text, attached(&a, members, "baseType:"));
+        CHECK(contains(members_type, "!DICompositeType(tag: DW_TAG_union_type, "));
+        CHECK(!contains(members_type, "name:"));
+        CHECK(contains(members_type, "size: 64"));
+        String members_node = defined_node(members_type);
+        CHECK(members_node.count > 0);
+        String circle = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"circle\"");
+        String rect = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"rect\"");
+        CHECK(string_eq(attached(&a, circle, "scope:"), members_node));
+        CHECK(string_eq(attached(&a, rect, "scope:"), members_node));
+        CHECK(!contains(circle, "offset:") && !contains(rect, "offset:"));
+        CHECK(!contains(text, "!DIDerivedType(tag: DW_TAG_member, name: \"empty\""));
+        // One member, two debug members: the tag and the union holding it.
+        String bytes_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Bytes\"");
+        CHECK(contains(bytes_line, "size: 32"));
+        String bytes = defined_node(bytes_line);
+        CHECK(bytes.count > 0);
+        CHECK(contains(text, string_cstr(&a, string_printf(&a,
+                                                           "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                           "scope: " STR_FMT ",",
+                                                           STR_ARG(bytes)))));
+        String bytes_members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                             "!DIDerivedType(tag: DW_TAG_member, "
+                                                                             "scope: " STR_FMT ",",
+                                                                             STR_ARG(bytes))));
+        CHECK(contains(bytes_members, "size: 24, offset: 8)"));
+        String bytes_union = defined_node(node_line(&a, text, attached(&a, bytes_members, "baseType:")));
+        CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"a\""), "scope:"),
+                        bytes_union));
+        // An s32 tag: an enumeration of 32 bits over s32, whose values are
+        // signed (the text doesn't show their width, 64 for cdb, as an s32
+        // enum's: debug_enum). The union is its largest member's 3 bytes
+        // rounded up to the 2 of u16's alignment, at 4, after the tag.
+        String odd_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Odd\"");
+        CHECK(contains(odd_line, "size: 64,"));
+        String odd = defined_node(odd_line);
+        CHECK(odd.count > 0);
+        String odd_tag = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                       "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                                       "scope: " STR_FMT ",",
+                                                                       STR_ARG(odd))));
+        String odd_tag_type = node_line(&a, text, attached(&a, odd_tag, "baseType:"));
+        CHECK(contains(odd_tag_type, "!DICompositeType(tag: DW_TAG_enumeration_type, "));
+        CHECK(contains(odd_tag_type, "size: 32,"));
+        CHECK(contains(node_line(&a, text, attached(&a, odd_tag_type, "baseType:")), "!DIBasicType(name: \"s32\""));
+        CHECK(contains(text, "!DIEnumerator(name: \"odd_bytes\", value: 0)"));
+        CHECK(contains(text, "!DIEnumerator(name: \"odd_half\", value: 1)"));
+        String odd_members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                           "!DIDerivedType(tag: DW_TAG_member, "
+                                                                           "scope: " STR_FMT ",",
+                                                                           STR_ARG(odd))));
+        CHECK(contains(odd_members, "size: 32, offset: 32)"));
+        CHECK(contains(node_line(&a, text, attached(&a, odd_members, "baseType:")), "size: 32,"));
+        // Members that all hold nothing: the tag alone, and no union.
+        String flags_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Flags\"");
+        CHECK(contains(flags_line, "size: 8,"));
+        String flags = defined_node(flags_line);
+        CHECK(flags.count > 0);
+        CHECK(contains(text, string_cstr(&a, string_printf(&a,
+                                                           "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                           "scope: " STR_FMT ",",
+                                                           STR_ARG(flags)))));
+        CHECK(!contains(text, string_cstr(&a, string_printf(&a,
+                                                            "!DIDerivedType(tag: DW_TAG_member, scope: " STR_FMT ",",
+                                                            STR_ARG(flags)))));
+        CHECK(contains(node_line(&a, text, attached(&a, flags_line, "elements:")), "!{!"));
+        CHECK(!contains(node_line(&a, text, attached(&a, flags_line, "elements:")), ", !"));
+        // A tagged union that points at itself is made once, as Node is, its
+        // pointer member pointing back at the same node; one holding a view
+        // of itself is made once, as Tree is, with its view.
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"List\"") == 1);
+        String list = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"List\""));
+        CHECK(list.count > 0);
+        String link = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"link\"");
+        String link_type = node_line(&a, text, attached(&a, link, "baseType:"));
+        CHECK(contains(link_type, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: "));
+        CHECK(string_eq(attached(&a, link_type, "baseType:"), list));
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Branch\"") == 1);
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Branch\"") == 1);
+        String kids = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"kids\"");
+        CHECK(contains(node_line(&a, text, attached(&a, kids, "baseType:")),
+                       "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Branch\""));
+        // A member named tag is tag$ in the union, so the struct has one
+        // `tag`, the tag's own; its enumerator is still `tag`.
+        String token = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Token\""));
+        CHECK(token.count > 0);
+        CHECK(count_of(text, string_cstr(&a, string_printf(&a,
+                                                           "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                           "scope: " STR_FMT ",",
+                                                           STR_ARG(token)))) == 1);
+        String token_members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                             "!DIDerivedType(tag: DW_TAG_member, "
+                                                                             "scope: " STR_FMT ",",
+                                                                             STR_ARG(token))));
+        String token_union = defined_node(node_line(&a, text, attached(&a, token_members, "baseType:")));
+        CHECK(token_union.count > 0);
+        CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"tag$\""), "scope:"),
+                        token_union));
+        CHECK(!contains(text, string_cstr(&a, string_printf(&a,
+                                                            "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                            "scope: " STR_FMT ",",
+                                                            STR_ARG(token_union)))));
+        CHECK(contains(text, "!DIEnumerator(name: \"tag\", value: 1, isUnsigned: true)"));
     }
     arena_free(&a);
 }
@@ -1746,6 +1897,35 @@ TEST(llvm_debug_union_stand_ins_are_unions) {
         CHECK(contains(stand_in, "!DICompositeType(tag: DW_TAG_union_type, scope: "));
         CHECK(!contains(stand_in, "name:"));
         CHECK(contains(stand_in, "line: 1000,"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_debug_tagged_union_stand_ins) {
+    // A tagged union is two levels above its members' types: its struct and
+    // the union of its members (tagged_members). T0 to T1100 each hold the
+    // one before, and v's T1100 is made from the top, each T two levels
+    // below the one holding it: T<1100 - (MAX_DEPTH - 2) / 2>, the first
+    // with no room below it for its union and a member, is the one
+    // declaration, so T1100 has MAX_DEPTH - 1 levels, and no T holds a
+    // declaration of a T made in full.
+    Arena a = arena_make();
+    const s64 last = MAX_DEPTH + 100;
+    const s64 cut = last - (MAX_DEPTH - 2) / 2;
+    const char *program = joined(
+        &a, "T0 :: union #tagged { x: int; }\n", chain_of(&a, "T%lld :: union #tagged { t: T%lld; }\n", 1, last, -1),
+        string_cstr(&a, string_printf(&a, "main :: () { v : T%lld; }\n", (long long)last)));
+    CHECK(check_source(&a, program).count == 0);
+    Ir_Module *m = lower_source(&a, program);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(struct_line(&a, text, string_cstr(&a, string_printf(&a, "T%lld", (long long)last))),
+                       ", elements: !"));
+        CHECK(contains(struct_line(&a, text, string_cstr(&a, string_printf(&a, "T%lld", (long long)(cut + 1)))),
+                       ", elements: !"));
+        CHECK(contains(struct_line(&a, text, string_cstr(&a, string_printf(&a, "T%lld", (long long)cut))),
+                       ", flags: DIFlagFwdDecl)"));
+        CHECK(count_of(text, "DIFlagFwdDecl") == 1);
     }
     arena_free(&a);
 }

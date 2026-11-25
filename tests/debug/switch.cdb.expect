@@ -1,13 +1,18 @@
-14:             twice := n * 2;
-15:             putchar(50);
+16:             twice := n * 2;
+17:             putchar(50);
 int64 0n4
-18:             putchar(51);
-21:     }
-22:     putchar(10);
+20:             putchar(51);
+23:     }
+24:     putchar(10);
 Couldn't resolve error at 'twice'
-!11:         case 1;
-!12:             putchar(49);
-!13:         case 2;
-!17:         case 3;
-!19:         case;
-!20:             putchar(48);
+30:             putchar(66);
+!13:         case 1;
+!14:             putchar(49);
+!15:         case 2;
+!19:         case 3;
+!21:         case;
+!22:             putchar(48);
+!27:         case .A;
+!28:             putchar(65);
+!29:         case .B;
+!Ambiguous symbol error

@@ -254,10 +254,11 @@
 // cdb sets a breakpoint on a line only when the line's code is in one
 // piece ("Ambiguous symbol error" otherwise), so a .cdb script never breaks
 // at a `for`, `while` or `if` line (their tests, steps and jumps are
-// pieces apart from each other; but a switch's `if` holds only its value
-// and dispatch, one piece, where a script can break, unless the switch
-// has a no-case failure, as a #complete one without `case;` does, a
-// second piece after the cases), nor at a line holding a runtime check (an
+// pieces apart from each other; but a switch's `if` holds only its value,
+// a tagged union's switch's stores of each `it`'s slot, the dispatch, and
+// the no-case failure of a #complete or tagged union's switch without
+// `case;` laid out right after it, one piece, where a script can break),
+// nor at a line holding a runtime check (an
 // index, a division, a checked cast, a field through a pointer), whose
 // failure block is a second piece, nor at a line of deferred code that runs
 // at more than one way out of its block (a copy per way out, pieces apart).

@@ -16,8 +16,8 @@
 //
 // print_item writes a value of any type, through its type info (spec
 // 3.16): it reads an Any by its description, as the type's kind says, and
-// writes a struct's fields and an array's, a view's or a resizable array's
-// elements each as an Any of its own.
+// writes a struct's fields, a tagged union's member and an array's, a
+// view's or a resizable array's elements each as an Any of its own.
 //
 // print, print_to_builder, sprint, tprint and print_error write a format
 // whose {} placeholders take ..Any arguments, each written by print_item,
@@ -167,22 +167,29 @@ print_quoted :: (builder: *String_Builder, s: string) {
 //     no name: {kind = 1, union(4 bytes)}, {n = 1, {a = 2, b = 3}}.
 //   - A union, by its size alone, union(8 bytes), never its members:
 //     which one holds the value is the program's to know.
+//   - A tagged union (spec 3.20), by the member its tag says it holds: a
+//     dot and the member's name, then its value in parentheses, nested,
+//     .circle({r = 2.0}), .text("hi"), or nothing more for a void member,
+//     .empty. A tag no member has, as C may write, is (tag 7), the number
+//     read by the tag type's sign, and no member is read.
 //   - An array, a view or a resizable array, [value, ...]; [] for one with
 //     no elements, or a view or resizable array whose count is 0 or less.
 //   - An enum, by its members' names, through print_enum: FREE, or
 //     VISIBLE | GLOWING for an enum_flags.
 //
-// nested says the value is inside a struct or an array of any kind, or among
-// the arguments a format leaves over, {!EXTRA: ...}, where a string is
-// quoted so that its bytes can't be mistaken for the punctuation around
-// it. Fields and elements are written by calling print_item again, nested,
-// each made into an Any of its own: a field's type at the struct's address
-// plus the field's offset, an element's type at its place in the data.
+// nested says the value is inside a struct, a tagged union or an array of
+// any kind, or among the arguments a format leaves over, {!EXTRA: ...},
+// where a string is quoted so that its bytes can't be mistaken for the
+// punctuation around it. Fields, members and elements are written by
+// calling print_item again, nested, each made into an Any of its own: a
+// field's type at the struct's address plus the field's offset, a tagged
+// union's member's type at the union's address plus the member's offset,
+// an element's type at its place in the data.
 //
 // What no conversion to Any makes: a zeroed Any, whose type is null, as a
 // zeroed struct's Any field is, writes null, as a zeroed pointer does; a
 // description of void, which only an Any made by hand can hold, writes
-// void; and a tag that isn't one of the ten writes nothing.
+// void; and a tag that isn't one of the eleven writes nothing.
 //
 // A pointer isn't followed, but a view's data (a resizable array's too)
 // and an Any's value_pointer are, so a view or an Any that reaches a value
@@ -279,6 +286,28 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
             print_item(builder, Any.{it.type, cast(*u8) p + it.offset}, true);
         }
         print_or_append(builder, "}");
+    } else if t.tag == .TAGGED_UNION {
+        // Only the member the tag names is read: another's bytes may be
+        // what it isn't, as a union's are. A tag of none is a number,
+        // written as an integer is.
+        u := cast(*Type_Info_Tagged_Union) t;
+        tag := cast(*u8) p + u.tag_offset;
+        signed := (cast(*Type_Info_Integer) u.tag_type).signed;
+        index := print_read_integer(tag, u.tag_type.size, signed);
+        if index < 0 || index >= u.members.count {
+            print_or_append(builder, "(tag ");
+            print_item(builder, Any.{u.tag_type, tag}, false);
+            print_or_append(builder, ")");
+            return;
+        }
+        member := u.members[index];
+        print_or_append(builder, ".");
+        print_or_append(builder, member.name);
+        if member.type.tag != .VOID {
+            print_or_append(builder, "(");
+            print_item(builder, Any.{member.type, cast(*u8) p + member.offset}, true);
+            print_or_append(builder, ")");
+        }
     } else if t.tag == .ARRAY {
         a := cast(*Type_Info_Array) t;
         data := cast(*u8) p;

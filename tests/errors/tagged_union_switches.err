@@ -1,0 +1,57 @@
+tests/errors/tagged_union_switches.rig:20:43: error: a tagged union's case names one of its members, as in case .circle;
+    not_a_name :: (s: Shape) { if s == { case 0; case; } }
+                                              ^
+tests/errors/tagged_union_switches.rig:21:41: error: 'Shape' has no member 'nope'
+    no_such :: (s: Shape) { if s == { case .nope; case; } }
+                                            ^
+tests/errors/tagged_union_switches.rig:22:38: error: a tagged union's case names one of its members, as in case .circle;
+    other :: (s: Shape) { if s == { case Other.circle; case Shape.nope; case; } }
+                                         ^
+tests/errors/tagged_union_switches.rig:22:63: error: 'Shape' has no member 'nope'
+    other :: (s: Shape) { if s == { case Other.circle; case Shape.nope; case; } }
+                                                                  ^
+tests/errors/tagged_union_switches.rig:23:52: error: 'Shape.circle' already has a case at tests/errors/tagged_union_switches.rig:23:38
+    twice :: (s: Shape) { if s == { case .circle; case .circle; case; } }
+                                                       ^
+tests/errors/tagged_union_switches.rig:26:14: error: a tagged union's case names one of its members, as in case .circle;
+            case 0; x := it.r;
+                 ^
+tests/errors/tagged_union_switches.rig:27:15: error: 'Shape' has no member 'nope'
+            case .nope; y := it.r;
+                  ^
+tests/errors/tagged_union_switches.rig:29:14: error: 'Shape.circle' already has a case at tests/errors/tagged_union_switches.rig:28:14
+            case .circle; z := it.r;
+                 ^
+tests/errors/tagged_union_switches.rig:33:62: error: 'Shape' has no member 'nope'
+    in_loop :: (shapes: []Shape) { for shapes { if it == { case .nope; x := it.r; case; } } }
+                                                                 ^
+tests/errors/tagged_union_switches.rig:36:15: error: 'Shape' has no member 'nope'
+            case .nope; return 1;
+                  ^
+tests/errors/tagged_union_switches.rig:40:60: error: this switch already has a 'case;' at tests/errors/tagged_union_switches.rig:40:40
+    two_defaults :: (s: Shape) { if s == { case; case .circle; case; } }
+                                                               ^
+tests/errors/tagged_union_switches.rig:42:5: error: this switch doesn't handle 'Shape.empty'; add its case or a 'case;'
+        if s == {
+        ^
+tests/errors/tagged_union_switches.rig:47:29: error: this switch doesn't handle 'Shape.rect' and 'Shape.empty'; add their cases or a 'case;'
+    two_missing :: (s: Shape) { if s == { case .circle; } }
+                                ^
+tests/errors/tagged_union_switches.rig:50:23: error: #through can't end a tagged union's case: the next case's 'it' is another member
+            case .circle; #through;
+                          ^
+tests/errors/tagged_union_switches.rig:55:43: error: can't assign to 'it': it's a member of a switched value that isn't a place
+    f :: (s: Shape) { if s == { case .circle; it.r = 1; case; } }
+                                              ^
+tests/errors/tagged_union_switches.rig:56:46: error: can't take the address of 'it': it's a member of a switched value that isn't a place
+    g :: () { if make() == { case .circle; q := *it; case; } }
+                                                 ^
+tests/errors/tagged_union_switches.rig:57:62: error: #run can't use 'it': it's a local, which doesn't exist while compiling
+    run_member :: (s: Shape) { if s == { case .circle; y := #run it.r; case; } }
+                                                                 ^
+tests/errors/tagged_union_switches.rig:60:39: error: #run can't use 'it': it's a local, which doesn't exist while compiling
+        if s == { case .circle; y := #run it.r; case; }
+                                          ^
+tests/errors/tagged_union_switches.rig:64:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'Circle'
+        if c == { case; }
+           ^
