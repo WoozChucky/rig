@@ -34,15 +34,18 @@ void diag_add_lines(Diagnostics *d, String lines) {
     d->messages[d->messages.count - 1].lines = string_copy(&d->arena, lines);
 }
 
-// The text of line number `line` (from 1), without its line break, and
-// without the file's UTF-8 byte-order mark: the lexer counts line 1's
-// columns after it.
-static String source_line(String text, s32 line) {
-    s64 start = 0;
-    if (line == 1 && text.count >= 3 && memcmp(text.data, "\xEF\xBB\xBF", 3) == 0) start = 3;
+s64 diag_line_start(String text, s32 line) {
+    s64 start = text.count >= 3 && memcmp(text.data, "\xEF\xBB\xBF", 3) == 0 ? 3 : 0;
     for (s32 l = 1; l < line && start < text.count; start++) {
         if (text.data[start] == '\n') l++;
     }
+    return start;
+}
+
+// The text of line number `line` (from 1), without its line break, and
+// without the file's UTF-8 byte-order mark (diag_line_start).
+static String source_line(String text, s32 line) {
+    s64 start = diag_line_start(text, line);
     s64 end = start;
     while (end < text.count && text.data[end] != '\n') end++;
     if (end > start && text.data[end - 1] == '\r') end--;

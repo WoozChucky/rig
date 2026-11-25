@@ -9,9 +9,12 @@
 // and != with anything but a member's name, and <; a tag test naming a
 // member it doesn't have, or another tagged union's member, on either
 // side; a void member's name meeting no type; two of them in an operator
-// meeting the union; and a member read with spaces around its '.', in
-// parentheses, or over two lines, whose switch shows the operand without
-// the spaces, as written, or as s.
+// meeting the union; a member read with spaces around its '.', in
+// parentheses, over two lines or with spaces inside its operand, whose
+// switch shows the operand as written, without the spaces around the '.',
+// or as s; a void member read or written, which holds nothing, its
+// message the tag test to write; and a tag test and a switch's case
+// naming a member beside a pointer, whose message adds the .* to write.
 Circle :: struct { r: float; }
 Rect :: struct { w: float; h: float; }
 Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
@@ -51,4 +54,10 @@ main :: () {
     x3 := (s).circle;
     x4 := shapes[
         0].circle;
+    x5 := shapes[ 1 ].circle;
+    v := s.empty;
+    p.empty = 1;
+    u := p == .circle;
+    u2 := .rect != p;
+    if p == { case .circle; case; }
 }

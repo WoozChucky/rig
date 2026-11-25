@@ -283,11 +283,25 @@ const char *loop_variable_kind(Ast_Var *var);
 // 3.20), names: its index; -1 after "'Shape' has no member 'z'", at the
 // name, or when t has no layout (said; check_layout, which lays out one
 // reached only through a pointer); -2 when e names no member that way
-// (nothing said). Found, e gets
-// type t and no constant (a T.NAME its of_tagged), as a case's value and a
-// tag test's name side need: check_run.cpp's walk_expression fails on any
-// expression it reaches with no type.
+// (nothing said). Found, e gets type t and no constant (a T.NAME its
+// of_tagged), as a case's value and a tag test's name side need:
+// check_run.cpp's walk_expression fails on any expression it reaches with
+// no type.
 s32 tagged_member_named(Checker *c, Type *t, Ast *e);
+
+// How a message writes the code from `from` up to `to`, as the program
+// wrote it, inner white space and all (`shapes[ 0 ]` stays so): without
+// the white space at its end, nor a `drop` there (a '.', or 0 for none)
+// and the white space before that. "s" when that is nothing, spans lines
+// or `to` is in another file.
+String source_text(Checker *c, Position from, Position to, u8 drop);
+
+// A .NAME meeting a pointer to a tagged union (spec 3.20), `to`, in a tag
+// test or a switch's case: "'.circle' needs an enum type, not '*Shape';
+// write p.* == .circle", the hint `fix` (or "if p.* == {"). True after
+// saying it; false, nothing said, when e is no .NAME or `to` no such
+// pointer.
+bool report_member_on_pointer(Checker *c, Ast *e, Type *to, String fix);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
 // `pointer`, or the offset of p + n, n + p or p - n: n must be an integer

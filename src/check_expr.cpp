@@ -694,6 +694,17 @@ static void convert_member(Checker *c, Ast *e, Type *to) {
     e->is_constant = true;
 }
 
+bool report_member_on_pointer(Checker *c, Ast *e, Type *to, String fix) {
+    if (e->kind != AST_DOT_NAME || !type_is_pointer(to)) return false;
+    Type *pointee = to->pointee;
+    if (pointee->kind != TYPE_STRUCT || !pointee->is_tagged) return false;
+    Ast_Dot_Name *dot = (Ast_Dot_Name *)e;
+    diag_error(c->diag, dot->pos, "'." STR_FMT "' needs an enum type, not '" STR_FMT "'; write " STR_FMT,
+               STR_ARG(dot->name), STR_ARG(type_name(c->arena, to)), STR_ARG(fix));
+    e->type = nullptr;
+    return true;
+}
+
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
@@ -2176,7 +2187,9 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // A tag test (spec 3.20), == or != between a tagged union and a member's
 // name, .NAME or Shape.NAME, either order, any member, void or not, is a
 // bool: whether the union holds that member (check_tag_test). The union
-// may itself be written Shape.empty, beside a .NAME or a Shape.NAME.
+// may itself be written Shape.empty, beside a .NAME or a Shape.NAME. A
+// .NAME beside a pointer to one is "'.circle' needs an enum type, not
+// '*Shape'; write p.* == .circle" (report_member_on_pointer).
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -2229,7 +2242,28 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
             return nullptr;
         }
         Ast *member = left == &type_untyped_member ? b->left : b->right;
-        check_convert(c, member, left == &type_untyped_member ? right : left);
+        Type *to = left == &type_untyped_member ? right : left;
+        if (equality && member->kind == AST_DOT_NAME && type_is_pointer(to)) {
+            // A tag test on a pointer is on what it points at: p.* ==
+            // .circle. The pointer's text, as written, when it's on the
+            // left, where its end, the operator, is known; on the right,
+            // its name, or s.
+            String name = ((Ast_Dot_Name *)member)->name;
+            String op = str(token_kind_name(b->op));
+            op = string_slice(op, 1, op.count - 2);  // without its quotes
+            String fix;
+            if (member == b->right) {
+                fix = string_printf(c->arena, STR_FMT ".* " STR_FMT " ." STR_FMT,
+                                    STR_ARG(source_text(c, b->left->start, b->pos, 0)), STR_ARG(op), STR_ARG(name));
+            } else {
+                bool named = b->right->kind == AST_NAME && !ast_in_parentheses(b->right);
+                String pointer = named ? ((Ast_Name *)b->right)->name : str("s");
+                fix = string_printf(c->arena, "." STR_FMT " " STR_FMT " " STR_FMT ".*", STR_ARG(name), STR_ARG(op),
+                                    STR_ARG(pointer));
+            }
+            if (report_member_on_pointer(c, member, to, fix)) return nullptr;
+        }
+        check_convert(c, member, to);
         if (!member->type) return nullptr;
         left = b->left->type;
         right = b->right->type;
@@ -2896,39 +2930,34 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     return is_place(c, m->operand, false) ? type_pointer_to(t->element) : nullptr;
 }
 
-// Where the byte at `at` is in source text `text`: lines and columns count
-// from 1, a column in bytes, line 1's after the UTF-8 byte-order mark, as
-// the lexer counts them.
-static s64 source_offset(String text, Position at) {
-    s64 offset = text.count >= 3 && memcmp(text.data, "\xEF\xBB\xBF", 3) == 0 ? 3 : 0;
-    for (s32 line = 1; line < at.line && offset < text.count; offset++) {
-        if (text.data[offset] == '\n') line++;
-    }
-    return offset + at.col - 1;
-}
-
 // Whether byte b is white space between tokens.
 static bool is_blank(u8 b) {
     return b == ' ' || b == '\t' || b == '\r' || b == '\n';
 }
 
-// How a message writes member m's operand (check_member): its source text,
-// from its start to the '.' before m's name, the white space around that
-// '.' left out, when it lies on one line, as `s`, `shapes[0]` or `p`
-// usually does; otherwise just "s".
-static String operand_text(Checker *c, Ast_Member *m) {
-    String text = c->diag->files[m->start.file].text;
-    s64 start = source_offset(text, m->start);
-    s64 end = m->pos.file == m->start.file ? source_offset(text, m->pos) : -1;
-    if (end > text.count) end = -1;
+String source_text(Checker *c, Position from, Position to, u8 drop) {
+    if (from.file != to.file) return str("s");
+    String text = c->diag->files[from.file].text;
+    s64 start = diag_line_start(text, from.line) + from.col - 1;
+    s64 end = diag_line_start(text, to.line) + to.col - 1;
+    if (end > text.count) return str("s");
     while (end > start && is_blank(text.data[end - 1])) end--;
-    if (end > start && text.data[end - 1] == '.') end--;
+    if (drop && end > start && text.data[end - 1] == drop) end--;
     while (end > start && is_blank(text.data[end - 1])) end--;
-    String operand = end > start ? string_slice(text, start, end - start) : String{};
-    for (s64 i = 0; i < operand.count; i++) {
-        if (operand.data[i] == '\n') return str("s");
+    if (end <= start) return str("s");
+    String written = string_slice(text, start, end - start);
+    for (s64 i = 0; i < written.count; i++) {
+        if (written.data[i] == '\n') return str("s");
     }
-    return operand.count ? operand : str("s");
+    return written;
+}
+
+// How a message writes member m's operand (check_member): its source text,
+// from its start to the '.' before m's name, without that '.' or the white
+// space on either side of it (source_text), as `s`, `shapes[0]` or `p`
+// usually is.
+static String operand_text(Checker *c, Ast_Member *m) {
+    return source_text(c, m->start, m->pos, '.');
 }
 
 // e.x: the field x of struct e, or of the struct e points at (p.x is
@@ -2975,8 +3004,10 @@ static String operand_text(Checker *c, Ast_Member *m) {
 // time, so it's read in a switch, whose case knows (checker.cpp's
 // check_switch): "a tagged union's member is read in a switch: if s == {
 // case .circle; ... it ... }", at the member's name, the operand as
-// written (operand_text), with .* after it through a pointer. A name the
-// union has no member of is "'Shape' has no member 'z'" there instead.
+// written (operand_text), with .* after it through a pointer. A void
+// member, whose case declares no it, holds nothing to read: "'Shape.empty'
+// holds nothing; test it with s == .empty" instead. A name the union has
+// no member of is "'Shape' has no member 'z'" there.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
     if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
@@ -3022,9 +3053,20 @@ static Type *check_member(Checker *c, Ast_Member *m) {
     }
     if (s->is_tagged) {
         // A name it doesn't have is said as that, not sent to a switch.
-        if (!check_layout(c, s) || tagged_member_index(c, s, m->name, m->pos) < 0) return nullptr;
-        // Through a pointer, the switch is on what it points at: `if p ==
-        // {` would be on the pointer.
+        if (!check_layout(c, s)) return nullptr;
+        s32 index = tagged_member_index(c, s, m->name, m->pos);
+        if (index < 0) return nullptr;
+        // Through a pointer, the switch, or the tag test, is on what it
+        // points at: `if p == {` would be on the pointer.
+        check_late_field(c, s, index);
+        if (s->fields[index].type == &type_void) {
+            // Its case declares no it: there's nothing to read but whether
+            // the union holds it.
+            diag_error(c->diag, m->pos, "'" STR_FMT "." STR_FMT "' holds nothing; test it with " STR_FMT "%s == ." STR_FMT,
+                       STR_ARG(type_name(c->arena, s)), STR_ARG(m->name), STR_ARG(operand_text(c, m)),
+                       s == t ? "" : ".*", STR_ARG(m->name));
+            return nullptr;
+        }
         diag_error(c->diag, m->pos,
                    "a tagged union's member is read in a switch: if " STR_FMT "%s == { case ." STR_FMT
                    "; ... it ... }",

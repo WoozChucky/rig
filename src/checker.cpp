@@ -2316,7 +2316,9 @@ static String case_key(Type *t, Ast *value) {
 // whose bytes are compared; a pointer's null, the one pointer that's
 // is_constant: a string literal's address has no number until the program
 // is linked, so "a pointer's case can only be null, as in case null;", for
-// any other value of a pointer switch. Any other value is "a case's value
+// any other value of a pointer switch; a .NAME in a switch on a pointer to
+// a tagged union is "'.circle' needs an enum type, not '*Shape'; write if
+// p.* == {" (report_member_on_pointer). Any other value is "a case's value
 // must be known while compiling", unless it needs a #run that failed, said
 // already (has_failed_run). Never evaluated at run time.
 //
@@ -2335,20 +2337,19 @@ static String case_key(Type *t, Ast *value) {
 // the enum_flags 'Look'"), at it, and the cases are checked as without it,
 // the switch `failed`, so its message is the only one (spec 6.11): a
 // procedure whose cases all return gets no second message that it reaches
-// its end. On an enum, once its members' values
-// are known and every case's value checked with no error (a case with one
-// would make a second message about the member it meant), each member's
-// value, in declaration order, must be some case's: each value missing is
-// named by the first member that has it, all in one message at the
-// '#complete', "this switch is #complete, but 'Mode.FREE' and
-// 'Mode.FREE_ALL' have no case". The members are looked up in the cases'
-// table, each missing one put in it, so a later member sharing its value
-// isn't named again. covers_every_value is set when none is missing;
-// checks_no_case when there's no `case;`, since a value no member has
-// (cast(Mode) 7) then finds no case, a runtime error (spec 8.1). A
-// #complete switch that doesn't cover every value said why (a member
-// missing, a case's error, an enum's), so it's `failed` too: its message
-// is the only one (spec 6.11).
+// its end. On an enum, once its members' values are known and every case's
+// value checked with no error (a case with one would make a second message
+// about the member it meant), each member's value, in declaration order,
+// must be some case's: each value missing is named by the first member
+// that has it, all in one message at the '#complete', "this switch is
+// #complete, but 'Mode.FREE' and 'Mode.FREE_ALL' have no case". The
+// members are looked up in the cases' table, each missing one put in it,
+// so a later member sharing its value isn't named again. covers_every_value
+// is set when none is missing; checks_no_case when there's no `case;`,
+// since a value no member has (cast(Mode) 7) then finds no case, a runtime
+// error (spec 8.1). A #complete switch that doesn't cover every value said
+// why (a member missing, a case's error, an enum's), so it's `failed` too:
+// its message is the only one (spec 6.11).
 //
 // Each case's statements are a block and a scope of their own
 // (check_scoped_block), so two cases may declare one name. The switch is
@@ -2398,7 +2399,15 @@ static void check_switch(Checker *c, Ast_Switch *s) {
             check_value(c, value);
         } else {
             s64 errors = c->diag->error_count;
-            if (check_value(c, value) && !check_convert(c, value, t)) report_no_conversion(c, value, t);
+            bool checked = check_value(c, value);
+            // A switch on a pointer is on the pointer: a .NAME on a pointer
+            // to a tagged union means what it points at, `if p.* == {`.
+            if (checked && value->kind == AST_DOT_NAME && type_is_pointer(t)) {
+                String fix = string_printf(c->arena, "if " STR_FMT ".* == {",
+                                           STR_ARG(source_text(c, s->value->start, s->equals, 0)));
+                if (report_member_on_pointer(c, value, t, fix)) checked = false;
+            }
+            if (checked && !check_convert(c, value, t)) report_no_conversion(c, value, t);
             bool fine = value->type && c->diag->error_count == errors;
             if (fine && type_is_pointer(t) && !value->is_constant) {
                 diag_error(c->diag, value->start, "a pointer's case can only be null, as in case null;");
