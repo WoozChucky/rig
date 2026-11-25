@@ -1521,6 +1521,7 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Flags :: union #tagged { on: void; off: void; }\n"
                                 "List :: union #tagged { link: *List; end: void; }\n"
                                 "Branch :: union #tagged { leaf: int; kids: []Branch; }\n"
+                                "Token :: union #tagged { word: s32; tag: s32; }\n"
                                 "main :: () {\n"
                                 "    value: Value;\n"
                                 "    event: Event;\n"
@@ -1548,6 +1549,7 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    flags: Flags;\n"
                                 "    list: List;\n"
                                 "    branch: Branch;\n"
+                                "    token: Token;\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -1770,6 +1772,27 @@ TEST(llvm_debug_types_of_every_kind) {
         String kids = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"kids\"");
         CHECK(contains(node_line(&a, text, attached(&a, kids, "baseType:")),
                        "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Branch\""));
+        // A member named tag is tag$ in the union, so the struct has one
+        // `tag`, the tag's own; its enumerator is still `tag`.
+        String token = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Token\""));
+        CHECK(token.count > 0);
+        CHECK(count_of(text, string_cstr(&a, string_printf(&a,
+                                                           "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                           "scope: " STR_FMT ",",
+                                                           STR_ARG(token)))) == 1);
+        String token_members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                             "!DIDerivedType(tag: DW_TAG_member, "
+                                                                             "scope: " STR_FMT ",",
+                                                                             STR_ARG(token))));
+        String token_union = defined_node(node_line(&a, text, attached(&a, token_members, "baseType:")));
+        CHECK(token_union.count > 0);
+        CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"tag$\""), "scope:"),
+                        token_union));
+        CHECK(!contains(text, string_cstr(&a, string_printf(&a,
+                                                            "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                            "scope: " STR_FMT ",",
+                                                            STR_ARG(token_union)))));
+        CHECK(contains(text, "!DIEnumerator(name: \"tag\", value: 1, isUnsigned: true)"));
     }
     arena_free(&a);
 }

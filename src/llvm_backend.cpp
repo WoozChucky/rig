@@ -996,7 +996,8 @@ static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LL
 //   members' offset, of a union with no name of those members, each at 0
 //   and at its declaration's line, as clang describes C's anonymous union:
 //   so `s.circle` shows the member in a debugger, as in C. A void member
-//   holds nothing to show, and is only an enumerator.
+//   holds nothing to show, and is only an enumerator. A member named tag
+//   is tag$ in the union (below).
 // The union has no Type of its own, so it's made here as debug_struct
 // makes one, a replaceable temporary first, which its members are scoped
 // in, then the real union: a member's type that leads back to the tagged
@@ -1053,7 +1054,13 @@ static s64 tagged_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LL
         Debug_Type made = debug_type_at(b, field->type, depth + 2);
         if (made.levels >= DEBUG_TYPE_LEVELS - 1) made = stand_in_debug_type(b, field->type);
         if (union_levels < made.levels + 1) union_levels = made.levels + 1;
-        parts[n++] = debug_member(b, temporary, file, field->name, (unsigned)t->decl->fields[i]->pos.line,
+        // A member named tag is tag$, a name no Rig member can have but both
+        // debuggers take in an expression (as result$): listed as tag, it
+        // would make `s.tag` name two members, the tag and, through the
+        // anonymous union, it, and gdb crashes on that. As tag$, `s.tag` is
+        // the tag and `s.tag$` the member (spec 10.7).
+        String name = string_eq(field->name, str("tag")) ? str("tag$") : field->name;
+        parts[n++] = debug_member(b, temporary, file, name, (unsigned)t->decl->fields[i]->pos.line,
                                   field->type->size, 0, made.node);
     }
     LLVMMetadataRef real = LLVMDIBuilderCreateUnionType(b->debug, file, "", 0, file, line, (u64)size * 8,
