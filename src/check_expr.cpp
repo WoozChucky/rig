@@ -3315,16 +3315,52 @@ s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array
     return found;
 }
 
+// The member reaching field `index` of struct s from operand: named as the
+// field (none for an anonymous member), its index and type the field's, at
+// pos and start. The caller makes a late field's type first
+// (check_late_field).
+static Ast_Member *member_link(Checker *c, Ast *operand, Type *s, s32 index, Position pos, Position start) {
+    Type_Field *field = &s->fields[index];
+    Ast_Member *m = ast_new<Ast_Member>(c->arena, AST_MEMBER, pos);
+    m->start = start;
+    m->operand = operand;
+    m->name = field->name;
+    m->index = index;
+    m->type = field->type;
+    return m;
+}
+
+// operand followed through every field of path but the last, from struct
+// *s: the chain (operand itself for a one-field path), *s left at the
+// struct the last field is in, stepping through a pointer field to its
+// pointee.
+//
+// Reached through anonymous members (spec 3.19), e.key is
+// e.<anonymous>.key, and through using fields (spec 3.21), p.position is
+// p.entity.position: a member for each field on the way (member_link),
+// made here, at the name written, which lowering and the rest see as
+// fields of fields. The first takes operand as written, so a pointer is
+// followed once, there, as for a field of its own; a using field that is a
+// pointer is followed by the member after it, as any pointer's field is.
+static Ast *member_chain(Checker *c, Ast *operand, Type **s, Array<s32> path, Position pos, Position start) {
+    Ast *chain = operand;
+    for (s64 k = 0; k + 1 < path.count; k++) {
+        Ast_Member *m = member_link(c, chain, *s, path[k], pos, start);
+        *s = type_is_pointer(m->type) ? m->type->pointee : m->type;
+        chain = m;
+    }
+    return chain;
+}
+
 // A name check_lookup found among the fields of the procedure's using
 // parameters (spec 3.21), as check_find_using finds it: position in move's
 // body is e.position. name->through gets the chain it means, made as
-// check_member makes one through using fields: an Ast_Name naming the
-// parameter, then a member for each field on the way, named as the field
-// (no name for an anonymous member), each at the name written, so a null
-// pointer followed on the way, the parameter's or a field's, is said there
-// (spec 8.4). name->decl is the parameter, and the field's type is
-// returned. Lowering, places and #run's walk follow the chain (checker.h's
-// using section).
+// check_member makes one through using fields (member_chain): an Ast_Name
+// naming the parameter, then a member for each field on the way, each at
+// the name written, so a null pointer followed on the way, the parameter's
+// or a field's, is said there (spec 8.4). name->decl is the parameter, and
+// the field's type is returned. Lowering, places and #run's walk follow the
+// chain (checker.h's using section).
 //
 // Two at the first depth that has one, across the parameters or in one,
 // are "'x' is ambiguous: 'a.x' or 'b.x'", at the name, each path written
@@ -3357,22 +3393,14 @@ static Type *check_using_name(Checker *c, Ast_Name *name) {
             base->name = param->name;
             base->decl = param;
             base->type = param->type;
-            Ast *chain = base;
+            // Every member, the last's too, is at the name written.
             Type *s = using_struct(param);
-            for (s64 k = 0; k < path.count; k++) {
-                // The last field's type may be a late one's, not made yet.
-                if (k + 1 == path.count) check_late_field(c, s, path[k]);
-                Type_Field *field = &s->fields[path[k]];
-                Ast_Member *m = ast_new<Ast_Member>(c->arena, AST_MEMBER, name->pos);
-                m->operand = chain;
-                m->name = field->name;
-                m->index = path[k];
-                m->type = field->type;
-                chain = m;
-                if (k + 1 < path.count) s = type_is_pointer(field->type) ? field->type->pointee : field->type;
-            }
-            name->through = chain;
-            t = chain->type;
+            Ast *chain = member_chain(c, base, &s, path, name->pos, name->pos);
+            s32 last = path[path.count - 1];
+            // The last field's type may be a late one's, not made yet.
+            check_late_field(c, s, last);
+            name->through = member_link(c, chain, s, last, name->pos, name->pos);
+            t = name->through->type;
         }
     }
     array_free(&path);
@@ -3521,24 +3549,10 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         return nullptr;
     }
     array_free(&other);
-    // Reached through anonymous members (spec 3.19), e.key is
-    // e.<anonymous>.key, and through using fields (spec 3.21), p.position
-    // is p.entity.position: a member for each field on the way, named as
-    // the field (no name for an anonymous member), made here, at the name
-    // written. The first takes e as written, so a pointer is followed once,
-    // there, as for a field of its own; a using field that is a pointer is
-    // followed by the member after it, as any pointer's field is.
-    for (s64 k = 0; k + 1 < path.count; k++) {
-        Type_Field *field = &s->fields[path[k]];
-        Ast_Member *inner = ast_new<Ast_Member>(c->arena, AST_MEMBER, m->pos);
-        inner->start = m->start;
-        inner->operand = m->operand;
-        inner->name = field->name;
-        inner->index = path[k];
-        inner->type = field->type;
-        s = type_is_pointer(field->type) ? field->type->pointee : field->type;
-        m->operand = inner;
-    }
+    // Reached through anonymous members or using fields, e becomes the
+    // chain of the fields on the way (member_chain), each at the name
+    // written and starting where e does; m reaches the last.
+    m->operand = member_chain(c, m->operand, &s, path, m->pos, m->start);
     m->index = path[path.count - 1];
     array_free(&path);
     check_late_field(c, s, m->index);
