@@ -62,7 +62,8 @@ struct Type_Field {
     Type *type;     // null when the field's type was an error (reported)
     s64 offset;     // in bytes, from the start of the struct
     bool is_using;  // a using field (spec 3.21) whose type is a struct or a pointer to one; false
-                    // once refused
+                    // once refused. A late field's is true until its type is made (type null),
+                    // then checked (checker.cpp's make_late_field)
 };
 
 struct Type {
@@ -140,9 +141,10 @@ const s64 RESIZABLE_ALLOCATED_OFFSET = 16, RESIZABLE_ALLOCATOR_OFFSET = 24, RESI
 // a change to one is a change to the other.
 //
 // Every description starts with a Type_Info (its tag, size and alignment),
-// which each kind's struct holds as its first field, info, so a *Type_Info
-// is cast to the struct its tag names. Floats, bool, string and void have
-// the plain Type_Info.
+// which each kind's struct holds as its first field, `using info:
+// Type_Info;` (spec 3.21), so a *Type_Info is cast to the struct its tag
+// names, and a kind's struct reads t.size as t.info.size. Floats, bool,
+// string and void have the plain Type_Info.
 //
 // The tags are the members of Preload's enum Type_Info_Tag, numbered as
 // Jai's tags are: ENUM is Jai's 11, the numbers between being kinds of

@@ -267,8 +267,8 @@
 //   "'void' is only a pointer's target, as in *void". A *void converts
 //   implicitly to and from every pointer type, as C's void * does; no other
 //   pointer converts to another without a cast ("a value of type '*u8'
-//   doesn't convert to '*int' implicitly"), but a pointer to a struct to one
-//   to a struct it holds through using fields (the using section below).
+//   doesn't convert to '*int' implicitly"), but a *S converts to a *B when
+//   the struct S holds a B through using fields (the using section below).
 // - p + n, n + p and p - n give p's type, n any integer: p moved by n of what
 //   it points at. p - q, two pointers of the same type, gives an int, the
 //   distance in what they point at. Otherwise: "can't add two pointers",

@@ -2383,8 +2383,9 @@ TEST(null_converts_to_pointers) {
 
 TEST(void_pointer_converts_both_ways) {
     // *void converts to and from every pointer type, so malloc's result
-    // needs no cast; no other pointer converts to another but through
-    // using fields (spec 3.21), *void's own pointer **void included.
+    // needs no cast. No other pointer converts to another, *void's own
+    // pointer **void included, but a *S to a *B that S holds through using
+    // fields (spec 3.21).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "malloc :: (size: u64) -> *void #foreign libc;\n"
@@ -7456,9 +7457,9 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // out as any struct. The two must agree: each struct's size,
     // alignment, field offsets and field types, and each tag's value. Each
     // kind's struct starts with its Type_Info, using info, so a *Type_Info
-    // casts to it and t.size reads it. Resizable_Array is a [..]T's layout (spec 3.17), which lowering
-    // and Preload's helpers read alike, aligned as a [..]T is
-    // (type_resizable_of), not as type information is.
+    // casts to it and t.size reads it. Resizable_Array is a [..]T's layout
+    // (spec 3.17), which lowering and Preload's helpers read alike, aligned
+    // as a [..]T is (type_resizable_of), not as type information is.
     s32 resizable_align = type_resizable_of(&type_int)->align;
     Arena a = arena_make();
     Ast_File *tree = nullptr;

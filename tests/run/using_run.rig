@@ -3,9 +3,9 @@
 // the program does when it runs. A constant is baked from a Player such
 // procedures made, a #run in a body converts a *Player into a using
 // *Entity parameter, what it moved read back through the Player too, and a
-// top-level #run prints what it moved. A #run in
-// a using body reaches a procedure declared after it, whose body is checked
-// there: its id is the global's, never the outer body's field.
+// top-level #run prints what it moved. A #run in a using body reaches a
+// procedure declared after it, whose body is checked there: its id is the
+// global's, never the outer body's field.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }

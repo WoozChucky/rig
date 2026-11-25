@@ -139,7 +139,8 @@ struct Member_Search {
 // its end, to be searched after every struct at its own depth. An empty name
 // is never found: it's an anonymous member's, which is searched, not named.
 // The checker refuses a name reachable twice from one declaration
-// (checker.cpp's lay_out), so the first found is the only one, for now.
+// (checker.cpp's lay_out), so the first found is the only one. Using
+// fields aren't followed: check_find_member does that.
 void type_find_member(Type *t, String name, Array<s32> *path) {
     path->count = 0;
     if (!name.count) return;

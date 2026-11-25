@@ -407,9 +407,12 @@ struct Ast_Type_Info : Ast {
 // pointer: p.x is p.*.x); or, when e is an enum's name, its member x (spec
 // 3.18). A postfix operator, as .* is. pos is the field's name, where a
 // null pointer's runtime error points; start is e's. A field reached
-// through anonymous members (spec 3.19), e.key, is made by the checker into
-// the chain of members it means, e.<anonymous>.key: a member with an empty
-// name for each anonymous member, at the name written. When e names a
+// through anonymous members (spec 3.19) or using fields (spec 3.21) is made
+// by the checker into the chain of members it means, each at the name
+// written: e.key is e.<anonymous>.key, a member with an empty name for each
+// anonymous member, and p.position is p.entity.position, a member named as
+// each using field. A member on the way may be a pointer, s.transform.x,
+// followed and null-checked at the name written as any is. When e names a
 // tagged union (spec 3.20), e.x names its member x: Shape.empty, a value
 // holding a member that holds nothing, or the name a tag test or a case
 // compares with.

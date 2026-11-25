@@ -1172,11 +1172,11 @@ static s32 lower_view_of_resizable(Lowering *l, Type *resizable, s32 array) {
 static s32 lower_any(Lowering *l, Ast *e, Type *any);
 
 // v, a `from` (a pointer), as the `to` it converts to: moved to the using
-// field it reaches (spec 3.21, type_base_offset), null kept
-// null, as C++ keeps it in a base conversion, so a null *Player passed as a
-// *Entity is still caught where it's used, not taken for address 16. v
-// itself for every other pair, and for a field at 0. No branch: both are
-// worked out, and a select picks.
+// field it reaches (spec 3.21, type_base_offset), null kept null, as C++
+// keeps it in a base conversion, so a null *Player passed as a *Entity is
+// still caught where it's used, not taken for address 16. v itself for
+// every other pair, and for a field at 0. No branch: both are worked out,
+// and a select picks.
 //
 //     %null = const ptr 0
 //     %is_null = cmp eq ptr %v, %null
@@ -1949,9 +1949,8 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
 // the '.'; a field's, its struct's plus the field's offset; a using
 // parameter's field's, that of the chain of members it means
 // (Ast_Name.through); context's, the address the procedure's slot holds
-// (load_context). A place's
-// operands, and its checks, are worked out here, before any value an
-// assignment stores (spec 6.5's order).
+// (load_context). A place's operands, and its checks, are worked out here,
+// before any value an assignment stores (spec 6.5's order).
 static s32 lower_address(Lowering *l, Ast *e) {
     if (e->kind == AST_DEREF) {
         Ast *pointer = ((Ast_Deref *)e)->operand;
@@ -4284,11 +4283,11 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // type's description's (type_info_address, spec 5.19), to its type_info.N
 // (type_info_global). Each is the address as it is, nothing added: the
 // checker refused one a using field would move (checker.cpp's
-// address_moves, spec 3.21). The checker made sure every value is a constant, a
-// string literal, a procedure, a description's address, constant data, a
-// literal of them (check_global_value), or a #run's baked value (run.cpp),
-// which is made of the same: a view's is the array literal of its elements,
-// read here as a view's array value is.
+// address_moves, spec 3.21). The checker made sure every value is a
+// constant, a string literal, a procedure, a description's address,
+// constant data, a literal of them (check_global_value), or a #run's baked
+// value (run.cpp), which is made of the same: a view's is the array literal
+// of its elements, read here as a view's array value is.
 //
 // `writable` says whose bytes they are: a global variable's (lower_global),
 // which the program may change, or a constant's or a #run's read-only

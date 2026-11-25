@@ -777,9 +777,9 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
     // constant, or a string field or element of one. Any other string's
     // bytes may go on past its count, so it doesn't (type_converts).
     if (is_literal_string(e) && is_c_string(to)) return true;
-    // A pointer to a struct holding a `to`'s struct two ways through using
-    // fields (spec 3.21) is said here, and the value's type cleared, as a
-    // literal's mistake is, so nothing more is said of it.
+    // A *S whose struct S holds the struct `to` points at two ways through
+    // using fields (spec 3.21) is said here, and the value's type cleared,
+    // as a literal's mistake is, so nothing more is said of it.
     if (!check_base_conversion(c, from, to, e->start)) {
         e->type = nullptr;
         return true;
@@ -962,6 +962,8 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
     diag_error(c->diag, name->pos, "a default value can't use the parameter '" STR_FMT "'", STR_ARG(name->name));
 }
 
+static Type *check_using_name(Checker *c, Ast_Name *name);
+
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
 // procedure type (a constant naming one too), one taking a '..T' last
@@ -979,8 +981,6 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
 // can't be a value: it's built into the language". A field of a using
 // parameter's struct (spec 3.21) is the field, through the parameter
 // (check_using_name).
-static Type *check_using_name(Checker *c, Ast_Name *name);
-
 static Type *check_name(Checker *c, Ast_Name *name) {
     bool through_using;
     Ast *decl = check_lookup(c, name->name, &through_using);

@@ -30,7 +30,7 @@ struct Checker {
     Array<Ast_Param *> using_params;  // the using parameters (spec 3.21) of the procedure whose body or
                                       // default values are being checked, in order, each of a type using
                                       // takes; set aside with the scopes (checker.cpp's leave_scopes)
-    Array<Ast *> loops;         // the loops around the statement being checked, innermost
+    Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
     Ast_Defer *deferring;        // the innermost defer whose statement is being checked (spec 6.12);
                                  // null outside deferred code. A body checked on demand sets it
@@ -237,8 +237,10 @@ Type *check_operand(Checker *c, Ast *e);
 // value converts to Preload's Any (spec 3.16), keeping its own type:
 // Ast.to_any says whether the Any holds the value's own address or a
 // copy's, and a literal without its type is reported, as check_default_type
-// reports it. True also when either type is unknown (null): the error was
-// reported already.
+// reports it. A pointer whose struct holds to's two ways through using
+// fields (spec 3.21) is reported here (check_base_conversion), its type
+// cleared, and counted as converting too. True also when either type is
+// unknown (null): the error was reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.
@@ -258,11 +260,12 @@ bool type_converts(Type *from, Type *to);
 // (spec 3.21) ready for type_converts, which is pure: from's struct laid
 // out (check_layout), which a body a #run reaches during the layouts may
 // find still to do, when to's is a struct and from's declares a using
-// field; never otherwise. False after saying, at `at`, that the struct
-// holds to's two ways at the shallowest depth that has one ("'*Twice'
-// converts to '*Entity' two ways, through 'a' and through 'b'; take the
-// address of the one meant", each path written from the struct); true
-// otherwise, whether it converts or not, and for any other pair of types.
+// field; never otherwise. False after saying, at `at`, that from's struct
+// holds to's struct two ways at the shallowest depth that has one
+// ("'*Twice' converts to '*Entity' two ways, through 'a' and through 'b';
+// take the address of the one meant", each path written from the struct);
+// true otherwise, whether it converts or not, and for any other pair of
+// types.
 bool check_base_conversion(Checker *c, Type *from, Type *to, Position at);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a

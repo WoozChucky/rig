@@ -98,7 +98,7 @@ HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
 // Every description starts with a Type_Info, whose tag says its kind. Each
 // kind's struct takes that Type_Info in as its first field, `using info:
 // Type_Info;` (spec 3.21), so a kind's tag, size and alignment are read as
-// its own, s.size, and through info still, s.info.size. A *Type_Info whose
+// its own, t.size, and through info still, t.info.size. A *Type_Info whose
 // tag says the kind is cast to the kind's struct, cast(*Type_Info_Struct) t
 // when t.tag == .STRUCT, and a pointer to a kind's struct converts to a
 // *Type_Info implicitly, the same address.

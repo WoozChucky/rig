@@ -133,11 +133,11 @@ static const char *local_kind(Ast *decl) {
 // iterators don't exist yet. Each name of one in it is "#run can't use 'x':
 // it's a local, which doesn't exist while compiling", at the name; a using
 // parameter's field (spec 3.21) "#run can't use 'id': it's a field of the
-// parameter 'e', which doesn't exist while compiling". Its local
-// constants are known while compiling, and are fine. A #run inside it had
-// its own operand checked so. In a default value (Checker.default_of), a
-// parameter was refused already, by check_name or check_addressable, and
-// isn't said again. True when there's none.
+// parameter 'e', which doesn't exist while compiling". Its local constants
+// are known while compiling, and are fine. A #run inside it had its own
+// operand checked so. In a default value (Checker.default_of), a parameter
+// was refused already, by check_name or check_addressable, and isn't said
+// again. True when there's none.
 static bool uses_no_locals(Checker *c, Ast *operand) {
     Array<Ast *> pending = {};
     array_add(&pending, operand);

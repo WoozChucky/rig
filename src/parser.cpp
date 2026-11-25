@@ -1906,18 +1906,18 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign
 // libc;). The loop looks at an element's first token to tell them apart: an
 // identifier, or a using parameter's 'using' (spec 3.21), begins a
-// parameter, whatever its type turns out to be (a
-// procedure's type, when #foreign parameters get them, is still IDENT ':'
-// and a type), and '..' is the end. A '..T' parameter (`rest: ..int`, spec
-// 7.2) takes every argument after the fixed ones, the parameters before
-// it, so a procedure has one at most: a second is "a procedure takes at
-// most one '..' parameter", at its '..', and the declaration is given up.
-// Parameters may follow it (issue #197): each takes only its default value,
-// which the checker makes sure it has (`log :: (format: string, args:
-// ..Any, loc: Source_Code_Location = #caller_location)`). A parameter may
-// have a default value (`times: int = 2`, spec 7.2), read with it
-// (parse_param) before the body, so its levels aren't the body's; which
-// parameters may have one is the checker's to say.
+// parameter, whatever its type turns out to be (a procedure's type, when
+// #foreign parameters get them, is still IDENT ':' and a type), and '..' is
+// the end. A '..T' parameter (`rest: ..int`, spec 7.2) takes every argument
+// after the fixed ones, the parameters before it, so a procedure has one at
+// most: a second is "a procedure takes at most one '..' parameter", at its
+// '..', and the declaration is given up. Parameters may follow it (issue
+// #197): each takes only its default value, which the checker makes sure
+// it has (`log :: (format: string, args: ..Any, loc: Source_Code_Location =
+// #caller_location)`). A parameter may have a default value
+// (`times: int = 2`, spec 7.2), read with it (parse_param) before the body,
+// so its levels aren't the body's; which parameters may have one is the
+// checker's to say.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
