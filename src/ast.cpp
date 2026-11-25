@@ -396,6 +396,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_STRUCT: {
         // (struct Vec2 (x float32) (y float32)), (union Value (i s64)); an
         // anonymous member's has no name: (union (key Key) (mouse Mouse)).
+        // A using field says so first: (using entity Entity).
         // A tagged union's has its tag's type after the name, as an enum's
         // has its integer type, _ for none: (union #tagged Shape _ (circle
         // Circle) (empty void)).
@@ -426,7 +427,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
             dump(buffer, field->anonymous);
             break;
         }
-        out(buffer, "(");
+        out(buffer, field->is_using ? "(using " : "(");
         out(buffer, field->name);
         out(buffer, " ");
         dump_type(buffer, field->type_expr);

@@ -1,0 +1,69 @@
+// using fields (issue #225, spec 3.21), compiled and interpreted: the
+// fields of the struct a using field holds are reached as its own struct's,
+// read and written, at any depth, and from inside an anonymous member,
+// the using field itself still there; an own field hides one reached
+// through using. Nothing is flattened: the struct is laid out with the
+// using field as one field, print writes it as an ordinary one, and a
+// constant's field reached through it folds. A struct with one is passed
+// and returned as any other.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Base :: struct { tag: int; }
+Mid :: struct { using base: Base; m: int; }
+Deep :: struct { using mid: Mid; tag2: int; }
+Key :: struct { code: s32; }
+Mouse :: struct { x: s16; y: s16; }
+Event :: struct { kind: s32; union { using key: Key; mouse: Mouse; }; }
+P2 :: struct { using entity: Entity; id: string; }
+
+K :: Player.{entity = .{id = 5, position = .{1, 2}}, health = 3};
+
+bump :: (p: Player) -> Player {
+    q := p;
+    q.position.x += 1;
+    return q;
+}
+
+main :: () {
+    // p.position is p.entity.position: the same field, whichever is written.
+    p: Player;
+    p.position.x = 1.5;
+    print("{} {}\n", p.position.x, p.entity.position.x);
+    p.entity.id = 7;
+    print("{}\n", p.id);
+    // Laid out as written: the name's 16 bytes, then the Entity, then the
+    // health; position 8 into the Entity.
+    print("{} {} {}\n", size_of(Player), cast(int) *p.entity - cast(int) *p, cast(int) *p.position - cast(int) *p);
+
+    // Two using fields deep, and from inside an anonymous union.
+    d: Deep;
+    d.tag = 9;
+    print("{}\n", d.mid.base.tag);
+    e: Event;
+    e.code = 65;
+    print("{}\n", e.key.code);
+
+    // P2's own id hides its entity's.
+    p2: P2;
+    p2.id = "own";
+    p2.entity.id = 4;
+    print("{} {}\n", p2.id, p2.entity.id);
+
+    // A constant's fields through its using field are constant data.
+    print("{}\n", K.id);
+    #if K.position.y == 2 {
+        print("folded\n");
+    } else {
+        print("not folded\n");
+    }
+
+    // print writes the using field as the field it is.
+    p.name = "ann";
+    p.health = 3;
+    print("{}\n", p);
+    r := bump(p);
+    print("{}\n", r.position.x);
+}

@@ -1,0 +1,31 @@
+// using fields' mistakes (issue #225, spec 3.21), one a line: using on a
+// field whose type isn't a struct or a pointer to one, an int, an enum and
+// an array; on a tagged union; a struct taking itself in by value; then, in
+// main, a name two using fields reach at one depth, a name nothing
+// reaches, in that struct and in one that points at itself through its
+// using field; and a literal naming a field reached through using, its
+// type written and met.
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Mode :: enum { A; B; }
+Shape :: union #tagged { circle: float; empty: void; }
+A :: struct { x: int; }
+B :: struct { x: float; }
+Two :: struct { using a: A; using b: B; }
+Cyclic :: struct { value: int; using me: *Cyclic; }
+Bad_Int :: struct { using n: int; }
+Bad_Enum :: struct { using m: Mode; }
+Bad_Array :: struct { using v: [2]Vec2; }
+Bad_Tagged :: struct { using s: Shape; }
+Self :: struct { using s: Self; }
+
+main :: () {
+    t: Two;
+    a := t.x;
+    b := t.nope;
+    c: Cyclic;
+    d := c.nope;
+    e := Player.{position = .{1, 2}};
+    f : Player = .{id = 3};
+}

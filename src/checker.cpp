@@ -1269,6 +1269,31 @@ static Type *make_anonymous_type(Type *outer, Ast_Struct *s) {
     return t;
 }
 
+// Whether `type`, written as `written`, is one a using field takes (spec
+// 3.21): a struct or a union, or one pointer to one, whose fields its
+// struct then reaches as its own. A tagged union, or a pointer to one, is
+// "'using' can't reach into a tagged union, 'Shape': its members are read
+// in a switch", since its fields would be reached outside the switch that
+// knows which member it holds; anything else, a number, an enum, an array,
+// a pointer to a pointer, a view or a procedure type, "'using' needs a
+// struct or a pointer to one, not 'int'", each at the type. A type that
+// was an error (null) was said already: false, nothing more. Refused, the
+// field is an ordinary one.
+static bool using_takes(Checker *c, Ast_Type *written, Type *type) {
+    if (!type) return false;
+    Type *s = type_is_pointer(type) ? type->pointee : type;
+    if (s->kind == TYPE_STRUCT && s->is_tagged) {
+        diag_error(c->diag, written->pos,
+                   "'using' can't reach into a tagged union, '" STR_FMT "': its members are read in a switch",
+                   STR_ARG(type_name(c->arena, s)));
+        return false;
+    }
+    if (s->kind == TYPE_STRUCT) return true;
+    diag_error(c->diag, written->pos, "'using' needs a struct or a pointer to one, not '" STR_FMT "'",
+               STR_ARG(type_name(c->arena, type)));
+    return false;
+}
+
 // Struct s's fields, offsets, size and alignment, into its Type: each field
 // at the next offset that is a multiple of its alignment, the struct's
 // alignment its largest field's (1 when it has none), its size rounded up to
@@ -1293,6 +1318,13 @@ static Type *make_anonymous_type(Type *outer, Ast_Struct *s) {
 // isn't kept (Ast_Field.index -1), though a late one's type is still made,
 // for its own mistakes; so the one field a name finds is the first
 // declared. Anonymous members' empty names clash with nothing.
+//
+// A using field (spec 3.21) is laid out as any field is, one field holding
+// its whole struct, or a pointer to one: nothing is flattened. Its
+// Type_Field.is_using is set when its type is one using takes
+// (using_takes), a late one's checked once made (make_late_field). The
+// names it reaches are never checked here against the struct's own: they
+// are found, or found ambiguous, where they're used (check_find_member).
 //
 // A field's type starts where the struct does, at `base`, so what it needs
 // starts a level below its own levels (layout_levels; open_declaration),
@@ -1339,10 +1371,13 @@ static void lay_out(Checker *c, Ast_Struct *s, s32 base, Array<Ast_Field *> *rea
             }
         }
         // A tagged union's members are placed after its tag once all are
-        // known (lay_out_tag), at 0 until then.
+        // known (lay_out_tag), at 0 until then. A using field's type is
+        // checked once it's made: a value one's here, a late one's by
+        // make_late_field, which may still clear is_using.
         s64 offset = s->is_union || s->is_tagged ? 0 : align_up(end, field_align);
+        bool is_using = field->is_using && (field->is_late || using_takes(c, field->type_expr, type));
         field->index = (s32)t->fields.count;
-        array_add(&t->fields, Type_Field{field->name, type, offset});
+        array_add(&t->fields, Type_Field{field->name, type, offset, is_using});
         field->type = type;
         if (offset + size > end) end = offset + size;
         if (field_align > align) align = field_align;
@@ -1518,9 +1553,15 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     if (field->resolve == RESOLVE_CYCLE) type = nullptr;
     field->resolve = RESOLVE_DONE;
     field->type = type;
+    // A using field's type is checked now it's made (lay_out took it as
+    // it was written); refused, the field is an ordinary one.
+    bool is_using = field->is_using && using_takes(c, field->type_expr, type);
     // A field whose name was declared before it isn't in the type (lay_out).
     Type *t = s->declared;
-    if (t && field->index >= 0) t->fields[field->index].type = type;
+    if (t && field->index >= 0) {
+        t->fields[field->index].type = type;
+        t->fields[field->index].is_using = is_using;
+    }
 }
 
 bool check_layout(Checker *c, Type *t) {

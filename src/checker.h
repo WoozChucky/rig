@@ -1164,6 +1164,39 @@
 //   operand_type is the tagged union and tag_member the member, its name
 //   side typed as the union but no value to work out.
 //
+// using (issue #225, spec 3.21).
+// - `using entity: Entity;` among a struct's or a union's fields, or an
+//   anonymous member's, is a field as any other, laid out as one, holding
+//   its whole struct (nothing is flattened), whose struct's fields are
+//   reached as the outer one's own; so is `using transform: *Transform;`,
+//   through the pointer. Its type is a struct or a union, or one pointer
+//   to one ("'using' needs a struct or a pointer to one, not 'int'"), never
+//   a tagged union ("'using' can't reach into a tagged union, 'Shape': its
+//   members are read in a switch"), each at the type, checked where the
+//   field's type is made (checker.cpp's lay_out, make_late_field); a
+//   refused one is an ordinary field. A tagged union's member, an
+//   anonymous member, a statement and a top-level declaration take no
+//   'using' (the parser's messages).
+// - e.x looks for x depth by depth (check_find_member): e's own fields
+//   and its anonymous members', then the fields of the structs its using
+//   fields hold or point at, and so on; the first depth that has it
+//   decides, two there being "'x' is ambiguous: 'a.x' or 'b.x'", at the
+//   name. Never checked where declared, unlike a name reachable twice
+//   through anonymous members. The walk enters no struct it searched at
+//   an earlier depth, and one struct through two paths at most at one
+//   depth, so it ends on cycles and stays small.
+// - A literal names its struct's own fields (type_find_member): a name
+//   reached through a using field is "a literal can't name 'position',
+//   reached through 'entity'; name 'entity', as in Player.{entity =
+//   ...}".
+// - What lowering may rely on: no Ast_Member reaches through a using
+//   field. The checker built the chain, as for anonymous members, a member
+//   for each field on the way, named as the field: p.position is
+//   p.entity.position, and s.x is s.transform.x, a member whose operand is
+//   a pointer, followed and null-checked at the name written as any is.
+//   Type_Field.is_using is information only: types, layouts, literals,
+//   type information and the debug information are a struct's as ever.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

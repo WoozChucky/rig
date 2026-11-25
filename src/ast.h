@@ -290,6 +290,7 @@ struct Ast_Field : Ast {
     s32 levels;             // an anonymous member's: one more than its deepest field's (layout_levels)
     s32 index;              // where it is in its struct's Type.fields, set by the layout; -1 when it
                             // isn't there, its name being reachable earlier (checker.cpp's lay_out)
+    bool is_using;          // using entity: Entity; (spec 3.21): its struct's fields are reached as this one's
 };
 
 // A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, or a

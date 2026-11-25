@@ -59,8 +59,10 @@ struct Ast_Enum;    // ast.h: an enum's declaration
 // A field of a struct type: its name, its type and where it is.
 struct Type_Field {
     String name;
-    Type *type;   // null when the field's type was an error (reported)
-    s64 offset;   // in bytes, from the start of the struct
+    Type *type;     // null when the field's type was an error (reported)
+    s64 offset;     // in bytes, from the start of the struct
+    bool is_using;  // a using field (spec 3.21) whose type is a struct or a pointer to one; false
+                    // once refused
 };
 
 struct Type {
@@ -289,10 +291,13 @@ bool type_has_view_fields(Type *t);
 Type *type_c_promoted(Type *t);
 
 // Where member `name` of struct or union t is (spec 3.19): t's own named
-// fields first, then its anonymous members' fields, depth by depth (#225
-// adds using fields to the same walk). *path gets the field indices from t
-// down; it's left empty when no field has the name. t is laid out
-// (check_layout).
+// fields first, then its anonymous members' fields, depth by depth. *path
+// gets the field indices from t down; it's left empty when no field has the
+// name. t is laid out (check_layout). It doesn't follow using fields (spec
+// 3.21): the checker's check_find_member does, which may need to lay out
+// the structs they reach, and to say a name is ambiguous; this finds the
+// struct's own fields, as a literal names them and as a declaration's
+// clash is checked.
 void type_find_member(Type *t, String name, Array<s32> *path);
 
 // void: what a procedure without -> returns (the type of a call of one,

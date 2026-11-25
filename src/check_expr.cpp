@@ -2994,6 +2994,165 @@ static String operand_text(Checker *c, Ast_Member *m) {
     return source_text(c, m->start, m->pos, '.');
 }
 
+// A struct the using walk (find_through_using) searches: its type; how it
+// was reached, the one searched before it that holds it, or points at it
+// (an index into the walk's list, -1 for one the walk starts at), and its
+// field there; the depth it's searched at, an anonymous member at its
+// outer's; and which of the structs the walk starts at it was reached from.
+struct Using_Search {
+    Type *type;
+    s64 outer;
+    s32 field;
+    s32 depth;
+    s32 root;
+};
+
+// The using walk's state: its list of structs searched or to search (each
+// path's way back up), those to search at the next depth, and the first
+// two places where the name is, each a struct in the list and its field.
+struct Using_Walk {
+    Checker *c;
+    String name;
+    Array<Using_Search> list;
+    Array<s64> next;
+    s32 found;
+    s64 found_in[2];
+    s32 found_field[2];
+};
+
+// Whether struct `type`, held or pointed at by a using field, is searched at
+// `depth`: not when it was searched at an earlier depth, where it held no
+// match and queued what it reaches, nor when it's to be searched at this
+// one through two paths already, which are enough to say a name is
+// ambiguous. Those keep the walk small, and end it on cycles (a struct
+// that points at itself, or at one that points back). Nor when its layout
+// fails or is still under way (check_layout): its fields aren't known.
+static bool using_search_needed(Using_Walk *w, Type *type, s32 depth) {
+    s32 paths = 0;
+    for (s64 i = 0; i < w->list.count; i++) {
+        if (w->list[i].type != type) continue;
+        if (w->list[i].depth < depth) return false;
+        paths++;
+    }
+    if (paths >= 2) return false;
+    if (!check_layout(w->c, type)) return false;
+    return !type->decl || type->decl->resolve == RESOLVE_DONE;
+}
+
+// Searches struct `at` of the walk's list, at its depth: each of its fields
+// in order, the name's found counted (the first two kept), an anonymous
+// member searched in its place, as its fields are its outer's (spec 3.19),
+// and a using field's struct queued for the next depth. A pointer using
+// field's type is made first if it isn't yet (check_late_field), which
+// says whether using takes it. A using field whose type is unknown (an
+// error, a circle) isn't followed.
+static void search_using_struct(Using_Walk *w, s64 at) {
+    Type *t = w->list[at].type;
+    s32 depth = w->list[at].depth;
+    s32 root = w->list[at].root;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        if (t->fields[i].is_using && !t->fields[i].type) check_late_field(w->c, t, (s32)i);
+        Type_Field *field = &t->fields[i];
+        if (!field->name.count) {
+            if (!field->type || field->type->kind != TYPE_STRUCT) continue;
+            array_add(&w->list, Using_Search{field->type, at, (s32)i, depth, root});
+            search_using_struct(w, w->list.count - 1);
+            continue;
+        }
+        // A late field's type may not be made yet: it's found all the
+        // same, and its type made by the caller (check_late_field).
+        if (string_eq(field->name, w->name)) {
+            if (w->found < 2) {
+                w->found_in[w->found] = at;
+                w->found_field[w->found] = (s32)i;
+            }
+            w->found++;
+        }
+        if (!field->is_using || !field->type) continue;
+        Type *held = type_is_pointer(field->type) ? field->type->pointee : field->type;
+        if (!using_search_needed(w, held, depth + 1)) continue;
+        array_add(&w->list, Using_Search{held, at, (s32)i, depth + 1, root});
+        array_add(&w->next, w->list.count - 1);
+    }
+}
+
+// The path of the k-th place the walk found the name: the field indices
+// from the struct it started at down, into *path, and that struct's number
+// among those it started at.
+static s32 using_found_path(Using_Walk *w, s32 k, Array<s32> *path) {
+    path->count = 0;
+    array_add(path, w->found_field[k]);
+    s64 at = w->found_in[k];
+    for (; w->list[at].outer >= 0; at = w->list[at].outer) array_add(path, w->list[at].field);
+    for (s64 j = 0; j < path->count / 2; j++) {
+        s32 swapped = (*path)[j];
+        (*path)[j] = (*path)[path->count - 1 - j];
+        (*path)[path->count - 1 - j] = swapped;
+    }
+    return w->list[at].root;
+}
+
+// Where member `name` is, from the `count` structs `roots`, searched at
+// depth 0 together (spec 3.21): their own fields, their anonymous members'
+// at any nesting included, in order; then, depth by depth, the structs
+// their using fields hold or point at, in the order those fields were
+// met. The first depth where the name is decides: how many paths it holds
+// is returned, 0, 1 or 2 (two or more: ambiguous), *path getting the
+// first's field indices and *path_root the root it starts at, *other and
+// *other_root the second's (*other left empty otherwise). check_find_member
+// starts it at one struct; a procedure's using parameters start it at each
+// one's struct, in parameter order.
+static s32 find_through_using(Checker *c, Type **roots, s32 count, String name, Array<s32> *path, s32 *path_root,
+                              Array<s32> *other, s32 *other_root) {
+    path->count = 0;
+    other->count = 0;
+    if (!name.count) return 0;  // an anonymous member's, which is searched, not named
+    Using_Walk w = {};
+    w.c = c;
+    w.name = name;
+    Array<s64> level = {};  // the structs searched at this depth, reached through using fields
+    for (s32 r = 0; r < count; r++) {
+        array_add(&w.list, Using_Search{roots[r], -1, -1, 0, r});
+        array_add(&level, w.list.count - 1);
+    }
+    while (level.count && !w.found) {
+        for (s64 i = 0; i < level.count; i++) search_using_struct(&w, level[i]);
+        Array<s64> searched = level;
+        level = w.next;
+        w.next = searched;
+        w.next.count = 0;
+    }
+    s32 found = w.found < 2 ? w.found : 2;
+    if (found >= 1) *path_root = using_found_path(&w, 0, path);
+    if (found == 2) *other_root = using_found_path(&w, 1, other);
+    array_free(&level);
+    array_free(&w.next);
+    array_free(&w.list);
+    return found;
+}
+
+s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other) {
+    s32 root;
+    return find_through_using(c, &t, 1, name, path, &root, other, &root);
+}
+
+// How a message writes the field `path` reaches from struct t: the names
+// of the fields on the way, anonymous members left out, joined by '.', as
+// "entity.base.tag", after `root` and a '.' when root isn't empty (a using
+// parameter's name).
+static String member_path_text(Checker *c, Type *t, Array<s32> path, String root) {
+    String text = root;
+    for (s64 i = 0; i < path.count; i++) {
+        Type_Field *field = &t->fields[path[i]];
+        if (field->name.count) {
+            text = text.count ? string_printf(c->arena, STR_FMT "." STR_FMT, STR_ARG(text), STR_ARG(field->name))
+                              : field->name;
+        }
+        t = type_is_pointer(field->type) ? field->type->pointee : field->type;
+    }
+    return text;
+}
+
 // e.x: the field x of struct e, or of the struct e points at (p.x is
 // p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
@@ -3010,6 +3169,15 @@ static String operand_text(Checker *c, Ast_Member *m) {
 // (type_find_member). A union's missing one is "'Value' has no member
 // 'z'". One reached through anonymous members makes e the chain of them,
 // which lowering and the rest see as fields of fields.
+//
+// Then, depth by depth, the fields of the structs e's using fields hold or
+// point at (spec 3.21, check_find_member): p.position is p.entity.position,
+// and s.x through `using transform: *Transform` is s.transform.x, the
+// pointer followed and null-checked as any field's, at the name written.
+// The chain is made the same way, a member for each field on the way,
+// named as the field. Two at the first depth that has one are "'x' is
+// ambiguous: 'a.x' or 'b.x'", at the name, the first two in the walk's
+// order.
 //
 // A field of constant data is known while compiling (spec 5.9) when it's a
 // number, a bool or null: the value its literal gives, or zero when it
@@ -3110,25 +3278,38 @@ static Type *check_member(Checker *c, Ast_Member *m) {
     }
     if (!check_layout(c, s)) return nullptr;
     Array<s32> path = {};
-    type_find_member(s, m->name, &path);
-    if (!path.count) {
-        if (!check_member_under_way(c, s, m->name)) {
+    Array<s32> other = {};
+    s32 found = check_find_member(c, s, m->name, &path, &other);
+    if (found != 1) {
+        if (found == 2) {
+            diag_error(c->diag, m->pos, "'" STR_FMT "' is ambiguous: '" STR_FMT "' or '" STR_FMT "'",
+                       STR_ARG(m->name), STR_ARG(member_path_text(c, s, path, {})),
+                       STR_ARG(member_path_text(c, s, other, {})));
+        } else if (!check_member_under_way(c, s, m->name)) {
             diag_error(c->diag, m->pos, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, s)),
                        s->is_union ? "member" : "field", STR_ARG(m->name));
         }
+        array_free(&path);
+        array_free(&other);
         return nullptr;
     }
-    // Reached through anonymous members (spec 3.19): e.key is e.<anonymous>.key,
-    // a member with no name for each, made here, at the name written. The
-    // first takes e as written, so a pointer is followed once, there, as for
-    // a field of its own.
+    array_free(&other);
+    // Reached through anonymous members (spec 3.19), e.key is
+    // e.<anonymous>.key, and through using fields (spec 3.21), p.position
+    // is p.entity.position: a member for each field on the way, named as
+    // the field (no name for an anonymous member), made here, at the name
+    // written. The first takes e as written, so a pointer is followed once,
+    // there, as for a field of its own; a using field that is a pointer is
+    // followed by the member after it, as any pointer's field is.
     for (s64 k = 0; k + 1 < path.count; k++) {
+        Type_Field *field = &s->fields[path[k]];
         Ast_Member *inner = ast_new<Ast_Member>(c->arena, AST_MEMBER, m->pos);
         inner->start = m->start;
         inner->operand = m->operand;
+        inner->name = field->name;
         inner->index = path[k];
-        s = s->fields[path[k]].type;
-        inner->type = s;
+        inner->type = field->type;
+        s = type_is_pointer(field->type) ? field->type->pointee : field->type;
         m->operand = inner;
     }
     m->index = path[path.count - 1];
@@ -3179,6 +3360,12 @@ static void check_stray_value(Checker *c, Ast *value) {
 // own passed on to the groups inside it. A name of an anonymous member
 // still under way isn't found, a circle (check_member_under_way), as
 // e.x's.
+//
+// A literal names its struct's own fields, its anonymous members'
+// included, never one reached through a using field (spec 3.21): that one
+// is "a literal can't name 'position', reached through 'entity'; name
+// 'entity', as in Player.{entity = ...}", at the name: the struct's own
+// using field the name is reached through is what the literal gives.
 static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     Array<Ast *> values = {};  // the literal's, grouped
     Array<String> names = {};
@@ -3186,6 +3373,8 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     Array<s32> fields = {};
     Array<s32> written = {};
     Array<s32> path = {};
+    Array<s32> through = {};  // a name's path through using fields, for its message
+    Array<s32> other = {};
     bool grouped = literal->written.count > 0;  // a group, or a literal holding one
     s32 first_field = -1;  // where the first value that went to a field went, and its name
     String first_name = {};
@@ -3200,7 +3389,25 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
         for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
         s32 field = -1;
         if (!path.count) {
-            if (!check_member_under_way(c, t, name)) {
+            if (check_member_under_way(c, t, name)) {
+                // Said: a circle.
+            } else if (check_find_member(c, t, name, &through, &other)) {
+                // Reached through a using field (spec 3.21), which the
+                // literal names instead: the first named field on the way.
+                // Only anonymous members come before it, so each field's
+                // type is the struct the next index is in.
+                String outer = {};
+                Type *in = t;
+                for (s64 k = 0; k < through.count && !outer.count; k++) {
+                    outer = in->fields[through[k]].name;
+                    in = in->fields[through[k]].type;
+                }
+                diag_error(c->diag, at,
+                           "a literal can't name '" STR_FMT "', reached through '" STR_FMT "'; name '" STR_FMT
+                           "', as in " STR_FMT ".{" STR_FMT " = ...}",
+                           STR_ARG(name), STR_ARG(outer), STR_ARG(outer), STR_ARG(type_name(c->arena, t)),
+                           STR_ARG(outer));
+            } else {
                 diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                            members ? "member" : "field", STR_ARG(name));
             }
@@ -3250,6 +3457,8 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
         array_add(&written, place);
     }
     array_free(&path);
+    array_free(&through);
+    array_free(&other);
     array_free(&literal->values);
     array_free(&literal->names);
     array_free(&literal->name_positions);

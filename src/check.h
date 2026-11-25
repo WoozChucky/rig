@@ -289,6 +289,15 @@ const char *loop_variable_kind(Ast_Var *var);
 // no type.
 s32 tagged_member_named(Checker *c, Type *t, Ast *e);
 
+// Where member `name` of struct t is (spec 3.21): t's own fields, its
+// anonymous members' included (type_find_member), then the fields of the
+// structs its using fields hold or point at, depth by depth. Returns how
+// many paths the first depth that has one holds, 0, 1 or 2 (two or more:
+// ambiguous); *path gets the first's field indices from t down, *other the
+// second's (left empty otherwise). Lays out each struct it enters and makes
+// each pointer using field's type.
+s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other);
+
 // How a message writes the code from `from` up to `to`, as the program
 // wrote it, inner white space and all (`shapes[ 0 ]` stays so): without
 // the white space at its end, nor a `drop` there (a '.', or 0 for none)

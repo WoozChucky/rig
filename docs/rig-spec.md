@@ -151,7 +151,7 @@ null          push_context  return        struct        true          union
 using         while
 ```
 
-`using` is reserved: no construct uses it yet, and writing it is a syntax error wherever it appears. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as its own struct's (section 3.21). Anywhere else it is a syntax error. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
 
 ### 2.7 Directives
 
@@ -472,7 +472,7 @@ A field's type may be any type but `void`, but a struct cannot hold itself by va
 
 A struct value is copied whole by assignment, as an argument and as a result. Structs are not compared by any operator.
 
-A struct may have anonymous members among its fields, `union { ... };` and `struct { ... };`, each a field with no name whose own fields the struct reaches as its own (section 3.19).
+A struct may have anonymous members among its fields, `union { ... };` and `struct { ... };`, each a field with no name whose own fields the struct reaches as its own (section 3.19). It may also take in another struct's fields with a `using` field, `using entity: Entity;`, a field as any other whose struct's fields it reaches as its own too, `p.position` for `p.entity.position` (section 3.21).
 
 ### 3.10 void
 
@@ -1048,7 +1048,7 @@ A union is a type whose members all lie at the same place, at offset 0: it holds
 
 ```ebnf
 StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl  = identifier ":" Type ";"
+FieldDecl  = [ "using" ] identifier ":" Type ";"
            | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 ```
 
@@ -1124,6 +1124,8 @@ example.rig:1:31: error: 'x' is already declared at example.rig:1:15
     S :: struct { x: int; union { x: float; y: int; }; }
                                   ^
 ```
+
+A name reached twice through `using` fields is another matter: it is never checked where declared, only where used, where two at one depth are ambiguous (section 3.21). An anonymous member's fields are its outer struct's own, so they hide a name reached through `using`, as the struct's other fields do.
 
 **Literals.** A union's literal gives one member, by name, and the rest of the union's bytes are zero: `Value.{f = 1.5}`. `Value.{}` gives none: every byte is zero. A literal without its type, `.{f = 1.5}`, takes a union type where it meets one, as it takes a struct type (section 5.17):
 
@@ -1401,6 +1403,104 @@ example.rig:6:5: error: this switch doesn't handle 'Shape.empty'; add its case o
         ^
 ```
 
+### 3.21 using
+
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as the outer struct's own, as an anonymous member's are (section 3.19), and the field is still there, a field as any other.
+
+```ebnf
+FieldDecl = [ "using" ] identifier ":" Type ";"
+          | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
+```
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+main :: () {
+    p: Player;
+    p.position.x = 1.5;     // p.entity.position.x
+    p.id = 7;               // p.entity.id
+    print("{} {} {}\n", p.entity.position.x, p.entity.id, size_of(Player));
+}
+```
+
+```text
+1.5 7 40
+```
+
+**Declaration.** A `using` field is one of a struct's fields, a union's members or an anonymous member's fields, and is laid out as any field is: nothing is flattened. `Player` has three fields, `name`, `entity` and `health`, and `entity`, at 16, holds a whole `Entity`. Its type is a struct or a union, or a pointer to one, `using transform: *Transform;`. Any other type, a number, an enum, an array, a pointer to a pointer, a view or a procedure type, is `'using' needs a struct or a pointer to one, not 'int'`, and a tagged union, or a pointer to one, is `'using' can't reach into a tagged union, 'Shape': its members are read in a switch`, each at the type, since a tagged union's members are read only in a switch's case (section 3.20); the field is then an ordinary one. For the same reason a tagged union's member is never `using`: `a tagged union's member can't be 'using': its members are read in a switch`, at the `using`. Only a named field takes it: `using union { ... };` is `expected a field's name, found 'union'`. A struct can't take itself in by value, directly or through others, `Self :: struct { using s: Self; }` being `'Self' contains itself; it can hold a pointer to itself, *Self` (section 3.9); behind a pointer it may. A `using` that starts a statement in a body, `using e;`, or a declaration at the top level, is `'using' is for a field or a parameter, as in using entity: Entity;`: Rig brings no struct's, enum's or module's names into a scope with it.
+
+**Lookup.** `e.x` looks for `x` depth by depth. Depth 0 is the struct's own fields, its anonymous members' at any depth included (section 3.19). Depth 1 is the fields of the structs its `using` fields hold or point at, an anonymous member's `using` fields included; depth 2 the fields of those their `using` fields reach; and so on. The first depth where `x` is found decides, and `e.x` is the field found there, through every field on the way: `p.position` is `p.entity.position`, and with `Mid :: struct { using base: Base; m: int; }` and `Deep :: struct { using mid: Mid; }`, `d.tag` is `d.mid.base.tag`. So a struct's own field, or its anonymous members', hides one of its name reached through `using`, and a field one `using` field away hides one two away. The field is a place when `e` is one, and through a pointer to the struct, `q.position` for a `*Player` `q`, the pointer is followed once, as for a field of its own (section 5.12). `p.entity` is a field as any other, read, written and addressed.
+
+**Ambiguity.** Two fields of the name at the first depth that has one are `'x' is ambiguous: 'a.x' or 'b.x'`, at the name, the first two found in the fields' order, each written as its path from the struct, anonymous members left out. Unlike a name reachable twice through anonymous members' braces, refused where declared (section 3.19), it is said only where the name is used: a struct may hold two `using` fields whose structs share a name, as long as nothing reaches it through them. The path written says which, `t.a.x`.
+
+```rig error
+A :: struct { x: int; }
+B :: struct { x: float; }
+Two :: struct { using a: A; using b: B; }
+
+main :: () {
+    t: Two;
+    t.a.x = 1;
+    t.x = 2;
+}
+```
+
+```text
+example.rig:8:7: error: 'x' is ambiguous: 'a.x' or 'b.x'
+        t.x = 2;
+          ^
+```
+
+**Pointers.** Through a `using` field that is a pointer, its struct's fields are reached as fields of what it points at: with `Sprite :: struct { using transform: *Transform; frame: int; }`, `s.x` is `s.transform.x`. So it is a place even when `s` isn't, a value parameter included (section 7.2); two sprites pointing at one `Transform` share its fields; and the pointer is checked not to be null at the name written, `x`, where a null one stops the program with `runtime error: null pointer dereference` (section 8.4). Each pointer on the way is followed, and checked, in turn.
+
+```rig
+#import "Basic";
+
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+
+nudge :: (s: Sprite) { s.x += 1; }
+
+main :: () {
+    t := Transform.{1, 2};
+    a := Sprite.{*t, 0};
+    b := Sprite.{*t, 1};
+    a.x = 3;
+    nudge(b);
+    print("{} {} {}\n", t.x, a.x, b.y);
+}
+```
+
+```text
+4.0 4.0 2.0
+```
+
+**Cycles.** A struct may point at itself through a `using` field, `Node :: struct { value: int; using parent: *Node; }`, and two structs at each other. The search enters no struct it searched at an earlier depth, where the name wasn't, nor one struct more than twice at one depth, two being enough to say a name is ambiguous; so it ends, and `n.nope` is `'Node' has no field 'nope'`.
+
+**Literals.** A literal names its struct's own fields, its anonymous members' included (section 5.17), never one reached through a `using` field: the `using` field is given its struct's value as any field is, by name, `Player.{entity = .{id = 1}, health = 3}`, or in order, `Player.{"ann", .{1, .{1, 2}}, 3}`. A name reached through it says which field to name:
+
+```rig error
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+main :: () {
+    p := Player.{position = .{1, 2}};
+}
+```
+
+```text
+example.rig:6:18: error: a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}
+        p := Player.{position = .{1, 2}};
+                     ^
+```
+
+**Constants, type information and printing.** A field of constant data reached through a `using` field folds as any field of it does (section 5.9): for `K :: Player.{entity = .{id = 5}};`, `K.id` is the constant 5. A `using` field is described as any field is (section 3.16), a member named `entity` of type `Entity`, and Basic's `print` writes it as one: `{name = "ann", entity = {id = 7, position = {x = 1.5, y = 0.0}}, health = 3}`.
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
@@ -1555,12 +1655,12 @@ A procedure's name is called (section 5.10), and used anywhere else it is a proc
 
 ```ebnf
 StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl  = identifier ":" Type ";"
+FieldDecl  = [ "using" ] identifier ":" Type ";"
            | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 TaggedDecl = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 ```
 
-A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
+A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19), and `using` before a field's name makes the fields of the struct it holds, or points at, reached as the outer one's own too (section 3.21). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
 
 A struct's name, or a union's, is a type, not a value: used as a value it is `'Vec2' is a type, not a value`.
 
@@ -1955,6 +2055,8 @@ An element of an array is a place when the array is one, so an array constant's 
 
 **Members of unions, and fields of anonymous members.** A union's members are reached as a struct's fields are, by the same rules; one the union does not have is `'Value' has no member 'z'` (section 3.19). The fields of a struct's or a union's anonymous members are its own (section 3.19): `e.key` is looked for among `e`'s own fields, then among its anonymous members' fields, depth by depth, and is the field it finds, through every anonymous member on the way. Through a pointer, `p.key`, the pointer is followed once, and checked not to be null at `key`.
 
+**Fields reached through `using`.** When `e`'s struct has no field `x` of its own, nor its anonymous members, `x` is looked for in the structs its `using` fields hold or point at, depth by depth, and is the field found there, through every field on the way (section 3.21): `p.position` is `p.entity.position`, and through `using transform: *Transform`, `s.x` is `s.transform.x`, the pointer followed and checked not to be null at `x`. Two at the first depth that has one are `'x' is ambiguous: 'a.x' or 'b.x'`, at the name.
+
 **Counts and data.** Arrays, views, resizable arrays and strings have the members `.count` and `.data`:
 
 | `e` | `e.count` | `e.data` |
@@ -2016,7 +2118,7 @@ Field         = [ identifier "=" ] Expression .
 ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-**Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19).
+**Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19). A literal names its struct's own fields only, never one reached through a `using` field, which is given its struct's value as any field is, `Player.{entity = .{id = 1}}`: `Player.{position = p}` is `a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}` (section 3.21).
 
 **Union literals.** A union's literal gives one member, by name, `Value.{f = 1.5}`, and the rest of its bytes are zero; `Value.{}` is all zero. Values in order are `a union's literal names its one member, as in Value.{f = 1.5}`, a second member is `a union's literal gives one member; 'i' is given already`, and a member given twice is `member 'i' is given twice` (section 3.19).
 
@@ -3782,6 +3884,10 @@ The sections defining each construct give its messages. Some of those met most o
 | `#through can't end a tagged union's case: the next case's 'it' is another member` | 3.20, 6.14 |
 | `can't assign to 'it': it's a member of a switched value that isn't a place` | 3.20, 6.4 |
 | `'==' compares a tagged union only with a member's name, as in s == .empty` | 3.20, 5.6 |
+| `'using' needs a struct or a pointer to one, not 'int'` | 3.21 |
+| `'using' can't reach into a tagged union, 'Shape': its members are read in a switch` | 3.21 |
+| `'x' is ambiguous: 'a.x' or 'b.x'` | 3.21, 5.12 |
+| `a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}` | 3.21, 5.17 |
 
 ### 9.4 Limits
 
@@ -4179,7 +4285,7 @@ Params        = Param { "," Param } [ "," ".." ] .
 Param         = identifier ":" [ ".." ] Type [ "=" Expression ] .
 
 StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl     = identifier ":" Type ";"
+FieldDecl     = [ "using" ] identifier ":" Type ";"
               | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 TaggedDecl    = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 
@@ -4284,7 +4390,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `enum` | enum type | 3.18 |
 | `enum_flags` | enum type of flags | 3.18 |
 | `union` | union type; an anonymous member, `union { ... };`; with `#tagged`, tagged union type | 3.19, 3.20, 4.5 |
-| `using` | reserved | 2.6 |
+| `using` | a field whose struct's fields are reached as its own struct's | 3.21, 2.6 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional; with `x == {`, a switch | 6.5, 6.14 |

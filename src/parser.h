@@ -19,7 +19,8 @@
 //               | run                                               code run while compiling
 //               | if_directive                                      conditional: its blocks hold top_level*
 //   members     = '{' {member} '}'
-//   member      = IDENT ':' type ';'
+//   member      = ['using'] IDENT ':' type ';'                     'using': its struct's fields reached as
+//                                                                  this one's (spec 3.21)
 //               | ('struct' | 'union') members ';'                 an anonymous member
 //   run         = '#run' block | '#run' expression ';'
 //   if_directive = '#if' expression block ['else' (block | if_directive)]
