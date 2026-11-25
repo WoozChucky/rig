@@ -382,9 +382,9 @@ static Ast *find_name(Checker *c, String name) {
 // literal's are found by find_name, which never looks there: a field is no
 // type. A name the walk finds twice at one depth (across the parameters or
 // in one) is still theirs, and check_using_name says it's ambiguous; so is
-// one whose walk meets a circle, which the walk says
-// (check_member_under_way): root isn't set, and check_using_name leaves
-// the name undeclared.
+// one whose walk meets a circle, or a layout found wrong, said already
+// (check_layout, check_member_under_way): root isn't set, and
+// check_using_name leaves the name undeclared.
 Ast *check_lookup(Checker *c, String name, bool *through_using) {
     if (through_using) *through_using = false;
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {

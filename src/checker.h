@@ -1185,7 +1185,12 @@
 //   name. Never checked where declared, unlike a name reachable twice
 //   through anonymous members. The walk enters no struct it searched at
 //   an earlier depth, and one struct through two paths at most at one
-//   depth, so it ends on cycles and stays small.
+//   depth, so it ends on cycles and stays small. At a depth it lays out
+//   only the structs whose own fields may hold x, by their declarations,
+//   and the others it reaches there only once the depth has no x, to go
+//   past them: a layout x doesn't need may be a circle (a #run during the
+//   layouts). One that fails, said, ends the walk, and nothing more is
+//   said of x, as of e.y.x when y's struct has no layout.
 // - A literal names its struct's own fields (type_find_member): a name
 //   reached through a using field is "a literal can't name 'position',
 //   reached through 'entity'; name 'entity', as in Player.{entity =
@@ -1209,14 +1214,13 @@
 //   top level (check_lookup): locals, a loop's or a case's it and the
 //   parameters hide such a field, which hides globals, constants,
 //   procedures, enums and structs, named as values; written types and
-//   literals' types are never looked up there. Two at one depth are "'x' is
-//   ambiguous: 'a.x' or 'b.x'". A value parameter's
-//   fields are read-only ("can't assign to 'id': it's a field of the
-//   parameter 'e'", and the address's), through a pointer they're places;
-//   in a default value they're refused ("a default value can't use 'id', a
-//   field of the parameter 'e'"), and in a #run in the body ("#run can't
-//   use 'id': it's a field of the parameter 'e', which doesn't exist while
-//   compiling").
+//   literals' types are never looked up there. Two at one depth are "'x'
+//   is ambiguous: 'a.x' or 'b.x'". A value parameter's fields are
+//   read-only ("can't assign to 'id': it's a field of the parameter 'e'",
+//   and the address's), through a pointer they're places; in a default
+//   value they're refused ("a default value can't use 'id', a field of the
+//   parameter 'e'"), and in a #run in the body ("#run can't use 'id': it's
+//   a field of the parameter 'e', which doesn't exist while compiling").
 // - What lowering may rely on: no Ast_Member reaches through a using
 //   field. The checker built the chain, as for anonymous members, a member
 //   for each field on the way, named as the field: p.position is

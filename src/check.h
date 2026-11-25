@@ -311,26 +311,28 @@ const char *loop_variable_kind(Ast_Var *var);
 // no type.
 s32 tagged_member_named(Checker *c, Type *t, Ast *e);
 
-// Where member `name` of struct t is (spec 3.21): t's own fields, its
-// anonymous members' included (type_find_member), then the fields of the
-// structs its using fields hold or point at, depth by depth. Returns how
-// many paths the first depth that has one holds, 0, 1 or 2 (two or more:
-// ambiguous); *path gets the first's field indices from t down, *other the
-// second's (left empty otherwise); -1 when a depth without the name
-// searches a struct still under way that holds it in an anonymous member
-// not in its fields yet: a circle, said (check_member_under_way). Lays out
-// each struct it enters, and makes each pointer using field's type it
-// follows, only once the walk reaches that depth.
+// Where member `name` of struct t, laid out, is (spec 3.21): t's own
+// fields in order, an anonymous member's searched in its place, then the
+// fields of the structs its using fields hold or point at, depth by depth.
+// Returns how many paths the first depth that has one holds, 0, 1 or 2 (two
+// or more: ambiguous); *path gets the first's field indices from t down,
+// *other the second's (left empty otherwise); -1 when a struct it needs has
+// no layout (a circle, or another mistake, said), or when a depth without
+// the name searches a struct still under way that holds it in an anonymous
+// member not in its fields yet: a circle, said (check_member_under_way).
+// Makes the type of each pointer using field queued for a depth once the
+// walk reaches that depth; there it lays out the structs whose own fields
+// may hold the name, and the others it reaches only once the depth has no
+// match, to go on past them.
 s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other);
 
 // Where `name` is among the fields the using parameters reach
 // (Checker.using_params, spec 3.21): check_find_member's walk, started at
 // every using parameter's struct (a pointer parameter's pointee) together,
-// at depth 0, in parameter order. Returns what check_find_member does;
-// *path gets the first path's field indices from its parameter's struct
-// down, and *root that parameter's index in using_params, *other and
-// *other_root the second's. A parameter whose struct's layout failed is
-// passed over.
+// at depth 0, in parameter order, each laid out as the walk needs it.
+// Returns what check_find_member does; *path gets the first path's field
+// indices from its parameter's struct down, and *root that parameter's
+// index in using_params, *other and *other_root the second's.
 s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array<s32> *other, s32 *other_root);
 
 // How a message writes the code from `from` up to `to`, as the program

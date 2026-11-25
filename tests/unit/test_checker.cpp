@@ -11562,17 +11562,39 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
                                                         no_name[i]));
         CHECK_STR(check_source(&a, src), "");
     }
+    // A name found at one depth doesn't lay out a struct searched there
+    // that only reaches it deeper: C, past which p.x and a bare x are q.x
+    // at depth 1 and p.x at depth 0, isn't laid out to rule out a second.
+    const char *shallow[] = {
+        "P :: struct { using q: *Q; using c: *C; }\n"
+        "Q :: struct { x: int; }\n"
+        "f :: (p: *P) -> int { if p == null { return 2; } return p.x; }\n",
+        "P :: struct { x: int; }\n"
+        "f :: (using p: *P, using c: *C) -> int { if p == null { return 2; } return x; }\n",
+    };
+    for (s64 i = 0; i < 2; i++) {
+        const char *src = string_cstr(&a, string_printf(&a,
+                                                        "A :: struct { arr: [#run f(null%s)]int; }\n"
+                                                        "%s"
+                                                        "C :: struct { a: A; using d: *D; }\n"
+                                                        "D :: struct { x: int; }\n"
+                                                        "main :: () { v: A; }\n",
+                                                        i ? ", null" : "", shallow[i]));
+        CHECK_STR(check_source(&a, src), "");
+    }
     // One whose using field reaches it is laid out, and is the circle it
-    // closes: C, in it, has no fields to search, so g is found nowhere.
-    CHECK_STR(check_source(&a,
-                           "A :: struct { arr: [#run f(null)]int; }\n"
-                           "B :: struct { using c: *C; }\n"
-                           "C :: struct { a: A; using d: *D; }\n"
-                           "D :: struct { g: int; }\n"
-                           "f :: (using b: *B) -> int { return g; }\n"
-                           "main :: () { x: A; }\n"),
-              "1:1: 'A' is defined in terms of itself\n"
-              "5:36: unknown identifier 'g'\n");
+    // closes: C, in it, has no fields to search, so the walk ends there,
+    // the circle alone said, as b.c.d.g says it.
+    const char *reached = "A :: struct { arr: [#run f(null)]int; }\n"
+                          "B :: struct { using c: *C; }\n"
+                          "C :: struct { a: A; using d: *D; }\n"
+                          "D :: struct { g: int; }\n"
+                          "f :: %s -> int { return %s; }\n"
+                          "main :: () { x: A; }\n";
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, "(using b: *B)", "g"))),
+              "1:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, "(b: *B)", "b.g"))),
+              "1:1: 'A' is defined in terms of itself\n");
     arena_free(&a);
 }
 
