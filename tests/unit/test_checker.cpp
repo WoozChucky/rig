@@ -11792,9 +11792,10 @@ TEST(literals_name_a_structs_own_fields) {
 
 TEST(pointers_convert_through_using_fields) {
     // A *S converts to the *B that S holds through value using fields, at
-    // any depth, the shallowest deciding; never through a pointer field, by
-    // value, back, or inside another type. Two at the shallowest depth are
-    // ambiguous, said once at the value, implicitly or in a cast.
+    // any depth, anonymous members on the way included, the shallowest
+    // deciding; never through a pointer field, by value, back, or inside
+    // another type. Two at the shallowest depth are ambiguous, said once at
+    // the value, implicitly or in a cast.
     Arena a = arena_make();
     Checked c = check_src(&a, USING_PLAYER
                           "Base :: struct { tag: int; }\n"
@@ -11805,13 +11806,15 @@ TEST(pointers_convert_through_using_fields) {
                           "Twice :: struct { using a: Entity; using b: Entity; }\n"
                           "Near :: struct { using e: Entity; using m: M; }\n"
                           "M :: struct { using e2: Entity; }\n"
+                          "Inside :: struct { k: int; struct { pad: int; using e: Entity; }; }\n"
                           "main :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Type *vec2 = struct_named(&c, "Vec2"), *entity = struct_named(&c, "Entity"), *player = struct_named(&c, "Player");
     Type *base = struct_named(&c, "Base"), *mid = struct_named(&c, "Mid"), *deep = struct_named(&c, "Deep");
     Type *transform = struct_named(&c, "Transform"), *sprite = struct_named(&c, "Sprite");
-    Type *twice = struct_named(&c, "Twice"), *nearby = struct_named(&c, "Near");
+    Type *twice = struct_named(&c, "Twice"), *nearby = struct_named(&c, "Near"), *inside = struct_named(&c, "Inside");
     CHECK(type_converts(type_pointer_to(player), type_pointer_to(entity)));
+    CHECK(type_converts(type_pointer_to(inside), type_pointer_to(entity)));
     CHECK(type_converts(type_pointer_to(deep), type_pointer_to(base)));
     CHECK(type_converts(type_pointer_to(deep), type_pointer_to(mid)));
     CHECK(type_converts(type_pointer_to(nearby), type_pointer_to(entity)));
@@ -11839,29 +11842,49 @@ TEST(pointers_convert_through_using_fields) {
     // Near's own e, at depth 0, decides over m.e2 at depth 1.
     CHECK_EQ(type_find_base(nearby, entity, &path, &other), 1);
     CHECK_EQ(path.count, 1);
+    // Through an anonymous member, its index on the path and its offset,
+    // 8, added to its e's, 8.
+    CHECK_EQ(type_find_base(inside, entity, &path, &other), 1);
+    CHECK_EQ(path.count, 2);
+    if (path.count == 2) {
+        CHECK_EQ(path[0], 1);
+        CHECK_EQ(path[1], 1);
+    }
+    CHECK_EQ(type_path_offset(inside, path), 16);
     CHECK_EQ(type_find_base(sprite, transform, &path, &other), 0);
     CHECK_EQ(type_find_base(player, vec2, &path, &other), 0);
     array_free(&path);
     array_free(&other);
     token_list_free(c.list);
     // The ambiguity, at the value, implicit and cast, said once each; the
-    // paths written from the struct, as a field's are.
+    // paths written from the struct, as a field's are, an anonymous member
+    // on the way left out.
     CHECK_STR(check_source(&a, USING_PLAYER
                            "Twice :: struct { using a: Entity; using b: Entity; }\n"
                            "Both :: struct { using p: Player; using q: Player; }\n"
+                           "Split :: struct { struct { using a: Entity; }; using b: Entity; }\n"
+                           "Either :: struct { k: int; union { using a: Entity; using b: Entity; }; }\n"
                            "main :: () {\n"
                            "    t: Twice;\n"
                            "    e : *Entity = *t;\n"
                            "    f := cast(*Entity) *t;\n"
                            "    b: Both;\n"
                            "    g : *Entity = *b;\n"
+                           "    s: Split;\n"
+                           "    h : *Entity = *s;\n"
+                           "    u: Either;\n"
+                           "    i : *Entity = *u;\n"
                            "}\n"),
-              "8:19: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "10:19: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
               "the one meant\n"
-              "9:24: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "11:24: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
               "the one meant\n"
-              "11:19: '*Both' converts to '*Entity' two ways, through 'p.entity' and through 'q.entity'; take the "
-              "address of the one meant\n");
+              "13:19: '*Both' converts to '*Entity' two ways, through 'p.entity' and through 'q.entity'; take the "
+              "address of the one meant\n"
+              "15:19: '*Split' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "17:19: '*Either' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n");
     // A comparison's operand says it at that operand, either side, and a
     // multi-assign's result at its target, as "doesn't convert" is said.
     CHECK_STR(check_source(&a,
@@ -11882,5 +11905,72 @@ TEST(pointers_convert_through_using_fields) {
               "the one meant\n"
               "10:5: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
               "the one meant\n");
+    arena_free(&a);
+}
+
+TEST(base_walks_end_on_doubling_chains) {
+    // A struct searched at an earlier depth isn't searched again, and one
+    // depth searches a struct through two paths at most: thirty levels of
+    // two value using fields to the next find the Base at the bottom two
+    // ways, and a struct held nowhere not at all, at once (2^30 paths
+    // otherwise).
+    Arena a = arena_make();
+    String text = string_printf(&a, "Base :: struct { tag: u8; }\n"
+                                    "Other :: struct { o: u8; }\n");
+    for (s64 i = 0; i < 30; i++) {
+        text = string_printf(&a, STR_FMT "L%lld :: struct { using a: L%lld; using b: L%lld; }\n", STR_ARG(text),
+                             (long long)i, (long long)(i + 1), (long long)(i + 1));
+    }
+    text = string_printf(&a, STR_FMT "L30 :: struct { using base: Base; }\nmain :: () { }\n", STR_ARG(text));
+    Checked c = check_src(&a, string_cstr(&a, text));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *top = struct_named(&c, "L0");
+    Array<s32> path = {}, other = {};
+    CHECK_EQ(type_find_base(top, struct_named(&c, "Base"), &path, &other), 2);
+    CHECK_EQ(path.count, 31);
+    CHECK_EQ(other.count, 31);
+    CHECK_EQ(type_find_base(top, struct_named(&c, "Other"), &path, &other), 0);
+    array_free(&path);
+    array_free(&other);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_conversion_lays_out_a_struct_with_using_fields_first) {
+    // A body a #run reaches while the structs are being laid out may meet a
+    // *Player before Player is laid out: Arr's count runs f, declared before
+    // Player. The conversion lays it out first, to find its entity field,
+    // in a declaration, a comparison and a multi-assign's result.
+    const char *bodies[] = {
+        "f :: (p: *Player) -> int { e : *Entity = p; return cast(int) e; }\n",
+        "f :: (p: *Player) -> int { e: *Entity; if p == e { return 1; } return 0; }\n",
+        "f :: (p: *Player) -> int { e: *Entity; n: int; e, n = pair(p); return n; }\n",
+    };
+    Arena a = arena_make();
+    for (s64 i = 0; i < 3; i++) {
+        CHECK_STR(check_source(&a, joined(&a, bodies[i],
+                                          "pair :: (p: *Player) -> *Player, int { return p, 1; }\n"
+                                          "size :: () -> int { return f(null) + 1; }\n"
+                                          "Arr :: struct { data: [N]int; }\n"
+                                          "N :: #run size();\n"
+                                          "Entity :: struct { id: int; }\n"
+                                          "Player :: struct { name: string; using entity: Entity; health: int; }\n"
+                                          "main :: () { }\n")),
+                  "");
+    }
+    // A struct with no using field never converts to another struct's
+    // pointer, so it isn't laid out for one: B, laid out, would hold C,
+    // whose count runs g, a circle that isn't there.
+    const char *uses[] = {"release(b);", "v : *void = b;", "x := cast(*X) b;", "y := cast(*int) b;"};
+    for (s64 i = 0; i < 4; i++) {
+        CHECK_STR(check_source(&a, joined(&a, "g :: () -> int { b: *B = null; ", uses[i],
+                                          " return 1; }\n"
+                                          "C :: struct { x: [#run g()]int; }\n"
+                                          "B :: struct { c: C; }\n"
+                                          "X :: struct { y: int; }\n"
+                                          "release :: (p: *void) { }\n"
+                                          "main :: () { c: C; }\n")),
+                  "");
+    }
     arena_free(&a);
 }

@@ -7690,7 +7690,8 @@ TEST(a_using_conversion_moves_the_pointer_and_keeps_null) {
     // A *Player becomes a *Entity at its entity field, 16 bytes in, a null
     // one staying null: a select, no branch, between null and the moved
     // pointer. A cast to *Entity is the same conversion. At offset 0 the
-    // pointer is the same, and a cast through *void is never moved.
+    // pointer is the same; a cast back, *Entity to *Player, keeps the
+    // address, and so does one through *void, which reinterprets it.
     Arena a = arena_make();
     String ir = ir_print(&a, lower_source(&a,
                                           "Vec2 :: struct { x: float; y: float; }\n"
@@ -7702,7 +7703,8 @@ TEST(a_using_conversion_moves_the_pointer_and_keeps_null) {
                                           "f :: (p: *Player) -> *Entity { return p; }\n"
                                           "g :: (d: *Deep) -> *Base { return d; }\n"
                                           "h :: (p: *Player) -> *Entity { return cast(*Entity) p; }\n"
-                                          "k :: (p: *Player) -> *Player { return cast(*Player) cast(*void) p; }\n"
+                                          "k :: (p: *Player) -> *Entity { return cast(*Entity) cast(*void) p; }\n"
+                                          "b :: (e: *Entity) -> *Player { return cast(*Player) e; }\n"
                                           "main :: () { }\n"));
     CHECK_STR(proc_ir(ir, "f"),
               "proc @f(ptr) -> ptr {\n"
@@ -7722,9 +7724,10 @@ TEST(a_using_conversion_moves_the_pointer_and_keeps_null) {
     CHECK(contains(h, "= ptradd "));
     CHECK(contains(h, "= select ptr "));
     CHECK(contains(h, "= cmp eq ptr "));
-    String g = proc_ir(ir, "g"), k = proc_ir(ir, "k");
-    CHECK(g.count > 0 && k.count > 0);
+    String g = proc_ir(ir, "g"), k = proc_ir(ir, "k"), b = proc_ir(ir, "b");
+    CHECK(g.count > 0 && k.count > 0 && b.count > 0);
     CHECK(!contains(g, "ptradd") && !contains(g, "select"));
     CHECK(!contains(k, "ptradd") && !contains(k, "select"));
+    CHECK(!contains(b, "ptradd") && !contains(b, "select"));
     arena_free(&a);
 }

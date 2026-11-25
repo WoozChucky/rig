@@ -789,10 +789,26 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
 
 static String member_path_text(Checker *c, Type *t, Array<s32> path, String root);
 
+// Whether struct s's braces declare a using field, an anonymous member's
+// braces included: only then can a pointer to it convert to a pointer to
+// another struct (spec 3.21).
+static bool declares_using(Ast_Struct *s) {
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Field *field = s->fields[i];
+        if (field->is_using || (field->anonymous && declares_using(field->anonymous))) return true;
+    }
+    return false;
+}
+
+// The struct is laid out only when the conversion may go through its using
+// fields: one into a *void, or from a struct declaring none, needs nothing
+// of it, and laying it out in a body a #run reaches while the structs are
+// being laid out could close a circle that isn't there.
 bool check_base_conversion(Checker *c, Type *from, Type *to, Position at) {
     if (!from || !to || !type_is_pointer(from) || !type_is_pointer(to)) return true;
     Type *t = from->pointee;
-    if (t->kind != TYPE_STRUCT || t == to->pointee || !check_layout(c, t)) return true;
+    if (t->kind != TYPE_STRUCT || to->pointee->kind != TYPE_STRUCT || t == to->pointee) return true;
+    if ((t->decl && !declares_using(t->decl)) || !check_layout(c, t)) return true;
     Array<s32> path = {}, other = {};
     bool ambiguous = type_find_base(t, to->pointee, &path, &other) == 2;
     if (ambiguous) {

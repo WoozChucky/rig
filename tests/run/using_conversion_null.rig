@@ -1,0 +1,17 @@
+// A null *Player converted to a *Entity through its using field (issue
+// #225, spec 3.21) stays null, not the address 16: a field read through it
+// stops the program with a runtime error at the field's name, as a field
+// of a null pointer does (spec 8.4). Compiled and interpreted.
+#import "Basic";
+
+Entity :: struct { id: int; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+describe :: (e: *Entity) -> int { return e.id; }
+
+main :: () {
+    print("before\n");
+    none : *Player = null;
+    print("{}\n", describe(none));
+    print("after\n");
+}

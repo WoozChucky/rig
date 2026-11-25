@@ -3,10 +3,12 @@
 // its entity field, 16 bytes in, wherever it goes into one: a declaration,
 // an assignment, an argument, a variadic one, a default value, a return
 // (one of several too), a literal's field, an array's element, a
-// multi-assign's target, a comparison's operand and a cast. Each is read back through the field's
-// id, its offset printed, and a write through one seen in the Player. A
-// *Deep is a *Base at offset 0, two using fields deep; a null *Player
-// stays null.
+// multi-assign's target, a comparison's operand and a cast. Each is read
+// back through the field's id, the offset printed where the pointer comes
+// back to main, and a write through one seen in the Player. A *Deep is a
+// *Base at offset 0, two using fields deep, and an *Inside a *Entity 16
+// bytes in, through its anonymous member; a cast back to *Player, or one
+// through *void, keeps the address; a null *Player stays null.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -15,6 +17,7 @@ Player :: struct { name: string; using entity: Entity; health: int; }
 Base :: struct { tag: int; }
 Mid :: struct { using base: Base; m: int; }
 Deep :: struct { using mid: Mid; tag2: int; }
+Inside :: struct { k: int; struct { pad: int; using e: Entity; }; }
 Holder :: struct { e: *Entity; }
 
 first: Player;
@@ -50,6 +53,11 @@ checks :: () {
     d.tag = 4;
     pb : *Base = *d;
     print("{} {}\n", cast(int) pb - cast(int) *d, pb.tag);
+    i: Inside;
+    i.id = 5;
+    ie : *Entity = *i;
+    print("{} {}\n", cast(int) ie - cast(int) *i, ie.id);
+    print("{} {}\n", cast(int) cast(*Player) pe - cast(int) pe, cast(int) cast(*Entity) cast(*void) *p - cast(int) *p);
     none : *Player = null;
     ne : *Entity = none;
     print("{} {} {}\n", ne == null, cast(*Entity) none == null, ne == none);

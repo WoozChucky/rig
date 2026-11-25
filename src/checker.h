@@ -1195,10 +1195,10 @@
 //   (type_find_base, type_converts): the shallowest depth that has one
 //   decides, two there being "'*Twice' converts to '*Entity' two ways,
 //   through 'a' and through 'b'; take the address of the one meant", at
-//   the value (check_base_conversion). cast(*B) is the same conversion;
-//   any other pointer cast keeps the address. Nothing else converts
-//   through a using field: not by value, not back, not inside another
-//   type.
+//   the value, at the target for a multi-assign's result
+//   (check_base_conversion). cast(*B) is the same conversion; any other
+//   pointer cast keeps the address. Nothing else converts through a using
+//   field: not by value, not back, not inside another type.
 // - What lowering may rely on: no Ast_Member reaches through a using
 //   field. The checker built the chain, as for anonymous members, a member
 //   for each field on the way, named as the field: p.position is

@@ -248,11 +248,12 @@ bool type_converts(Type *from, Type *to);
 // Gets a conversion of pointer `from` to pointer `to` through using fields
 // (spec 3.21) ready for type_converts, which is pure: from's struct laid
 // out (check_layout), which a body a #run reaches during the layouts may
-// find still to do. False after saying, at `at`, that the struct holds
-// to's two ways at the shallowest depth that has one ("'*Twice' converts
-// to '*Entity' two ways, through 'a' and through 'b'; take the address of
-// the one meant", each path written from the struct); true otherwise,
-// whether it converts or not, and for any other pair of types.
+// find still to do, when to's is a struct and from's declares a using
+// field; never otherwise. False after saying, at `at`, that the struct
+// holds to's two ways at the shallowest depth that has one ("'*Twice'
+// converts to '*Entity' two ways, through 'a' and through 'b'; take the
+// address of the one meant", each path written from the struct); true
+// otherwise, whether it converts or not, and for any other pair of types.
 bool check_base_conversion(Checker *c, Type *from, Type *to, Position at);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a

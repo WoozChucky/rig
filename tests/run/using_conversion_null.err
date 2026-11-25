@@ -1,0 +1,1 @@
+tests/run/using_conversion_null.rig:10:44: runtime error: null pointer dereference
