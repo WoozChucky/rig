@@ -1,8 +1,8 @@
 l+t
 l+s
 l+l
-bp `using.rig:23`
-bp `using.rig:30`
+bp `using.rig:26`
+bp `using.rig:33`
 g
 ?? p
 ?? p.entity.position.x
@@ -10,4 +10,5 @@ g
 ?? s.transform->x
 g
 ?? e->position
+?? position
 q

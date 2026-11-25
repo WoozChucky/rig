@@ -1,4 +1,4 @@
-30:     putchar(10);
+33:     putchar(10);
 struct Player
 +0x000 name             : string
 +0x010 entity           : Entity
@@ -6,7 +6,8 @@ struct Player
 float 1
 Type does not have given member error at 'position'
 float 4
-23:     putchar(10);
+26:     putchar(10);
 struct Vec2
 +0x000 x                : 2
 +0x004 y                : 2
+Couldn't resolve error at 'position'
