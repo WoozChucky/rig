@@ -1,0 +1,60 @@
+// using fields that are pointers (issue #225, spec 3.21), compiled and
+// interpreted: a field reached through one is a field through the pointer,
+// read and written where it points, so two sprites sharing one Transform
+// share its fields; it's a place even through a value parameter, and its
+// address can be passed on; two structs pointing at each other each reach
+// the other's fields; and a chain of two using pointers is followed hop by
+// hop.
+#import "Basic";
+
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+Up :: struct { level: int; }
+Node :: struct { value: int; using up: *Up; }
+A :: struct { a_value: int; using b: *B; }
+B :: struct { b_value: int; using a: *A; }
+Holder :: struct { using t: *Transform; }
+Item :: struct { using h: *Holder; }
+
+nudge :: (s: Sprite) {
+    s.x += 1;
+}
+
+set :: (f: *float, v: float) {
+    f.* = v;
+}
+
+main :: () {
+    t: Transform;
+    a := Sprite.{*t, 1};
+    b := Sprite.{*t, 2};
+    a.x = 3;
+    print("{} {}\n", b.x, t.x);
+    // The parameter is a copy, but its pointer points at t.
+    nudge(b);
+    print("{} {}\n", a.x, t.x);
+    set(*a.y, 5);
+    print("{} {}\n", b.y, t.y);
+
+    up := Up.{4};
+    n := Node.{1, *up};
+    n.level += 1;
+    print("{} {} {}\n", n.value, n.level, up.level);
+
+    // x.b_value is x.b.b_value; x.b.a_value is x.b.a.a_value, x's own.
+    x: A;
+    y: B;
+    x.b = *y;
+    y.a = *x;
+    x.a_value = 2;
+    x.b_value = 6;
+    print("{} {} {}\n", x.b_value, x.b.a_value, y.b_value);
+
+    // item.x is item.h.t.x: through the Holder, to the Transform.
+    u: Transform;
+    holder := Holder.{*u};
+    item := Item.{*holder};
+    item.x = 7;
+    item.y = item.x + 1;
+    print("{} {} {}\n", u.x, u.y, item.y);
+}

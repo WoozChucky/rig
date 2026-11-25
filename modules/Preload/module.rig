@@ -96,9 +96,12 @@ HEAP_ALLOCATOR :: Allocator.{heap_allocator_proc, null};
 // writing one is a memory error no check catches (spec 8.6).
 //
 // Every description starts with a Type_Info, whose tag says its kind. Each
-// kind's struct holds that Type_Info as its first field, info (Rig has no
-// using), so a *Type_Info whose tag says the kind is cast to the kind's
-// struct: cast(*Type_Info_Struct) t when t.tag == .STRUCT.
+// kind's struct takes that Type_Info in as its first field, `using info:
+// Type_Info;` (spec 3.21), so a kind's tag, size and alignment are read as
+// its own, t.size, and through info still, t.info.size. A *Type_Info whose
+// tag says the kind is cast to the kind's struct, cast(*Type_Info_Struct) t
+// when t.tag == .STRUCT, and a pointer to a kind's struct converts to a
+// *Type_Info implicitly, the same address.
 
 // The kinds, a Type_Info's tag, numbered as Jai's tags are: ENUM is Jai's
 // 11, the numbers between being kinds of Jai's that Rig doesn't have.
@@ -126,17 +129,17 @@ Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
 // .INTEGER: s8 to u64, and int. int and s64 are two types with two
 // descriptions, the same in all but their addresses.
-Type_Info_Integer :: struct { info: Type_Info; signed: bool; }
+Type_Info_Integer :: struct { using info: Type_Info; signed: bool; }
 
 // .POINTER: *T, and the description of the T it points at (void's for a
 // *void).
-Type_Info_Pointer :: struct { info: Type_Info; pointer_to: *Type_Info; }
+Type_Info_Pointer :: struct { using info: Type_Info; pointer_to: *Type_Info; }
 
 // .PROCEDURE: a procedure type, its parameters' types and its results', in
 // order, whether it's called as C calls (#c_call), and whether its last
 // parameter is a ..T, whose type is then described as []T.
 Type_Info_Procedure :: struct {
-    info: Type_Info;
+    using info: Type_Info;
     parameter_types: []*Type_Info;
     result_types: []*Type_Info;
     is_c_call: bool;
@@ -151,7 +154,7 @@ Type_Info_Procedure :: struct {
 // a member with an empty name, whose type is described as its own union or
 // struct, with an empty name too.
 Type_Info_Struct :: struct {
-    info: Type_Info;
+    using info: Type_Info;
     name: string;
     members: []Type_Info_Struct_Member;
     is_union: bool;
@@ -167,7 +170,7 @@ Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int;
 // array_kind tells apart (.FIXED, .VIEW or .RESIZABLE); the description of
 // T; and N, or -1 for a view or a resizable array. A string is no view
 // here: it has its own tag, .STRING.
-Type_Info_Array :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
+Type_Info_Array :: struct { using info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
 
 // A Type_Info_Array's array_kind, in Jai's order. Over int, so it is 8
 // bytes, as types.h writes it.
@@ -179,10 +182,9 @@ Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
 // with none: names[i] is a member's name and values[i] its value, as 64
 // bits, sign-extended from a signed integer type and zero-extended from an
 // unsigned one, so a u64 member above s64's largest reads negative. Its
-// Type_Info is its first field, info, as every kind's is until Rig has
-// using.
+// Type_Info is taken in as every kind's is, using info.
 Type_Info_Enum :: struct {
-    info: Type_Info;
+    using info: Type_Info;
     name: string;
     underlying: *Type_Info;
     is_flags: bool;
@@ -198,7 +200,7 @@ Type_Info_Enum :: struct {
 // and its offset, the same for all, past the tag. The member a value holds
 // is members[tag], when its tag, read at tag_offset, is one of theirs.
 Type_Info_Tagged_Union :: struct {
-    info: Type_Info;
+    using info: Type_Info;
     name: string;
     tag_type: *Type_Info;
     tag_offset: int;

@@ -1,0 +1,17 @@
+// A null pointer at the second of two using pointers (issue #225, spec
+// 3.21) stops the program with a runtime error at the name written, as
+// using_null's first does: item.x is item.h.t.x, h followed and checked,
+// then t, null, checked at x. Compiled and interpreted.
+#import "Basic";
+
+Transform :: struct { x: float; y: float; }
+Holder :: struct { using t: *Transform; }
+Item :: struct { using h: *Holder; }
+
+main :: () {
+    print("before\n");
+    holder: Holder;
+    item := Item.{*holder};
+    item.x = 1;
+    print("after\n");
+}

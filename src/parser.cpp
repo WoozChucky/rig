@@ -732,18 +732,20 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
 }
 
 // Whether a procedure's parameter list starts `ahead` tokens on: '(' ')',
-// '(' IDENT ':', '(' IDENT ':=' or '(' '..'. Any other '(' after '::'
-// begins a constant's value in parentheses (N :: (1 + 2);). A spread starts
-// with '..' too, but a constant's value can't be one (only a call's
-// argument can), so (..) is a signature, if a wrong one: parse_procedure
-// says what's wrong with it, rather than refusing a spread. No expression
-// has a ':=' either, so (n := 0) is a signature too, whose parameter
-// parse_param says is missing its type.
+// '(' IDENT ':', '(' IDENT ':=', '(' '..' or '(' 'using'. Any other '('
+// after '::' begins a constant's value in parentheses (N :: (1 + 2);). A
+// spread starts with '..' too, but a constant's value can't be one (only a
+// call's argument can), so (..) is a signature, if a wrong one:
+// parse_procedure says what's wrong with it, rather than refusing a
+// spread. No expression has a ':=' either, so (n := 0) is a signature too,
+// whose parameter parse_param says is missing its type; nor does one start
+// with 'using', which only a field or a parameter takes (spec 3.21), so
+// (using e: *Entity) is a signature.
 static bool procedure_follows(Parser *p, s64 ahead) {
     Token_Kind next = peek(p, ahead + 1)->kind;
     Token_Kind after = peek(p, ahead + 2)->kind;
     return peek(p, ahead)->kind == TOKEN_LPAREN &&
-           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT ||
+           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT || next == TOKEN_USING ||
             (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)));
 }
 
@@ -1364,7 +1366,9 @@ static Ast *parse_push_context(Parser *p) {
 // A 'case' or a '#through' only goes right inside a switch's braces, where
 // parse_switch reads it and the statements of a case stop before it
 // (parse_statements). Where a statement starts anywhere else, a block or
-// an #if inside a case included, it's refused (spec 6.14), at it.
+// an #if inside a case included, it's refused (spec 6.14), at it. So is a
+// 'using' that starts one, `using e;`: Rig's using is on a field or a
+// parameter (spec 3.21), never a statement of its own.
 static Ast *parse_statement(Parser *p) {
     Token *t = peek(p);
     if (t->kind == TOKEN_CASE) {
@@ -1374,6 +1378,10 @@ static Ast *parse_statement(Parser *p) {
     }
     if (is_directive(t, "through")) {
         diag_error(p->diag, t->pos, "#through can only end a switch's case, as in case 1; a(); #through;");
+        return nullptr;
+    }
+    if (t->kind == TOKEN_USING) {
+        diag_error(p->diag, t->pos, "'using' is for a field or a parameter, as in using entity: Entity;");
         return nullptr;
     }
     switch (t->kind) {
@@ -1795,7 +1803,11 @@ static Ast_Type *parse_whole_type(Parser *p) {
     return type;
 }
 
-// param = IDENT ':' ['..'] type ['=' expression]
+// param = ['using'] IDENT ':' ['..'] type ['=' expression]
+//
+// 'using' before the name marks it (Ast_Param.is_using): the body names
+// the fields of the struct it is, or points at, directly (spec 3.21),
+// which the checker says it may be.
 //
 // A '..' before the type makes the parameter a '..T' one (spec 7.2), which
 // takes the call's other arguments: its type as written is T, and the
@@ -1813,6 +1825,8 @@ static Ast_Type *parse_whole_type(Parser *p) {
 // left to its value, is "a parameter needs its type, as in n: int = 0", at
 // the ':=', for now.
 static Ast_Param *parse_param(Parser *p) {
+    bool is_using = peek(p)->kind == TOKEN_USING;
+    if (is_using) advance(p);
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     if (peek(p)->kind == TOKEN_COLON_EQUAL) {
@@ -1822,6 +1836,7 @@ static Ast_Param *parse_param(Parser *p) {
     if (!expect(p, TOKEN_COLON)) return nullptr;
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
+    param->is_using = is_using;
     if (peek(p)->kind == TOKEN_DOT_DOT) {
         param->is_variadic = true;
         param->dots = advance(p)->pos;
@@ -1890,18 +1905,19 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // Each element of the parameter list is a parameter or, last, C's bare '..'
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign
 // libc;). The loop looks at an element's first token to tell them apart: an
-// identifier begins a parameter, whatever its type turns out to be (a
-// procedure's type, when #foreign parameters get them, is still IDENT ':'
-// and a type), and '..' is the end. A '..T' parameter (`rest: ..int`, spec
-// 7.2) takes every argument after the fixed ones, the parameters before
-// it, so a procedure has one at most: a second is "a procedure takes at
-// most one '..' parameter", at its '..', and the declaration is given up.
-// Parameters may follow it (issue #197): each takes only its default value,
-// which the checker makes sure it has (`log :: (format: string, args:
-// ..Any, loc: Source_Code_Location = #caller_location)`). A parameter may
-// have a default value (`times: int = 2`, spec 7.2), read with it
-// (parse_param) before the body, so its levels aren't the body's; which
-// parameters may have one is the checker's to say.
+// identifier, or a using parameter's 'using' (spec 3.21), begins a
+// parameter, whatever its type turns out to be (a procedure's type, when
+// #foreign parameters get them, is still IDENT ':' and a type), and '..' is
+// the end. A '..T' parameter (`rest: ..int`, spec 7.2) takes every argument
+// after the fixed ones, the parameters before it, so a procedure has one at
+// most: a second is "a procedure takes at most one '..' parameter", at its
+// '..', and the declaration is given up. Parameters may follow it (issue
+// #197): each takes only its default value, which the checker makes sure
+// it has (`log :: (format: string, args: ..Any, loc: Source_Code_Location =
+// #caller_location)`). A parameter may have a default value
+// (`times: int = 2`, spec 7.2), read with it (parse_param) before the body,
+// so its levels aren't the body's; which parameters may have one is the
+// checker's to say.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;
@@ -2051,7 +2067,7 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 }
 
 // members = '{' {member} '}'
-// member  = IDENT ':' type ';' | ('struct' | 'union') members ';'
+// member  = ['using'] IDENT ':' type ';' | ('struct' | 'union') members ';'
 //
 // The braces of struct s, after its keyword: a struct's fields or a union's
 // members (parse_struct), or an anonymous member's (spec 3.19), read alike,
@@ -2088,6 +2104,12 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 // "anonymous members are nested too deeply (more than 1000 levels)", at the
 // keyword of the one too deep.
 //
+// 'using' before a named field's name marks it (Ast_Field.is_using): the
+// fields of the struct it holds, or points at, are reached as its own
+// struct's (spec 3.21), which the checker says it may hold. Only a named
+// field takes it: `using union {` is "expected a field's name, found
+// 'union'", at the keyword, as any other thing where the name goes.
+//
 // A tagged union's members (spec 3.20) are read as a union's, by its
 // messages, but named ones only: 'union' or 'struct' among them is "a
 // tagged union's member needs a name, as in circle: Circle;", at the
@@ -2096,7 +2118,10 @@ static Braced_Next braced_next(Parser *p, s64 *first_load, Array<Token *> *loads
 // be an anonymous member; declare it, as in Shape :: union #tagged { ...
 // }", at the directive (among a tagged union's members, the message above,
 // at the `union`; `struct #tagged {` is parse_struct's "#tagged is for a
-// union"). Either gives the declaration up.
+// union"). Either gives the declaration up. Nor is a tagged union's member
+// 'using': "a tagged union's member can't be 'using': its members are read
+// in a switch", at the 'using', since one would reach a member's fields
+// outside the switch that knows which member the union holds.
 //
 // An enum's members are in braces too (parse_enum), which end the same way:
 // braced_next is what both do before each field or member. False after an
@@ -2147,6 +2172,16 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
             array_add(&s->fields, field);
             continue;
         }
+        bool is_using = field_name->kind == TOKEN_USING;
+        if (is_using) {
+            if (s->is_tagged) {
+                diag_error(p->diag, field_name->pos,
+                           "a tagged union's member can't be 'using': its members are read in a switch");
+                return false;
+            }
+            advance(p);
+            field_name = peek(p);
+        }
         if (field_name->kind != TOKEN_IDENT) {
             error_expected(p, members ? "a member's name" : "a field's name");
             return false;
@@ -2155,6 +2190,7 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
         if (!expect(p, TOKEN_COLON)) return false;
         Ast_Field *field = ast_new<Ast_Field>(p->arena, AST_FIELD, field_name->pos);
         field->name = field_name->text;
+        field->is_using = is_using;
         field->type_expr = parse_whole_type(p);
         if (!field->type_expr || !expect(p, TOKEN_SEMICOLON)) return false;
         array_add(&s->fields, field);
@@ -2390,7 +2426,10 @@ static Ast *parse_run(Parser *p) {
 // defer is then a stray token, and f is read. A push_context is a
 // statement too, whose block runs with another context: at the top level
 // it's "push_context can only be in a body", at the keyword, with the same
-// recovery.
+// recovery. A 'using' that starts a declaration, `using Foo;`, is "'using'
+// is for a field or a parameter, as in using entity: Entity;" (spec 3.21:
+// Rig brings no module's or enum's names into scope with it), at the
+// keyword, with the same recovery too.
 static bool variable_follows(Parser *p, s64 open);
 
 static Ast *parse_declaration(Parser *p) {
@@ -2403,6 +2442,10 @@ static Ast *parse_declaration(Parser *p) {
     }
     if (peek(p)->kind == TOKEN_PUSH_CONTEXT) {
         diag_error(p->diag, peek(p)->pos, "push_context can only be in a body");
+        return nullptr;
+    }
+    if (peek(p)->kind == TOKEN_USING) {
+        diag_error(p->diag, peek(p)->pos, "'using' is for a field or a parameter, as in using entity: Entity;");
         return nullptr;
     }
     Token *name = expect(p, TOKEN_IDENT);

@@ -1171,14 +1171,35 @@ static s32 lower_view_of_resizable(Lowering *l, Type *resizable, s32 array) {
 
 static s32 lower_any(Lowering *l, Ast *e, Type *any);
 
+// v, a `from` (a pointer), as the `to` it converts to: moved to the using
+// field it reaches (spec 3.21, type_base_offset), null kept null, as C++
+// keeps it in a base conversion, so a null *Player passed as a *Entity is
+// still caught where it's used, not taken for address 16. v itself for
+// every other pair, and for a field at 0. No branch: both are worked out,
+// and a select picks.
+//
+//     %null = const ptr 0
+//     %is_null = cmp eq ptr %v, %null
+//     %offset = const i64 16
+//     %moved = ptradd %v, %offset
+//     %entity = select ptr %is_null, %null, %moved
+static s32 convert_base_pointer(Lowering *l, s32 v, Type *from, Type *to) {
+    s64 offset = type_base_offset(from, to);
+    if (offset == 0) return v;
+    s32 null = emit_constant(l, IR_PTR, 0);
+    s32 is_null = emit_compare(l, IR_EQ, IR_PTR, v, null);
+    return emit_select(l, IR_PTR, is_null, null, emit_field_address(l, v, offset));
+}
+
 // The value of `e`, of the type `to` its use wants (the checker said it
 // converts): an Any holding it (lower_any) where the checker converted it
 // to one, a constant made at that type, e's value widened to it, an
 // array's view (lower_view_of), a resizable array's, read here
-// (lower_view_of_resizable), or, where a string meets a *u8, the address
-// of the string literal's bytes it is (literal_address): a literal, or
+// (lower_view_of_resizable), where a string meets a *u8, the address of
+// the string literal's bytes it is (literal_address): a literal, or
 // constant data holding one, the only strings the checker lets become a
-// pointer (spec 3.8). Returns the value's number.
+// pointer (spec 3.8), or a pointer to a struct moved to the using field it
+// converts through (convert_base_pointer). Returns the value's number.
 static s32 lower_value(Lowering *l, Ast *e, Type *to) {
     // The Any first: a converted constant (show(5)) is copied into a
     // temporary, not made at the Any's type. At its own type, the value
@@ -1190,7 +1211,7 @@ static s32 lower_value(Lowering *l, Ast *e, Type *to) {
         return lower_view_of_resizable(l, e->type, lower_expr(l, e));
     }
     if (to && type_is_pointer(to) && e->type == &type_string) return literal_bytes(l, literal_address(e));
-    return resize(l, lower_expr(l, e), e->type, ir_type_of(to));
+    return convert_base_pointer(l, resize(l, lower_expr(l, e), e->type, ir_type_of(to)), e->type, to);
 }
 
 // The address of e's value: when `place` (expr_is_place, asked by the
@@ -1559,9 +1580,11 @@ static s32 lower_float_cast(Lowering *l, s32 v, Type *from, Type *to) {
 //   view, the same address); a string literal's, or a string constant's, to
 //   *u8 is the literal's bytes' address, as where it meets a *u8 without a
 //   cast.
-// - A pointer to a pointer is the same address; to an int, s64 or u64 it's
-//   ptrtoint, and from one inttoptr: the address as a number and back,
-//   unchecked (spec 3.14).
+// - A pointer to a pointer is the same address, but a pointer to a struct
+//   cast to one to the struct it holds through using fields, moved to the
+//   field as where it converts without a cast (convert_base_pointer, spec
+//   3.21); to an int, s64 or u64 it's ptrtoint, and from one inttoptr: the
+//   address as a number and back, unchecked (spec 3.14).
 // - cast(Any) e is e's conversion to Any (lower_any), as where it meets an
 //   Any without a cast (spec 3.14, 3.16), a constant e included.
 // - cast([]T) e of an array or a resizable array is its view, as where it
@@ -1584,7 +1607,7 @@ static s32 lower_cast(Lowering *l, Ast_Cast *cast) {
     // An aggregate is otherwise only ever cast to its own type, or a string
     // to a []u8 and back: the same bytes.
     if (type_is_aggregate(from)) return v;
-    if (type_is_pointer(from) && type_is_pointer(to)) return v;
+    if (type_is_pointer(from) && type_is_pointer(to)) return convert_base_pointer(l, v, from, to);
     // A procedure value to or from *void: the same address.
     if (from->kind == TYPE_PROC || to->kind == TYPE_PROC) return v;
     if (type_is_pointer(from)) return emit_convert(l, IR_PTRTOINT, IR_PTR, v, IR_I64);
@@ -1923,10 +1946,11 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
 // The address of a place in memory (the checker's check_addressable): what
 // *e gives, and where an assignment to e stores. A variable's is its slot,
 // or its global's addr; p.*'s is p's value, once checked not to be null, at
-// the '.'; a field's, its struct's plus the field's offset; context's, the
-// address the procedure's slot holds (load_context). A place's
-// operands, and its checks, are worked out here, before any value an
-// assignment stores (spec 6.5's order).
+// the '.'; a field's, its struct's plus the field's offset; a using
+// parameter's field's, that of the chain of members it means
+// (Ast_Name.through); context's, the address the procedure's slot holds
+// (load_context). A place's operands, and its checks, are worked out here,
+// before any value an assignment stores (spec 6.5's order).
 static s32 lower_address(Lowering *l, Ast *e) {
     if (e->kind == AST_DEREF) {
         Ast *pointer = ((Ast_Deref *)e)->operand;
@@ -1937,8 +1961,10 @@ static s32 lower_address(Lowering *l, Ast *e) {
     if (e->kind == AST_MEMBER) return lower_member_address(l, (Ast_Member *)e);
     if (e->kind == AST_INDEX) return lower_index_address(l, (Ast_Index *)e);
     if (e->kind == AST_CONTEXT) return load_context(l);  // the current context's own address
-    RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
-    return address_of(l, ((Ast_Name *)e)->decl);
+    RIG_ASSERT(e->kind == AST_NAME);  // a variable or a using parameter's field: the checker allowed nothing else
+    Ast_Name *name = (Ast_Name *)e;
+    if (name->through) return lower_address(l, name->through);  // a using parameter's field (spec 3.21)
+    return address_of(l, name->decl);
 }
 
 // A value of a struct literal that holds the checker's groups
@@ -2085,8 +2111,12 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // a constant) is the address of its value: a string's, a struct's,
         // an array's or a baked view's read-only global, as any aggregate's
         // value is its bytes' address, or, a pointer, the string literal's
-        // bytes it points at.
-        Ast *decl = ((Ast_Name *)e)->decl;
+        // bytes it points at. A using parameter's field (spec 3.21) is the
+        // chain of members the checker made for it (Ast_Name.through),
+        // e.position, read as one written so is.
+        Ast_Name *name = (Ast_Name *)e;
+        if (name->through) return lower_expr(l, name->through);
+        Ast *decl = name->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
             return type_is_aggregate(decl->type) ? value : emit_get(l, decl->type, value);
@@ -3668,7 +3698,9 @@ static void lower_multi_var(Lowering *l, Ast_Multi_Var *multi) {
 
 // a, b = f(); the call first, then each result put into its target, in
 // order, widened first when the target's type is wider (the checker made
-// sure each converts), or copied from its temporary when it's an aggregate.
+// sure each converts), a pointer moved to the using field it converts
+// through (convert_base_pointer), or copied from its temporary when it's an
+// aggregate.
 // The targets are read only after the call, so `a, b = swap(a, b);` passes
 // the old values and stores the new ones; each target's place (and its null
 // check, for p.*) is found just before its store.
@@ -3689,7 +3721,8 @@ static void lower_multi_assign(Lowering *l, Ast_Assign *assign) {
                         ? view_of_copy(l, from, results[i])
                     : from->kind == TYPE_RESIZABLE && target->type->kind == TYPE_VIEW
                         ? lower_view_of_resizable(l, from, results[i])
-                        : resize(l, results[i], from, ir_type_of(target->type));
+                        : convert_base_pointer(l, resize(l, results[i], from, ir_type_of(target->type)), from,
+                                               target->type);
         emit_put(l, target->type, value, address);
     }
     array_free(&results);
@@ -4248,11 +4281,13 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // the member's field, its own fields in turn). A procedure's address
 // (procedure_address) is a relocation too, to the procedure, and so is a
 // type's description's (type_info_address, spec 5.19), to its type_info.N
-// (type_info_global). The checker made sure every value is a constant, a
-// string literal, a procedure, a description's address, constant data, a
-// literal of them (check_global_value), or a #run's baked value (run.cpp),
-// which is made of the same: a view's is the array literal of its elements,
-// read here as a view's array value is.
+// (type_info_global). Each is the address as it is, nothing added: the
+// checker refused one a using field would move (checker.cpp's
+// address_moves, spec 3.21). The checker made sure every value is a
+// constant, a string literal, a procedure, a description's address,
+// constant data, a literal of them (check_global_value), or a #run's baked
+// value (run.cpp), which is made of the same: a view's is the array literal
+// of its elements, read here as a view's array value is.
 //
 // `writable` says whose bytes they are: a global variable's (lower_global),
 // which the program may change, or a constant's or a #run's read-only

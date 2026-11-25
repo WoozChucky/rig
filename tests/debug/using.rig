@@ -1,0 +1,35 @@
+// A debugger's view of using fields and parameters (bin/run-tests runs it
+// under gdb with using.gdb and under cdb with using.cdb; issue #225, spec
+// 3.21, 10.7). The debug information describes a using field as the
+// ordinary member it is, so a debugger shows it by its name among the
+// struct's fields (gdb's `entity = {id = 1, ...}`, cdb's `+0x010 entity`)
+// and reaches what it holds by the whole path, p.entity.position.x, never
+// p.position (gdb: "There is no member named position.", cdb: "Type does
+// not have given member"); a using pointer field is the pointer it is
+// (s.transform.x in gdb, s.transform->x in cdb). A using parameter is the
+// parameter it is, its fields written through it (e.position in gdb,
+// e->position in cdb), never as the body names them: a bare position is
+// no symbol to either debugger. An error ends a gdb -batch script, so
+// using.gdb asks for p.position inside a Python try, which prints the
+// error and goes on. move is given a *Player, moved to its entity (spec
+// 3.21), so e.position is p's.
+putchar :: (c: s32) -> s32 #foreign libc;
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+
+move :: (using e: *Entity, dx: float) {
+    position.x += dx;
+    putchar(10);
+}
+
+main :: () {
+    p := Player.{"ann", .{1, .{1, 2}}, 3};
+    t := Transform.{4, 5};
+    s := Sprite.{*t, 1};
+    putchar(10);
+    move(*p, 1);
+}

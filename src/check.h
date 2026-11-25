@@ -27,6 +27,9 @@ struct Checker {
                                  // worked out where it's needed setting the outer ones aside
                                  // (checker.cpp's check_body, leave_scopes)
     Ast_Proc *proc;              // the procedure whose body is being checked
+    Array<Ast_Param *> using_params;  // the using parameters (spec 3.21) of the procedure whose body or
+                                      // default values are being checked, in order, each of a type using
+                                      // takes; set aside with the scopes (checker.cpp's leave_scopes)
     Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
     Ast_Defer *deferring;        // the innermost defer whose statement is being checked (spec 6.12);
@@ -86,11 +89,16 @@ struct Checker {
 // checker.cpp
 
 // The declaration `name` means where the checker is: the innermost block's
-// that declares it, else the top level's (a procedure, a global or a
-// constant); null when there's none. A global or constant found at the top
-// level is checked first if it hasn't been yet (resolve_global), so its
-// type and value are known, whatever the order of the declarations.
-Ast *check_lookup(Checker *c, String name);
+// that declares it, else a field of a using parameter's struct
+// (Checker.using_params, spec 3.21): the parameter is returned, and
+// *through_using set, for the caller to work out the field
+// (check_expr.cpp's check_using_name); else the top level's (a procedure,
+// a global or a constant); null when there's none. A global or constant
+// found at the top level is checked first if it hasn't been yet
+// (resolve_global), so its type and value are known, whatever the order of
+// the declarations. through_using may be null, for a caller that only
+// asks whether the name is a type's, an enum's or a procedure's.
+Ast *check_lookup(Checker *c, String name, bool *through_using);
 
 // The type a written type means, or null after reporting an unknown name,
 // or void anywhere but behind a pointer ("'void' is only a pointer's
@@ -229,8 +237,10 @@ Type *check_operand(Checker *c, Ast *e);
 // value converts to Preload's Any (spec 3.16), keeping its own type:
 // Ast.to_any says whether the Any holds the value's own address or a
 // copy's, and a literal without its type is reported, as check_default_type
-// reports it. True also when either type is unknown (null): the error was
-// reported already.
+// reports it. A pointer whose struct holds to's two ways through using
+// fields (spec 3.21) is reported here (check_base_conversion), its type
+// cleared, and counted as converting too. True also when either type is
+// unknown (null): the error was reported already.
 bool check_convert(Checker *c, Ast *e, Type *to);
 
 // "a value of type 'A' doesn't convert to 'B' implicitly", at the value.
@@ -238,10 +248,25 @@ void report_no_conversion(Checker *c, Ast *value, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
 // implicitly to `to`: the same type, an integer that widens, a float32 to a
-// float64 (spec 6.4), a *void to or from any pointer, or [N]T or [..]T to
-// []T (spec 6.5, 3.17). True when either is unknown (null): the error was
-// reported already.
+// float64 (spec 6.4), a *void to or from any pointer, a pointer to a struct
+// to one to the struct it holds through using fields (spec 3.21,
+// type_find_base: from's struct laid out by check_base_conversion when it
+// declares a using field, and needing no layout otherwise), or [N]T or
+// [..]T to []T (spec 6.5, 3.17). True when either is unknown (null): the
+// error was reported already.
 bool type_converts(Type *from, Type *to);
+
+// Gets a conversion of pointer `from` to pointer `to` through using fields
+// (spec 3.21) ready for type_converts, which is pure: from's struct laid
+// out (check_layout), which a body a #run reaches during the layouts may
+// find still to do, when to's is a struct and from's declares a using
+// field; never otherwise. False after saying, at `at`, that from's struct
+// holds to's struct two ways at the shallowest depth that has one
+// ("'*Twice' converts to '*Entity' two ways, through 'a' and through 'b';
+// take the address of the one meant", each path written from the struct);
+// true otherwise, whether it converts or not, and for any other pair of
+// types.
+bool check_base_conversion(Checker *c, Type *from, Type *to, Position at);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a
 // float32 (x := 0.5;), which it must fit. A literal that meets none,
@@ -288,6 +313,30 @@ const char *loop_variable_kind(Ast_Var *var);
 // check_run.cpp's walk_expression fails on any expression it reaches with
 // no type.
 s32 tagged_member_named(Checker *c, Type *t, Ast *e);
+
+// Where member `name` of struct t, laid out, is (spec 3.21): t's own
+// fields in order, an anonymous member's searched in its place, then the
+// fields of the structs its using fields hold or point at, depth by depth.
+// Returns how many paths the first depth that has one holds, 0, 1 or 2 (two
+// or more: ambiguous); *path gets the first's field indices from t down,
+// *other the second's (left empty otherwise); -1 when a struct it needs has
+// no layout (a circle, or another mistake, said), or when a depth without
+// the name searches a struct still under way that holds it in an anonymous
+// member not in its fields yet: a circle, said (check_member_under_way).
+// Makes the type of each pointer using field queued for a depth once the
+// walk reaches that depth; there it lays out the structs whose own fields
+// may hold the name, and the others whose using fields may reach it only
+// once the depth has no match, to go on past them.
+s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other);
+
+// Where `name` is among the fields the using parameters reach
+// (Checker.using_params, spec 3.21): check_find_member's walk, started at
+// every using parameter's struct (a pointer parameter's pointee) together,
+// at depth 0, in parameter order, each laid out as the walk needs it.
+// Returns what check_find_member does; *path gets the first path's field
+// indices from its parameter's struct down, and *root that parameter's
+// index in using_params, *other and *other_root the second's.
+s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array<s32> *other, s32 *other_root);
 
 // How a message writes the code from `from` up to `to`, as the program
 // wrote it, inner white space and all (`shapes[ 0 ]` stays so): without

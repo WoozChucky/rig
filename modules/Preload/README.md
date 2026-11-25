@@ -55,24 +55,24 @@ A `Type_Info`'s `tag` is a member of the enum `Type_Info_Tag` (spec 3.18), over 
 
 A tag is written `Type_Info_Tag.STRUCT`, or `.STRUCT` where its type is known: `t.tag == .STRUCT`.
 
-Every description starts with a `Type_Info`. Each kind's struct holds it as its first field, `info`, so a `*Type_Info` whose tag says the kind is cast to the kind's struct. Floats, `bool`, `string` and `void` have the plain `Type_Info`.
+Every description starts with a `Type_Info`. Each kind's struct takes it in as its first field, `using info: Type_Info;` (spec 3.21), so a kind's tag, size and alignment are read as its own, `t.size`, and through `info` still, `t.info.size`. A `*Type_Info` whose tag says the kind is cast to the kind's struct, and a pointer to a kind's struct converts to a `*Type_Info` implicitly, the same address. Floats, `bool`, `string` and `void` have the plain `Type_Info`.
 
 - `Type_Info`:
   - `tag: Type_Info_Tag`: the kind.
   - `size: int`, `alignment: int`: the type's size and alignment in bytes (spec 3.11); `void`'s are 0 and 1. A float's size says which float it is.
 - `Type_Info_Integer` (`.INTEGER`, for `s8` to `u64` and `int`):
-  - `info: Type_Info`.
+  - `using info: Type_Info`.
   - `signed: bool`: whether the integer type is signed.
 - `Type_Info_Pointer` (`.POINTER`):
-  - `info: Type_Info`.
+  - `using info: Type_Info`.
   - `pointer_to: *Type_Info`: what it points at; `void`'s description for a `*void`.
 - `Type_Info_Procedure` (`.PROCEDURE`):
-  - `info: Type_Info`.
+  - `using info: Type_Info`.
   - `parameter_types: []*Type_Info`, `result_types: []*Type_Info`: the parameters' types and the results', in order.
   - `is_c_call: bool`: whether it is called as C calls (`#c_call`).
   - `is_variadic: bool`: whether its last parameter is a `..T`, whose type is then described as `[]T`.
 - `Type_Info_Struct` (`.STRUCT`, for a struct and a union alike):
-  - `info: Type_Info`.
+  - `using info: Type_Info`.
   - `name: string`: the struct's or the union's declared name; empty for an anonymous member's type.
   - `members: []Type_Info_Struct_Member`: its fields, in order; none for a struct with none. A struct that holds a pointer to itself points back at its own description.
   - `is_union: bool`: whether it is a union (spec 3.19), whose members are all at offset 0.
@@ -81,18 +81,18 @@ Every description starts with a `Type_Info`. Each kind's struct holds it as its 
   - `type: *Type_Info`: its type's description.
   - `offset: int`: where it is, in bytes from the struct's or the tagged union's start (spec 3.9).
 - `Type_Info_Array` (`.ARRAY`, for an array `[N]T`, a view `[]T` and a resizable array `[..]T` alike):
-  - `info: Type_Info`.
+  - `using info: Type_Info`.
   - `element_type: *Type_Info`: `T`'s description.
   - `array_kind: Array_Kind`: a member of the enum `Array_Kind`, over `int`: `.FIXED` (0) for an array, `.VIEW` (1) for a view, `.RESIZABLE` (2) for a resizable array (spec 3.17), in Jai's order.
   - `count: int`: the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A string isn't described as a view: it has its own tag.
 - `Type_Info_Enum` (`.ENUM`, for an `enum` or `enum_flags` type, spec 3.18):
-  - `info: Type_Info`: its size and alignment are its integer type's.
+  - `using info: Type_Info`: its size and alignment are its integer type's.
   - `name: string`: the enum's declared name.
   - `underlying: *Type_Info`: its integer type's description.
   - `is_flags: bool`: whether it is an `enum_flags`.
   - `names: []string`, `values: []s64`: its members, in order; none for an enum with none. `names[i]` is a member's name and `values[i]` its value, as 64 bits: sign-extended from a signed integer type, zero-extended from an unsigned one, so a `u64` member above `s64`'s largest reads negative.
 - `Type_Info_Tagged_Union` (`.TAGGED_UNION`, for a tagged union, spec 3.20):
-  - `info: Type_Info`.
+  - `using info: Type_Info`.
   - `name: string`: the tagged union's declared name.
   - `tag_type: *Type_Info`: its tag's integer type's description, whose size and sign the tag has.
   - `tag_offset: int`: where the tag is, in bytes from the start: 0 in every Rig tagged union, there for a C layout that puts it elsewhere.
@@ -236,4 +236,3 @@ A zeroed `Source_Code_Location`, `file` empty and `line` 0, is no place. The con
 ## Waiting on the language
 
 - No type aliases, so the allocator's procedure type is written out, in `Allocator` and in each allocator procedure.
-- No `using`, so each kind's type information struct holds its `Type_Info` as a field, `info`, and reads it as `t.info.size`.

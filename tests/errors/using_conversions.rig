@@ -1,0 +1,45 @@
+// Pointer conversions through using fields that aren't (issue #225, spec
+// 3.21), one a line: a struct holding two at one depth, implicitly then in
+// a cast; through a pointer using field; by value; back from the field's
+// struct to the outer one; and inside another type, a pointer to a pointer
+// and a view. Then an address the linker writes, moved through a using
+// field, which a constant or a global can't hold, for now: a string
+// literal's converted into a constant's field, in a constant's cast, into
+// a global, a global literal's field, a global array's element and a
+// global's cast, and a type's description's into a global. One at offset
+// 0, Wrap's into a *Base, is the address itself, and allowed.
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Twice :: struct { using a: Entity; using b: Entity; }
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+Holder :: struct { e: *Entity; }
+Base :: struct { tag: int; }
+Wrap :: struct { using base: Base; pad: int; using t: Type_Info; }
+
+S :: "abcdefgh12345678";
+W :: cast(*Player) S.data;
+H :: Holder.{W};
+X :: cast(*Entity) W;
+global_entity : *Entity = W;
+global_holder := Holder.{W};
+global_array : [1]*Entity = .[W];
+global_cast := cast(*Entity) W;
+global_info : *Type_Info = cast(*Wrap) type_info(int);
+global_base : *Base = cast(*Wrap) type_info(int);
+
+main :: () {
+    t: Twice;
+    p: Player;
+    s: Sprite;
+    pp := *p;
+    ps: []Player;
+    a : *Entity = *t;
+    b := cast(*Entity) *t;
+    c : *Transform = *s;
+    d : Entity = p;
+    e : *Player = *p.entity;
+    f : **Entity = *pp;
+    g : []Entity = ps;
+}

@@ -148,6 +148,8 @@ struct Ast_Param : Ast {
     bool default_needs_context;  // its default value uses context, calls a procedure that takes it, or
                                  // leaves out a default that needs it (checker.cpp's check_defaults): a
                                  // #c_call body outside a push_context can't leave it out (spec 7.6)
+    bool is_using;  // using e: *Entity (spec 3.21): the body names e's fields directly; cleared by the
+                    // checker when its type is one using doesn't take (check_signature)
 };
 
 struct Ast_Proc;
@@ -290,6 +292,7 @@ struct Ast_Field : Ast {
     s32 levels;             // an anonymous member's: one more than its deepest field's (layout_levels)
     s32 index;              // where it is in its struct's Type.fields, set by the layout; -1 when it
                             // isn't there, its name being reachable earlier (checker.cpp's lay_out)
+    bool is_using;          // using entity: Entity; (spec 3.21): its struct's fields are reached as this one's
 };
 
 // A struct's declaration, `Vec2 :: struct { x: float; y: float; }`, or a
@@ -404,9 +407,12 @@ struct Ast_Type_Info : Ast {
 // pointer: p.x is p.*.x); or, when e is an enum's name, its member x (spec
 // 3.18). A postfix operator, as .* is. pos is the field's name, where a
 // null pointer's runtime error points; start is e's. A field reached
-// through anonymous members (spec 3.19), e.key, is made by the checker into
-// the chain of members it means, e.<anonymous>.key: a member with an empty
-// name for each anonymous member, at the name written. When e names a
+// through anonymous members (spec 3.19) or using fields (spec 3.21) is made
+// by the checker into the chain of members it means, each at the name
+// written: e.key is e.<anonymous>.key, a member with an empty name for each
+// anonymous member, and p.position is p.entity.position, a member named as
+// each using field. A member on the way may be a pointer, s.transform.x,
+// followed and null-checked at the name written as any is. When e names a
 // tagged union (spec 3.20), e.x names its member x: Shape.empty, a value
 // holding a member that holds nothing, or the name a tag test or a case
 // compares with.
@@ -534,6 +540,8 @@ struct Ast_Name : Ast {
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
                 // or an Ast_Struct or an Ast_Enum, whose name is a type, not a value (reported),
                 // or an Ast_Builtin, which only a call's callee may name (spec 3.17)
+    Ast *through;  // a using parameter's field (spec 3.21): the chain it means, e.position, whose innermost
+                   // operand is an Ast_Name naming the parameter; decl is the parameter. Null otherwise
 };
 
 struct Ast_String : Ast {

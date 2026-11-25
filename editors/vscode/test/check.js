@@ -1133,6 +1133,20 @@ check('the grammar colours tagged union declarations', () => {
     });
 });
 
+// using (issue #225) is a keyword as it was, before a field's name or a
+// parameter's, whose type is coloured as any; a procedure whose parameter
+// list starts with it is still one, its name a function's.
+check('the grammar colours using fields and parameters', () => {
+    assertScopes('move :: (using e: *Entity, dx: float) {', {
+        move: 'entity.name.function.rig',
+        using: 'keyword.other.rig',
+        Entity: TYPE,
+        e: null,
+        float: PRIMITIVE,
+    });
+    assertScopes('    using entity: Entity;', { using: 'keyword.other.rig', Entity: TYPE, entity: null });
+});
+
 // The switch (issue #222): case is a keyword of control, as if is; #complete
 // and #through are directives, which one rule colours, whatever their name.
 check('the grammar colours a switch', () => {

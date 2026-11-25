@@ -59,8 +59,11 @@ struct Ast_Enum;    // ast.h: an enum's declaration
 // A field of a struct type: its name, its type and where it is.
 struct Type_Field {
     String name;
-    Type *type;   // null when the field's type was an error (reported)
-    s64 offset;   // in bytes, from the start of the struct
+    Type *type;     // null when the field's type was an error (reported)
+    s64 offset;     // in bytes, from the start of the struct
+    bool is_using;  // a using field (spec 3.21) whose type is a struct or a pointer to one; false
+                    // once refused. A late field's is true until its type is made (type null),
+                    // then checked (checker.cpp's make_late_field)
 };
 
 struct Type {
@@ -138,9 +141,10 @@ const s64 RESIZABLE_ALLOCATED_OFFSET = 16, RESIZABLE_ALLOCATOR_OFFSET = 24, RESI
 // a change to one is a change to the other.
 //
 // Every description starts with a Type_Info (its tag, size and alignment),
-// which each kind's struct holds as its first field, info, so a *Type_Info
-// is cast to the struct its tag names. Floats, bool, string and void have
-// the plain Type_Info.
+// which each kind's struct holds as its first field, `using info:
+// Type_Info;` (spec 3.21), so a *Type_Info is cast to the struct its tag
+// names, and a kind's struct reads t.size as t.info.size. Floats, bool,
+// string and void have the plain Type_Info.
 //
 // The tags are the members of Preload's enum Type_Info_Tag, numbered as
 // Jai's tags are: ENUM is Jai's 11, the numbers between being kinds of
@@ -289,11 +293,37 @@ bool type_has_view_fields(Type *t);
 Type *type_c_promoted(Type *t);
 
 // Where member `name` of struct or union t is (spec 3.19): t's own named
-// fields first, then its anonymous members' fields, depth by depth (#225
-// adds using fields to the same walk). *path gets the field indices from t
-// down; it's left empty when no field has the name. t is laid out
-// (check_layout).
+// fields first, then its anonymous members' fields, depth by depth. *path
+// gets the field indices from t down; it's left empty when no field has the
+// name. t is laid out (check_layout). It doesn't follow using fields (spec
+// 3.21): the checker's check_find_member does, which may need to lay out
+// the structs they reach, and to say a name is ambiguous; this finds the
+// struct's own fields, as a literal names them and as a declaration's
+// clash is checked.
 void type_find_member(Type *t, String name, Array<s32> *path);
+
+// The value using fields (spec 3.21) through which struct t holds a
+// `base`, anonymous members on the way included, never a pointer field:
+// depth by depth, t's own using fields first. Returns how many the
+// shallowest depth with one has, 0, 1 or 2 (two or more: ambiguous); *path
+// gets the first's field indices from t down (its last a using field of
+// type base), *other the second's (both left empty when there's none). 0
+// when t isn't a struct. t is laid out, or declares no using field (then
+// 0, whatever state its layout is in). A *t converts implicitly to a
+// *base when there's exactly one, moved to it (the checker's
+// type_converts, lowering's convert_base_pointer).
+s32 type_find_base(Type *t, Type *base, Array<s32> *path, Array<s32> *other);
+
+// Where the field `path` ends at is, in bytes from the start of struct t:
+// its fields' offsets summed, each a value field (type_find_base's path),
+// so each holds the next.
+s64 type_path_offset(Type *t, Array<s32> path);
+
+// How far a pointer of type `from` moves converting to pointer type `to`
+// (spec 3.21): the offset of the one using field type_find_base finds in
+// from's struct, 0 for any other pair of types, either unknown (null)
+// included.
+s64 type_base_offset(Type *from, Type *to);
 
 // void: what a procedure without -> returns (the type of a call of one,
 // which has no value), and what a *void points at. A *void is a pointer to

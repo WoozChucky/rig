@@ -1,0 +1,33 @@
+tests/errors/using_parameters.rig:19:31: error: can't assign to 'id': it's a field of the parameter 'e'
+    assign :: (using e: Entity) { id = 1; }
+                                  ^
+tests/errors/using_parameters.rig:20:38: error: can't take the address of 'id': it's a field of the parameter 'e'
+    address :: (using e: Entity) { p := *id; }
+                                         ^
+tests/errors/using_parameters.rig:21:29: error: can't assign to 'id': it's a field of the parameter 'e'
+    bump :: (using e: Entity) { id += 1; }
+                                ^
+tests/errors/using_parameters.rig:22:33: error: can't take the address of 'arr': it's a field of the parameter 'a'
+    fixed :: (using a: Arr) { for * arr { it.* += 1; } }
+                                    ^
+tests/errors/using_parameters.rig:23:41: error: a default value can't use 'id', a field of the parameter 'e'
+    defaults :: (using e: *Entity, n: int = id) { }
+                                            ^
+tests/errors/using_parameters.rig:24:45: error: #run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling
+    run :: (using e: *Entity) { v := #run twice(id); }
+                                                ^
+tests/errors/using_parameters.rig:25:27: error: 'using' needs a struct or a pointer to one, not 'int'
+    not_a_struct :: (using n: int) { }
+                              ^
+tests/errors/using_parameters.rig:26:21: error: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch
+    tagged :: (using s: *Shape) { c := circle; }
+                        ^
+tests/errors/using_parameters.rig:26:36: error: unknown identifier 'circle'
+    tagged :: (using s: *Shape) { c := circle; }
+                                       ^
+tests/errors/using_parameters.rig:27:57: error: 'x' is ambiguous: 'a.x' or 'b.x'
+    ambiguous :: (using a: *A, using b: *B) -> int { return x; }
+                                                            ^
+tests/errors/using_parameters.rig:28:33: error: unknown identifier 'nope'
+    unknown :: (using e: *Entity) { nope = 1; }
+                                    ^

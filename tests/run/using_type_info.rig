@@ -1,0 +1,31 @@
+// Type information with using (issue #225, spec 3.16, 3.21): each kind's
+// struct in Preload starts with `using info: Type_Info;`, so a
+// Type_Info_Struct's size, alignment and tag are read as its own, t.size,
+// and through info still, t.info.size; and a *Type_Info_Struct converts to
+// the *Type_Info it starts with, the same address. A struct's using field
+// is described as any field is, a member with its name and offset, and
+// print writes it as one. The same while compiling, in a top-level #run.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Mode :: enum u16 { WALK; RUN; }
+
+describe :: () {
+    t := cast(*Type_Info_Struct) type_info(Player);
+    print("{} {} {} {}\n", t.size, t.info.size, t.alignment, t.tag == .STRUCT);
+    for t.members { print("{} {}\n", it.name, it.offset); }
+    e := cast(*Type_Info_Enum) type_info(Mode);
+    print("{} {} {}\n", e.size, e.info.size, e.tag == .ENUM);
+    ti : *Type_Info = t;
+    print("{} {}\n", ti == type_info(Player), ti.size);
+    p := Player.{"ann", .{1, .{1, 2}}, 3};
+    print("{}\n", p);
+}
+
+#run describe();
+
+main :: () {
+    describe();
+}

@@ -89,19 +89,19 @@ Table_Entry_Header :: struct {
     state: Table_Entry_State;
 }
 
-// The header of a string-keyed entry. key is the table's own copy of the
-// key, in memory from the table's allocator: zeroed, with no memory, for
-// the empty key.
+// The header of a string-keyed entry: the header both kinds share, taken
+// in with using (spec 3.21), so entry.hash and entry.state are read as its
+// own, then key. key is the table's own copy of the key, in memory from
+// the table's allocator: zeroed, with no memory, for the empty key.
 Table_Entry :: struct {
-    hash: u64;
-    state: Table_Entry_State;
+    using header: Table_Entry_Header;
     key: string;
 }
 
-// The header of an int-keyed entry.
+// The header of an int-keyed entry: the shared header, taken in the same
+// way, then key.
 Int_Table_Entry :: struct {
-    hash: u64;
-    state: Table_Entry_State;
+    using header: Table_Entry_Header;
     key: int;
 }
 

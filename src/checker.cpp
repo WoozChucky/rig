@@ -298,13 +298,14 @@ static void pop_scope(Checker *c) {
 
 // What leave_scopes sets aside, and return_to_scopes returns to.
 struct Outer_Scopes {
-    Array<Table<Ast *>> scopes;  // Checker.scopes
-    bool lost_a_local;           // Checker.lost_a_local
-    Ast_Proc *default_of;        // Checker.default_of
-    s32 filled_depth;            // Checker.filled_depth
-    bool needs_context;          // Checker.needs_context
-    bool in_code;                // Checker.in_code
-    bool contextless;            // Checker.contextless
+    Array<Table<Ast *>> scopes;       // Checker.scopes
+    Array<Ast_Param *> using_params;  // Checker.using_params
+    bool lost_a_local;                // Checker.lost_a_local
+    Ast_Proc *default_of;             // Checker.default_of
+    s32 filled_depth;                 // Checker.filled_depth
+    bool needs_context;               // Checker.needs_context
+    bool in_code;                     // Checker.in_code
+    bool contextless;                 // Checker.contextless
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -312,7 +313,9 @@ struct Outer_Scopes {
 // wherever that is: its names are the top level's, whatever body needed it.
 // A body checked on demand has its own scopes too (check_body). So the
 // scopes open where it's needed are set aside, returned here, and the
-// checker goes on with none. So is lost_a_local, which is about those
+// checker goes on with none; and so are the using parameters whose fields
+// the body names (spec 3.21), which are the body's as its parameters are,
+// never the declaration's. So is lost_a_local, which is about those
 // scopes: a failed #if in the body that needed it may hide a local's name,
 // never a top-level one, so the declaration's unknown names are reported.
 // So are default_of, filled_depth and needs_context, which are about the
@@ -327,9 +330,10 @@ struct Outer_Scopes {
 // signature's default values run in each caller that leaves them out, with
 // the caller's (check_call_context says when a #c_call body can't).
 static Outer_Scopes leave_scopes(Checker *c) {
-    Outer_Scopes outer = {c->scopes,        c->lost_a_local, c->default_of, c->filled_depth,
-                          c->needs_context, c->in_code,      c->contextless};
+    Outer_Scopes outer = {c->scopes,        c->using_params, c->lost_a_local, c->default_of,
+                          c->filled_depth,  c->needs_context, c->in_code,     c->contextless};
     c->scopes = {};
+    c->using_params = {};
     c->lost_a_local = false;
     c->default_of = nullptr;
     c->filled_depth = 0;
@@ -340,12 +344,14 @@ static Outer_Scopes leave_scopes(Checker *c) {
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
-// closed, and to their lost_a_local, default_of, filled_depth,
-// needs_context, in_code and contextless.
+// closed, and to their using parameters, lost_a_local, default_of,
+// filled_depth, needs_context, in_code and contextless.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
+    array_free(&c->using_params);
     c->scopes = outer.scopes;
+    c->using_params = outer.using_params;
     c->lost_a_local = outer.lost_a_local;
     c->default_of = outer.default_of;
     c->filled_depth = outer.filled_depth;
@@ -368,10 +374,33 @@ static Ast *find_name(Checker *c, String name) {
     return found ? *found : nullptr;
 }
 
-Ast *check_lookup(Checker *c, String name) {
+// Between the scopes and the top level, the fields the procedure's using
+// parameters reach (spec 3.21, 4.7): locals, a loop's it, a case's it and
+// the parameters themselves hide them, and they hide the globals,
+// constants, procedures, enums and structs of their names, the name being
+// a value there (Mode.A, Shape.empty, a callee). A written type and a
+// literal's are found by find_name, which never looks there: a field is no
+// type. A name the walk finds twice at one depth (across the parameters or
+// in one) is still theirs, and check_using_name says it's ambiguous; so is
+// one whose walk meets a circle, or a layout found wrong, said already
+// (check_layout, check_member_under_way): root isn't set, and
+// check_using_name leaves the name undeclared.
+Ast *check_lookup(Checker *c, String name, bool *through_using) {
+    if (through_using) *through_using = false;
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
+    }
+    if (c->using_params.count) {
+        Array<s32> path = {}, other = {};
+        s32 root = 0, other_root = 0;
+        s32 reached = check_find_using(c, name, &path, &root, &other, &other_root);
+        array_free(&path);
+        array_free(&other);
+        if (reached) {
+            if (through_using) *through_using = true;
+            return c->using_params[root];
+        }
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
@@ -430,6 +459,21 @@ static void check_var(Checker *c, Ast_Var *var) {
     declare(c, var->name, var);
 }
 
+// Whether `value`, an address the linker writes (a string literal's, a
+// procedure's or a type's description's), is moved on the way into a slot
+// of type t, through a using field at a nonzero offset (spec 3.21): where
+// it converts to t, or in a cast written around it (cast(*Entity) W, for
+// W :: cast(*Player) S.data). The linker adds nothing to it, so a global
+// or a constant can't hold it moved, for now. Constant data the address is
+// found through needs no look: its constant's own value was checked so.
+static bool address_moves(Ast *value, Type *t) {
+    if (type_base_offset(value->type, t)) return true;
+    for (Ast *e = value; e->kind == AST_CAST; e = ((Ast_Cast *)e)->value) {
+        if (type_base_offset(((Ast_Cast *)e)->value->type, e->type)) return true;
+    }
+    return false;
+}
+
 // A global variable: as a local, but its value must be known while
 // compiling, because it's written into the program's file, where the
 // variable lives (lower.cpp); there's no code that could run before main
@@ -471,9 +515,19 @@ static void check_var(Checker *c, Ast_Var *var) {
 // while compiling, for now", at the value, in a literal too (any : Any =
 // 7;, Holder.{a = 5}).
 //
+// The linker writes such an address as it is, with nothing added
+// (lower.cpp's constant_bytes), so it may not be moved on the way through
+// a using field (address_moves): for W :: cast(*Player) S.data,
+// `g : *Entity = W;` is "a global's value must be known while compiling,
+// for now", where a body's `l : *Entity = W;` moves it to W's entity
+// field.
+//
 // A value that needs a #run with no value says nothing more: the #run's
 // failure, or the errors in what it reaches, were said (has_failed_run).
-static bool check_global_value(Checker *c, Ast *value) {
+// t is the type of the slot the value goes into, the global's or a
+// literal's field's or element's; null when it isn't known, after an
+// error in the literal.
+static bool check_global_value(Checker *c, Ast *value, Type *t) {
     if (value->to_any != ANY_NONE) {
         if (!has_failed_run(value)) {
             diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
@@ -485,20 +539,27 @@ static bool check_global_value(Checker *c, Ast *value) {
     if (value->kind == AST_LITERAL && type_is_aggregate(value->type)) {
         Ast_Literal *literal = (Ast_Literal *)value;
         for (s64 i = 0; i < literal->values.count; i++) {
-            if (!check_global_value(c, literal->values[i])) return false;
+            Type *part = nullptr;
+            if (value->type->kind == TYPE_ARRAY) {
+                part = value->type->element;
+            } else if (value->type->kind == TYPE_STRUCT && i < literal->fields.count && literal->fields[i] >= 0) {
+                part = value->type->fields[literal->fields[i]].type;
+            }
+            if (!check_global_value(c, literal->values[i], part)) return false;
         }
         return true;
     }
     Ast *data;
-    if (literal_address(value) || procedure_address(value) || type_info_address(value)) return true;
-    if (constant_data(value, &data)) return true;
+    bool address = literal_address(value) || procedure_address(value) || type_info_address(value);
+    if (address && !address_moves(value, t)) return true;
+    if (!address && constant_data(value, &data)) return true;
     if (has_failed_run(value)) return false;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
 
 static void check_global_var(Checker *c, Ast_Var *var) {
-    if (check_var_value(c, var)) check_global_value(c, var->value);
+    if (check_var_value(c, var)) check_global_value(c, var->value, var->type);
 }
 
 // Whether e is known while compiling, as a literal's value of constant
@@ -611,7 +672,9 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   number, a procedure's address or a pointer variable), a procedure's
 //   address or a type's description's (type_info(T), spec 5.19) is "a
 //   constant's pointer can only be null or a string literal's address";
-//   anything else isn't known.
+//   so is a string literal's address moved through a using field
+//   (address_moves: H :: Holder.{W}, for W :: cast(*Player) S.data and a
+//   *Entity field); anything else isn't known.
 // - A procedure value is a procedure (procedure_address) or null.
 // - A number or a bool is is_constant.
 // - A value converted to an Any, or cast to one (holds_converted_any, spec
@@ -685,8 +748,10 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
     // reaches a pointer as its bytes' address, though its type stays string.
     if (!type_converts(value->type, t) && !(type_is_pointer(t) && literal_address(value))) return false;
     if (type_is_pointer(t) || t == &type_null) {
-        if (value->is_constant || literal_address(value)) return true;
-        if (value->kind == AST_CAST || procedure_address(value) || type_info_address(value)) {
+        if (value->is_constant) return true;
+        bool literal = literal_address(value);
+        if (literal && !address_moves(value, t)) return true;
+        if (literal || value->kind == AST_CAST || procedure_address(value) || type_info_address(value)) {
             diag_error(c->diag, value->start, "a constant's pointer can only be null or a string literal's address");
         } else {
             report_unknown_constant(c, constant, value);
@@ -1269,6 +1334,32 @@ static Type *make_anonymous_type(Type *outer, Ast_Struct *s) {
     return t;
 }
 
+// Whether `type` is one a using field takes (spec 3.21): a struct or a
+// union, or one pointer to one, whose fields its struct then reaches as its
+// own. A tagged union, or a pointer to one, is "'using' can't reach into a
+// tagged union, 'Shape': its members are read in a switch", since its
+// fields would be reached outside the switch that knows which member it
+// holds; anything else, a number, an enum, an array, a pointer to a
+// pointer, a view or a procedure type, "'using' needs a struct or a pointer
+// to one, not 'int'", each at `pos`: the type as written, or a '..'
+// parameter's '..', which made its view. A type that was an error (null)
+// was said already: false, nothing more. Refused, the field is an ordinary
+// one.
+static bool using_takes(Checker *c, Position pos, Type *type) {
+    if (!type) return false;
+    Type *s = type_is_pointer(type) ? type->pointee : type;
+    if (s->kind == TYPE_STRUCT && s->is_tagged) {
+        diag_error(c->diag, pos,
+                   "'using' can't reach into a tagged union, '" STR_FMT "': its members are read in a switch",
+                   STR_ARG(type_name(c->arena, s)));
+        return false;
+    }
+    if (s->kind == TYPE_STRUCT) return true;
+    diag_error(c->diag, pos, "'using' needs a struct or a pointer to one, not '" STR_FMT "'",
+               STR_ARG(type_name(c->arena, type)));
+    return false;
+}
+
 // Struct s's fields, offsets, size and alignment, into its Type: each field
 // at the next offset that is a multiple of its alignment, the struct's
 // alignment its largest field's (1 when it has none), its size rounded up to
@@ -1285,14 +1376,22 @@ static Type *make_anonymous_type(Type *outer, Ast_Struct *s) {
 // An anonymous member is a field with no name, of a type of its own made
 // here (make_anonymous_type), whose fields are laid out first, as s's are;
 // then it's placed as any field is. Its fields are reached as its outer
-// struct's (type_find_member), as C reaches them, so a name is declared
-// once in all the braces of one top-level declaration, nested to any
-// depth: `reachable` holds the named fields so far, in source order, from
-// the top-level declaration's first. A field whose name is in it, in its
-// own braces or in others', is "'x' is already declared at PATH:L:C", and
-// isn't kept (Ast_Field.index -1), though a late one's type is still made,
-// for its own mistakes; so the one field a name finds is the first
-// declared. Anonymous members' empty names clash with nothing.
+// struct's (check_find_member for a use, type_find_member for a literal),
+// as C reaches them, so a name is declared once in all the braces of one
+// top-level declaration, nested to any depth: `reachable` holds the named
+// fields so far, in source order, from the top-level declaration's first.
+// A field whose name is in it, in its own braces or in others', is "'x' is
+// already declared at PATH:L:C", and isn't kept (Ast_Field.index -1),
+// though a late one's type is still made, for its own mistakes; so the one
+// field a name finds is the first declared. Anonymous members' empty names
+// clash with nothing.
+//
+// A using field (spec 3.21) is laid out as any field is, one field holding
+// its whole struct, or a pointer to one: nothing is flattened. Its
+// Type_Field.is_using is set when its type is one using takes
+// (using_takes), a late one's checked once made (make_late_field). The
+// names it reaches are never checked here against the struct's own: they
+// are found, or found ambiguous, where they're used (check_find_member).
 //
 // A field's type starts where the struct does, at `base`, so what it needs
 // starts a level below its own levels (layout_levels; open_declaration),
@@ -1339,10 +1438,13 @@ static void lay_out(Checker *c, Ast_Struct *s, s32 base, Array<Ast_Field *> *rea
             }
         }
         // A tagged union's members are placed after its tag once all are
-        // known (lay_out_tag), at 0 until then.
+        // known (lay_out_tag), at 0 until then. A using field's type is
+        // checked once it's made: a value one's here, a late one's by
+        // make_late_field, which may still clear is_using.
         s64 offset = s->is_union || s->is_tagged ? 0 : align_up(end, field_align);
+        bool is_using = field->is_using && (field->is_late || using_takes(c, field->type_expr->pos, type));
         field->index = (s32)t->fields.count;
-        array_add(&t->fields, Type_Field{field->name, type, offset});
+        array_add(&t->fields, Type_Field{field->name, type, offset, is_using});
         field->type = type;
         if (offset + size > end) end = offset + size;
         if (field_align > align) align = field_align;
@@ -1518,9 +1620,15 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     if (field->resolve == RESOLVE_CYCLE) type = nullptr;
     field->resolve = RESOLVE_DONE;
     field->type = type;
+    // A using field's type is checked now it's made (lay_out took it as
+    // it was written); refused, the field is an ordinary one.
+    bool is_using = field->is_using && using_takes(c, field->type_expr->pos, type);
     // A field whose name was declared before it isn't in the type (lay_out).
     Type *t = s->declared;
-    if (t && field->index >= 0) t->fields[field->index].type = type;
+    if (t && field->index >= 0) {
+        t->fields[field->index].type = type;
+        t->fields[field->index].is_using = is_using;
+    }
 }
 
 bool check_layout(Checker *c, Type *t) {
@@ -1731,13 +1839,16 @@ static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
 // a, b = f(); the targets must be places in memory (check_target), f must
 // return as many results, and each result converts to its target's type as
 // a value assigned to it would ("a value of type 'int' doesn't convert to
-// 'u8' implicitly", at the target).
+// 'u8' implicitly", at the target), a *Player result into a *Entity target
+// too (spec 3.21), or said to convert two ways (check_base_conversion), at
+// the target as well.
 static void check_multi_assign(Checker *c, Ast_Assign *assign) {
     Array<Type *> targets = {};
     for (s64 i = 0; i < assign->targets.count; i++) array_add(&targets, check_target(c, assign->targets[i]));
     Ast_Call *call = check_several_values(c, assign->value, assign->targets.count);
     for (s64 i = 0; call && i < targets.count; i++) {
         Type *from = call_result_type(call, i), *to = targets[i];
+        if (!check_base_conversion(c, from, to, assign->targets[i]->start)) continue;
         if (!type_converts(from, to)) {
             diag_error(c->diag, assign->targets[i]->start,
                        "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",
@@ -2646,8 +2757,23 @@ static bool reaches_end(Ast_Block *block) {
     return goes_past(block->statements[block->statements.count - 1]);
 }
 
+// Into c->using_params, in order, the using parameters of proc (spec 3.21),
+// whose fields its body, or its default values, name directly: each whose
+// type is known and one using takes (check_signature cleared is_using
+// otherwise, and said why; an unknown type's error was said too). Freed by
+// return_to_scopes, or by check_defaults, which has no scopes of its own to
+// return to.
+static void add_using_params(Checker *c, Ast_Proc *proc) {
+    for (s64 i = 0; i < proc->params.count; i++) {
+        Ast_Param *param = proc->params[i];
+        if (param->is_using && param->type) array_add(&c->using_params, param);
+    }
+}
+
 // A procedure's body. Its parameters are in the body's own scope, so a
-// local can't have a parameter's name.
+// local can't have a parameter's name. Its using parameters' fields
+// (add_using_params) are named after them, before the top level's names
+// (check_lookup).
 //
 // Checked in check()'s pass over the bodies, or earlier, where a #run
 // reaches it (check_reached_body): inside another body, or inside a
@@ -2685,6 +2811,7 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     c->contextless = proc->is_c_call && !is_main;
     push_scope(c);
     for (s64 i = 0; i < proc->params.count; i++) declare(c, proc->params[i]->name, proc->params[i]);
+    add_using_params(c, proc);
     check_block(c, proc->body);
     pop_scope(c);
     // main's results are reported by check() already: main returns nothing.
@@ -2926,7 +3053,10 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // c->default_of makes check_name, and check_addressable for its address,
 // refuse each: "a default value can't use the parameter 'times'", at the
 // name. A global times can't stand in for the parameter, which is what the
-// default would seem to mean.
+// default would seem to mean. So are the fields of its using parameters
+// (spec 3.21), which hide the top level's names as in the body too
+// (add_using_params): "a default value can't use 'id', a field of the
+// parameter 'e'" (check_using_name).
 //
 // Each converts to its parameter's type as a typed variable's value does
 // (check_var_value): an untyped constant takes the type ("300 doesn't fit
@@ -3017,6 +3147,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     push_scope(c);
     Table<Ast *> *scope = &c->scopes[c->scopes.count - 1];
     for (s64 i = 0; i < params.count; i++) table_put(scope, params[i]->name, (Ast *)params[i]);
+    add_using_params(c, proc);
     c->default_of = proc;
     s32 depth = 0;
     bool too_deep = false;
@@ -3048,6 +3179,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     c->default_of = nullptr;
     c->filled_depth = 0;
     c->needs_context = false;
+    array_free(&c->using_params);
     pop_scope(c);
     proc->defaults_depth = too_deep ? 0 : depth;
 }
@@ -3080,6 +3212,13 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
 //
+// A using parameter's type is one a using field takes (spec 3.21,
+// using_takes): a struct or a union, or one pointer to one, never a tagged
+// union's. Refused, at the type (a '..T' one's at its '..', which makes it
+// a view), it's an ordinary parameter (Ast_Param.is_using cleared), so its
+// body says nothing more of it and can't name its fields. Any procedure may
+// have one, a foreign one too: it changes only what the body's names mean.
+//
 // Then the parameters' default values (check_defaults), once every type is
 // known, each converting to its parameter's: still under way, so one that
 // needs this signature is a circle.
@@ -3100,9 +3239,11 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         if (!param->is_variadic) {
             param->type = resolve_type(c, param->type_expr);
             if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
+            if (param->is_using) param->is_using = using_takes(c, param->type_expr->pos, param->type);
             continue;
         }
         param->type = resolve_variadic(c, param->type_expr);
+        if (param->is_using) param->is_using = using_takes(c, param->dots, param->type);
         refused = c_side || proc->is_compiler;
         if (!param->type) continue;  // T's own mistake, reported
         if (proc->is_foreign) {

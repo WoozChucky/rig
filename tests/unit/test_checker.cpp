@@ -2383,8 +2383,9 @@ TEST(null_converts_to_pointers) {
 
 TEST(void_pointer_converts_both_ways) {
     // *void converts to and from every pointer type, so malloc's result
-    // needs no cast; no other pointer converts to another, *void's own
-    // pointer **void included.
+    // needs no cast. No other pointer converts to another, *void's own
+    // pointer **void included, but a *S to a *B that S holds through using
+    // fields (spec 3.21).
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "malloc :: (size: u64) -> *void #foreign libc;\n"
@@ -7455,10 +7456,10 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // program reads it through Preload's structs, which the checker lays
     // out as any struct. The two must agree: each struct's size,
     // alignment, field offsets and field types, and each tag's value. Each
-    // kind's struct starts with its Type_Info, info, so a *Type_Info casts
-    // to it. Resizable_Array is a [..]T's layout (spec 3.17), which lowering
-    // and Preload's helpers read alike, aligned as a [..]T is
-    // (type_resizable_of), not as type information is.
+    // kind's struct starts with its Type_Info, using info, so a *Type_Info
+    // casts to it and t.size reads it. Resizable_Array is a [..]T's layout
+    // (spec 3.17), which lowering and Preload's helpers read alike, aligned
+    // as a [..]T is (type_resizable_of), not as type information is.
     s32 resizable_align = type_resizable_of(&type_int)->align;
     Arena a = arena_make();
     Ast_File *tree = nullptr;
@@ -7564,6 +7565,9 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
             CHECK_EQ(index, f);  // in the order given here
             CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
             CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
+            // A kind's info is `using info: Type_Info;` (spec 3.16, 3.21),
+            // so t.size reads it; every other field is an ordinary one.
+            CHECK_EQ(t->fields[index].is_using, string_eq(t->fields[index].name, str("info")));
         }
         array_free(&path);
     }
@@ -11337,5 +11341,913 @@ TEST(tagged_unions_contain_themselves_as_structs_do) {
                                "main :: () { }\n"),
               "1:1: 'T' contains itself; it can hold a pointer to itself, *T\n"
               "2:1: 'U' contains itself; it can hold a pointer to itself, *U\n");
+    arena_free(&a);
+}
+
+// Issue #225: using (spec 3.21).
+
+// The types most of these tests use, three lines.
+#define USING_PLAYER                                  \
+    "Vec2 :: struct { x: float; y: float; }\n"        \
+    "Entity :: struct { id: int; position: Vec2; }\n" \
+    "Player :: struct { name: string; using entity: Entity; health: int; }\n"
+
+// Whether e is a member named `name` (empty for an anonymous member's)
+// whose type is named `type`.
+static bool is_member(Arena *a, Ast *e, const char *name, const char *type) {
+    if (e->kind != AST_MEMBER) return false;
+    Ast_Member *m = (Ast_Member *)e;
+    return string_eq(m->name, str(name)) && m->type && string_eq(type_name(a, m->type), str(type));
+}
+
+// Whether e is the name `name`.
+static bool is_name(Ast *e, const char *name) {
+    return e->kind == AST_NAME && string_eq(((Ast_Name *)e)->name, str(name));
+}
+
+TEST(using_fields_are_reached_as_their_structs_own) {
+    // p.position is p.entity.position: the checker makes the using field's
+    // member, named as the field, its operand p, at the name written; a
+    // pointer is followed once, at the first. The struct keeps its three
+    // fields, the using one marked. A struct's own field hides one reached
+    // through using.
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "P2 :: struct { using entity: Entity; id: string; }\n"
+                          "main :: () {\n"
+                          "    p: Player;\n"
+                          "    p.position.x = 1;\n"
+                          "    a := p.id;\n"
+                          "    b := p.entity.id;\n"
+                          "    q := *p;\n"
+                          "    c := q.position;\n"
+                          "    p2: P2;\n"
+                          "    d := p2.id;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Block *body = c.file->procs[c.file->procs.count - 1]->body;
+    Ast_Assign *assign = (Ast_Assign *)body->statements[1];
+    CHECK_EQ(assign->kind, AST_ASSIGN);
+    Ast_Member *x = (Ast_Member *)assign->targets[0];
+    CHECK(is_member(&a, x, "x", "float32"));
+    Ast_Member *position = (Ast_Member *)x->operand;
+    CHECK(is_member(&a, position, "position", "Vec2"));
+    if (position->kind == AST_MEMBER) {
+        Ast_Member *entity = (Ast_Member *)position->operand;
+        CHECK(is_member(&a, entity, "entity", "Entity"));
+        if (entity->kind == AST_MEMBER) {
+            CHECK_EQ(entity->index, 1);
+            CHECK_EQ(entity->pos.line, position->pos.line);
+            CHECK_EQ(entity->pos.col, position->pos.col);
+            CHECK(is_name(entity->operand, "p"));
+        }
+    }
+    CHECK_STR(type_of(&a, &c, "a"), "int");
+    CHECK_STR(type_of(&a, &c, "b"), "int");
+    CHECK_STR(type_of(&a, &c, "c"), "Vec2");
+    Ast *through_pointer = value_of(&c, "c");
+    CHECK(is_member(&a, through_pointer, "position", "Vec2"));
+    if (through_pointer->kind == AST_MEMBER) {
+        Ast *entity = ((Ast_Member *)through_pointer)->operand;
+        CHECK(is_member(&a, entity, "entity", "Entity"));
+        if (entity->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)entity)->operand, "q"));
+    }
+    Type *player = struct_named(&c, "Player");
+    CHECK_EQ(player->fields.count, 3);
+    if (player->fields.count == 3) {
+        CHECK(!player->fields[0].is_using);
+        CHECK(player->fields[1].is_using);
+        CHECK(!player->fields[2].is_using);
+    }
+    CHECK_STR(type_of(&a, &c, "d"), "string");
+    Ast *own = value_of(&c, "d");
+    CHECK(is_member(&a, own, "id", "string"));
+    if (own->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)own)->operand, "p2"));
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(using_lookup_goes_depth_by_depth) {
+    // d.tag is d.mid.base.tag, two using fields deep; s.x is s.a.x, found
+    // at depth 1, before s.b.c.x at depth 2.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Base :: struct { tag: int; }\n"
+                          "Mid :: struct { using base: Base; m: int; }\n"
+                          "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                          "S :: struct { using a: A; using b: B; }\n"
+                          "A :: struct { x: int; }\n"
+                          "B :: struct { using c: C; }\n"
+                          "C :: struct { x: float; }\n"
+                          "main :: () {\n"
+                          "    d: Deep;\n"
+                          "    t := d.tag;\n"
+                          "    s: S;\n"
+                          "    x := s.x;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "t"), "int");
+    Ast *tag = value_of(&c, "t");
+    CHECK(is_member(&a, tag, "tag", "int"));
+    if (tag->kind == AST_MEMBER) {
+        Ast *base = ((Ast_Member *)tag)->operand;
+        CHECK(is_member(&a, base, "base", "Base"));
+        if (base->kind == AST_MEMBER) {
+            Ast *mid = ((Ast_Member *)base)->operand;
+            CHECK(is_member(&a, mid, "mid", "Mid"));
+            if (mid->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)mid)->operand, "d"));
+        }
+    }
+    CHECK_STR(type_of(&a, &c, "x"), "int");
+    Ast *x = value_of(&c, "x");
+    if (x->kind == AST_MEMBER) CHECK(is_member(&a, ((Ast_Member *)x)->operand, "a", "A"));
+    token_list_free(c.list);
+    // A union's using member is reached as a struct's: u.code is u.k.code.
+    c = check_src(&a,
+                  "Key :: struct { code: s32; }\n"
+                  "U :: union { using k: Key; f: float; }\n"
+                  "main :: () { u: U; code := u.code; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "code"), "s32");
+    Ast *code = value_of(&c, "code");
+    if (code->kind == AST_MEMBER) CHECK(is_member(&a, ((Ast_Member *)code)->operand, "k", "Key"));
+    token_list_free(c.list);
+    // A name nothing reaches is a union's missing member.
+    CHECK_STR(check_source(&a,
+                           "Key :: struct { code: s32; }\n"
+                           "U :: union { using k: Key; f: float; }\n"
+                           "main :: () { u: U; n := u.nope; }\n"),
+              "3:27: 'U' has no member 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(using_reaches_a_struct_under_way) {
+    // A #run reached while S is laid out finds y through T's using field in
+    // S's fields so far, as t.s.y does, not "'T' has no field 'y'".
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "T :: struct { using s: *S; }\n"
+                          "S :: struct { y: int; arr: [N]int; }\n"
+                          "N :: #run h();\n"
+                          "h :: () -> int { t: T; if false { return t.y; } return 2; }\n"
+                          "main :: () { s: S; n := s.arr.count; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "int");
+    token_list_free(c.list);
+    // A name the walk doesn't find, held by an anonymous member of a struct
+    // it reached that's still under way, is the circle, as t.s.y's is, not
+    // "'T' has no field 'y'".
+    const char *in_union = "T :: struct { using s: *S; }\n"
+                           "S :: struct { k: int; union { y: int; arr: [N]int; }; }\n"
+                           "N :: #run f();\n"
+                           "f :: () -> int { t: T; if false { return t.%s; } return 2; }\n"
+                           "main :: () { s: S; }\n";
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, in_union, "y"))),
+              "2:1: 'S' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, in_union, "s.y"))),
+              "2:1: 'S' is defined in terms of itself\n");
+    // A bare name a using parameter's walk can't find for the circle is the
+    // parameter's still: the circle alone, not "unknown identifier 'y'".
+    CHECK_STR(check_source(&a, "T :: struct { k: int; union { y: int; arr: [N]int; }; }\n"
+                               "N :: #run f(null);\n"
+                               "f :: (using t: *T) -> int { if t == null { return 2; } return y; }\n"
+                               "main :: () { t: T; }\n"),
+              "1:1: 'T' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(using_walks_lay_out_only_the_structs_they_enter) {
+    // A name found at one depth needs nothing deeper: reading T's own field
+    // in a #run during the layouts doesn't lay out U, or make the late using
+    // field's type, so a struct waiting on that #run isn't a circle.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "A :: struct { arr: [N]int; }\n"
+                          "N :: #run f();\n"
+                          "f :: () -> int { t: T; t.a = 2; return t.a; }\n"
+                          "T :: struct { a: int; using p: *U; }\n"
+                          "U :: struct { b: [N]int; }\n"
+                          "main :: () { x: A; u: U; n := x.arr; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "[2]int");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "T :: struct { v: int; using s: *S; }\n"
+                           "A :: struct { arr: [M]int; }\n"
+                           "M :: #run g();\n"
+                           "g :: () -> int { t: T; return t.v + 2; }\n"
+                           "S :: struct { b: [size_of(A)]int; }\n"
+                           "main :: () { a: A; }\n"),
+              "");
+    // A name no struct's declaration holds, g here, lays none out: not C,
+    // reached through B's using field, nor C as the parameter's own, nor C
+    // whose own using field reaches D, none holding g, so the #run during
+    // A's layout isn't a circle, as it isn't without using.
+    const char *no_name[] = {
+        "B :: struct { using c: *C; }\n"
+        "C :: struct { a: A; }\n"
+        "f :: (using b: *B) -> int { return g(); }\n",
+        "C :: struct { a: A; }\n"
+        "f :: (using c: *C) -> int { return g(); }\n",
+        "B :: struct { using c: *C; }\n"
+        "C :: struct { a: A; using d: *D; }\n"
+        "D :: struct { k: int; }\n"
+        "f :: (using b: *B) -> int { return g(); }\n",
+    };
+    for (s64 i = 0; i < 3; i++) {
+        const char *src = string_cstr(&a, string_printf(&a,
+                                                        "A :: struct { arr: [#run f(null)]int; }\n"
+                                                        "%s"
+                                                        "g :: () -> int { return 2; }\n"
+                                                        "main :: () { x: A; }\n",
+                                                        no_name[i]));
+        CHECK_STR(check_source(&a, src), "");
+    }
+    // A name found at one depth doesn't lay out a struct searched there
+    // that only reaches it deeper: C, past which p.x and a bare x are q.x
+    // at depth 1 and p.x at depth 0, isn't laid out to rule out a second.
+    const char *shallow[] = {
+        "P :: struct { using q: *Q; using c: *C; }\n"
+        "Q :: struct { x: int; }\n"
+        "f :: (p: *P) -> int { if p == null { return 2; } return p.x; }\n",
+        "P :: struct { x: int; }\n"
+        "f :: (using p: *P, using c: *C) -> int { if p == null { return 2; } return x; }\n",
+    };
+    for (s64 i = 0; i < 2; i++) {
+        const char *src = string_cstr(&a, string_printf(&a,
+                                                        "A :: struct { arr: [#run f(null%s)]int; }\n"
+                                                        "%s"
+                                                        "C :: struct { a: A; using d: *D; }\n"
+                                                        "D :: struct { x: int; }\n"
+                                                        "main :: () { v: A; }\n",
+                                                        i ? ", null" : "", shallow[i]));
+        CHECK_STR(check_source(&a, src), "");
+    }
+    // One whose using field reaches it is laid out, and is the circle it
+    // closes: C, in it, has no fields to search, so the walk ends there,
+    // the circle alone said, as b.c.d.g says it: for a bare name, a field,
+    // a literal's name and an assignment's target, h there not taken for
+    // the procedure ("can't assign to 'h': it's a procedure").
+    const char *reached = "A :: struct { arr: [#run f(null)]int; }\n"
+                          "B :: struct { using c: *C; }\n"
+                          "C :: struct { a: A; using d: *D; }\n"
+                          "D :: struct { g: int; h: int; }\n"
+                          "h :: () -> int { return 3; }\n"
+                          "f :: %s -> int { %s }\n"
+                          "main :: () { x: A; }\n";
+    const char *reaching[][2] = {
+        {"(using b: *B)", "return g;"},
+        {"(b: *B)", "return b.g;"},
+        {"(b: *B)", "v := B.{g = 1}; return 2;"},
+        {"(using b: *B)", "h = 4; return 2;"},
+    };
+    for (s64 i = 0; i < 4; i++) {
+        CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, reaching[i][0], reaching[i][1]))),
+                  "1:1: 'A' is defined in terms of itself\n");
+    }
+    arena_free(&a);
+}
+
+TEST(using_names_at_one_depth_are_ambiguous) {
+    // Two at the first depth that has one, at the name, the first two in
+    // the walk's order: field order, an anonymous member's using fields in
+    // its place, and depth 1 too.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "A :: struct { x: int; }\n"
+                           "A2 :: struct { x: int; }\n"
+                           "A3 :: struct { x: int; }\n"
+                           "T :: struct { using a: A; using b: A2; }\n"
+                           "T3 :: struct { using a: A; using b: A2; using c: A3; }\n"
+                           "U :: struct { union { using a: A; n: int; }; using b: A2; }\n"
+                           "main :: () {\n"
+                           "    t: T; n := t.x;\n"
+                           "    t3: T3; m := t3.x;\n"
+                           "    u: U; k := u.x;\n"
+                           "}\n"),
+              "8:18: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "9:21: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "10:18: 'x' is ambiguous: 'a.x' or 'b.x'\n");
+    // A path may end at a field whose type isn't known: an error, first or
+    // second, or a late field's not made yet, reached by a #run during the
+    // layouts. Its name is all the message needs.
+    CHECK_STR(check_source(&a,
+                           "A :: struct { x: Nope; }\n"
+                           "A2 :: struct { x: int; }\n"
+                           "T :: struct { using a: A; using b: A2; }\n"
+                           "U :: struct { using b: A2; using a: A; }\n"
+                           "main :: () { t: T; y := t.x; u: U; z := u.x; }\n"),
+              "1:18: unknown type 'Nope'\n"
+              "5:27: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "5:43: 'x' is ambiguous: 'b.x' or 'a.x'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: struct { x: int; }\n"
+                           "B :: struct { x: *int; }\n"
+                           "T :: struct { using a: A; using b: B; }\n"
+                           "N :: #run f();\n"
+                           "f :: () -> int { t: T; return t.x; }\n"
+                           "main :: () { }\n"),
+              "5:33: 'x' is ambiguous: 'a.x' or 'b.x'\n");
+    // The shallowest decides: v.tag is v.o.tag at depth 1, not
+    // v.d.mid.base.tag at depth 3.
+    Checked c = check_src(&a,
+                          "Base :: struct { tag: int; }\n"
+                          "Mid :: struct { using base: Base; m: int; }\n"
+                          "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                          "V :: struct { using d: Deep; using o: Base; }\n"
+                          "main :: () { v: V; t := v.tag; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "t"), "int");
+    Ast *tag = value_of(&c, "t");
+    if (tag->kind == AST_MEMBER) {
+        Ast *o = ((Ast_Member *)tag)->operand;
+        CHECK(is_member(&a, o, "o", "Base"));
+        if (o->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)o)->operand, "v"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(using_and_anonymous_members_agree) {
+    // A struct's own field, and its anonymous members' (its own too, spec
+    // 3.19), hide one reached through using; two through anonymous braces
+    // are still refused where declared.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "A :: struct { x: int; }\n"
+                          "W :: struct { x: int; using a: A; }\n"
+                          "X :: struct { union { x: s8; }; using a: A; }\n"
+                          "main :: () { w: W; i := w.x; x: X; j := x.x; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "i"), "int");
+    Ast *own = value_of(&c, "i");
+    if (own->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)own)->operand, "w"));
+    CHECK_STR(type_of(&a, &c, "j"), "s8");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "Y :: struct { x: int; union { x: s8; }; }\n"
+                           "main :: () { }\n"),
+              "1:31: 'x' is already declared at test.rig:1:15\n");
+    arena_free(&a);
+}
+
+TEST(using_chains_follow_pointer_fields) {
+    // s.x through `using transform: *Transform` is s.transform.x: a field
+    // through a pointer, so a place, even of a parameter. Declared before
+    // Transform and reached by a #run during the layouts, the walk lays
+    // Transform out and makes the late field's type itself.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "Transform :: struct { x: float; y: float; }\n"
+                          "Sprite :: struct { using transform: *Transform; frame: int; }\n"
+                          "f :: (s: Sprite) { s.x = 1; q := *s.x; }\n"
+                          "main :: () { s: Sprite; a := s.x; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast *x = value_of(&c, "a");
+    CHECK(is_member(&a, x, "x", "float32"));
+    if (x->kind == AST_MEMBER) {
+        Ast *transform = ((Ast_Member *)x)->operand;
+        CHECK(is_member(&a, transform, "transform", "*Transform"));
+        if (transform->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)transform)->operand, "s"));
+    }
+    token_list_free(c.list);
+    // Two using pointers in a row: item.x is item.h.t.x, each pointer
+    // followed by the member after it.
+    c = check_src(&a,
+                  "Transform :: struct { x: float; y: float; }\n"
+                  "Holder :: struct { using t: *Transform; }\n"
+                  "Item :: struct { using h: *Holder; }\n"
+                  "main :: () { item: Item; a := item.x; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    x = value_of(&c, "a");
+    CHECK(is_member(&a, x, "x", "float32"));
+    if (x->kind == AST_MEMBER) {
+        Ast *t = ((Ast_Member *)x)->operand;
+        CHECK(is_member(&a, t, "t", "*Transform"));
+        if (t->kind == AST_MEMBER) {
+            Ast *h = ((Ast_Member *)t)->operand;
+            CHECK(is_member(&a, h, "h", "*Holder"));
+            if (h->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)h)->operand, "item"));
+        }
+    }
+    token_list_free(c.list);
+    c = check_src(&a,
+                  "N :: #run count();\n"
+                  "count :: () -> int {\n"
+                  "    s: Sprite;\n"
+                  "    if s.frame == 1 { s.x = 2; }\n"
+                  "    t := Transform.{3, 4};\n"
+                  "    s.transform = *t;\n"
+                  "    return cast(int) s.y;\n"
+                  "}\n"
+                  "Sprite :: struct { using transform: *Transform; frame: int; }\n"
+                  "Transform :: struct { x: float; y: float; }\n"
+                  "main :: () { a: [N]int; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "a"), "[4]int");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(using_walks_end_on_cycles) {
+    // A struct searched at an earlier depth isn't searched again, and one
+    // depth searches a struct through two paths at most: a struct pointing
+    // at itself, two pointing at each other, and forty levels of two using
+    // fields to the next each end at once (2^40 paths otherwise).
+    Arena a = arena_make();
+    String text = string_printf(&a,
+                                "Node :: struct { value: int; using parent: *Node; }\n"
+                                "A :: struct { a_value: int; using b: *B; }\n"
+                                "B :: struct { b_value: int; using a: *A; }\n");
+    for (s64 i = 0; i < 40; i++) {
+        text = string_printf(&a, STR_FMT "L%lld :: struct { using p: *L%lld; using q: *L%lld; }\n", STR_ARG(text),
+                             (long long)i, (long long)(i + 1), (long long)(i + 1));
+    }
+    text = string_printf(&a, STR_FMT "L40 :: struct { bottom: int; }\n"
+                                     "main :: () {\n"
+                                     "    n: Node; i := n.nope;\n"
+                                     "    x: A; j := x.b_value;\n"
+                                     "    y: B; k := y.nope;\n"
+                                     "    l: L0; m := l.bottom;\n"
+                                     "    o := l.nope;\n"
+                                     "}\n",
+                         STR_ARG(text));
+    // The two paths to bottom: forty p's, and thirty-nine and a q.
+    String p39 = {};
+    for (s64 i = 0; i < 39; i++) p39 = string_printf(&a, STR_FMT "p.", STR_ARG(p39));
+    String expected = string_printf(&a,
+                                    "46:21: 'Node' has no field 'nope'\n"
+                                    "48:18: 'B' has no field 'nope'\n"
+                                    "49:19: 'bottom' is ambiguous: '" STR_FMT "p.bottom' or '" STR_FMT
+                                    "q.bottom'\n"
+                                    "50:12: 'L0' has no field 'nope'\n",
+                                    STR_ARG(p39), STR_ARG(p39));
+    CHECK_STR(check_source(&a, string_cstr(&a, text)), string_cstr(&a, expected));
+    arena_free(&a);
+}
+
+TEST(using_takes_a_struct_or_a_pointer_to_one) {
+    // A struct or a union, or one pointer to one; never a tagged union.
+    // Each refusal at the type, the field then an ordinary one.
+    const char *source = "Vec2 :: struct { x: float; y: float; }\n"
+                         "Mode :: enum { A; }\n"
+                         "Shape :: union #tagged { a: int; }\n"
+                         "Value :: union { i: int; }\n"
+                         "Bad :: struct {\n"
+                         "    using n: int;\n"
+                         "    using m: Mode;\n"
+                         "    using v: [2]Vec2;\n"
+                         "    using q: **Vec2;\n"
+                         "    using s: Shape;\n"
+                         "    using t: *Shape;\n"
+                         "    using u: Value;\n"
+                         "    using w: *Value;\n"
+                         "}\n"
+                         "main :: () { }\n";
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, source),
+              "6:14: 'using' needs a struct or a pointer to one, not 'int'\n"
+              "7:14: 'using' needs a struct or a pointer to one, not 'Mode'\n"
+              "8:14: 'using' needs a struct or a pointer to one, not '[2]Vec2'\n"
+              "9:14: 'using' needs a struct or a pointer to one, not '**Vec2'\n"
+              "10:14: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
+              "11:14: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n");
+    // A type that's an error is said once, not again by using, and the
+    // field isn't followed.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { using a: Nope; using b: *Nope; }\n"
+                           "main :: () { s: S; z := s.zz; }\n"),
+              "1:24: unknown type 'Nope'\n"
+              "1:40: unknown type 'Nope'\n"
+              "2:27: 'S' has no field 'zz'\n");
+    Checked c = check_src(&a, source);
+    Type *bad = struct_named(&c, "Bad");
+    CHECK_EQ(bad->fields.count, 8);
+    for (s64 i = 0; i < bad->fields.count; i++) CHECK_EQ(bad->fields[i].is_using, i >= 6);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(literals_name_a_structs_own_fields) {
+    // By name or in order, a literal gives the struct's own fields, the
+    // using one taking its struct; a name reached through it is refused,
+    // pointing at the field to name.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "main :: () {\n"
+                           "    a := Player.{entity = .{id = 1}, health = 3};\n"
+                           "    b := Player.{\"ann\", .{1, .{1, 2}}, 3};\n"
+                           "    c := Player.{position = .{1, 2}};\n"
+                           "    d : Player = .{id = 3};\n"
+                           "}\n"),
+              "7:18: a literal can't name 'position', reached through 'entity'; name 'entity', as in "
+              "Player.{entity = ...}\n"
+              "8:20: a literal can't name 'id', reached through 'entity'; name 'entity', as in "
+              "Player.{entity = ...}\n");
+    // Two using fields deep, the field to name is the first on the way, not
+    // the one holding the name.
+    CHECK_STR(check_source(&a,
+                           "Base :: struct { tag: int; }\n"
+                           "Mid :: struct { using base: Base; m: int; }\n"
+                           "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                           "main :: () { d := Deep.{tag = 1}; }\n"),
+              "4:25: a literal can't name 'tag', reached through 'mid'; name 'mid', as in Deep.{mid = ...}\n");
+    // Through an anonymous member, the field to name is its using field;
+    // inside the member's group, there's no type to write before .{.
+    CHECK_STR(check_source(&a,
+                           "Key :: struct { code: s32; }\n"
+                           "Mouse :: struct { x: s16; y: s16; }\n"
+                           "Event :: struct { kind: s32; union { using key: Key; mouse: Mouse; }; }\n"
+                           "main :: () {\n"
+                           "    a := Event.{code = 1};\n"
+                           "    b := Event.{1, .{code = 1}};\n"
+                           "}\n"),
+              "5:17: a literal can't name 'code', reached through 'key'; name 'key', as in Event.{key = ...}\n"
+              "6:22: a literal can't name 'code', reached through 'key'; name 'key', as in .{key = ...}\n");
+    arena_free(&a);
+}
+
+TEST(pointers_convert_through_using_fields) {
+    // A *S converts to the *B that S holds through value using fields, at
+    // any depth, anonymous members on the way included, the shallowest
+    // deciding; never through a pointer field, by value, back, or inside
+    // another type. Two at the shallowest depth are ambiguous, said once at
+    // the value, implicitly or in a cast.
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "Base :: struct { tag: int; }\n"
+                          "Mid :: struct { using base: Base; m: int; }\n"
+                          "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                          "Transform :: struct { x: float; y: float; }\n"
+                          "Sprite :: struct { using transform: *Transform; frame: int; }\n"
+                          "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                          "Near :: struct { using e: Entity; using m: M; }\n"
+                          "M :: struct { using e2: Entity; }\n"
+                          "Inside :: struct { k: int; struct { pad: int; using e: Entity; }; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *vec2 = struct_named(&c, "Vec2"), *entity = struct_named(&c, "Entity"), *player = struct_named(&c, "Player");
+    Type *base = struct_named(&c, "Base"), *mid = struct_named(&c, "Mid"), *deep = struct_named(&c, "Deep");
+    Type *transform = struct_named(&c, "Transform"), *sprite = struct_named(&c, "Sprite");
+    Type *twice = struct_named(&c, "Twice"), *nearby = struct_named(&c, "Near"), *inside = struct_named(&c, "Inside");
+    CHECK(type_converts(type_pointer_to(player), type_pointer_to(entity)));
+    CHECK(type_converts(type_pointer_to(inside), type_pointer_to(entity)));
+    CHECK(type_converts(type_pointer_to(deep), type_pointer_to(base)));
+    CHECK(type_converts(type_pointer_to(deep), type_pointer_to(mid)));
+    CHECK(type_converts(type_pointer_to(nearby), type_pointer_to(entity)));
+    CHECK(!type_converts(type_pointer_to(player), type_pointer_to(vec2)));
+    CHECK(!type_converts(type_pointer_to(sprite), type_pointer_to(transform)));
+    CHECK(!type_converts(type_pointer_to(entity), type_pointer_to(player)));
+    CHECK(!type_converts(type_pointer_to(type_pointer_to(player)), type_pointer_to(type_pointer_to(entity))));
+    CHECK(!type_converts(player, entity));
+    CHECK(!type_converts(type_view_of(player), type_view_of(entity)));
+    CHECK(!type_converts(type_pointer_to(twice), type_pointer_to(entity)));
+    Array<s32> path = {}, other = {};
+    CHECK_EQ(type_find_base(twice, entity, &path, &other), 2);
+    CHECK_EQ(path.count, 1);
+    CHECK_EQ(other.count, 1);
+    if (path.count == 1 && other.count == 1) {
+        CHECK_EQ(path[0], 0);
+        CHECK_EQ(other[0], 1);
+    }
+    CHECK_EQ(type_find_base(player, entity, &path, &other), 1);
+    CHECK_EQ(other.count, 0);
+    CHECK_EQ(type_path_offset(player, path), 16);
+    CHECK_EQ(type_find_base(deep, base, &path, &other), 1);
+    CHECK_EQ(path.count, 2);
+    CHECK_EQ(type_path_offset(deep, path), 0);
+    // Near's own e, at depth 0, decides over m.e2 at depth 1.
+    CHECK_EQ(type_find_base(nearby, entity, &path, &other), 1);
+    CHECK_EQ(path.count, 1);
+    // Through an anonymous member, its index on the path and its offset,
+    // 8, added to its e's, 8.
+    CHECK_EQ(type_find_base(inside, entity, &path, &other), 1);
+    CHECK_EQ(path.count, 2);
+    if (path.count == 2) {
+        CHECK_EQ(path[0], 1);
+        CHECK_EQ(path[1], 1);
+    }
+    CHECK_EQ(type_path_offset(inside, path), 16);
+    CHECK_EQ(type_find_base(sprite, transform, &path, &other), 0);
+    CHECK_EQ(type_find_base(player, vec2, &path, &other), 0);
+    array_free(&path);
+    array_free(&other);
+    token_list_free(c.list);
+    // The ambiguity, at the value, implicit and cast, said once each; the
+    // paths written from the struct, as a field's are, an anonymous member
+    // on the way left out.
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                           "Both :: struct { using p: Player; using q: Player; }\n"
+                           "Split :: struct { struct { using a: Entity; }; using b: Entity; }\n"
+                           "Either :: struct { k: int; union { using a: Entity; using b: Entity; }; }\n"
+                           "main :: () {\n"
+                           "    t: Twice;\n"
+                           "    e : *Entity = *t;\n"
+                           "    f := cast(*Entity) *t;\n"
+                           "    b: Both;\n"
+                           "    g : *Entity = *b;\n"
+                           "    s: Split;\n"
+                           "    h : *Entity = *s;\n"
+                           "    u: Either;\n"
+                           "    i : *Entity = *u;\n"
+                           "}\n"),
+              "10:19: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "11:24: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "13:19: '*Both' converts to '*Entity' two ways, through 'p.entity' and through 'q.entity'; take the "
+              "address of the one meant\n"
+              "15:19: '*Split' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "17:19: '*Either' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n");
+    // A comparison's operand says it at that operand, either side, and a
+    // multi-assign's result at its target, as "doesn't convert" is said.
+    CHECK_STR(check_source(&a,
+                           "Entity :: struct { id: int; }\n"
+                           "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                           "both :: (t: *Twice) -> *Twice, int { return t, 1; }\n"
+                           "main :: () {\n"
+                           "    t: Twice;\n"
+                           "    pe: *Entity;\n"
+                           "    x := pe == *t;\n"
+                           "    y := *t != pe;\n"
+                           "    n: int;\n"
+                           "    pe, n = both(*t);\n"
+                           "}\n"),
+              "7:16: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "8:10: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "10:5: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n");
+    arena_free(&a);
+}
+
+TEST(base_walks_end_on_doubling_chains) {
+    // A struct searched at an earlier depth isn't searched again, and one
+    // depth searches a struct through two paths at most: thirty levels of
+    // two value using fields to the next find the Base at the bottom two
+    // ways, and a struct held nowhere not at all, at once (2^30 paths
+    // otherwise).
+    Arena a = arena_make();
+    String text = string_printf(&a, "Base :: struct { tag: u8; }\n"
+                                    "Other :: struct { o: u8; }\n");
+    for (s64 i = 0; i < 30; i++) {
+        text = string_printf(&a, STR_FMT "L%lld :: struct { using a: L%lld; using b: L%lld; }\n", STR_ARG(text),
+                             (long long)i, (long long)(i + 1), (long long)(i + 1));
+    }
+    text = string_printf(&a, STR_FMT "L30 :: struct { using base: Base; }\nmain :: () { }\n", STR_ARG(text));
+    Checked c = check_src(&a, string_cstr(&a, text));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *top = struct_named(&c, "L0");
+    Array<s32> path = {}, other = {};
+    CHECK_EQ(type_find_base(top, struct_named(&c, "Base"), &path, &other), 2);
+    CHECK_EQ(path.count, 31);
+    CHECK_EQ(other.count, 31);
+    CHECK_EQ(type_find_base(top, struct_named(&c, "Other"), &path, &other), 0);
+    array_free(&path);
+    array_free(&other);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(a_conversion_lays_out_a_struct_with_using_fields_first) {
+    // A body a #run reaches while the structs are being laid out may meet a
+    // *Player before Player is laid out: Arr's count runs f, declared before
+    // Player. The conversion lays it out first, to find its entity field,
+    // in a declaration, a comparison and a multi-assign's result; and a
+    // cast, which converts whatever it finds, lays it out to find a Twice's
+    // two ways.
+    const char *bodies[] = {
+        "f :: (p: *Player) -> int { e : *Entity = p; return cast(int) e; }\n",
+        "f :: (p: *Player) -> int { e: *Entity; if p == e { return 1; } return 0; }\n",
+        "f :: (p: *Player) -> int { e: *Entity; n: int; e, n = pair(p); return n; }\n",
+    };
+    Arena a = arena_make();
+    for (s64 i = 0; i < 3; i++) {
+        CHECK_STR(check_source(&a, joined(&a, bodies[i],
+                                          "pair :: (p: *Player) -> *Player, int { return p, 1; }\n"
+                                          "size :: () -> int { return f(null) + 1; }\n"
+                                          "Arr :: struct { data: [N]int; }\n"
+                                          "N :: #run size();\n"
+                                          "Entity :: struct { id: int; }\n"
+                                          "Player :: struct { name: string; using entity: Entity; health: int; }\n"
+                                          "main :: () { }\n")),
+                  "");
+    }
+    CHECK_STR(check_source(&a, "f :: (t: *Twice) -> int { e := cast(*Entity) t; return cast(int) e; }\n"
+                               "size :: () -> int { return f(null) + 1; }\n"
+                               "Arr :: struct { data: [N]int; }\n"
+                               "N :: #run size();\n"
+                               "Entity :: struct { id: int; }\n"
+                               "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                               "main :: () { }\n"),
+              "1:46: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n");
+    // A struct with no using field never converts to another struct's
+    // pointer, so it isn't laid out for one: B, laid out, would hold C,
+    // whose count runs g, a circle that isn't there.
+    const char *uses[] = {"release(b);", "v : *void = b;", "x := cast(*X) b;", "y := cast(*int) b;"};
+    for (s64 i = 0; i < 4; i++) {
+        CHECK_STR(check_source(&a, joined(&a, "g :: () -> int { b: *B = null; ", uses[i],
+                                          " return 1; }\n"
+                                          "C :: struct { x: [#run g()]int; }\n"
+                                          "B :: struct { c: C; }\n"
+                                          "X :: struct { y: int; }\n"
+                                          "release :: (p: *void) { }\n"
+                                          "main :: () { c: C; }\n")),
+                  "");
+    }
+    arena_free(&a);
+}
+
+// The local `name` of the procedure `proc`, which must have it.
+static Ast *local_of_proc(Checked *c, const char *proc, const char *name) {
+    Ast *found = find_local(((Ast_Proc *)global_named(c, proc))->body, name);
+    RIG_ASSERT(found);
+    return found;
+}
+
+// How messages name the type of procedure `proc`'s local `name`; "?" when
+// the checker found none.
+static String type_in(Arena *a, Checked *c, const char *proc, const char *name) {
+    Type *t = local_of_proc(c, proc, name)->type;
+    return t ? type_name(a, t) : str("?");
+}
+
+TEST(using_parameters_name_their_fields) {
+    // In move's body, position is e.position: the name keeps the chain it
+    // means (Ast_Name.through), a member named as the field whose operand
+    // names the parameter; decl is the parameter. A field one using field
+    // further in is reached too.
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "move :: (using e: *Entity, dx: float) { position.x += dx; id += 1; }\n"
+                          "nested :: (using p: *Player) { health -= 1; position.y = 9; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *move = (Ast_Proc *)global_named(&c, "move");
+    Ast_Assign *first = (Ast_Assign *)move->body->statements[0];
+    Ast_Member *x = (Ast_Member *)first->targets[0];
+    CHECK(is_member(&a, x, "x", "float32"));
+    CHECK(x->kind == AST_MEMBER && is_name(x->operand, "position"));
+    if (x->kind == AST_MEMBER && is_name(x->operand, "position")) {
+        Ast_Name *position = (Ast_Name *)x->operand;
+        CHECK(position->decl == move->params[0]);
+        CHECK_STR(type_name(&a, position->type), "Vec2");
+        Ast *through = position->through;
+        CHECK(through && is_member(&a, through, "position", "Vec2"));
+        if (through && through->kind == AST_MEMBER) {
+            Ast *e = ((Ast_Member *)through)->operand;
+            CHECK(is_name(e, "e"));
+            if (e->kind == AST_NAME) {
+                CHECK(((Ast_Name *)e)->decl == move->params[0]);
+                CHECK_STR(type_name(&a, e->type), "*Entity");
+            }
+        }
+    }
+    Ast_Assign *second = (Ast_Assign *)move->body->statements[1];
+    CHECK(is_name(second->targets[0], "id"));
+    if (second->targets[0]->kind == AST_NAME) {
+        Ast_Name *id = (Ast_Name *)second->targets[0];
+        CHECK(id->decl == move->params[0]);
+        CHECK_STR(type_name(&a, id->type), "int");
+    }
+    token_list_free(c.list);
+    // A field holding a pointer is a late one, its type made once every
+    // layout is done; p, named through the parameter in a #run an array's
+    // count needs before then, makes it there first.
+    c = check_src(&a, "A :: struct { arr: [#run h(null)]int; }\n"
+                      "T :: struct { k: int; p: *int; }\n"
+                      "h :: (using t: *T) -> int { if t == null { return 3; } q := p; return 1; }\n"
+                      "main :: () { a: A; n := a.arr; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "[3]int");
+    Ast *q = ((Ast_Var *)local_of_proc(&c, "h", "q"))->value;
+    CHECK(is_name(q, "p"));
+    if (q->kind == AST_NAME) {
+        Ast *through = ((Ast_Name *)q)->through;
+        CHECK(through && is_member(&a, through, "p", "*int"));
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(using_parameter_names_come_between_locals_and_globals) {
+    // Locals, the other parameters, a for's it and a tagged switch's case's
+    // it hide a using parameter's field; the field hides a global, a
+    // procedure, an enum, and a struct's name used as a value. Two at the
+    // first depth, across parameters or in one, are ambiguous. (A view of
+    // items: a resizable array needs Preload.)
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "id := \"global\";\n"
+                          "Mode :: enum { A; }\n"
+                          "Circle :: struct { r: float; }\n"
+                          "Shape :: union #tagged { circle: Circle; }\n"
+                          "Bag :: struct { items: []int; Mode: int; it: string; }\n"
+                          "f :: (using p: *Player, health: string) {\n"
+                          "    a := id;\n"
+                          "    {\n"
+                          "        id := 1.5;\n"
+                          "        b := id;\n"
+                          "    }\n"
+                          "    hp := health;\n"
+                          "}\n"
+                          "g :: (using e: *Entity, id: string) { c := id; }\n"
+                          "h :: (using b: *Bag, s: Shape) {\n"
+                          "    m := Mode;\n"
+                          "    for 0..2 { d := it; }\n"
+                          "    n := it;\n"
+                          "    if s == { case .circle; k := it; }\n"
+                          "}\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_in(&a, &c, "f", "a"), "int");
+    CHECK_STR(type_in(&a, &c, "f", "b"), "float32");
+    CHECK_STR(type_in(&a, &c, "f", "hp"), "string");
+    CHECK_STR(type_in(&a, &c, "g", "c"), "string");
+    CHECK_STR(type_in(&a, &c, "h", "m"), "int");
+    CHECK_STR(type_in(&a, &c, "h", "d"), "int");
+    CHECK_STR(type_in(&a, &c, "h", "n"), "string");
+    CHECK_STR(type_in(&a, &c, "h", "k"), "Circle");
+    token_list_free(c.list);
+    // The field hides the procedure: a Vec2 can't be called. Two fields
+    // named x at depth 0, one in each parameter's struct, each path written
+    // from its own parameter's struct (a's x is A3's second field); and two
+    // named id at depth 1, both in one parameter's struct.
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "position :: () { }\n"
+                           "A :: struct { x: int; }\n"
+                           "A2 :: struct { x: int; }\n"
+                           "A3 :: struct { y: int; x: int; }\n"
+                           "Two :: struct { using a: Entity; using b: Entity; }\n"
+                           "k :: (using e: *Entity) { position(); }\n"
+                           "j :: (using a: *A, using b: *A2) -> int { return x; }\n"
+                           "j3 :: (using a: *A3, using b: *A) -> int { return x; }\n"
+                           "amb :: (using t: *Two) -> int { return id; }\n"
+                           "main :: () { }\n"),
+              "9:27: 'position' isn't a procedure, so it can't be called\n"
+              "10:50: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "11:51: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "12:40: 'id' is ambiguous: 't.a.id' or 't.b.id'\n");
+    // A field hides a struct's or a tagged union's name where the name is a
+    // value, as it hides an enum's: Shape.empty and Vec2() name the field. A
+    // written type and a literal's type are never a field's.
+    CHECK_STR(check_source(&a, "Circle :: struct { r: float; }\n"
+                               "Shape :: union #tagged { circle: Circle; empty: void; }\n"
+                               "Vec2 :: struct { x: float; y: float; }\n"
+                               "Bag :: struct { Shape: int; Vec2: int; }\n"
+                               "f :: (using b: *Bag) -> bool { s: Shape; return s == Shape.empty; }\n"
+                               "g :: (using b: *Bag) { s := Shape.{circle = .{1}}; v := Vec2.{1, 2}; w: Vec2; }\n"
+                               "h :: (using b: *Bag) { Vec2(1); }\n"
+                               "main :: () { }\n"),
+              "5:60: '.empty' needs a struct or a pointer to one, not 'int'\n"
+              "7:24: 'Vec2' isn't a procedure, so it can't be called\n");
+    arena_free(&a);
+}
+
+TEST(value_using_parameters_are_read_only) {
+    // A value parameter's fields are read-only, reached through using too;
+    // through a pointer, the parameter's or a field's, they're places. In a
+    // default value and in a #run, a field is refused as its parameter is.
+    // A variadic parameter is a view, so it takes no using, said at its
+    // '..'. A refused using parameter is an ordinary one: its body can't
+    // name the fields, a tagged union's members included.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "Transform :: struct { x: float; y: float; }\n"
+                           "Sprite :: struct { using transform: *Transform; frame: int; }\n"
+                           "twice :: (n: int) -> int { return n * 2; }\n"
+                           "f :: (using e: Entity) { id = 1; }\n"
+                           "g :: (using e: Entity) { q := *id; }\n"
+                           "h :: (using s: Sprite) { x = 1; }\n"
+                           "k :: (using e: *Entity) { id = 1; r := *id; }\n"
+                           "d :: (using e: *Entity, n: int = id) { }\n"
+                           "r :: (using e: *Entity) { v := #run twice(id); }\n"
+                           "u :: (using n: int) { }\n"
+                           "v :: (using e: ..*Entity) { n := id; }\n"
+                           "Circle :: struct { r: float; }\n"
+                           "Shape :: union #tagged { circle: Circle; }\n"
+                           "t :: (using s: *Shape) { c := circle; }\n"
+                           "main :: () { }\n"),
+              "7:26: can't assign to 'id': it's a field of the parameter 'e'\n"
+              "8:32: can't take the address of 'id': it's a field of the parameter 'e'\n"
+              "11:34: a default value can't use 'id', a field of the parameter 'e'\n"
+              "12:43: #run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling\n"
+              "13:16: 'using' needs a struct or a pointer to one, not 'int'\n"
+              "14:16: 'using' needs a struct or a pointer to one, not '[]*Entity'\n"
+              "14:34: unknown identifier 'id'\n"
+              "17:16: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
+              "17:31: unknown identifier 'circle'\n");
+    // Any procedure may have one: a foreign one, and a #c_call one whose
+    // body names a field through it.
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "f :: (using e: *Entity) -> s32 #foreign libc;\n"
+                           "g :: (using e: *Entity) -> s32 #c_call { return cast(s32) id; }\n"
+                           "main :: () { }\n"),
+              "");
     arena_free(&a);
 }

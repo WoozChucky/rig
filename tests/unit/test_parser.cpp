@@ -4472,3 +4472,83 @@ TEST(tagged_union_declaration_mistakes) {
     CHECK_STR(errors, "1:19: expected an expression, found directive\n");
     arena_free(&a);
 }
+
+// Issue #225: using (spec 3.21).
+
+TEST(parses_using_fields) {
+    // 'using' before a field's name, in a struct's braces or an anonymous
+    // member's, its type a struct or a pointer to one (the checker's to
+    // say). The dump writes it first.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "Player :: struct { name: string; using entity: Entity; health: int; }\n"
+                        "E :: struct { union { using k: Key; m: int; }; using p: *Node; }\n"
+                        "main :: () { }\n",
+                        &errors),
+              "(struct Player (name string) (using entity Entity) (health int))\n"
+              "(struct E (union (using k Key) (m int)) (using p (ptr Node)))\n"
+              "(proc main (params) (block))\n");
+    CHECK_STR(errors, "");
+    // The field is at its name, as any field, and says it's a using one.
+    Token_List *list = src("Player :: struct { name: string; using entity: Entity; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->globals.count, 1);
+    Ast_Struct *player = file->globals.count == 1 ? (Ast_Struct *)file->globals[0] : nullptr;
+    CHECK(player && player->kind == AST_STRUCT);
+    if (player && player->kind == AST_STRUCT && player->fields.count == 2) {
+        CHECK(!player->fields[0]->is_using);
+        CHECK(player->fields[1]->is_using);
+        CHECK_STR(player->fields[1]->name, "entity");
+        CHECK_EQ(player->fields[1]->pos.col, 40);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(using_mistakes) {
+    // Each alone: a tagged union's member, an anonymous member, a statement
+    // in a body, a top-level declaration and a procedure type's parameter.
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "S :: union #tagged { using a: A; }\n", &errors);
+    CHECK_STR(errors, "1:22: a tagged union's member can't be 'using': its members are read in a switch\n");
+    parse_src(&a, "S :: struct { using union { a: int; }; }\n", &errors);
+    CHECK_STR(errors, "1:21: expected a field's name, found 'union'\n");
+    parse_src(&a, "main :: () {\n    using e;\n}\n", &errors);
+    CHECK_STR(errors, "2:5: 'using' is for a field or a parameter, as in using entity: Entity;\n");
+    parse_src(&a, "using Foo;\n", &errors);
+    CHECK_STR(errors, "1:1: 'using' is for a field or a parameter, as in using entity: Entity;\n");
+    parse_src(&a, "f : (using e: *E) -> int;\n", &errors);
+    CHECK_STR(errors, "1:6: expected a type, found 'using'\n");
+    arena_free(&a);
+}
+
+TEST(parses_using_parameters) {
+    // 'using' before a parameter's name, a value's or a pointer's; the dump
+    // writes it first. A '(' followed by 'using' after '::' begins a
+    // parameter list, so each is a procedure, not a constant.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "move :: (using e: *Entity, dx: float) { }\n"
+                        "show :: (using e: Entity) { }\n",
+                        &errors),
+              "(proc move (params (using e (ptr Entity)) (dx float)) (block))\n"
+              "(proc show (params (using e Entity)) (block))\n");
+    CHECK_STR(errors, "");
+    // The parameter is at its name, as any parameter, and says it's a
+    // using one; the other isn't.
+    Token_List *list = src("move :: (using e: *Entity, dx: float) { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->procs.count, 1);
+    if (file->procs.count == 1 && file->procs[0]->params.count == 2) {
+        Ast_Param *e = file->procs[0]->params[0];
+        CHECK(e->is_using);
+        CHECK_STR(e->name, "e");
+        CHECK_EQ(e->pos.col, 16);
+        CHECK(!file->procs[0]->params[1]->is_using);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}

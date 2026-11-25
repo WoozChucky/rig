@@ -19,7 +19,8 @@
 //               | run                                               code run while compiling
 //               | if_directive                                      conditional: its blocks hold top_level*
 //   members     = '{' {member} '}'
-//   member      = IDENT ':' type ';'
+//   member      = ['using'] IDENT ':' type ';'                     'using': its struct's fields reached as
+//                                                                  this one's (spec 3.21)
 //               | ('struct' | 'union') members ';'                 an anonymous member
 //   run         = '#run' block | '#run' expression ';'
 //   if_directive = '#if' expression block ['else' (block | if_directive)]
@@ -27,7 +28,10 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = IDENT ':' ['..'] type ['=' expression]          '..': a '..T' parameter, one at most;
+//   param       = ['using'] IDENT ':' ['..'] type ['=' expression]
+//                                                                  'using': its struct's fields named
+//                                                                  directly in the body (spec 3.21);
+//                                                                  '..': a '..T' parameter, one at most;
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)

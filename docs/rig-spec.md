@@ -151,7 +151,7 @@ null          push_context  return        struct        true          union
 using         while
 ```
 
-`using` is reserved: no construct uses it yet, and writing it is a syntax error wherever it appears. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as the outer struct's own; before a parameter's name, it lets the procedure's body name the fields of the parameter's struct directly (section 3.21). Anywhere else it is a syntax error. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
 
 ### 2.7 Directives
 
@@ -420,7 +420,7 @@ Signed integers are two's complement. Each integer type's alignment is its size.
 
 `null` is the pointer to nothing. It is a constant with a type of its own, which converts to every pointer type, to every procedure type (the procedure value that names no procedure, section 3.15) and to nothing else: `p : *int = null;`. On its own, with no pointer type to take, it is an error: `x := null;` is `null needs a pointer type, as in p : *int = null;`.
 
-`*void` is a pointer to anything, C's `void *`. It converts implicitly to and from every pointer type. It cannot be dereferenced (`can't dereference a '*void'; cast it to a pointer to something first`), indexed, or moved by arithmetic, since what it points at has no size. Every other pointer converts to another pointer type only through a cast.
+`*void` is a pointer to anything, C's `void *`. It converts implicitly to and from every pointer type. It cannot be dereferenced (`can't dereference a '*void'; cast it to a pointer to something first`), indexed, or moved by arithmetic, since what it points at has no size. Any other pointer converts to another pointer type only through a cast, but a `*S` converts to a `*B` when the struct `S` holds a `B` through `using` fields (section 3.21).
 
 ### 3.6 Array types
 
@@ -472,7 +472,7 @@ A field's type may be any type but `void`, but a struct cannot hold itself by va
 
 A struct value is copied whole by assignment, as an argument and as a result. Structs are not compared by any operator.
 
-A struct may have anonymous members among its fields, `union { ... };` and `struct { ... };`, each a field with no name whose own fields the struct reaches as its own (section 3.19).
+A struct may have anonymous members among its fields, `union { ... };` and `struct { ... };`, each a field with no name whose own fields the struct reaches as its own (section 3.19). It may also take in another struct's fields with a `using` field, `using entity: Entity;`, a field as any other whose struct's fields it reaches as its own too, `p.position` for `p.entity.position` (section 3.21).
 
 ### 3.10 void
 
@@ -533,6 +533,7 @@ A value converts implicitly to another type only in these cases:
 - `float32` to `float64`.
 - `null` to any pointer type and any procedure type.
 - `*void` to any pointer type, and any pointer type to `*void`.
+- A `*S` to the `*B` that the struct `S` holds through value `using` fields, at any depth: a `*Player` to a `*Entity`, moved to its `entity` field (section 3.21).
 - A procedure value to its own procedure type only: the same parameter types, result types, `#c_call` mark and `..T` last parameter or none (section 3.15).
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
 - `[..]T` to `[]T`, a view of the resizable array's elements, its `count` of them at its `data`, read where it converts (section 3.17).
@@ -541,7 +542,7 @@ A value converts implicitly to another type only in these cases:
 - A member written without its enum, `.FREE`, to its enum type, and the untyped `0` to an `enum_flags` type (section 3.18).
 - Any value to `Any`, Preload's struct of the value's address and its type's description; a value of type `Any` converts as itself (section 3.16).
 
-Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between an enum and an integer or another enum, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
+Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between an enum and an integer or another enum, not between pointers to different types other than through `*void` and `using` fields, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
 
 Implicit conversions happen wherever a value goes into something of a known type: a variable's declaration with a type, an assignment, an argument, a return, a field or element of a compound literal, and a binary operator's operands (section 5.3).
 
@@ -557,13 +558,13 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 
 | From | To | Result |
 |---|---|---|
-| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below); `cast(Any) e` converts a value of any type, a pointer and a procedure value included (section 3.16) |
+| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below); `cast(Any) e` converts a value of any type, a pointer and a procedure value included (section 3.16), and `cast(*Entity) p` of a `*Player` is moved to its `entity` field, as where it converts implicitly (section 3.21) |
 | integer | integer | the same number. If `e` is a constant, a value outside `T`'s range is the compile-time error `300 doesn't fit in 'u8'`, at the cast; otherwise the value is checked at run time (section 8.3). |
 | enum or integer | integer or enum, not two enum types | the integer cast between their integer types, checked the same way (`300 doesn't fit in 'Small'`); a value no member has is allowed (section 3.18) |
 | `bool` | integer | 1 for `true`, 0 for `false` |
 | integer or float | float | the nearest value of `T`, ties to even (`float32` to `float64` is exact) |
 | float | integer | the value truncated toward zero, saturated to `T`'s range: a value above `T`'s largest gives its largest, a value below its smallest gives its smallest, NaN gives 0. No runtime check. |
-| pointer | pointer | the same address |
+| pointer | pointer | otherwise the same address: `cast(*Player) pe` of a `*Entity` included, and `cast(*Entity) cast(*void) p` |
 | pointer | `int`, `s64`, `u64` | the address as a number |
 | `int`, `s64`, `u64` | pointer | the number as an address |
 | `string` | `[]u8` | the same view (same count, same data) |
@@ -684,24 +685,25 @@ Type_Info_Tag :: enum { INTEGER; FLOAT; BOOL; STRING; POINTER; PROCEDURE; VOID; 
 
 Type_Info :: struct { tag: Type_Info_Tag; size: int; alignment: int; }
 
-Type_Info_Integer   :: struct { info: Type_Info; signed: bool; }
-Type_Info_Pointer   :: struct { info: Type_Info; pointer_to: *Type_Info; }
-Type_Info_Procedure :: struct { info: Type_Info; parameter_types: []*Type_Info; result_types: []*Type_Info;
-                                is_c_call: bool; is_variadic: bool; }
-Type_Info_Struct    :: struct { info: Type_Info; name: string; members: []Type_Info_Struct_Member;
+Type_Info_Integer   :: struct { using info: Type_Info; signed: bool; }
+Type_Info_Pointer   :: struct { using info: Type_Info; pointer_to: *Type_Info; }
+Type_Info_Procedure :: struct { using info: Type_Info; parameter_types: []*Type_Info;
+                                result_types: []*Type_Info; is_c_call: bool; is_variadic: bool; }
+Type_Info_Struct    :: struct { using info: Type_Info; name: string; members: []Type_Info_Struct_Member;
                                 is_union: bool; }
 Type_Info_Struct_Member :: struct { name: string; type: *Type_Info; offset: int; }
-Type_Info_Array     :: struct { info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind; count: int; }
+Type_Info_Array     :: struct { using info: Type_Info; element_type: *Type_Info; array_kind: Array_Kind;
+                                count: int; }
 Array_Kind :: enum { FIXED; VIEW; RESIZABLE; }
-Type_Info_Enum      :: struct { info: Type_Info; name: string; underlying: *Type_Info; is_flags: bool;
+Type_Info_Enum      :: struct { using info: Type_Info; name: string; underlying: *Type_Info; is_flags: bool;
                                 names: []string; values: []s64; }
-Type_Info_Tagged_Union :: struct { info: Type_Info; name: string; tag_type: *Type_Info; tag_offset: int;
+Type_Info_Tagged_Union :: struct { using info: Type_Info; name: string; tag_type: *Type_Info; tag_offset: int;
                                    members: []Type_Info_Struct_Member; }
 
 Any :: struct { type: *Type_Info; value_pointer: *void; }
 ```
 
-**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, a member of the enum `Type_Info_Tag` (section 3.18), numbered as Jai's tags are (`ENUM` is Jai's 11, the numbers between being kinds of Jai's that Rig doesn't have; `TAGGED_UNION`, a kind Jai doesn't have, is 32, past every number Jai uses), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `info`, is that `Type_Info` (Rig has no `using`, so it is read as `t.info.size`), and a `*Type_Info` whose tag says the kind is cast to the kind's struct: `cast(*Type_Info_Struct) t` when `t.tag == .STRUCT`.
+**The descriptions.** Every description starts with a `Type_Info`: its `tag` is the type's kind, a member of the enum `Type_Info_Tag` (section 3.18), numbered as Jai's tags are (`ENUM` is Jai's 11, the numbers between being kinds of Jai's that Rig doesn't have; `TAGGED_UNION`, a kind Jai doesn't have, is 32, past every number Jai uses), and its `size` and `alignment` are the type's, in bytes (section 3.11), `void`'s being 0 and 1. A kind with more to say has a struct of its own, whose first field, `using info: Type_Info;`, is that `Type_Info` (section 3.21), so the kind's tag, size and alignment are read as its own, `t.size`, and through `info` still, `t.info.size`. A `*Type_Info` whose tag says the kind is cast to the kind's struct, `cast(*Type_Info_Struct) t` when `t.tag == .STRUCT`, and a pointer to a kind's struct converts to a `*Type_Info` implicitly, the same address, `info` being at offset 0 (section 3.21).
 
 - **Integers**, `s8` to `u64` and `int` (`.INTEGER`): a `Type_Info_Integer`, whose `signed` says whether the type is signed.
 - **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
@@ -1048,7 +1050,7 @@ A union is a type whose members all lie at the same place, at offset 0: it holds
 
 ```ebnf
 StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl  = identifier ":" Type ";"
+FieldDecl  = [ "using" ] identifier ":" Type ";"
            | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 ```
 
@@ -1124,6 +1126,8 @@ example.rig:1:31: error: 'x' is already declared at example.rig:1:15
     S :: struct { x: int; union { x: float; y: int; }; }
                                   ^
 ```
+
+A name reached twice through `using` fields is another matter: it is never checked where declared, only where used, where two at one depth are ambiguous (section 3.21). An anonymous member's fields are its outer struct's own, so they hide a name reached through `using`, as the struct's other fields do.
 
 **Literals.** A union's literal gives one member, by name, and the rest of the union's bytes are zero: `Value.{f = 1.5}`. `Value.{}` gives none: every byte is zero. A literal without its type, `.{f = 1.5}`, takes a union type where it meets one, as it takes a struct type (section 5.17):
 
@@ -1401,6 +1405,199 @@ example.rig:6:5: error: this switch doesn't handle 'Shape.empty'; add its case o
         ^
 ```
 
+### 3.21 using
+
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as the outer struct's own, as an anonymous member's are (section 3.19), and the field is still there, a field as any other. Before a parameter's name, it lets the procedure's body name the fields of the struct the parameter is, or points at, directly (**On a parameter**, below).
+
+```ebnf
+FieldDecl = [ "using" ] identifier ":" Type ";"
+          | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
+```
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+main :: () {
+    p: Player;
+    p.position.x = 1.5;     // p.entity.position.x
+    p.id = 7;               // p.entity.id
+    print("{} {} {}\n", p.entity.position.x, p.entity.id, size_of(Player));
+}
+```
+
+```text
+1.5 7 40
+```
+
+**Declaration.** A `using` field is one of a struct's fields, a union's members or an anonymous member's fields, and is laid out as any field is: nothing is flattened. `Player` has three fields, `name`, `entity` and `health`, and `entity`, at 16, holds a whole `Entity`. Its type is a struct or a union, or a pointer to one, `using transform: *Transform;`. Any other type, a number, an enum, an array, a pointer to a pointer, a view or a procedure type, is `'using' needs a struct or a pointer to one, not 'int'`, and a tagged union, or a pointer to one, is `'using' can't reach into a tagged union, 'Shape': its members are read in a switch`, each at the type, since a tagged union's members are read only in a switch's case (section 3.20); the field is then an ordinary one. For the same reason a tagged union's member is never `using`: `a tagged union's member can't be 'using': its members are read in a switch`, at the `using`. Only a named field takes it: `using union { ... };` is `expected a field's name, found 'union'`. A struct can't take itself in by value, directly or through others, `Self :: struct { using s: Self; }` being `'Self' contains itself; it can hold a pointer to itself, *Self` (section 3.9); behind a pointer it may. A `using` that starts a statement in a body, `using e;`, or a declaration at the top level, is `'using' is for a field or a parameter, as in using entity: Entity;`: Rig brings no struct's, enum's or module's names into a scope with it.
+
+**Lookup.** `e.x` looks for `x` depth by depth. Depth 0 is the struct's own fields, its anonymous members' at any depth included (section 3.19). Depth 1 is the fields of the structs its `using` fields hold or point at, an anonymous member's `using` fields included; depth 2 the fields of those their `using` fields reach; and so on. The first depth where `x` is found decides, and `e.x` is the field found there, through every field on the way: `p.position` is `p.entity.position`, and with `Mid :: struct { using base: Base; m: int; }` and `Deep :: struct { using mid: Mid; }`, `d.tag` is `d.mid.base.tag`. So a struct's own field, or its anonymous members', hides one of its name reached through `using`, and a field one `using` field away hides one two away. The field is a place when `e` is one, and through a pointer to the struct, `q.position` for a `*Player` `q`, the pointer is followed once, as for a field of its own (section 5.12). `p.entity` is a field as any other, read, written and addressed.
+
+**Ambiguity.** Two fields of the name at the first depth that has one are `'x' is ambiguous: 'a.x' or 'b.x'`, at the name, the first two found in the fields' order, each written as its path from the struct, anonymous members left out. Unlike a name reachable twice through anonymous members' braces, refused where declared (section 3.19), it is said only where the name is used: a struct may hold two `using` fields whose structs share a name, as long as nothing reaches it through them. The path written says which, `t.a.x`.
+
+```rig error
+A :: struct { x: int; }
+B :: struct { x: float; }
+Two :: struct { using a: A; using b: B; }
+
+main :: () {
+    t: Two;
+    t.a.x = 1;
+    t.x = 2;
+}
+```
+
+```text
+example.rig:8:7: error: 'x' is ambiguous: 'a.x' or 'b.x'
+        t.x = 2;
+          ^
+```
+
+**Pointers.** Through a `using` field that is a pointer, its struct's fields are reached as fields of what it points at: with `Sprite :: struct { using transform: *Transform; frame: int; }`, `s.x` is `s.transform.x`. So it is a place even when `s` isn't, a value parameter included (section 7.2); two sprites pointing at one `Transform` share its fields; and the pointer is checked not to be null at the name written, `x`, where a null one stops the program with `runtime error: null pointer dereference` (section 8.4). Each pointer on the way is followed, and checked, in turn.
+
+```rig
+#import "Basic";
+
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+
+nudge :: (s: Sprite) { s.x += 1; }
+
+main :: () {
+    t := Transform.{1, 2};
+    a := Sprite.{*t, 0};
+    b := Sprite.{*t, 1};
+    a.x = 3;
+    nudge(b);
+    print("{} {} {}\n", t.x, a.x, b.y);
+}
+```
+
+```text
+4.0 4.0 2.0
+```
+
+**Cycles.** A struct may point at itself through a `using` field, `Node :: struct { value: int; using parent: *Node; }`, and two structs at each other. The search enters no struct it searched at an earlier depth, where the name wasn't, nor one struct more than twice at one depth, two being enough to say a name is ambiguous; so it ends, and `n.nope` is `'Node' has no field 'nope'`.
+
+**Literals.** A literal names its struct's own fields, its anonymous members' included (section 5.17), never one reached through a `using` field: the `using` field is given its struct's value as any field is, by name, `Player.{entity = .{id = 1}, health = 3}`, or in order, `Player.{"ann", .{1, .{1, 2}}, 3}`. A name reached through it says which field to name:
+
+```rig error
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+main :: () {
+    p := Player.{position = .{1, 2}};
+}
+```
+
+```text
+example.rig:6:18: error: a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}
+        p := Player.{position = .{1, 2}};
+                     ^
+```
+
+**Conversion.** A pointer to a struct converts implicitly to a pointer to a struct it holds through value `using` fields (section 3.13): a `*Player` is a `*Entity`, the address of its `entity` field, 16 bytes on from the `Player`'s. It goes through any number of them, anonymous members on the way included: with `Deep` above, a `*Deep` is a `*Mid` and a `*Base`. It applies wherever a value goes into something of a known type, as every implicit conversion does: a declaration, an assignment, an argument, a return, a field or element of a literal, a default value, and the operands of a comparison, `pe == *p` comparing two `*Entity`s. A null pointer stays null, so a null `*Player` passed as a `*Entity` is caught where it is used (section 8.4), not taken for the address 16. The shallowest depth that has a `using` field of the type decides, the struct's own `using` fields being the first: with `Near :: struct { using e: Entity; using m: M; }` and `M :: struct { using e2: Entity; }`, a `*Near` converts through `e`. Two at that depth are `'*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant`, at the value (at the target in `a, b = f();`, where a result's other conversion errors are, section 6.4), each written as its path from the struct; `*t.a` says which. `cast(*Entity) p` is the same conversion (section 3.14), refused the same way. A string literal's, a procedure's or a type's description's address that the conversion would move, through a field not at offset 0, is no constant's or global's value, for now, since the linker writes such an address as it is (sections 4.2, 4.3).
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+describe :: (e: *Entity) -> int { return e.id; }
+
+main :: () {
+    p: Player;
+    p.id = 7;
+    pe : *Entity = *p;
+    pe.position.x = 2.5;
+    none : *Player = null;
+    ne : *Entity = none;
+    print("{} {} {} {}\n", describe(*p), cast(int) pe - cast(int) *p, p.position.x, ne == null);
+}
+```
+
+```text
+7 16 2.5 true
+```
+
+```rig error
+Entity :: struct { id: int; }
+Twice :: struct { using a: Entity; using b: Entity; }
+
+main :: () {
+    t: Twice;
+    e : *Entity = *t;
+}
+```
+
+```text
+example.rig:6:19: error: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant
+        e : *Entity = *t;
+                      ^
+```
+
+Only a pointer converts, and only through value fields: a `using` field that is a pointer holds no struct, so a `*Sprite` isn't a `*Transform` (`a value of type '*Sprite' doesn't convert to '*Transform' implicitly`). A `Player` doesn't convert to an `Entity` (`p.entity` is one), nor a `*Entity` back to a `*Player`, nor a `**Player` to a `**Entity`, a `[]Player` to a `[]Entity`, or any other type made of them. A cast between pointers that don't convert this way keeps the address (section 3.14): `cast(*Player) pe` is the `*Player` at `pe`'s address, which is the `Player` holding it only when its `using` field is its first, at 0; and `cast(*Entity) cast(*void) p` reads the `Player`'s first bytes as an `Entity`.
+
+**Constants, type information and printing.** A field of constant data reached through a `using` field folds as any field of it does (section 5.9): for `K :: Player.{entity = .{id = 5}};`, `K.id` is the constant 5. A `using` field is described as any field is (section 3.16), a member named `entity` of type `Entity`, and Basic's `print` writes it as one: `{name = "ann", entity = {id = 7, position = {x = 1.5, y = 0.0}}, health = 3}`. Preload's descriptions take in their `Type_Info` so, `using info: Type_Info;`, each kind's first field: a `Type_Info_Struct`'s `t.size` is its `t.info.size`, and a `*Type_Info_Struct` is a `*Type_Info`, the same address. A debugger shows a `using` field as the ordinary field it is, reached by its whole path, `p.entity.position` (section 10.7).
+
+**On a parameter.** `using` before a parameter's name in a procedure's declaration lets its body name the fields of the struct the parameter is, or points at, directly: in `move :: (using e: *Entity, dx: float)`, `position` is `e.position` and `id` is `e.id`. The grammar is section 7.1's `Param = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ]`. The parameter's type is one a `using` field takes, or it is refused with the same messages, at the type, and is then an ordinary parameter. Any procedure may have one, a foreign one too, since it changes only what the body's names mean; a procedure type has none (`expected a type, found 'using'`). The parameter is still there, `e` itself, passed as any other (section 7.2): a `*Player` goes into `using e: *Entity` as into any `*Entity`, moved to its `entity` field (above). No new variable is made: each name is the parameter's field, reached when the statement naming it runs.
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+move :: (using e: *Entity, dx: float) {
+    position.x += dx;   // e.position.x
+    id += 1;            // e.id
+}
+
+hurt :: (using p: *Player, damage: int) {
+    health -= damage;   // p.health
+    position.y = 0;     // p.entity.position.y
+}
+
+main :: () {
+    p := Player.{health = 10};
+    move(*p, 1.5);
+    hurt(*p, 3);
+    print("{} {} {}\n", p.position.x, p.id, p.health);
+}
+```
+
+```text
+1.5 1 7
+```
+
+**Lookup in the body.** A name is looked for in the blocks around it, then among the fields of the procedure's `using` parameters, then at the top level (section 4.7). So a local, a loop's `it` or `it_index`, a switch case's `it` and the parameters themselves hide such a field, and a field hides a global, a constant, a procedure, an enum or a struct of its name where the name is a value (`Mode.A`, `Shape.empty`, a callee); a written type and a literal's type (`Vec2.{1, 2}`) are never a field's. The fields are found as `e.x` finds them, depth by depth, from the structs of all the `using` parameters together at depth 0, in parameter order: a field of `p.entity` is found one `using` field away, and with `(using a: *A, using b: *B)` both holding `x`, `x` is `'x' is ambiguous: 'a.x' or 'b.x'`, at the name, each path written from its parameter's name. A field that holds a procedure value is called through it: `on(n)` for a field `on: (int) -> int`.
+
+**Read-only.** A field named so is a part of its parameter. Through a pointer, the parameter's or a pointer `using` field's on the way, it is a place, and writing it writes where the pointer points; a null pointer stops the program at the name written, `runtime error: null pointer dereference` (section 8.4). A value parameter's own fields are read-only, as the parameter is (section 7.2): `can't assign to 'id': it's a field of the parameter 'e'`, and `can't take the address of 'id': it's a field of the parameter 'e'`, at the name. In the procedure's default values its `using` parameters' fields are in scope, as its parameters are, and refused as they are, since none exists where a default is worked out (`a default value can't use 'id', a field of the parameter 'e'`); nor can an expression `#run` in the body use one (`#run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling`, section 7.8).
+
+```rig error
+Entity :: struct { id: int; }
+
+reset :: (using e: Entity) {
+    id = 0;
+}
+
+main :: () { }
+```
+
+```text
+example.rig:4:5: error: can't assign to 'id': it's a field of the parameter 'e'
+        id = 0;
+        ^
+```
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
@@ -1425,7 +1622,7 @@ A declaration of a name binds it to a constant, a variable, a procedure, a struc
 
 Procedures, structs, unions and enums are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`, `Value :: union { ... }` is `unions can only be declared at the top level, for now`, and `Mode :: enum { ... }` is `enums can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=` begins a procedure's parameter list (a parameter written `n := 0` is an error there, section 7.2); any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
+After `::`, a `(` followed by `)`, by `..`, by `using` (a `using` parameter's, section 3.21), or by an identifier and `:` or `:=` begins a procedure's parameter list (a parameter written `n := 0` is an error there, section 7.2); any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
 
 ### 4.2 Constants
 
@@ -1442,7 +1639,7 @@ ConstDecl = identifier "::" Expression ";" .
 
 A constant's value may also be a `#run`, worked out by running code while compiling (section 7.8): `LIMIT :: #run triangle(4);`, `PRIMES :: #run primes();`. It holds what the `#run` gives, baked into the program as if it had been written: any of the above but a pointer other than `null`, and views too, as its own value or inside its data, which a written constant can't hold (below). A view's elements are then read-only data of the constant's, as its strings' bytes are.
 
-A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. So is a type's description's address, `type_info(T)` (section 5.19), as it is or cast, and a value converted to `Any` (section 3.16), which holds addresses: `INFO :: type_info(int);` is refused so, at the value, and so is `HELD :: Holder.{a = 5};`, for an `Any` field `a`, at the value converted to `Any` (the `5`). A written constant makes no view, as its own value or inside its data, since a view would see memory of its own: `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field, a `#run`'s array included. A `#run`'s view is copied (above), so a constant may hold one wherever it comes from: the `#run` itself, another constant holding it (`V2 :: V;`), or a part of one, in a literal too (`H :: Holder.{v = V};`). A view field that a struct literal leaves out is allowed: it is the empty view. So is a resizable array field left out, the empty array, though no constant can hold a resizable array otherwise, since no literal makes one: `E :: H.items;`, for such a field `items` of a constant `H`, is `a constant can't hold a resizable array; no literal makes one`, at the value (section 3.17). Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
+A value that isn't known while compiling is `the value of constant 'N' isn't known while compiling`, at the value, or at the first value inside its literals that isn't: in `LIVE :: Holder.{n = count};`, for a variable `count`, at `count`. A pointer, the constant's own or one inside its data, is `null` or a string literal's address; a cast that makes any other pointer, from a number, a procedure or a pointer variable (`cast(*int) 4096`, `cast(*void) add`), is `a constant's pointer can only be null or a string literal's address`. So is a string literal's address moved through a `using` field (section 3.21), where it converts to the pointer it goes into or in a cast around it: with `S :: "abcdefgh12345678";` and `W :: cast(*Player) S.data;`, `H :: Holder.{W};`, for a `*Entity` field, and `X :: cast(*Entity) W;`, at the value, since the linker writes the address as it is. So is a type's description's address, `type_info(T)` (section 5.19), as it is or cast, and a value converted to `Any` (section 3.16), which holds addresses: `INFO :: type_info(int);` is refused so, at the value, and so is `HELD :: Holder.{a = 5};`, for an `Any` field `a`, at the value converted to `Any` (the `5`). A written constant makes no view, as its own value or inside its data, since a view would see memory of its own: `VIEW :: cast([]u8) "hi";` is `a constant can't hold a view; only a string or an array can be one`, at the value, and so is an array given to a view field, a `#run`'s array included. A `#run`'s view is copied (above), so a constant may hold one wherever it comes from: the `#run` itself, another constant holding it (`V2 :: V;`), or a part of one, in a literal too (`H :: Holder.{v = V};`). A view field that a struct literal leaves out is allowed: it is the empty view. So is a resizable array field left out, the empty array, though no constant can hold a resizable array otherwise, since no literal makes one: `E :: H.items;`, for such a field `items` of a constant `H`, is `a constant can't hold a resizable array; no literal makes one`, at the value (section 3.17). Where a view is needed, an array constant converts to one, and a string constant is one already (section 3.13).
 
 A constant that names a procedure, `OP :: add;` (or `OP :: OTHER;`, where `OTHER` names one), stands for that procedure: its type is the procedure's type (section 3.15), and `OP(1, 2)` calls `add` as `add(1, 2)` does. Casts may be written around the name when they end at the procedure's own type, as `cast((int, int) -> int) cast(*void) add` does; a constant that would name a procedure as another type is refused, since a call of it calls the procedure: `'add' is a '(int, int) -> int', so a constant can't name it as a '(int) -> int'`. A constant cannot name `main`, which is no value (section 7.4), nor a variadic foreign procedure or a procedure with parameters after its `..T` one, which are none either (section 3.15).
 
@@ -1515,6 +1712,8 @@ A local variable is declared after its value is worked out, so `x := x + 1;` in 
 
 A value converted to `Any` (section 3.16) is not allowed, for now, alone or in a literal, whatever the value: `any : Any = 7;` and `held := Holder.{a = 5};`, for an `Any` field `a`, are `a global's value must be known while compiling, for now`, at the value converted, or at the global's whole value when that is a cast to `Any` (`any := cast(Any) 7;`), or a cast or a field of a literal holding one (`held := cast(Holder) Holder.{a = 5};`).
 
+Nor, for now, is a string literal's, a procedure's or a type's description's address moved through a `using` field (section 3.21), where it converts to the pointer it goes into or in a cast around it, alone or in a literal: with `W` above (section 4.2), `g : *Entity = W;` and `t : *Type_Info = cast(*Wrap) type_info(int);`, for a `Wrap` holding its `Type_Info` 8 bytes in, are `a global's value must be known while compiling, for now`, at the value, since the linker writes the address as it is. One converted through a field at offset 0 is the address itself, and allowed.
+
 A global with no value, or with `---`, starts at zero.
 
 ```rig
@@ -1555,12 +1754,12 @@ A procedure's name is called (section 5.10), and used anywhere else it is a proc
 
 ```ebnf
 StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl  = identifier ":" Type ";"
+FieldDecl  = [ "using" ] identifier ":" Type ";"
            | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 TaggedDecl = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 ```
 
-A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
+A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19), and `using` before a field's name makes the fields of the struct it holds, or points at, reached as the outer one's own too (section 3.21). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
 
 A struct's name, or a union's, is a type, not a value: used as a value it is `'Vec2' is a type, not a value`.
 
@@ -1577,9 +1776,10 @@ A **block** is a sequence of statements in braces (section 6.1). A procedure's b
 - A name declared in a block, a local variable or a local constant, is visible from the end of its declaration to the end of the block, including in blocks nested inside it.
 - A procedure's parameters are declared in its body's block. They are in scope in its default values too, hiding the top level's names of theirs there as in the body, but can't be used (section 7.2).
 - A `for` loop declares its iterator (`it` or the name given) and `it_index` in its body's block (section 6.8).
+- The fields of a procedure's `using` parameters' structs are names in its body and its default values, after its blocks and before the top level, and can't be used in its default values either (section 3.21).
 - A name declared at the top level is visible everywhere, in every file of the program, unless hidden.
 
-A name is looked up from the innermost block outwards, and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
+A name is looked up from the innermost block outwards, then among the fields of the procedure's `using` parameters (section 3.21), and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -1955,6 +2155,8 @@ An element of an array is a place when the array is one, so an array constant's 
 
 **Members of unions, and fields of anonymous members.** A union's members are reached as a struct's fields are, by the same rules; one the union does not have is `'Value' has no member 'z'` (section 3.19). The fields of a struct's or a union's anonymous members are its own (section 3.19): `e.key` is looked for among `e`'s own fields, then among its anonymous members' fields, depth by depth, and is the field it finds, through every anonymous member on the way. Through a pointer, `p.key`, the pointer is followed once, and checked not to be null at `key`.
 
+**Fields reached through `using`.** When `e`'s struct has no field `x` of its own, nor its anonymous members, `x` is looked for in the structs its `using` fields hold or point at, depth by depth, and is the field found there, through every field on the way (section 3.21): `p.position` is `p.entity.position`, and through `using transform: *Transform`, `s.x` is `s.transform.x`, the pointer followed and checked not to be null at `x`. Two at the first depth that has one are `'x' is ambiguous: 'a.x' or 'b.x'`, at the name.
+
 **Counts and data.** Arrays, views, resizable arrays and strings have the members `.count` and `.data`:
 
 | `e` | `e.count` | `e.data` |
@@ -2016,7 +2218,7 @@ Field         = [ identifier "=" ] Expression .
 ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-**Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19).
+**Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19). A literal names its struct's own fields only, never one reached through a `using` field, which is given its struct's value as any field is, `Player.{entity = .{id = 1}}`: `Player.{position = p}` is `a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}` (section 3.21).
 
 **Union literals.** A union's literal gives one member, by name, `Value.{f = 1.5}`, and the rest of its bytes are zero; `Value.{}` is all zero. Values in order are `a union's literal names its one member, as in Value.{f = 1.5}`, a second member is `a union's literal gives one member; 'i' is given already`, and a member given twice is `member 'i' is given twice` (section 3.19).
 
@@ -2585,10 +2787,10 @@ ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#fore
 Signature = "(" [ Params ] ")" [ "->" Results ] .
 Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
-Param     = identifier ":" [ ".." ] Type [ "=" Expression ] .
+Param     = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 ```
 
-A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, which may be followed by `=` and the parameter's default value, passed by a call that leaves the parameter out (section 7.2), and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. One parameter may be written `name: ..T`, which takes the rest of a call's arguments as a view, `[]T`, and the parameters after it, if any, have default values (section 7.2). A foreign procedure's list may instead end with C's bare `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
+A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, which may be followed by `=` and the parameter's default value, passed by a call that leaves the parameter out (section 7.2), and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. One parameter may be written `name: ..T`, which takes the rest of a call's arguments as a view, `[]T`, and the parameters after it, if any, have default values (section 7.2). A parameter written `using e: *Entity` lets the body name the fields of the struct it is, or points at, directly (section 3.21). A foreign procedure's list may instead end with C's bare `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
 
 ```rig
 divmod :: (a: int, b: int) -> int, int {
@@ -2606,7 +2808,7 @@ Procedures may be declared in any order, and may call themselves and each other.
 
 Each argument's value is converted to its parameter's type and passed **by value**: the procedure receives its own copy, and nothing it does changes the caller's value. A struct or an array is copied whole; a view or a string is copied as its count and pointer, so its elements are shared with the caller; a resizable array is copied as a struct is, its 40 bytes, and its elements are shared too (section 3.17).
 
-Parameters are **read-only**: a parameter cannot be assigned to (`can't assign to 'a': it's a parameter`), nor can the fields or elements of a struct or array parameter, nor a view or string parameter's `.count` and `.data`, nor a resizable array parameter's four members, and a parameter has no address. To change a value, copy it into a variable first. Memory reached through a parameter is not read-only: the elements of a view or a resizable array and what a pointer points at can be changed, which is how a procedure changes its caller's data. A procedure that grows its caller's resizable array takes a pointer to it, `*[..]T`, as the built-in procedures do (section 3.17).
+Parameters are **read-only**: a parameter cannot be assigned to (`can't assign to 'a': it's a parameter`), nor can the fields or elements of a struct or array parameter, nor a view or string parameter's `.count` and `.data`, nor a resizable array parameter's four members, and a parameter has no address. To change a value, copy it into a variable first. Memory reached through a parameter is not read-only: the elements of a view or a resizable array and what a pointer points at can be changed, which is how a procedure changes its caller's data. A procedure that grows its caller's resizable array takes a pointer to it, `*[..]T`, as the built-in procedures do (section 3.17). The same goes for the fields a `using` parameter's body names directly (section 3.21): a value parameter's own fields are read-only (`can't assign to 'id': it's a field of the parameter 'e'`), and those reached through a pointer, the parameter's or a `using` field's, are what it points at.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -3028,7 +3230,7 @@ Unary   = ( "-" | "~" | "!" | "*" | "#run" ) Unary | Cast | Postfix .
 
 **At the top level,** `#run e;` and `#run { ... }` are declarations of their own, which declare no name (section 4.6). They run for their effect, and what they give is thrown away. `#run e;` runs the whole expression up to its `;`, so `#run f() + 1;` runs the sum, and the expression may be a call that returns nothing. `#run { ... }` runs its block as the body of a procedure named `#run` with no parameters and no results: its statements run in order, and `return;` ends it. A `defer` in it works as in any body, `return;` running the deferred statements as any `return` does (section 6.12). The code any `#run` runs, of either form, runs its deferred statements as the compiled program would.
 
-**In a body,** `#run` is an expression only. A statement `#run f();` is `#run in a body must be a value, as in x := #run f();`, at the `#run`: code run for its effect alone is a top-level `#run`. A `#run` in a body runs before any call of the procedure it is in, so its operand can't use what exists only while that procedure runs: a local variable, a parameter, a loop's iterator or its index. Each is `#run can't use 'x': it's a local, which doesn't exist while compiling`, at the name (`it's a parameter`, `it's the loop's iterator` or `it's the loop's index` for the others). A local constant is known while compiling, and may be used.
+**In a body,** `#run` is an expression only. A statement `#run f();` is `#run in a body must be a value, as in x := #run f();`, at the `#run`: code run for its effect alone is a top-level `#run`. A `#run` in a body runs before any call of the procedure it is in, so its operand can't use what exists only while that procedure runs: a local variable, a parameter, a loop's iterator or its index, or a field a `using` parameter's body names (section 3.21). Each is `#run can't use 'x': it's a local, which doesn't exist while compiling`, at the name (`it's a parameter`, `it's the loop's iterator`, `it's the loop's index` or `it's a field of the parameter 'e'` for the others). A local constant is known while compiling, and may be used.
 
 ```rig
 printf :: (format: *u8, ..) -> s32 #foreign libc;
@@ -3694,8 +3896,8 @@ The sections defining each construct give its messages. Some of those met most o
 | `main is where the program starts; #run can't call it` | 7.8 |
 | `#run failed: runtime error: index 10 is out of bounds (count 10)` | 7.8 |
 | `#run's result holds a pointer, which can't be baked, for now` | 7.8 |
-| `a constant's pointer can only be null or a string literal's address` | 4.2, 3.16 |
-| `a global's value must be known while compiling, for now` | 4.3, 3.16 |
+| `a constant's pointer can only be null or a string literal's address` | 4.2, 3.16, 3.21 |
+| `a global's value must be known while compiling, for now` | 4.3, 3.16, 3.21 |
 | `a foreign procedure's C name can't be empty` | 7.6 |
 | `'fr ee' can't be a C function's name: it has white space` | 7.6 |
 | `'main' can't be a C function's name: it's where the program starts` | 7.6 |
@@ -3782,6 +3984,15 @@ The sections defining each construct give its messages. Some of those met most o
 | `#through can't end a tagged union's case: the next case's 'it' is another member` | 3.20, 6.14 |
 | `can't assign to 'it': it's a member of a switched value that isn't a place` | 3.20, 6.4 |
 | `'==' compares a tagged union only with a member's name, as in s == .empty` | 3.20, 5.6 |
+| `'using' needs a struct or a pointer to one, not 'int'` | 3.21 |
+| `'using' can't reach into a tagged union, 'Shape': its members are read in a switch` | 3.21 |
+| `'x' is ambiguous: 'a.x' or 'b.x'` | 3.21, 5.12 |
+| `a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}` | 3.21, 5.17 |
+| `'*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant` | 3.13, 3.14, 3.21 |
+| `can't assign to 'id': it's a field of the parameter 'e'` | 3.21, 7.2 |
+| `can't take the address of 'id': it's a field of the parameter 'e'` | 3.21, 7.2 |
+| `a default value can't use 'id', a field of the parameter 'e'` | 3.21, 7.2 |
+| `#run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling` | 3.21, 7.8 |
 
 ### 9.4 Limits
 
@@ -4060,6 +4271,8 @@ The debug information holds:
 - **Constants:** every constant the program declares (section 4.2), at the top level or in a body, used or not, by its Rig name and with its type, but one naming a procedure (`OP :: add;`: a debugger knows the procedure by its own name) unless it hides a name a debugger shows, the predeclared `OS` (section 4.9), which the program doesn't declare, one in a nested block that can't run, after code that can't go on in the block around it (as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one: section 4.2), which has no code for a debugger to stop in, and one that hides a name, after such code in its own block, which would hide it only where there is no code. An untyped integer constant is shown as an `int`, an untyped float as a `float64`, so its value shows whole (section 3.12), and `N :: null;` as a `*void`. A number, an enum's value, a `bool` or `null` is a constant value with no storage (CodeView's `S_CONSTANT`, DWARF's `DW_AT_const_value`); a constant holding data (a string, a struct, an array, a `#run`'s view) is a variable at its read-only data (section 10.3), and so is a pointer to a string literal (`GREETING :: cast(*u8) "hi";`), at the 8 bytes holding its address there, since CodeView can't give an address as a value, and so is a body's constant naming a procedure that hides a name a debugger shows, at 8 bytes holding the procedure's address, so a debugger shows the procedure where the constant hides the name (under a top-level `OP :: 5;`, cdb's `?? OP` after `OP :: add;` is `add`'s address, not `0n5`). A body's constant that hides nothing is in the lexical block that declares it, even after a declaration that started one inside it: it needs no code where it is declared, and a debugger shows it wherever its block has code. One that hides a name a debugger shows is in the block its declaration starts, as a local is, and so is shown only where code follows it in its block: so in `{ y := x + STEP; LIMIT :: 99; z := LIMIT + y; }` under a top-level `LIMIT :: 12;`, a debugger shows `LIMIT` as 12 at `y`'s line, 99 at `z`'s, and 12 again after the block (on Windows, not when a `return`, `break` or `continue` leaves the block through deferred code: see below). A copy of deferred code (section 6.12) declares its constants anew, as it does its variables. gdb's `print` and `info locals`, cdb's `??` and `dv /t`, and VS Code's Watch, hover and Debug Console show them, on both systems (gdb's `print LIMIT` is `12`, and for `RATIO :: 0.1;`, an untyped float shown as a `float64`, `print RATIO` is `0.10000000000000001`; cdb's `?? LIMIT` is `int64 0n12`). cdb's `dx` doesn't find a top-level number constant, where `??` does; and VS Code's Variables view lists only what has storage: a body's constants holding data, its pointers to a string literal and its procedure constants that hide a name, not its numbers, `bool`s and `null`s.
 - **Types:** the integer types, `bool` and the float types as base types (`u8` as an unsigned char, so a string's bytes show as text); pointers (`*void` as C's `void *`); structs with their fields and offsets; unions (section 3.19) as union types, as C's are described, with their members, all at offset 0, so a debugger shows every member over the same bytes (gdb's `print v` of a `Value` holding 1.5 is `{i = 4609434218613702656, f = 1.5, p = 0x3ff8000000000000}`, its `ptype v` `union Value {...}`; cdb's `?? v` lists `i`, `f` and `p`, each at `+0x000`); an anonymous member as a member with no name, at its offset, of a struct or union type with no name, declared at the member's keyword, as clang describes C's, so a debugger reaches its fields as the outer type's (gdb's `print e.key.code`, cdb's `?? e.key.code`): gdb shows it as a value with no name among the outer one's (`{kind = 2, {key = {code = 65}, mouse = {x = 65, y = 0}}}`), and on Windows LLVM's CodeView lists its fields in the outer type, at their offsets, as Microsoft's compiler does C's, so cdb's `?? e` shows `key` and `mouse` at `+0x004`, after `kind`; a tagged union (section 3.20) as the C struct it is laid out as, named as the union, of two members: `tag`, at 0, of an enumeration with no name over the tag's type, an enumerator for each member named as the member and valued its index, so a debugger shows the member the tag names; and, unless every member is `void`, a member with no name at the members' offset, of a union with no name of the members that aren't `void`, each at 0, as clang describes C's anonymous union, so `s.circle` shows the member as it does in C, whichever the union holds (gdb's `print s` of a `Shape` holding a circle of radius 3 is `{tag = circle, {circle = {r = 3}, rect = {w = 3, h = 0}}}`, its `ptype s` `struct Shape { enum {circle, rect, empty} tag; union { struct Circle circle; struct Rect rect; }; }`; cdb's `?? s` writes the tag as its number and its enumerator's name, `0 ( circle )`, then lists `circle` and `rect` at `+0x004`, in the struct itself, as it lists any anonymous member's fields), a member named `tag` listed as `tag$`, a name no Rig member can have but both debuggers take in an expression, as `result$` is (listed as `tag`, it would be a second `tag` in the struct, through the union, and gdb crashes on `s.tag` then), so `s.tag` is the tag and `s.tag$` the member (gdb's `print k` of a `Token :: union #tagged { word: s32; tag: s32; }` holding its `tag` 5 is `{tag = tag, {word = 5, tag$ = 5}}`); enums (section 3.18) as enumeration types, as a C `enum` with a fixed type is described: named as the enum, at its declaration, over its integer type, with an enumerator for each member, in order, of the member's value (read as unsigned for an unsigned integer type, so an `enum u64`'s largest member is 18446744073709551615), so a debugger shows a value by its member's name and one that no member has as its number, and an `enum_flags` value as it shows a C `enum` of flags (gdb's `(VISIBLE | GLOWING)`, when each member is a bit of its own); `[N]T` as arrays of N elements; `[]T` and `string` as structs `{ count: int; data: *T; }` named `[]T` and `string`; `[..]T` as a struct named `[..]T` of its four members, `{ count: int; data: *T; allocated: int; allocator: Allocator; }` (section 3.17), so a debugger shows them and reaches the elements through `data` (`numbers.data[2]`, gdb's `print *numbers.data@numbers.count` for them all); and a procedure type as a pointer to the subroutine type of its signature, as C's function pointers are described, `#c_call` or not, one node for each procedure type. A procedure's type says how it is called (section 10.4), the same in DWARF and CodeView, not how C would pass the same types: an aggregate parameter is a pointer to its type, each aggregate result a pointer parameter, `result$`, before the visible ones, and the context a `struct Context *` after the result pointers, in every procedure type that isn't `#c_call` (section 10.4), the procedure returning its one scalar result, or nothing when it has none or several (gdb's `ptype make` is `void (struct Pair *, struct Context *, int)`, `ptype sum` `int (struct Context *, struct Pair *)`; cdb's `dt make` `void (Pair*, Context*, int64)`). A debugger that calls a procedure from an expression passes what that type says, so a call passes addresses where the procedure takes them, and the context, which the frame's `context` gives: given `q`, a `Pair`, gdb's `print sum(context, &q)` and cdb's `.call sum(context, &q)` return `q.a + q.b`, and gdb's `print make(&q, context, 7)` and cdb's `.call make(&q, context, 7)` make `q` `{a = 7, b = 8}`; cdb refuses `.call make(7)` (`Too few arguments`). Where the frame has no `context`, in a `#c_call` procedure outside its pushes, `&default_context` is one to pass. A procedure's default values are its Rig callers' (section 7.2), and its type has none, so a debugger's call of it gives every argument. gdb's `finish` out of a procedure that returns an aggregate shows no value, rather than whatever the registers held. After it the procedure's frame is gone, and `result$` with it: to see the value, print `result$` before leaving (gdb names the address `$1`, say) and `*$1` after `finish`, or print the variable the caller assigns once its call's line is done. A procedure whose parameters and results are all scalars is called as C's, the context first (gdb's `print twice(context, 4)`, cdb's `.call twice(context, 4)`), and a `#c_call` procedure, which takes none, with its arguments alone. A procedure value's subroutine type is the one a procedure of its type has, so a debugger shows the value as an address and the procedure there, and calls through it as it calls the procedure: gdb's `print f` is `(int (*)(struct Context *, int, int)) 0x401136 <add>` and `ptype` of a value holding `make` `void (*)(struct Pair *, struct Context *, int)`; cdb's `dx f` is `procedure_values!add+0x0 [Type: __int64 (__cdecl*)(Context *,__int64,__int64)]`, after the address. A null value shows as `0x0`. gdb calls through a value as C does, `print f(context, 10, 20)`; cdb's `.call` takes only a procedure's name, but calls through a value with C++'s expression evaluator, `.call @@c++(f)(context, 10, 20)`. CodeView keeps no names for the built-in types, so Microsoft's debuggers show C's names for them (`int` is `int64`, `s8` is `char`, `float64` is `double`); gdb shows Rig's.
 
+`using` (section 3.21) changes nothing in the debug information, which describes what is laid out. A `using` field is a struct's member as any field is, so a debugger shows it by its name and reaches what it holds by its whole path: gdb's `print p` of a `Player` shows `entity = {id = 1, position = {x = 1, y = 2}}` among its fields and cdb's `?? p` lists `entity` at `+0x010`, and `p.entity.position.x` is the field `p.position.x` names, while `p.position` is no member to them (cdb's `Type does not have given member`). A `using` pointer field is the pointer it is, `s.transform.x` (cdb's `s.transform->x`). A `using` parameter is the parameter it is, its fields written through it, `e.position` (cdb's `e->position`): a name the body reaches through it, a bare `position`, is no variable to a debugger (gdb's `No symbol "position" in current context.`).
+
 A line of deferred code that runs at more than one way out of its block has its code in several places, one per copy, and the debuggers treat a breakpoint on it by their own rules and LLVM's, not Rig's. cdb takes a breakpoint on a line only when the line's code is in one piece, as it refuses one on a `for` line, so it refuses one on such a line (`Ambiguous symbol error`). gdb keeps one place of a line per lexical block, and LLVM writes a lexical block only for a scope that declares a variable itself (a scope that holds only other scopes is folded into the one around it too): so the copies of a deferred line are one place, the first copy in the code, where a breakpoint stops only when that copy runs, unless the line is in a block of the deferred code that declares a variable itself. Both statements of `defer { t := f(); g(t); }` have a place per copy, but the `if` line of `defer if c { t := f(); g(t); }` one, since `t` is in a block inside it. Stepping goes through every copy that runs, in both debuggers.
 
 A `return`, `break` or `continue` that runs the deferred statements of a block around the blocks it leaves puts their copies among those blocks' code, but outside them, so each block it leaves that declares a variable has its code in pieces. DWARF describes a block in pieces, and gdb shows each variable in its own block. LLVM's CodeView writer describes no block in pieces: it puts the variables such a block declares in the block around it, so on Windows a debugger shows them over that whole block, outside their own as `<value unavailable>`. A constant such a block declares has no range in CodeView, a number, `bool` or `null` (`S_CONSTANT`) or one at its read-only data (a static local: a constant holding data, a pointer to a string literal, a procedure constant that hides a name), so none to be unavailable outside: on Windows a debugger shows it with its value over the whole block around it, and one that hides an outer name hides it there too. In `main :: () { a := 1; defer putchar(97); putchar(10); { y := 5; LIMIT :: 99; LABEL :: "inner"; if y == 5 { return; } putchar(98); } }` under a top-level `LIMIT :: 12;` and `LABEL :: "outer";`, cdb's `dv /t` at `putchar(10);` lists `y`, `LIMIT` and `LABEL` as well as `a`, `?? LIMIT` there is `int64 0n99` and `?? LABEL` `"inner"`, where gdb's `print LIMIT` is `12` and `print LABEL` `"outer"`. A procedure's `defer free(p);` with a `return` in a loop does it to the loop's iterators.
@@ -4176,10 +4389,10 @@ ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#
 Signature     = "(" [ Params ] ")" [ "->" Results ] .
 Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
-Param         = identifier ":" [ ".." ] Type [ "=" Expression ] .
+Param         = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 
 StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl     = identifier ":" Type ";"
+FieldDecl     = [ "using" ] identifier ":" Type ";"
               | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 TaggedDecl    = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 
@@ -4202,7 +4415,7 @@ ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, by `using`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
@@ -4284,7 +4497,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `enum` | enum type | 3.18 |
 | `enum_flags` | enum type of flags | 3.18 |
 | `union` | union type; an anonymous member, `union { ... };`; with `#tagged`, tagged union type | 3.19, 3.20, 4.5 |
-| `using` | reserved | 2.6 |
+| `using` | a field the fields of whose struct are reached as the outer struct's own, or a parameter whose struct's fields its body names directly | 3.21, 2.6, 7.2 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional; with `x == {`, a switch | 6.5, 6.14 |

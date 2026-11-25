@@ -1,0 +1,30 @@
+tests/errors/using_fields.rig:17:30: error: 'using' needs a struct or a pointer to one, not 'int'
+    Bad_Int :: struct { using n: int; }
+                                 ^
+tests/errors/using_fields.rig:18:31: error: 'using' needs a struct or a pointer to one, not 'Mode'
+    Bad_Enum :: struct { using m: Mode; }
+                                  ^
+tests/errors/using_fields.rig:19:32: error: 'using' needs a struct or a pointer to one, not '[2]Vec2'
+    Bad_Array :: struct { using v: [2]Vec2; }
+                                   ^
+tests/errors/using_fields.rig:20:33: error: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch
+    Bad_Tagged :: struct { using s: Shape; }
+                                    ^
+tests/errors/using_fields.rig:21:1: error: 'Self' contains itself; it can hold a pointer to itself, *Self
+    Self :: struct { using s: Self; }
+    ^
+tests/errors/using_fields.rig:25:12: error: 'x' is ambiguous: 'a.x' or 'b.x'
+        a := t.x;
+               ^
+tests/errors/using_fields.rig:26:12: error: 'Two' has no field 'nope'
+        b := t.nope;
+               ^
+tests/errors/using_fields.rig:28:12: error: 'Cyclic' has no field 'nope'
+        d := c.nope;
+               ^
+tests/errors/using_fields.rig:29:18: error: a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}
+        e := Player.{position = .{1, 2}};
+                     ^
+tests/errors/using_fields.rig:30:20: error: a literal can't name 'id', reached through 'entity'; name 'entity', as in Player.{entity = ...}
+        f : Player = .{id = 3};
+                       ^

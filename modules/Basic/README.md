@@ -298,8 +298,8 @@ The entries are one run of memory, a power of two of them, each a header (the ke
 - `hash_int(key: int) -> u64`: the hash of the 8 bytes of `key`, in the order memory holds them.
 - `Table_Entry_State :: enum { EMPTY; USED; REMOVED; }`: an entry's state (spec 3.18); zeroed memory is `.EMPTY`, so a new entry starts empty.
 - `Table_Entry_Header`: `hash: u64` and `state: Table_Entry_State`, what both kinds of entry start with.
-- `Table_Entry`: a string-keyed entry's header, `hash: u64`, `state: Table_Entry_State` and `key: string` (the table's copy).
-- `Int_Table_Entry`: an int-keyed entry's header, `hash: u64`, `state: Table_Entry_State` and `key: int`.
+- `Table_Entry`: a string-keyed entry's header, `using header: Table_Entry_Header` (spec 3.21: `entry.hash` and `entry.state` are its own) and `key: string` (the table's copy).
+- `Int_Table_Entry`: an int-keyed entry's header, `using header: Table_Entry_Header` and `key: int`.
 - `TABLE_VALUE_OFFSET`, `INT_TABLE_VALUE_OFFSET`: where the value starts in each kind's entry, 32 and 24.
 - `Table`, `Int_Table`: `value_size: int`, `entry_size: int`, `count: int` (the keys held), `removed: int` (the entries marked removed), `capacity: int` (the entries), `entries: *u8` and `allocator: Allocator`.
 - `table_entry_size(value_offset: int, value_size: int) -> int`: an entry's bytes, the value's size rounded up to 8 after its offset.
@@ -598,5 +598,4 @@ What Basic would do differently once Rig has it:
 
 - No type aliases, so the allocator's procedure type, the key comparison the tables' probe takes, and the comparisons of the sorts and `binary_search`, are written out wherever they're used, and a time is a struct of one field, `Time`, rather than an `int` of a type of its own.
 - No overloading or generics, so procedures are named by type (`min_int`, `min_float64`), the tables are untyped, handing out `*void` (an array is typed, as the language's `[..]T`), sorting and searching take an element's size and compare through pointers, and there is one kind of table per kind of key, `Table` and `Int_Table`, with the same fields.
-- No way for a struct to take in another's fields, as Jai's `using` does, so both kinds of table entry repeat the fields of `Table_Entry_Header`, and the code they share reads an entry's start through it.
 - No named arguments (spec 7.2), so a parameter after a `..` one is always its default value, and a procedure of the program's own that takes `..Any` and a `loc` can't pass its `loc` on to `sprint` or `print_to_builder`: their allocations name its own call of them (Allocators, above; #197).

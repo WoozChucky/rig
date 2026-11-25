@@ -1,0 +1,42 @@
+tests/errors/using_conversions.rig:23:14: error: a constant's pointer can only be null or a string literal's address
+    H :: Holder.{W};
+                 ^
+tests/errors/using_conversions.rig:24:6: error: a constant's pointer can only be null or a string literal's address
+    X :: cast(*Entity) W;
+         ^
+tests/errors/using_conversions.rig:25:27: error: a global's value must be known while compiling, for now
+    global_entity : *Entity = W;
+                              ^
+tests/errors/using_conversions.rig:26:26: error: a global's value must be known while compiling, for now
+    global_holder := Holder.{W};
+                             ^
+tests/errors/using_conversions.rig:27:31: error: a global's value must be known while compiling, for now
+    global_array : [1]*Entity = .[W];
+                                  ^
+tests/errors/using_conversions.rig:28:16: error: a global's value must be known while compiling, for now
+    global_cast := cast(*Entity) W;
+                   ^
+tests/errors/using_conversions.rig:29:28: error: a global's value must be known while compiling, for now
+    global_info : *Type_Info = cast(*Wrap) type_info(int);
+                               ^
+tests/errors/using_conversions.rig:38:19: error: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant
+        a : *Entity = *t;
+                      ^
+tests/errors/using_conversions.rig:39:24: error: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant
+        b := cast(*Entity) *t;
+                           ^
+tests/errors/using_conversions.rig:40:22: error: a value of type '*Sprite' doesn't convert to '*Transform' implicitly
+        c : *Transform = *s;
+                         ^
+tests/errors/using_conversions.rig:41:18: error: a value of type 'Player' doesn't convert to 'Entity' implicitly
+        d : Entity = p;
+                     ^
+tests/errors/using_conversions.rig:42:19: error: a value of type '*Entity' doesn't convert to '*Player' implicitly
+        e : *Player = *p.entity;
+                      ^
+tests/errors/using_conversions.rig:43:20: error: a value of type '**Player' doesn't convert to '**Entity' implicitly
+        f : **Entity = *pp;
+                       ^
+tests/errors/using_conversions.rig:44:20: error: a value of type '[]Player' doesn't convert to '[]Entity' implicitly
+        g : []Entity = ps;
+                       ^

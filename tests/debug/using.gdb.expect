@@ -1,0 +1,16 @@
+main () at
+using.rig:33
+putchar(10);
+{name = {count = 3, data = 0x
+"ann"}, entity = {id = 1, position = {x = 1, y = 2}}, health = 3}
+= 1
+There is no member named position.
+= 4
+move (context=0x
+dx=1) at
+using.rig:26
+putchar(10);
+= {x = 2, y = 2}
+= {id = 1, position = {x = 2, y = 2}}
+No symbol "position" in current context.
+!.debug_names not created by gdb

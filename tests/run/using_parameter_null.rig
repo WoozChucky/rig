@@ -1,0 +1,18 @@
+// A field of a using parameter that is a null pointer (issue #225, spec
+// 3.21) stops the program with a runtime error at the name written, as a
+// field of a null pointer does (spec 8.4): position is e.position, the
+// pointer checked at position. Compiled and interpreted.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+
+move :: (using e: *Entity, dx: float) {
+    position.x += dx;
+}
+
+main :: () {
+    print("before\n");
+    move(null, 1);
+    print("after\n");
+}

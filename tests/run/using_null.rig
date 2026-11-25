@@ -1,0 +1,16 @@
+// A field reached through a using field that is a null pointer (issue
+// #225, spec 3.21) stops the program with a runtime error at the name
+// written, as a field of a null pointer does (spec 8.4): s.x is
+// s.transform.x, the pointer followed and checked at x. Compiled and
+// interpreted.
+#import "Basic";
+
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+
+main :: () {
+    print("before\n");
+    s: Sprite;
+    s.x = 1;
+    print("after\n");
+}

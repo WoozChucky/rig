@@ -1,0 +1,14 @@
+l+t
+l+s
+l+l
+bp `using.rig:26`
+bp `using.rig:33`
+g
+?? p
+?? p.entity.position.x
+?? p.position
+?? s.transform->x
+g
+?? e->position
+?? position
+q

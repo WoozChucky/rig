@@ -267,7 +267,8 @@
 //   "'void' is only a pointer's target, as in *void". A *void converts
 //   implicitly to and from every pointer type, as C's void * does; no other
 //   pointer converts to another without a cast ("a value of type '*u8'
-//   doesn't convert to '*int' implicitly").
+//   doesn't convert to '*int' implicitly"), but a *S converts to a *B when
+//   the struct S holds a B through using fields (the using section below).
 // - p + n, n + p and p - n give p's type, n any integer: p moved by n of what
 //   it points at. p - q, two pointers of the same type, gives an int, the
 //   distance in what they point at. Otherwise: "can't add two pointers",
@@ -1083,8 +1084,8 @@
 //   ... };` is an anonymous member: a field with no name, of a type of its
 //   own, also with no name ("union", "struct" in messages), made by its
 //   outer's layout. Its fields are its outer's to reach: e.key is found in
-//   e's own fields, then in its anonymous members', depth by depth
-//   (type_find_member). A name reachable twice from one top-level
+//   e's fields in order, an anonymous member's searched in its place
+//   (check_find_member). A name reachable twice from one top-level
 //   declaration, in one pair of braces or across them, is "'x' is already
 //   declared at PATH:L:C", at the later, which isn't kept.
 // - A missing member: "'Value' has no member 'z'" ("'Vec2' has no field
@@ -1163,6 +1164,80 @@
 //   #complete switch has them. A tag test is an Ast_Binary == or != whose
 //   operand_type is the tagged union and tag_member the member, its name
 //   side typed as the union but no value to work out.
+//
+// using (issue #225, spec 3.21).
+// - `using entity: Entity;` among a struct's or a union's fields, or an
+//   anonymous member's, is a field as any other, laid out as one, holding
+//   its whole struct (nothing is flattened), whose struct's fields are
+//   reached as the outer one's own; so is `using transform: *Transform;`,
+//   through the pointer. Its type is a struct or a union, or one pointer
+//   to one ("'using' needs a struct or a pointer to one, not 'int'"), never
+//   a tagged union ("'using' can't reach into a tagged union, 'Shape': its
+//   members are read in a switch"), each at the type, checked where the
+//   field's type is made (checker.cpp's lay_out, make_late_field); a
+//   refused one is an ordinary field. A tagged union's member, an
+//   anonymous member, a statement and a top-level declaration take no
+//   'using' (the parser's messages).
+// - e.x looks for x depth by depth (check_find_member): e's own fields
+//   and its anonymous members', then the fields of the structs its using
+//   fields hold or point at, and so on; the first depth that has it
+//   decides, two there being "'x' is ambiguous: 'a.x' or 'b.x'", at the
+//   name. Never checked where declared, unlike a name reachable twice
+//   through anonymous members. The walk enters no struct it searched at
+//   an earlier depth, and one struct through two paths at most at one
+//   depth, so it ends on cycles and stays small. At a depth it lays out
+//   only the structs whose own fields may hold x, by their declarations,
+//   and the others there whose using fields may reach it only once the
+//   depth has no x, to go past them: a layout x doesn't need may be a
+//   circle (a #run during the layouts). One that fails, said, ends the
+//   walk, and nothing more is said of x, as of e.y.x when y's struct has
+//   no layout.
+// - A literal names its struct's own fields (type_find_member): a name
+//   reached through a using field is "a literal can't name 'position',
+//   reached through 'entity'; name 'entity', as in Player.{entity =
+//   ...}".
+// - A *S converts implicitly to the *B that S holds through value using
+//   fields, anonymous members on the way included, never a pointer field
+//   (type_find_base, type_converts): the shallowest depth that has one
+//   decides, two there being "'*Twice' converts to '*Entity' two ways,
+//   through 'a' and through 'b'; take the address of the one meant", at
+//   the value, at the target for a multi-assign's result
+//   (check_base_conversion). cast(*B) is the same conversion; any other
+//   pointer cast keeps the address. Nothing else converts through a using
+//   field: not by value, not back, not inside another type.
+// - `move :: (using e: *Entity, dx: float)` lets the body name e's
+//   struct's fields directly: position is e.position. The parameter's type
+//   is checked as a using field's (checker.cpp's check_signature); a
+//   refused one is an ordinary parameter. A name is looked up in the
+//   scopes, then among the fields the using parameters reach
+//   (Checker.using_params, check_find_using: the same walk, from every
+//   using parameter's struct at depth 0, in parameter order), then at the
+//   top level (check_lookup): locals, a loop's or a case's it and the
+//   parameters hide such a field, which hides globals, constants,
+//   procedures, enums and structs, named as values; written types and
+//   literals' types are never looked up there. Two at one depth are "'x'
+//   is ambiguous: 'a.x' or 'b.x'". A value parameter's fields are
+//   read-only ("can't assign to 'id': it's a field of the parameter 'e'",
+//   and the address's), through a pointer they're places; in a default
+//   value they're refused ("a default value can't use 'id', a field of the
+//   parameter 'e'"), and in a #run in the body ("#run can't use 'id': it's
+//   a field of the parameter 'e', which doesn't exist while compiling").
+// - What lowering may rely on: no Ast_Member reaches through a using
+//   field. The checker built the chain, as for anonymous members, a member
+//   for each field on the way, named as the field: p.position is
+//   p.entity.position, and s.x is s.transform.x, a member whose operand is
+//   a pointer, followed and null-checked at the name written as any is.
+//   A using parameter's field is an Ast_Name whose through is that chain,
+//   from an Ast_Name naming the parameter (check_expr.cpp's
+//   check_using_name), its decl the parameter: lowering reads and
+//   addresses the chain in the name's place (lower_expr, lower_address).
+//   No variable is made for it, nor a debug variable.
+//   A value whose type is a pointer meeting another pointer type, where it
+//   converts (lower_value, lower_multi_assign) or in a cast, is moved to
+//   the using field type_find_base finds when there's one
+//   (convert_base_pointer), null kept null. Otherwise Type_Field.is_using
+//   is information only: types, layouts, literals, type information and
+//   the debug information are a struct's as ever.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
