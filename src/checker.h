@@ -267,7 +267,8 @@
 //   "'void' is only a pointer's target, as in *void". A *void converts
 //   implicitly to and from every pointer type, as C's void * does; no other
 //   pointer converts to another without a cast ("a value of type '*u8'
-//   doesn't convert to '*int' implicitly").
+//   doesn't convert to '*int' implicitly"), but a pointer to a struct to one
+//   to a struct it holds through using fields (the using section below).
 // - p + n, n + p and p - n give p's type, n any integer: p moved by n of what
 //   it points at. p - q, two pointers of the same type, gives an int, the
 //   distance in what they point at. Otherwise: "can't add two pointers",
@@ -1189,13 +1190,26 @@
 //   reached through a using field is "a literal can't name 'position',
 //   reached through 'entity'; name 'entity', as in Player.{entity =
 //   ...}".
+// - A *S converts implicitly to the *B that S holds through value using
+//   fields, anonymous members on the way included, never a pointer field
+//   (type_find_base, type_converts): the shallowest depth that has one
+//   decides, two there being "'*Twice' converts to '*Entity' two ways,
+//   through 'a' and through 'b'; take the address of the one meant", at
+//   the value (check_base_conversion). cast(*B) is the same conversion;
+//   any other pointer cast keeps the address. Nothing else converts
+//   through a using field: not by value, not back, not inside another
+//   type.
 // - What lowering may rely on: no Ast_Member reaches through a using
 //   field. The checker built the chain, as for anonymous members, a member
 //   for each field on the way, named as the field: p.position is
 //   p.entity.position, and s.x is s.transform.x, a member whose operand is
 //   a pointer, followed and null-checked at the name written as any is.
-//   Type_Field.is_using is information only: types, layouts, literals,
-//   type information and the debug information are a struct's as ever.
+//   A value whose type is a pointer meeting another pointer type, where it
+//   converts (lower_value, lower_multi_assign) or in a cast, is moved to
+//   the using field type_find_base finds when there's one
+//   (convert_base_pointer), null kept null. Otherwise Type_Field.is_using
+//   is information only: types, layouts, literals, type information and
+//   the debug information are a struct's as ever.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

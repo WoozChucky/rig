@@ -1,0 +1,21 @@
+tests/errors/using_conversions.rig:19:19: error: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant
+        a : *Entity = *t;
+                      ^
+tests/errors/using_conversions.rig:20:24: error: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant
+        b := cast(*Entity) *t;
+                           ^
+tests/errors/using_conversions.rig:21:22: error: a value of type '*Sprite' doesn't convert to '*Transform' implicitly
+        c : *Transform = *s;
+                         ^
+tests/errors/using_conversions.rig:22:18: error: a value of type 'Player' doesn't convert to 'Entity' implicitly
+        d : Entity = p;
+                     ^
+tests/errors/using_conversions.rig:23:19: error: a value of type '*Entity' doesn't convert to '*Player' implicitly
+        e : *Player = *p.entity;
+                      ^
+tests/errors/using_conversions.rig:24:20: error: a value of type '**Player' doesn't convert to '**Entity' implicitly
+        f : **Entity = *pp;
+                       ^
+tests/errors/using_conversions.rig:25:20: error: a value of type '[]Player' doesn't convert to '[]Entity' implicitly
+        g : []Entity = ps;
+                       ^

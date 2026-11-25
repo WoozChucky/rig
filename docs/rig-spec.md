@@ -533,6 +533,7 @@ A value converts implicitly to another type only in these cases:
 - `float32` to `float64`.
 - `null` to any pointer type and any procedure type.
 - `*void` to any pointer type, and any pointer type to `*void`.
+- A `*S` to the `*B` that the struct `S` holds through value `using` fields, at any depth: a `*Player` to a `*Entity`, moved to its `entity` field (section 3.21).
 - A procedure value to its own procedure type only: the same parameter types, result types, `#c_call` mark and `..T` last parameter or none (section 3.15).
 - `[N]T` to `[]T`, a view of the array's `N` elements (section 5.17 says which memory the view points at).
 - `[..]T` to `[]T`, a view of the resizable array's elements, its `count` of them at its `data`, read where it converts (section 3.17).
@@ -541,7 +542,7 @@ A value converts implicitly to another type only in these cases:
 - A member written without its enum, `.FREE`, to its enum type, and the untyped `0` to an `enum_flags` type (section 3.18).
 - Any value to `Any`, Preload's struct of the value's address and its type's description; a value of type `Any` converts as itself (section 3.16).
 
-Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between an enum and an integer or another enum, not between pointers to different types other than through `*void`, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
+Nothing else converts implicitly: not an integer to a narrower integer, not between integers and floats, not `float64` to `float32`, not between `bool` and any number, not between an enum and an integer or another enum, not between pointers to different types other than through `*void` and `using` fields, and not between procedure types, nor between a procedure value and a pointer. Such a value is `a value of type 'int' doesn't convert to 'float32' implicitly`. A value always converts to its own type.
 
 Implicit conversions happen wherever a value goes into something of a known type: a variable's declaration with a type, an assignment, an argument, a return, a field or element of a compound literal, and a binary operator's operands (section 5.3).
 
@@ -557,13 +558,13 @@ Cast = "cast" [ "," "trunc" ] "(" Type ")" Unary .
 
 | From | To | Result |
 |---|---|---|
-| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below); `cast(Any) e` converts a value of any type, a pointer and a procedure value included (section 3.16) |
+| any type | a type it converts to implicitly (its own included) | the implicit conversion (section 3.13), except for an untyped float (below); `cast(Any) e` converts a value of any type, a pointer and a procedure value included (section 3.16), and `cast(*Entity) p` of a `*Player` is moved to its `entity` field, as where it converts implicitly (section 3.21) |
 | integer | integer | the same number. If `e` is a constant, a value outside `T`'s range is the compile-time error `300 doesn't fit in 'u8'`, at the cast; otherwise the value is checked at run time (section 8.3). |
 | enum or integer | integer or enum, not two enum types | the integer cast between their integer types, checked the same way (`300 doesn't fit in 'Small'`); a value no member has is allowed (section 3.18) |
 | `bool` | integer | 1 for `true`, 0 for `false` |
 | integer or float | float | the nearest value of `T`, ties to even (`float32` to `float64` is exact) |
 | float | integer | the value truncated toward zero, saturated to `T`'s range: a value above `T`'s largest gives its largest, a value below its smallest gives its smallest, NaN gives 0. No runtime check. |
-| pointer | pointer | the same address |
+| pointer | pointer | otherwise the same address: `cast(*Player) pe` of a `*Entity` included, and `cast(*Entity) cast(*void) p` |
 | pointer | `int`, `s64`, `u64` | the address as a number |
 | `int`, `s64`, `u64` | pointer | the number as an address |
 | `string` | `[]u8` | the same view (same count, same data) |
@@ -1498,6 +1499,50 @@ example.rig:6:18: error: a literal can't name 'position', reached through 'entit
         p := Player.{position = .{1, 2}};
                      ^
 ```
+
+**Conversion.** A pointer to a struct converts implicitly to a pointer to a struct it holds through value `using` fields (section 3.13): a `*Player` is a `*Entity`, the address of its `entity` field, 16 bytes on from the `Player`'s. It goes through any number of them, anonymous members on the way included: with `Deep` above, a `*Deep` is a `*Mid` and a `*Base`. It applies wherever a value goes into something of a known type, as every implicit conversion does: a declaration, an assignment, an argument, a return, a field or element of a literal, a default value, and the operands of a comparison, `pe == *p` comparing two `*Entity`s. A null pointer stays null, so a null `*Player` passed as a `*Entity` is caught where it is used (section 8.4), not taken for the address 16. The shallowest depth that has a `using` field of the type decides, the struct's own `using` fields being the first: with `Near :: struct { using e: Entity; using m: M; }` and `M :: struct { using e2: Entity; }`, a `*Near` converts through `e`. Two at that depth are `'*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant`, at the value, each written as its path from the struct; `*t.a` says which. `cast(*Entity) p` is the same conversion (section 3.14), refused the same way.
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+describe :: (e: *Entity) -> int { return e.id; }
+
+main :: () {
+    p: Player;
+    p.id = 7;
+    pe : *Entity = *p;
+    pe.position.x = 2.5;
+    none : *Player = null;
+    ne : *Entity = none;
+    print("{} {} {} {}\n", describe(*p), cast(int) pe - cast(int) *p, p.position.x, ne == null);
+}
+```
+
+```text
+7 16 2.5 true
+```
+
+```rig error
+Entity :: struct { id: int; }
+Twice :: struct { using a: Entity; using b: Entity; }
+
+main :: () {
+    t: Twice;
+    e : *Entity = *t;
+}
+```
+
+```text
+example.rig:6:19: error: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant
+        e : *Entity = *t;
+                      ^
+```
+
+Only a pointer converts, and only through value fields: a `using` field that is a pointer holds no struct, so a `*Sprite` isn't a `*Transform` (`a value of type '*Sprite' doesn't convert to '*Transform' implicitly`). A `Player` doesn't convert to an `Entity` (`p.entity` is one), nor a `*Entity` back to a `*Player`, nor a `**Player` to a `**Entity`, a `[]Player` to a `[]Entity`, or any other type made of them. A cast between pointers that don't convert this way keeps the address (section 3.14): `cast(*Player) pe` is the `*Player` at `pe`'s address, which is the `Player` holding it only when its `using` field is its first, at 0; and `cast(*Entity) cast(*void) p` reads the `Player`'s first bytes as an `Entity`.
 
 **Constants, type information and printing.** A field of constant data reached through a `using` field folds as any field of it does (section 5.9): for `K :: Player.{entity = .{id = 5}};`, `K.id` is the constant 5. A `using` field is described as any field is (section 3.16), a member named `entity` of type `Entity`, and Basic's `print` writes it as one: `{name = "ann", entity = {id = 7, position = {x = 1.5, y = 0.0}}, health = 3}`.
 
@@ -3888,6 +3933,7 @@ The sections defining each construct give its messages. Some of those met most o
 | `'using' can't reach into a tagged union, 'Shape': its members are read in a switch` | 3.21 |
 | `'x' is ambiguous: 'a.x' or 'b.x'` | 3.21, 5.12 |
 | `a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}` | 3.21, 5.17 |
+| `'*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant` | 3.13, 3.14, 3.21 |
 
 ### 9.4 Limits
 

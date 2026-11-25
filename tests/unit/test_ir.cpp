@@ -7683,3 +7683,48 @@ TEST(a_tagged_case_reads_it_back_at_its_first_line_with_code) {
     array_free(&slots);
     arena_free(&a);
 }
+
+// Issue #225: using (spec 3.21).
+
+TEST(a_using_conversion_moves_the_pointer_and_keeps_null) {
+    // A *Player becomes a *Entity at its entity field, 16 bytes in, a null
+    // one staying null: a select, no branch, between null and the moved
+    // pointer. A cast to *Entity is the same conversion. At offset 0 the
+    // pointer is the same, and a cast through *void is never moved.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "Vec2 :: struct { x: float; y: float; }\n"
+                                          "Entity :: struct { id: int; position: Vec2; }\n"
+                                          "Player :: struct { name: string; using entity: Entity; health: int; }\n"
+                                          "Base :: struct { tag: int; }\n"
+                                          "Mid :: struct { using base: Base; m: int; }\n"
+                                          "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                                          "f :: (p: *Player) -> *Entity { return p; }\n"
+                                          "g :: (d: *Deep) -> *Base { return d; }\n"
+                                          "h :: (p: *Player) -> *Entity { return cast(*Entity) p; }\n"
+                                          "k :: (p: *Player) -> *Player { return cast(*Player) cast(*void) p; }\n"
+                                          "main :: () { }\n"));
+    CHECK_STR(proc_ir(ir, "f"),
+              "proc @f(ptr) -> ptr {\n"
+              "b0:\n"
+              "  %1 = local ptr\n"
+              "  store ptr %0, %1\n"
+              "  %2 = load ptr %1\n"
+              "  %3 = const ptr 0\n"
+              "  %4 = cmp eq ptr %2, %3\n"
+              "  %5 = const i64 16\n"
+              "  %6 = ptradd %2, %5\n"
+              "  %7 = select ptr %4, %3, %6\n"
+              "  ret %7\n"
+              "}\n");
+    String h = proc_ir(ir, "h");
+    CHECK(contains(h, "= const i64 16\n"));
+    CHECK(contains(h, "= ptradd "));
+    CHECK(contains(h, "= select ptr "));
+    CHECK(contains(h, "= cmp eq ptr "));
+    String g = proc_ir(ir, "g"), k = proc_ir(ir, "k");
+    CHECK(g.count > 0 && k.count > 0);
+    CHECK(!contains(g, "ptradd") && !contains(g, "select"));
+    CHECK(!contains(k, "ptradd") && !contains(k, "select"));
+    arena_free(&a);
+}

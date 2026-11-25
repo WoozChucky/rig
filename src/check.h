@@ -238,10 +238,22 @@ void report_no_conversion(Checker *c, Ast *value, Type *to);
 
 // Whether a value of type `from`, not an untyped constant, converts
 // implicitly to `to`: the same type, an integer that widens, a float32 to a
-// float64 (spec 6.4), a *void to or from any pointer, or [N]T or [..]T to
-// []T (spec 6.5, 3.17). True when either is unknown (null): the error was
-// reported already.
+// float64 (spec 6.4), a *void to or from any pointer, a pointer to a struct
+// to one to the struct it holds through using fields (spec 3.21,
+// type_find_base: from's struct laid out, check_base_conversion), or [N]T
+// or [..]T to []T (spec 6.5, 3.17). True when either is unknown (null): the
+// error was reported already.
 bool type_converts(Type *from, Type *to);
+
+// Gets a conversion of pointer `from` to pointer `to` through using fields
+// (spec 3.21) ready for type_converts, which is pure: from's struct laid
+// out (check_layout), which a body a #run reaches during the layouts may
+// find still to do. False after saying, at `at`, that the struct holds
+// to's two ways at the shallowest depth that has one ("'*Twice' converts
+// to '*Entity' two ways, through 'a' and through 'b'; take the address of
+// the one meant", each path written from the struct); true otherwise,
+// whether it converts or not, and for any other pair of types.
+bool check_base_conversion(Checker *c, Type *from, Type *to, Position at);
 
 // An untyped constant that meets no type becomes an int (x := 5;), or a
 // float32 (x := 0.5;), which it must fit. A literal that meets none,

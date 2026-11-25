@@ -11789,3 +11789,98 @@ TEST(literals_name_a_structs_own_fields) {
               "6:22: a literal can't name 'code', reached through 'key'; name 'key', as in .{key = ...}\n");
     arena_free(&a);
 }
+
+TEST(pointers_convert_through_using_fields) {
+    // A *S converts to the *B that S holds through value using fields, at
+    // any depth, the shallowest deciding; never through a pointer field, by
+    // value, back, or inside another type. Two at the shallowest depth are
+    // ambiguous, said once at the value, implicitly or in a cast.
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "Base :: struct { tag: int; }\n"
+                          "Mid :: struct { using base: Base; m: int; }\n"
+                          "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                          "Transform :: struct { x: float; y: float; }\n"
+                          "Sprite :: struct { using transform: *Transform; frame: int; }\n"
+                          "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                          "Near :: struct { using e: Entity; using m: M; }\n"
+                          "M :: struct { using e2: Entity; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *vec2 = struct_named(&c, "Vec2"), *entity = struct_named(&c, "Entity"), *player = struct_named(&c, "Player");
+    Type *base = struct_named(&c, "Base"), *mid = struct_named(&c, "Mid"), *deep = struct_named(&c, "Deep");
+    Type *transform = struct_named(&c, "Transform"), *sprite = struct_named(&c, "Sprite");
+    Type *twice = struct_named(&c, "Twice"), *nearby = struct_named(&c, "Near");
+    CHECK(type_converts(type_pointer_to(player), type_pointer_to(entity)));
+    CHECK(type_converts(type_pointer_to(deep), type_pointer_to(base)));
+    CHECK(type_converts(type_pointer_to(deep), type_pointer_to(mid)));
+    CHECK(type_converts(type_pointer_to(nearby), type_pointer_to(entity)));
+    CHECK(!type_converts(type_pointer_to(player), type_pointer_to(vec2)));
+    CHECK(!type_converts(type_pointer_to(sprite), type_pointer_to(transform)));
+    CHECK(!type_converts(type_pointer_to(entity), type_pointer_to(player)));
+    CHECK(!type_converts(type_pointer_to(type_pointer_to(player)), type_pointer_to(type_pointer_to(entity))));
+    CHECK(!type_converts(player, entity));
+    CHECK(!type_converts(type_view_of(player), type_view_of(entity)));
+    CHECK(!type_converts(type_pointer_to(twice), type_pointer_to(entity)));
+    Array<s32> path = {}, other = {};
+    CHECK_EQ(type_find_base(twice, entity, &path, &other), 2);
+    CHECK_EQ(path.count, 1);
+    CHECK_EQ(other.count, 1);
+    if (path.count == 1 && other.count == 1) {
+        CHECK_EQ(path[0], 0);
+        CHECK_EQ(other[0], 1);
+    }
+    CHECK_EQ(type_find_base(player, entity, &path, &other), 1);
+    CHECK_EQ(other.count, 0);
+    CHECK_EQ(type_path_offset(player, path), 16);
+    CHECK_EQ(type_find_base(deep, base, &path, &other), 1);
+    CHECK_EQ(path.count, 2);
+    CHECK_EQ(type_path_offset(deep, path), 0);
+    // Near's own e, at depth 0, decides over m.e2 at depth 1.
+    CHECK_EQ(type_find_base(nearby, entity, &path, &other), 1);
+    CHECK_EQ(path.count, 1);
+    CHECK_EQ(type_find_base(sprite, transform, &path, &other), 0);
+    CHECK_EQ(type_find_base(player, vec2, &path, &other), 0);
+    array_free(&path);
+    array_free(&other);
+    token_list_free(c.list);
+    // The ambiguity, at the value, implicit and cast, said once each; the
+    // paths written from the struct, as a field's are.
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                           "Both :: struct { using p: Player; using q: Player; }\n"
+                           "main :: () {\n"
+                           "    t: Twice;\n"
+                           "    e : *Entity = *t;\n"
+                           "    f := cast(*Entity) *t;\n"
+                           "    b: Both;\n"
+                           "    g : *Entity = *b;\n"
+                           "}\n"),
+              "8:19: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "9:24: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "11:19: '*Both' converts to '*Entity' two ways, through 'p.entity' and through 'q.entity'; take the "
+              "address of the one meant\n");
+    // A comparison's operand says it at that operand, either side, and a
+    // multi-assign's result at its target, as "doesn't convert" is said.
+    CHECK_STR(check_source(&a,
+                           "Entity :: struct { id: int; }\n"
+                           "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                           "both :: (t: *Twice) -> *Twice, int { return t, 1; }\n"
+                           "main :: () {\n"
+                           "    t: Twice;\n"
+                           "    pe: *Entity;\n"
+                           "    x := pe == *t;\n"
+                           "    y := *t != pe;\n"
+                           "    n: int;\n"
+                           "    pe, n = both(*t);\n"
+                           "}\n"),
+              "7:16: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "8:10: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n"
+              "10:5: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n");
+    arena_free(&a);
+}

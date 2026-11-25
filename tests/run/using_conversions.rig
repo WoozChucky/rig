@@ -1,0 +1,95 @@
+// Pointers converting through using fields (issue #225, spec 3.21),
+// compiled, interpreted and in a top-level #run: a *Player is a *Entity at
+// its entity field, 16 bytes in, wherever it goes into one: a declaration,
+// an assignment, an argument, a variadic one, a default value, a return
+// (one of several too), a literal's field, an array's element, a
+// multi-assign's target, a comparison's operand and a cast. Each is read back through the field's
+// id, its offset printed, and a write through one seen in the Player. A
+// *Deep is a *Base at offset 0, two using fields deep; a null *Player
+// stays null.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Base :: struct { tag: int; }
+Mid :: struct { using base: Base; m: int; }
+Deep :: struct { using mid: Mid; tag2: int; }
+Holder :: struct { e: *Entity; }
+
+first: Player;
+
+// How far into the Player its *Entity is, and the id read through it.
+show :: (e: *Entity, p: *Player) {
+    print("{} {}\n", cast(int) e - cast(int) p, e.id);
+}
+
+describe :: (e: *Entity) -> int { return e.id; }
+
+get :: (p: *Player) -> *Entity { return p; }
+
+count :: (es: ..*Entity) -> int {
+    total := 0;
+    for es { total += it.id; }
+    return total;
+}
+
+pick :: (e: *Entity = *first) -> int { return e.id; }
+
+pair :: (p: *Player) -> *Player, int { return p, 2; }
+
+entity_pair :: (p: *Player) -> *Entity, int { return p, 3; }
+
+// The offset and null checks, run in main and in the top-level #run.
+checks :: () {
+    p: Player;
+    p.id = 7;
+    pe : *Entity = *p;
+    show(pe, *p);
+    d: Deep;
+    d.tag = 4;
+    pb : *Base = *d;
+    print("{} {}\n", cast(int) pb - cast(int) *d, pb.tag);
+    none : *Player = null;
+    ne : *Entity = none;
+    print("{} {} {}\n", ne == null, cast(*Entity) none == null, ne == none);
+}
+
+main :: () {
+    p: Player;
+    p.id = 7;
+    q: Player;
+    q.id = 30;
+    first.id = 11;
+
+    pe : *Entity = *p;
+    show(pe, *p);
+    pe = *q;
+    show(pe, *q);
+    print("{}\n", describe(*p));
+    show(get(*p), *p);
+    h := Holder.{*p};
+    show(h.e, *p);
+    es: [2]*Entity;
+    es[0] = *p;
+    show(es[0], *p);
+    both : [2]*Entity = .[*p, *q];
+    show(both[1], *q);
+    print("{}\n", count(*p, *q));
+    print("{}\n", pick());
+    n: int;
+    pe, n = entity_pair(*q);
+    show(pe, *q);
+    pe, n = pair(*p);
+    show(pe, *p);
+    print("{} {}\n", pe == *p, cast(*Entity) *p == pe);
+    show(cast(*Entity) *q, *q);
+
+    // A write through the *Entity is the Player's.
+    pe.position.x = 2.5;
+    print("{}\n", p.position.x);
+
+    checks();
+}
+
+#run checks();

@@ -171,6 +171,127 @@ void type_find_member(Type *t, String name, Array<s32> *path) {
     array_free(&queue);
 }
 
+// A struct type_find_base searches: its type; how it was reached, the one
+// searched before it that holds it (an index into the walk's list, -1 for
+// t) and its field there; and the depth it's searched at, an anonymous
+// member at its outer's.
+struct Base_Search {
+    Type *type;
+    s64 outer;
+    s32 field;
+    s32 depth;
+};
+
+// type_find_base's state: its list of structs searched or to search (each
+// path's way back up), those to search at the next depth, and the first
+// two using fields of the base's type found, each a struct in the list and
+// its field.
+struct Base_Walk {
+    Type *base;
+    Array<Base_Search> list;
+    Array<s64> next;
+    s32 found;
+    s64 found_in[2];
+    s32 found_field[2];
+};
+
+// Whether struct `type`, held by a using field, is searched at `depth`, as
+// the checker's walk through using fields decides it (check_expr.cpp's
+// using_search_needed): not when it was searched at an earlier depth,
+// where it held no base and queued what it holds, nor when two paths reach
+// it at this one already, enough to say the base is reached two ways. A
+// struct can't hold itself by value, so there's no cycle to end, but a
+// struct holding two of another, each holding two of a third, would be
+// searched twice as often at each depth.
+static bool base_search_needed(Base_Walk *w, Type *type, s32 depth) {
+    s32 paths = 0;
+    for (s64 i = 0; i < w->list.count; i++) {
+        if (w->list[i].type != type) continue;
+        if (w->list[i].depth < depth) return false;
+        paths++;
+    }
+    return paths < 2;
+}
+
+// Searches struct `at` of the walk's list, at its depth: each of its value
+// using fields in order, one of the base's type counted (the first two
+// kept), any other's struct queued for the next depth; an anonymous member
+// searched in its place, as its fields are its outer's (spec 3.19). A
+// pointer field is never followed: what it points at isn't in the struct.
+static void search_base_struct(Base_Walk *w, s64 at) {
+    Type *t = w->list[at].type;
+    s32 depth = w->list[at].depth;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        Type_Field *field = &t->fields[i];
+        if (!field->type || field->type->kind != TYPE_STRUCT) continue;
+        if (!field->name.count) {
+            array_add(&w->list, Base_Search{field->type, at, (s32)i, depth});
+            search_base_struct(w, w->list.count - 1);
+            continue;
+        }
+        if (!field->is_using) continue;
+        if (field->type == w->base) {
+            if (w->found < 2) {
+                w->found_in[w->found] = at;
+                w->found_field[w->found] = (s32)i;
+            }
+            w->found++;
+            continue;
+        }
+        if (!base_search_needed(w, field->type, depth + 1)) continue;
+        array_add(&w->list, Base_Search{field->type, at, (s32)i, depth + 1});
+        array_add(&w->next, w->list.count - 1);
+    }
+}
+
+// The path of the k-th using field the walk found: the field indices from
+// t down, into *path.
+static void base_found_path(Base_Walk *w, s32 k, Array<s32> *path) {
+    path->count = 0;
+    array_add(path, w->found_field[k]);
+    for (s64 at = w->found_in[k]; w->list[at].outer >= 0; at = w->list[at].outer) array_add(path, w->list[at].field);
+    for (s64 j = 0; j < path->count / 2; j++) {
+        s32 swapped = (*path)[j];
+        (*path)[j] = (*path)[path->count - 1 - j];
+        (*path)[path->count - 1 - j] = swapped;
+    }
+}
+
+s32 type_find_base(Type *t, Type *base, Array<s32> *path, Array<s32> *other) {
+    path->count = 0;
+    other->count = 0;
+    if (t->kind != TYPE_STRUCT) return 0;
+    Base_Walk w = {};
+    w.base = base;
+    array_add(&w.list, Base_Search{t, -1, -1, 0});
+    Array<s64> level = {};  // the structs searched at this depth
+    array_add(&level, 0);
+    while (level.count && !w.found) {
+        for (s64 i = 0; i < level.count; i++) search_base_struct(&w, level[i]);
+        Array<s64> searched = level;
+        level = w.next;
+        w.next = searched;
+        w.next.count = 0;
+    }
+    s32 found = w.found < 2 ? w.found : 2;
+    if (found >= 1) base_found_path(&w, 0, path);
+    if (found == 2) base_found_path(&w, 1, other);
+    array_free(&level);
+    array_free(&w.next);
+    array_free(&w.list);
+    return found;
+}
+
+s64 type_path_offset(Type *t, Array<s32> path) {
+    s64 offset = 0;
+    for (s64 i = 0; i < path.count; i++) {
+        Type_Field *field = &t->fields[path[i]];
+        offset += field->offset;
+        t = field->type;
+    }
+    return offset;
+}
+
 s32 type_align(Type *t) {
     return t->align;
 }

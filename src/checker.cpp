@@ -1773,13 +1773,16 @@ static void check_multi_var(Checker *c, Ast_Multi_Var *multi) {
 // a, b = f(); the targets must be places in memory (check_target), f must
 // return as many results, and each result converts to its target's type as
 // a value assigned to it would ("a value of type 'int' doesn't convert to
-// 'u8' implicitly", at the target).
+// 'u8' implicitly", at the target), a *Player result into a *Entity target
+// too (spec 3.21), or said to convert two ways (check_base_conversion), at
+// the target as well.
 static void check_multi_assign(Checker *c, Ast_Assign *assign) {
     Array<Type *> targets = {};
     for (s64 i = 0; i < assign->targets.count; i++) array_add(&targets, check_target(c, assign->targets[i]));
     Ast_Call *call = check_several_values(c, assign->value, assign->targets.count);
     for (s64 i = 0; call && i < targets.count; i++) {
         Type *from = call_result_type(call, i), *to = targets[i];
+        if (!check_base_conversion(c, from, to, assign->targets[i]->start)) continue;
         if (!type_converts(from, to)) {
             diag_error(c->diag, assign->targets[i]->start,
                        "a value of type '" STR_FMT "' doesn't convert to '" STR_FMT "' implicitly",

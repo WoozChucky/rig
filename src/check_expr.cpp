@@ -777,17 +777,56 @@ bool check_convert(Checker *c, Ast *e, Type *to) {
     // constant, or a string field or element of one. Any other string's
     // bytes may go on past its count, so it doesn't (type_converts).
     if (is_literal_string(e) && is_c_string(to)) return true;
+    // A pointer to a struct holding a `to`'s struct two ways through using
+    // fields (spec 3.21) is said here, and the value's type cleared, as a
+    // literal's mistake is, so nothing more is said of it.
+    if (!check_base_conversion(c, from, to, e->start)) {
+        e->type = nullptr;
+        return true;
+    }
     return type_converts(from, to);
+}
+
+static String member_path_text(Checker *c, Type *t, Array<s32> path, String root);
+
+bool check_base_conversion(Checker *c, Type *from, Type *to, Position at) {
+    if (!from || !to || !type_is_pointer(from) || !type_is_pointer(to)) return true;
+    Type *t = from->pointee;
+    if (t->kind != TYPE_STRUCT || t == to->pointee || !check_layout(c, t)) return true;
+    Array<s32> path = {}, other = {};
+    bool ambiguous = type_find_base(t, to->pointee, &path, &other) == 2;
+    if (ambiguous) {
+        diag_error(c->diag, at,
+                   "'" STR_FMT "' converts to '" STR_FMT "' two ways, through '" STR_FMT "' and through '" STR_FMT
+                   "'; take the address of the one meant",
+                   STR_ARG(type_name(c->arena, from)), STR_ARG(type_name(c->arena, to)),
+                   STR_ARG(member_path_text(c, t, path, {})), STR_ARG(member_path_text(c, t, other, {})));
+    }
+    array_free(&path);
+    array_free(&other);
+    return !ambiguous;
 }
 
 bool type_converts(Type *from, Type *to) {
     if (!from || !to || from == to) return true;
     if (from->kind == TYPE_INTEGER && to->kind == TYPE_INTEGER) return widens(from, to);
     // A *void is a pointer to anything (C's void *), so malloc's result goes
-    // into any pointer, and any pointer into free's argument. No other
-    // pointer becomes another without a cast: a *u8 isn't a *int, and a
-    // **int isn't a **void (what it points at, a *int, isn't a *void).
-    if (type_is_pointer(from) && type_is_pointer(to)) return from->pointee == &type_void || to->pointee == &type_void;
+    // into any pointer, and any pointer into free's argument. A pointer to a
+    // struct becomes one to the struct it holds through value using fields
+    // (spec 3.21), when exactly one is at the shallowest depth that has one
+    // (type_find_base): a *Player is a *Entity, moved to its entity field
+    // where it converts (lowering's convert_base_pointer). No other pointer
+    // becomes another without a cast: a *u8 isn't a *int, a *Entity isn't
+    // a *Player, and a **int isn't a **void (what it points at, a *int,
+    // isn't a *void).
+    if (type_is_pointer(from) && type_is_pointer(to)) {
+        if (from->pointee == &type_void || to->pointee == &type_void) return true;
+        Array<s32> path = {}, other = {};
+        bool through_using = type_find_base(from->pointee, to->pointee, &path, &other) == 1;
+        array_free(&path);
+        array_free(&other);
+        return through_using;
+    }
     // An array is seen through a view of its elements (spec 3.13 and
     // 5.17): [N]T becomes the []T of its N T's, wherever it is (lowering).
     // Never the other way: a view's count isn't known while compiling.
@@ -1816,11 +1855,14 @@ static bool is_comparison(Token_Kind op) {
 // The pointer type two operands of a comparison meet at, when either is a
 // pointer or null: null takes the other's type; two pointers, the one the
 // other converts to implicitly (a *void meets any pointer, and is what they
-// meet at). Null after reporting: two nulls have no type to take ("null
-// needs a pointer type, ..."), a pointer meeting a value that isn't one is
-// "mismatched types '*int' and 'int' for '<'" (no cast suggested: only
-// 64-bit integers cast to pointers), and two pointers that don't convert
-// "mismatched types '*int' and '*u8' for '=='; cast one of them".
+// meet at; a *Player meets a *Entity it holds through a using field at the
+// *Entity, spec 3.21). Null after reporting: two nulls have no type to take
+// ("null needs a pointer type, ..."), a pointer meeting a value that isn't
+// one is "mismatched types '*int' and 'int' for '<'" (no cast suggested:
+// only 64-bit integers cast to pointers), a pointer to a struct holding the
+// other's two ways is said at it (check_base_conversion), and two pointers
+// that don't convert "mismatched types '*int' and '*u8' for '=='; cast one
+// of them".
 static Type *check_unify_pointers(Checker *c, Ast_Binary *b, Type *left, Type *right, const char *op) {
     if (left == &type_null && right == &type_null) {
         report_null_without_a_type(c, b->left);
@@ -1838,6 +1880,8 @@ static Type *check_unify_pointers(Checker *c, Ast_Binary *b, Type *left, Type *r
             check_convert(c, b->right, left);
             return left;
         }
+        if (!check_base_conversion(c, right, left, b->right->start)) return nullptr;
+        if (!check_base_conversion(c, left, right, b->left->start)) return nullptr;
         if (type_converts(right, left)) return left;
         if (type_converts(left, right)) return right;
         hint = "; cast one of them";
@@ -2427,7 +2471,11 @@ static Type *check_proc_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to) {
 
 // cast(T) e where e is a pointer and T anything, or T a pointer and e a
 // number or a bool (check_cast has seen to null and strings) (spec 6.5):
-// - a pointer to any pointer: the same address, taken to point at
+// - a pointer to a struct to one to the struct it holds through using
+//   fields (spec 3.21): the implicit conversion, moved to the field
+//   (lowering), as spec 3.14's first row says; one holding it two ways is
+//   said at the value (check_base_conversion).
+// - a pointer to any other pointer: the same address, taken to point at
 //   something else. A null stays null, a constant.
 // - a pointer to and from int, s64 or u64: the address as a number, and a
 //   number as an address, unchecked. An untyped integer is an int.
@@ -2437,6 +2485,7 @@ static Type *check_proc_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to) {
 static Type *check_pointer_cast(Checker *c, Ast_Cast *cast, Type *from, Type *to) {
     Ast *value = cast->value;
     if (type_is_pointer(from) && type_is_pointer(to)) {
+        if (!check_base_conversion(c, from, to, value->start)) return nullptr;
         cast->is_constant = value->is_constant;
         cast->constant = value->constant;
         return to;

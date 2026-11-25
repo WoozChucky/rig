@@ -300,6 +300,22 @@ Type *type_c_promoted(Type *t);
 // clash is checked.
 void type_find_member(Type *t, String name, Array<s32> *path);
 
+// The value using fields (spec 3.21) through which struct t holds a
+// `base`, anonymous members on the way included, never a pointer field:
+// depth by depth, t's own using fields first. Returns how many the
+// shallowest depth with one has, 0, 1 or 2 (two or more: ambiguous); *path
+// gets the first's field indices from t down (its last a using field of
+// type base), *other the second's (both left empty when there's none). 0
+// when t isn't a struct. t is laid out. A *t converts implicitly to a
+// *base when there's exactly one, moved to it (the checker's
+// type_converts, lowering's convert_base_pointer).
+s32 type_find_base(Type *t, Type *base, Array<s32> *path, Array<s32> *other);
+
+// Where the field `path` ends at is, in bytes from the start of struct t:
+// its fields' offsets summed, each a value field (type_find_base's path),
+// so each holds the next.
+s64 type_path_offset(Type *t, Array<s32> path);
+
 // void: what a procedure without -> returns (the type of a call of one,
 // which has no value), and what a *void points at. A *void is a pointer to
 // anything: it converts implicitly to and from every pointer type, as C's
