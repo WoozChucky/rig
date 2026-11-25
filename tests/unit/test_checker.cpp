@@ -12119,7 +12119,9 @@ TEST(value_using_parameters_are_read_only) {
     // A value parameter's fields are read-only, reached through using too;
     // through a pointer, the parameter's or a field's, they're places. In a
     // default value and in a #run, a field is refused as its parameter is.
-    // A variadic parameter is a view, so it takes no using.
+    // A variadic parameter is a view, so it takes no using, said at its
+    // '..'. A refused using parameter is an ordinary one: its body can't
+    // name the fields, a tagged union's members included.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, USING_PLAYER
                            "Transform :: struct { x: float; y: float; }\n"
@@ -12132,13 +12134,19 @@ TEST(value_using_parameters_are_read_only) {
                            "d :: (using e: *Entity, n: int = id) { }\n"
                            "r :: (using e: *Entity) { v := #run twice(id); }\n"
                            "u :: (using n: int) { }\n"
-                           "v :: (using e: ..*Entity) { }\n"
+                           "v :: (using e: ..*Entity) { n := id; }\n"
+                           "Circle :: struct { r: float; }\n"
+                           "Shape :: union #tagged { circle: Circle; }\n"
+                           "t :: (using s: *Shape) { c := circle; }\n"
                            "main :: () { }\n"),
               "7:26: can't assign to 'id': it's a field of the parameter 'e'\n"
               "8:32: can't take the address of 'id': it's a field of the parameter 'e'\n"
               "11:34: a default value can't use 'id', a field of the parameter 'e'\n"
               "12:43: #run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling\n"
               "13:16: 'using' needs a struct or a pointer to one, not 'int'\n"
-              "14:18: 'using' needs a struct or a pointer to one, not '[]*Entity'\n");
+              "14:16: 'using' needs a struct or a pointer to one, not '[]*Entity'\n"
+              "14:34: unknown identifier 'id'\n"
+              "17:16: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
+              "17:31: unknown identifier 'circle'\n");
     arena_free(&a);
 }

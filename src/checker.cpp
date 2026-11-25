@@ -1334,27 +1334,28 @@ static Type *make_anonymous_type(Type *outer, Ast_Struct *s) {
     return t;
 }
 
-// Whether `type`, written as `written`, is one a using field takes (spec
-// 3.21): a struct or a union, or one pointer to one, whose fields its
-// struct then reaches as its own. A tagged union, or a pointer to one, is
-// "'using' can't reach into a tagged union, 'Shape': its members are read
-// in a switch", since its fields would be reached outside the switch that
-// knows which member it holds; anything else, a number, an enum, an array,
-// a pointer to a pointer, a view or a procedure type, "'using' needs a
-// struct or a pointer to one, not 'int'", each at the type. A type that
-// was an error (null) was said already: false, nothing more. Refused, the
-// field is an ordinary one.
-static bool using_takes(Checker *c, Ast_Type *written, Type *type) {
+// Whether `type` is one a using field takes (spec 3.21): a struct or a
+// union, or one pointer to one, whose fields its struct then reaches as its
+// own. A tagged union, or a pointer to one, is "'using' can't reach into a
+// tagged union, 'Shape': its members are read in a switch", since its
+// fields would be reached outside the switch that knows which member it
+// holds; anything else, a number, an enum, an array, a pointer to a
+// pointer, a view or a procedure type, "'using' needs a struct or a pointer
+// to one, not 'int'", each at `pos`: the type as written, or a '..'
+// parameter's '..', which made its view. A type that was an error (null)
+// was said already: false, nothing more. Refused, the field is an ordinary
+// one.
+static bool using_takes(Checker *c, Position pos, Type *type) {
     if (!type) return false;
     Type *s = type_is_pointer(type) ? type->pointee : type;
     if (s->kind == TYPE_STRUCT && s->is_tagged) {
-        diag_error(c->diag, written->pos,
+        diag_error(c->diag, pos,
                    "'using' can't reach into a tagged union, '" STR_FMT "': its members are read in a switch",
                    STR_ARG(type_name(c->arena, s)));
         return false;
     }
     if (s->kind == TYPE_STRUCT) return true;
-    diag_error(c->diag, written->pos, "'using' needs a struct or a pointer to one, not '" STR_FMT "'",
+    diag_error(c->diag, pos, "'using' needs a struct or a pointer to one, not '" STR_FMT "'",
                STR_ARG(type_name(c->arena, type)));
     return false;
 }
@@ -1441,7 +1442,7 @@ static void lay_out(Checker *c, Ast_Struct *s, s32 base, Array<Ast_Field *> *rea
         // checked once it's made: a value one's here, a late one's by
         // make_late_field, which may still clear is_using.
         s64 offset = s->is_union || s->is_tagged ? 0 : align_up(end, field_align);
-        bool is_using = field->is_using && (field->is_late || using_takes(c, field->type_expr, type));
+        bool is_using = field->is_using && (field->is_late || using_takes(c, field->type_expr->pos, type));
         field->index = (s32)t->fields.count;
         array_add(&t->fields, Type_Field{field->name, type, offset, is_using});
         field->type = type;
@@ -1621,7 +1622,7 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     field->type = type;
     // A using field's type is checked now it's made (lay_out took it as
     // it was written); refused, the field is an ordinary one.
-    bool is_using = field->is_using && using_takes(c, field->type_expr, type);
+    bool is_using = field->is_using && using_takes(c, field->type_expr->pos, type);
     // A field whose name was declared before it isn't in the type (lay_out).
     Type *t = s->declared;
     if (t && field->index >= 0) {
@@ -3213,10 +3214,10 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
 //
 // A using parameter's type is one a using field takes (spec 3.21,
 // using_takes): a struct or a union, or one pointer to one, never a tagged
-// union's. Refused, at the type, it's an ordinary parameter
-// (Ast_Param.is_using cleared), so its body says nothing more of it. Any
-// procedure may have one, a foreign one too: it changes only what the
-// body's names mean.
+// union's. Refused, at the type (a '..T' one's at its '..', which makes it
+// a view), it's an ordinary parameter (Ast_Param.is_using cleared), so its
+// body says nothing more of it and can't name its fields. Any procedure may
+// have one, a foreign one too: it changes only what the body's names mean.
 //
 // Then the parameters' default values (check_defaults), once every type is
 // known, each converting to its parameter's: still under way, so one that
@@ -3238,11 +3239,11 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         if (!param->is_variadic) {
             param->type = resolve_type(c, param->type_expr);
             if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
-            if (param->is_using) param->is_using = using_takes(c, param->type_expr, param->type);
+            if (param->is_using) param->is_using = using_takes(c, param->type_expr->pos, param->type);
             continue;
         }
         param->type = resolve_variadic(c, param->type_expr);
-        if (param->is_using) param->is_using = using_takes(c, param->type_expr, param->type);
+        if (param->is_using) param->is_using = using_takes(c, param->dots, param->type);
         refused = c_side || proc->is_compiler;
         if (!param->type) continue;  // T's own mistake, reported
         if (proc->is_foreign) {

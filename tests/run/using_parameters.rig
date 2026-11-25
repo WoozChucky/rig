@@ -5,8 +5,9 @@
 // name, and it hides a global; a field that holds a procedure is called
 // through its value; a value parameter's pointer field still writes where
 // it points, and for * over its resizable array field writes the shared
-// elements; print takes a field by its place. A *Player goes into a
-// using *Entity parameter, moved to its entity field.
+// elements; print takes a field by its place; a pointer parameter's field's
+// address is taken and the caller's struct written through it. A *Player
+// goes into a using *Entity parameter, moved to its entity field.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -67,6 +68,12 @@ describe :: (using e: *Entity) {
     print("{} {}\n", id, position);
 }
 
+set :: (p: *int, v: int) { p.* = v; }
+
+poke :: (using e: *Entity) {
+    set(*id, 77);
+}
+
 main :: () {
     p: Player;
     p.health = 3;
@@ -97,4 +104,8 @@ main :: () {
 
     // A *Player where a *Entity is taken: the parameter is p.entity.
     describe(*p);
+
+    // A field's address, taken through the pointer, writes p's id.
+    poke(*p);
+    print("{}\n", p.id);
 }
