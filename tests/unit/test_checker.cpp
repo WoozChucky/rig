@@ -11458,6 +11458,38 @@ TEST(using_lookup_goes_depth_by_depth) {
     Ast *x = value_of(&c, "x");
     if (x->kind == AST_MEMBER) CHECK(is_member(&a, ((Ast_Member *)x)->operand, "a", "A"));
     token_list_free(c.list);
+    // A union's using member is reached as a struct's: u.code is u.k.code.
+    c = check_src(&a,
+                  "Key :: struct { code: s32; }\n"
+                  "U :: union { using k: Key; f: float; }\n"
+                  "main :: () { u: U; code := u.code; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "code"), "s32");
+    Ast *code = value_of(&c, "code");
+    if (code->kind == AST_MEMBER) CHECK(is_member(&a, ((Ast_Member *)code)->operand, "k", "Key"));
+    token_list_free(c.list);
+    // A name nothing reaches is a union's missing member.
+    CHECK_STR(check_source(&a,
+                           "Key :: struct { code: s32; }\n"
+                           "U :: union { using k: Key; f: float; }\n"
+                           "main :: () { u: U; n := u.nope; }\n"),
+              "3:27: 'U' has no member 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(using_reaches_a_struct_under_way) {
+    // A #run reached while S is laid out finds y through T's using field in
+    // S's fields so far, as t.s.y does, not "'T' has no field 'y'".
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "T :: struct { using s: *S; }\n"
+                          "S :: struct { y: int; arr: [N]int; }\n"
+                          "N :: #run h();\n"
+                          "h :: () -> int { t: T; if false { return t.y; } return 2; }\n"
+                          "main :: () { s: S; n := s.arr.count; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "int");
+    token_list_free(c.list);
     arena_free(&a);
 }
 
@@ -11481,6 +11513,26 @@ TEST(using_names_at_one_depth_are_ambiguous) {
               "8:18: 'x' is ambiguous: 'a.x' or 'b.x'\n"
               "9:21: 'x' is ambiguous: 'a.x' or 'b.x'\n"
               "10:18: 'x' is ambiguous: 'a.x' or 'b.x'\n");
+    // A path may end at a field whose type isn't known: an error, first or
+    // second, or a late field's not made yet, reached by a #run during the
+    // layouts. Its name is all the message needs.
+    CHECK_STR(check_source(&a,
+                           "A :: struct { x: Nope; }\n"
+                           "A2 :: struct { x: int; }\n"
+                           "T :: struct { using a: A; using b: A2; }\n"
+                           "U :: struct { using b: A2; using a: A; }\n"
+                           "main :: () { t: T; y := t.x; u: U; z := u.x; }\n"),
+              "1:18: unknown type 'Nope'\n"
+              "5:27: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "5:43: 'x' is ambiguous: 'b.x' or 'a.x'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: struct { x: int; }\n"
+                           "B :: struct { x: *int; }\n"
+                           "T :: struct { using a: A; using b: B; }\n"
+                           "N :: #run f();\n"
+                           "f :: () -> int { t: T; return t.x; }\n"
+                           "main :: () { }\n"),
+              "5:33: 'x' is ambiguous: 'a.x' or 'b.x'\n");
     // The shallowest decides: v.tag is v.o.tag at depth 1, not
     // v.d.mid.base.tag at depth 3.
     Checked c = check_src(&a,
@@ -11625,6 +11677,14 @@ TEST(using_takes_a_struct_or_a_pointer_to_one) {
               "9:14: 'using' needs a struct or a pointer to one, not '**Vec2'\n"
               "10:14: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
               "11:14: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n");
+    // A type that's an error is said once, not again by using, and the
+    // field isn't followed.
+    CHECK_STR(check_source(&a,
+                           "S :: struct { using a: Nope; using b: *Nope; }\n"
+                           "main :: () { s: S; z := s.zz; }\n"),
+              "1:24: unknown type 'Nope'\n"
+              "1:40: unknown type 'Nope'\n"
+              "2:27: 'S' has no field 'zz'\n");
     Checked c = check_src(&a, source);
     Type *bad = struct_named(&c, "Bad");
     CHECK_EQ(bad->fields.count, 8);
@@ -11649,5 +11709,17 @@ TEST(literals_name_a_structs_own_fields) {
               "Player.{entity = ...}\n"
               "8:20: a literal can't name 'id', reached through 'entity'; name 'entity', as in "
               "Player.{entity = ...}\n");
+    // Through an anonymous member, the field to name is its using field;
+    // inside the member's group, there's no type to write before .{.
+    CHECK_STR(check_source(&a,
+                           "Key :: struct { code: s32; }\n"
+                           "Mouse :: struct { x: s16; y: s16; }\n"
+                           "Event :: struct { kind: s32; union { using key: Key; mouse: Mouse; }; }\n"
+                           "main :: () {\n"
+                           "    a := Event.{code = 1};\n"
+                           "    b := Event.{1, .{code = 1}};\n"
+                           "}\n"),
+              "5:17: a literal can't name 'code', reached through 'key'; name 'key', as in Event.{key = ...}\n"
+              "6:22: a literal can't name 'code', reached through 'key'; name 'key', as in .{key = ...}\n");
     arena_free(&a);
 }

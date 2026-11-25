@@ -3026,7 +3026,8 @@ struct Using_Walk {
 // one through two paths already, which are enough to say a name is
 // ambiguous. Those keep the walk small, and end it on cycles (a struct
 // that points at itself, or at one that points back). Nor when its layout
-// fails or is still under way (check_layout): its fields aren't known.
+// fails (check_layout): its fields aren't known. One still under way is
+// searched as it is, its fields so far, as e.x's is.
 static bool using_search_needed(Using_Walk *w, Type *type, s32 depth) {
     s32 paths = 0;
     for (s64 i = 0; i < w->list.count; i++) {
@@ -3035,8 +3036,7 @@ static bool using_search_needed(Using_Walk *w, Type *type, s32 depth) {
         paths++;
     }
     if (paths >= 2) return false;
-    if (!check_layout(w->c, type)) return false;
-    return !type->decl || type->decl->resolve == RESOLVE_DONE;
+    return check_layout(w->c, type);
 }
 
 // Searches struct `at` of the walk's list, at its depth: each of its fields
@@ -3148,7 +3148,9 @@ static String member_path_text(Checker *c, Type *t, Array<s32> path, String root
             text = text.count ? string_printf(c->arena, STR_FMT "." STR_FMT, STR_ARG(text), STR_ARG(field->name))
                               : field->name;
         }
-        t = type_is_pointer(field->type) ? field->type->pointee : field->type;
+        // Only a field on the way is stepped into: the last one's type may
+        // not be known (an error, or a late field's not made yet).
+        if (i + 1 < path.count) t = type_is_pointer(field->type) ? field->type->pointee : field->type;
     }
     return text;
 }
@@ -3365,7 +3367,8 @@ static void check_stray_value(Checker *c, Ast *value) {
 // included, never one reached through a using field (spec 3.21): that one
 // is "a literal can't name 'position', reached through 'entity'; name
 // 'entity', as in Player.{entity = ...}", at the name: the struct's own
-// using field the name is reached through is what the literal gives.
+// using field the name is reached through is what the literal gives. An
+// anonymous member's group has no type to write: "as in .{key = ...}".
 static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     Array<Ast *> values = {};  // the literal's, grouped
     Array<String> names = {};
@@ -3402,11 +3405,11 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
                     outer = in->fields[through[k]].name;
                     in = in->fields[through[k]].type;
                 }
+                String type = t->decl && !t->decl->name.count ? String{} : type_name(c->arena, t);
                 diag_error(c->diag, at,
                            "a literal can't name '" STR_FMT "', reached through '" STR_FMT "'; name '" STR_FMT
                            "', as in " STR_FMT ".{" STR_FMT " = ...}",
-                           STR_ARG(name), STR_ARG(outer), STR_ARG(outer), STR_ARG(type_name(c->arena, t)),
-                           STR_ARG(outer));
+                           STR_ARG(name), STR_ARG(outer), STR_ARG(outer), STR_ARG(type), STR_ARG(outer));
             } else {
                 diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
                            members ? "member" : "field", STR_ARG(name));
