@@ -1172,7 +1172,7 @@ static s32 lower_view_of_resizable(Lowering *l, Type *resizable, s32 array) {
 static s32 lower_any(Lowering *l, Ast *e, Type *any);
 
 // v, a `from` (a pointer), as the `to` it converts to: moved to the using
-// field it reaches (spec 3.21, type_find_base, exactly one), null kept
+// field it reaches (spec 3.21, type_base_offset), null kept
 // null, as C++ keeps it in a base conversion, so a null *Player passed as a
 // *Entity is still caught where it's used, not taken for address 16. v
 // itself for every other pair, and for a field at 0. No branch: both are
@@ -1184,12 +1184,7 @@ static s32 lower_any(Lowering *l, Ast *e, Type *any);
 //     %moved = ptradd %v, %offset
 //     %entity = select ptr %is_null, %null, %moved
 static s32 convert_base_pointer(Lowering *l, s32 v, Type *from, Type *to) {
-    if (!from || !to || from == to || !type_is_pointer(from) || !type_is_pointer(to)) return v;
-    Array<s32> path = {}, other = {};
-    s64 offset = 0;
-    if (type_find_base(from->pointee, to->pointee, &path, &other) == 1) offset = type_path_offset(from->pointee, path);
-    array_free(&path);
-    array_free(&other);
+    s64 offset = type_base_offset(from, to);
     if (offset == 0) return v;
     s32 null = emit_constant(l, IR_PTR, 0);
     s32 is_null = emit_compare(l, IR_EQ, IR_PTR, v, null);
@@ -4279,7 +4274,9 @@ static s32 string_copy_global(Lowering *l, Ast_String *literal) {
 // the member's field, its own fields in turn). A procedure's address
 // (procedure_address) is a relocation too, to the procedure, and so is a
 // type's description's (type_info_address, spec 5.19), to its type_info.N
-// (type_info_global). The checker made sure every value is a constant, a
+// (type_info_global). Each is the address as it is, nothing added: the
+// checker refused one a using field would move (checker.cpp's
+// address_moves, spec 3.21). The checker made sure every value is a constant, a
 // string literal, a procedure, a description's address, constant data, a
 // literal of them (check_global_value), or a #run's baked value (run.cpp),
 // which is made of the same: a view's is the array literal of its elements,

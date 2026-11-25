@@ -240,8 +240,9 @@ void report_no_conversion(Checker *c, Ast *value, Type *to);
 // implicitly to `to`: the same type, an integer that widens, a float32 to a
 // float64 (spec 6.4), a *void to or from any pointer, a pointer to a struct
 // to one to the struct it holds through using fields (spec 3.21,
-// type_find_base: from's struct laid out, check_base_conversion), or [N]T
-// or [..]T to []T (spec 6.5, 3.17). True when either is unknown (null): the
+// type_find_base: from's struct laid out by check_base_conversion when it
+// declares a using field, and needing no layout otherwise), or [N]T or
+// [..]T to []T (spec 6.5, 3.17). True when either is unknown (null): the
 // error was reported already.
 bool type_converts(Type *from, Type *to);
 

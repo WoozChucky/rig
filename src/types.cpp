@@ -292,6 +292,16 @@ s64 type_path_offset(Type *t, Array<s32> path) {
     return offset;
 }
 
+s64 type_base_offset(Type *from, Type *to) {
+    if (!from || !to || from == to || !type_is_pointer(from) || !type_is_pointer(to)) return 0;
+    Array<s32> path = {}, other = {};
+    s64 offset = 0;
+    if (type_find_base(from->pointee, to->pointee, &path, &other) == 1) offset = type_path_offset(from->pointee, path);
+    array_free(&path);
+    array_free(&other);
+    return offset;
+}
+
 s32 type_align(Type *t) {
     return t->align;
 }

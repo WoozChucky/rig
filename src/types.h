@@ -306,7 +306,8 @@ void type_find_member(Type *t, String name, Array<s32> *path);
 // shallowest depth with one has, 0, 1 or 2 (two or more: ambiguous); *path
 // gets the first's field indices from t down (its last a using field of
 // type base), *other the second's (both left empty when there's none). 0
-// when t isn't a struct. t is laid out. A *t converts implicitly to a
+// when t isn't a struct. t is laid out, or declares no using field (then
+// 0, whatever state its layout is in). A *t converts implicitly to a
 // *base when there's exactly one, moved to it (the checker's
 // type_converts, lowering's convert_base_pointer).
 s32 type_find_base(Type *t, Type *base, Array<s32> *path, Array<s32> *other);
@@ -315,6 +316,12 @@ s32 type_find_base(Type *t, Type *base, Array<s32> *path, Array<s32> *other);
 // its fields' offsets summed, each a value field (type_find_base's path),
 // so each holds the next.
 s64 type_path_offset(Type *t, Array<s32> path);
+
+// How far a pointer of type `from` moves converting to pointer type `to`
+// (spec 3.21): the offset of the one using field type_find_base finds in
+// from's struct, 0 for any other pair of types, either unknown (null)
+// included.
+s64 type_base_offset(Type *from, Type *to);
 
 // void: what a procedure without -> returns (the type of a call of one,
 // which has no value), and what a *void points at. A *void is a pointer to

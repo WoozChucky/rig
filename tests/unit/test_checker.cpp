@@ -2383,8 +2383,8 @@ TEST(null_converts_to_pointers) {
 
 TEST(void_pointer_converts_both_ways) {
     // *void converts to and from every pointer type, so malloc's result
-    // needs no cast; no other pointer converts to another, *void's own
-    // pointer **void included.
+    // needs no cast; no other pointer converts to another but through
+    // using fields (spec 3.21), *void's own pointer **void included.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "malloc :: (size: u64) -> *void #foreign libc;\n"
@@ -11940,7 +11940,9 @@ TEST(a_conversion_lays_out_a_struct_with_using_fields_first) {
     // A body a #run reaches while the structs are being laid out may meet a
     // *Player before Player is laid out: Arr's count runs f, declared before
     // Player. The conversion lays it out first, to find its entity field,
-    // in a declaration, a comparison and a multi-assign's result.
+    // in a declaration, a comparison and a multi-assign's result; and a
+    // cast, which converts whatever it finds, lays it out to find a Twice's
+    // two ways.
     const char *bodies[] = {
         "f :: (p: *Player) -> int { e : *Entity = p; return cast(int) e; }\n",
         "f :: (p: *Player) -> int { e: *Entity; if p == e { return 1; } return 0; }\n",
@@ -11958,6 +11960,15 @@ TEST(a_conversion_lays_out_a_struct_with_using_fields_first) {
                                           "main :: () { }\n")),
                   "");
     }
+    CHECK_STR(check_source(&a, "f :: (t: *Twice) -> int { e := cast(*Entity) t; return cast(int) e; }\n"
+                               "size :: () -> int { return f(null) + 1; }\n"
+                               "Arr :: struct { data: [N]int; }\n"
+                               "N :: #run size();\n"
+                               "Entity :: struct { id: int; }\n"
+                               "Twice :: struct { using a: Entity; using b: Entity; }\n"
+                               "main :: () { }\n"),
+              "1:46: '*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of "
+              "the one meant\n");
     // A struct with no using field never converts to another struct's
     // pointer, so it isn't laid out for one: B, laid out, would hold C,
     // whose count runs g, a circle that isn't there.

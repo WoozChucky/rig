@@ -430,6 +430,21 @@ static void check_var(Checker *c, Ast_Var *var) {
     declare(c, var->name, var);
 }
 
+// Whether `value`, an address the linker writes (a string literal's, a
+// procedure's or a type's description's), is moved on the way into a slot
+// of type t, through a using field at a nonzero offset (spec 3.21): where
+// it converts to t, or in a cast written around it (cast(*Entity) W, for
+// W :: cast(*Player) S.data). The linker adds nothing to it, so a global
+// or a constant can't hold it moved, for now. Constant data the address is
+// found through needs no look: its constant's own value was checked so.
+static bool address_moves(Ast *value, Type *t) {
+    if (type_base_offset(value->type, t)) return true;
+    for (Ast *e = value; e->kind == AST_CAST; e = ((Ast_Cast *)e)->value) {
+        if (type_base_offset(((Ast_Cast *)e)->value->type, e->type)) return true;
+    }
+    return false;
+}
+
 // A global variable: as a local, but its value must be known while
 // compiling, because it's written into the program's file, where the
 // variable lives (lower.cpp); there's no code that could run before main
@@ -471,9 +486,19 @@ static void check_var(Checker *c, Ast_Var *var) {
 // while compiling, for now", at the value, in a literal too (any : Any =
 // 7;, Holder.{a = 5}).
 //
+// The linker writes such an address as it is, with nothing added
+// (lower.cpp's constant_bytes), so it may not be moved on the way through
+// a using field (address_moves): for W :: cast(*Player) S.data,
+// `g : *Entity = W;` is "a global's value must be known while compiling,
+// for now", where a body's `l : *Entity = W;` moves it to W's entity
+// field.
+//
 // A value that needs a #run with no value says nothing more: the #run's
 // failure, or the errors in what it reaches, were said (has_failed_run).
-static bool check_global_value(Checker *c, Ast *value) {
+// t is the type of the slot the value goes into, the global's or a
+// literal's field's or element's; null when it isn't known, after an
+// error in the literal.
+static bool check_global_value(Checker *c, Ast *value, Type *t) {
     if (value->to_any != ANY_NONE) {
         if (!has_failed_run(value)) {
             diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
@@ -485,20 +510,27 @@ static bool check_global_value(Checker *c, Ast *value) {
     if (value->kind == AST_LITERAL && type_is_aggregate(value->type)) {
         Ast_Literal *literal = (Ast_Literal *)value;
         for (s64 i = 0; i < literal->values.count; i++) {
-            if (!check_global_value(c, literal->values[i])) return false;
+            Type *part = nullptr;
+            if (value->type->kind == TYPE_ARRAY) {
+                part = value->type->element;
+            } else if (value->type->kind == TYPE_STRUCT && i < literal->fields.count && literal->fields[i] >= 0) {
+                part = value->type->fields[literal->fields[i]].type;
+            }
+            if (!check_global_value(c, literal->values[i], part)) return false;
         }
         return true;
     }
     Ast *data;
-    if (literal_address(value) || procedure_address(value) || type_info_address(value)) return true;
-    if (constant_data(value, &data)) return true;
+    bool address = literal_address(value) || procedure_address(value) || type_info_address(value);
+    if (address && !address_moves(value, t)) return true;
+    if (!address && constant_data(value, &data)) return true;
     if (has_failed_run(value)) return false;
     diag_error(c->diag, value->start, "a global's value must be known while compiling, for now");
     return false;
 }
 
 static void check_global_var(Checker *c, Ast_Var *var) {
-    if (check_var_value(c, var)) check_global_value(c, var->value);
+    if (check_var_value(c, var)) check_global_value(c, var->value, var->type);
 }
 
 // Whether e is known while compiling, as a literal's value of constant
@@ -611,7 +643,9 @@ static void report_unknown_constant(Checker *c, Ast_Const *constant, Ast *value)
 //   number, a procedure's address or a pointer variable), a procedure's
 //   address or a type's description's (type_info(T), spec 5.19) is "a
 //   constant's pointer can only be null or a string literal's address";
-//   anything else isn't known.
+//   so is a string literal's address moved through a using field
+//   (address_moves: H :: Holder.{W}, for W :: cast(*Player) S.data and a
+//   *Entity field); anything else isn't known.
 // - A procedure value is a procedure (procedure_address) or null.
 // - A number or a bool is is_constant.
 // - A value converted to an Any, or cast to one (holds_converted_any, spec
@@ -685,8 +719,10 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
     // reaches a pointer as its bytes' address, though its type stays string.
     if (!type_converts(value->type, t) && !(type_is_pointer(t) && literal_address(value))) return false;
     if (type_is_pointer(t) || t == &type_null) {
-        if (value->is_constant || literal_address(value)) return true;
-        if (value->kind == AST_CAST || procedure_address(value) || type_info_address(value)) {
+        if (value->is_constant) return true;
+        bool literal = literal_address(value);
+        if (literal && !address_moves(value, t)) return true;
+        if (literal || value->kind == AST_CAST || procedure_address(value) || type_info_address(value)) {
             diag_error(c->diag, value->start, "a constant's pointer can only be null or a string literal's address");
         } else {
             report_unknown_constant(c, constant, value);

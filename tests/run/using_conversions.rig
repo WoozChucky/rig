@@ -8,7 +8,9 @@
 // back to main, and a write through one seen in the Player. A *Deep is a
 // *Base at offset 0, two using fields deep, and an *Inside a *Entity 16
 // bytes in, through its anonymous member; a cast back to *Player, or one
-// through *void, keeps the address; a null *Player stays null.
+// through *void, keeps the address; a null *Player stays null wherever it
+// converts. A comparison converts either operand, the *Player on the
+// right or on the left.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -43,6 +45,13 @@ pair :: (p: *Player) -> *Player, int { return p, 2; }
 
 entity_pair :: (p: *Player) -> *Entity, int { return p, 3; }
 
+// How many of its arguments are null.
+nulls :: (es: ..*Entity) -> int {
+    total := 0;
+    for es { if it == null { total += 1; } }
+    return total;
+}
+
 // The offset and null checks, run in main and in the top-level #run.
 checks :: () {
     p: Player;
@@ -60,7 +69,16 @@ checks :: () {
     print("{} {}\n", cast(int) cast(*Player) pe - cast(int) pe, cast(int) cast(*Entity) cast(*void) *p - cast(int) *p);
     none : *Player = null;
     ne : *Entity = none;
-    print("{} {} {}\n", ne == null, cast(*Entity) none == null, ne == none);
+    print("{} {} {} {}\n", ne == null, cast(*Entity) none == null, ne == none, none == ne);
+    ne = pe;
+    ne = none;
+    es : [2]*Entity = .[pe, none];
+    es[0] = none;
+    n: int;
+    pn := pe;
+    pn, n = pair(none);
+    print("{} {} {} {} {} {} {}\n", ne == null, get(none) == null, Holder.{none}.e == null, es[0] == null,
+          es[1] == null, nulls(none, pe, none), pn == null);
 }
 
 main :: () {
@@ -90,7 +108,7 @@ main :: () {
     show(pe, *q);
     pe, n = pair(*p);
     show(pe, *p);
-    print("{} {}\n", pe == *p, cast(*Entity) *p == pe);
+    print("{} {} {}\n", pe == *p, *p == pe, cast(*Entity) *p == pe);
     show(cast(*Entity) *q, *q);
 
     // A write through the *Entity is the Player's.
