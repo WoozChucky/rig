@@ -151,7 +151,7 @@ null          push_context  return        struct        true          union
 using         while
 ```
 
-`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as its own struct's; before a parameter's name, it lets the procedure's body name the fields of the parameter's struct directly (section 3.21). Anywhere else it is a syntax error. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as the outer struct's own; before a parameter's name, it lets the procedure's body name the fields of the parameter's struct directly (section 3.21). Anywhere else it is a syntax error. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
 
 ### 2.7 Directives
 
@@ -420,7 +420,7 @@ Signed integers are two's complement. Each integer type's alignment is its size.
 
 `null` is the pointer to nothing. It is a constant with a type of its own, which converts to every pointer type, to every procedure type (the procedure value that names no procedure, section 3.15) and to nothing else: `p : *int = null;`. On its own, with no pointer type to take, it is an error: `x := null;` is `null needs a pointer type, as in p : *int = null;`.
 
-`*void` is a pointer to anything, C's `void *`. It converts implicitly to and from every pointer type. It cannot be dereferenced (`can't dereference a '*void'; cast it to a pointer to something first`), indexed, or moved by arithmetic, since what it points at has no size. Any other pointer converts to another pointer type only through a cast, or to a pointer to a struct it holds through `using` fields (section 3.21).
+`*void` is a pointer to anything, C's `void *`. It converts implicitly to and from every pointer type. It cannot be dereferenced (`can't dereference a '*void'; cast it to a pointer to something first`), indexed, or moved by arithmetic, since what it points at has no size. Any other pointer converts to another pointer type only through a cast, but a `*S` converts to a `*B` when the struct `S` holds a `B` through `using` fields (section 3.21).
 
 ### 3.6 Array types
 
@@ -3230,7 +3230,7 @@ Unary   = ( "-" | "~" | "!" | "*" | "#run" ) Unary | Cast | Postfix .
 
 **At the top level,** `#run e;` and `#run { ... }` are declarations of their own, which declare no name (section 4.6). They run for their effect, and what they give is thrown away. `#run e;` runs the whole expression up to its `;`, so `#run f() + 1;` runs the sum, and the expression may be a call that returns nothing. `#run { ... }` runs its block as the body of a procedure named `#run` with no parameters and no results: its statements run in order, and `return;` ends it. A `defer` in it works as in any body, `return;` running the deferred statements as any `return` does (section 6.12). The code any `#run` runs, of either form, runs its deferred statements as the compiled program would.
 
-**In a body,** `#run` is an expression only. A statement `#run f();` is `#run in a body must be a value, as in x := #run f();`, at the `#run`: code run for its effect alone is a top-level `#run`. A `#run` in a body runs before any call of the procedure it is in, so its operand can't use what exists only while that procedure runs: a local variable, a parameter, a loop's iterator or its index. Each is `#run can't use 'x': it's a local, which doesn't exist while compiling`, at the name (`it's a parameter`, `it's the loop's iterator` or `it's the loop's index` for the others). A local constant is known while compiling, and may be used.
+**In a body,** `#run` is an expression only. A statement `#run f();` is `#run in a body must be a value, as in x := #run f();`, at the `#run`: code run for its effect alone is a top-level `#run`. A `#run` in a body runs before any call of the procedure it is in, so its operand can't use what exists only while that procedure runs: a local variable, a parameter, a loop's iterator or its index, or a field a `using` parameter's body names (section 3.21). Each is `#run can't use 'x': it's a local, which doesn't exist while compiling`, at the name (`it's a parameter`, `it's the loop's iterator`, `it's the loop's index` or `it's a field of the parameter 'e'` for the others). A local constant is known while compiling, and may be used.
 
 ```rig
 printf :: (format: *u8, ..) -> s32 #foreign libc;
@@ -4497,7 +4497,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `enum` | enum type | 3.18 |
 | `enum_flags` | enum type of flags | 3.18 |
 | `union` | union type; an anonymous member, `union { ... };`; with `#tagged`, tagged union type | 3.19, 3.20, 4.5 |
-| `using` | a field whose struct's fields are reached as its own struct's, or a parameter whose struct's fields its body names directly | 3.21, 2.6, 7.2 |
+| `using` | a field the fields of whose struct are reached as the outer struct's own, or a parameter whose struct's fields its body names directly | 3.21, 2.6, 7.2 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional; with `x == {`, a switch | 6.5, 6.14 |
