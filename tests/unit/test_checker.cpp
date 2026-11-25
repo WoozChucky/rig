@@ -11505,6 +11505,13 @@ TEST(using_reaches_a_struct_under_way) {
               "2:1: 'S' is defined in terms of itself\n");
     CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, in_union, "s.y"))),
               "2:1: 'S' is defined in terms of itself\n");
+    // A bare name a using parameter's walk can't find for the circle is the
+    // parameter's still: the circle alone, not "unknown identifier 'y'".
+    CHECK_STR(check_source(&a, "T :: struct { k: int; union { y: int; arr: [N]int; }; }\n"
+                               "N :: #run f(null);\n"
+                               "f :: (using t: *T) -> int { if t == null { return 2; } return y; }\n"
+                               "main :: () { t: T; }\n"),
+              "1:1: 'T' is defined in terms of itself\n");
     arena_free(&a);
 }
 
@@ -12053,6 +12060,7 @@ TEST(using_parameters_name_their_fields) {
     Ast_Assign *first = (Ast_Assign *)move->body->statements[0];
     Ast_Member *x = (Ast_Member *)first->targets[0];
     CHECK(is_member(&a, x, "x", "float32"));
+    CHECK(x->kind == AST_MEMBER && is_name(x->operand, "position"));
     if (x->kind == AST_MEMBER && is_name(x->operand, "position")) {
         Ast_Name *position = (Ast_Name *)x->operand;
         CHECK(position->decl == move->params[0]);
@@ -12074,6 +12082,22 @@ TEST(using_parameters_name_their_fields) {
         Ast_Name *id = (Ast_Name *)second->targets[0];
         CHECK(id->decl == move->params[0]);
         CHECK_STR(type_name(&a, id->type), "int");
+    }
+    token_list_free(c.list);
+    // A field holding a pointer is a late one, its type made once every
+    // layout is done; p, named through the parameter in a #run an array's
+    // count needs before then, makes it there first.
+    c = check_src(&a, "A :: struct { arr: [#run h(null)]int; }\n"
+                      "T :: struct { k: int; p: *int; }\n"
+                      "h :: (using t: *T) -> int { if t == null { return 3; } q := p; return 1; }\n"
+                      "main :: () { a: A; n := a.arr; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "[3]int");
+    Ast *q = ((Ast_Var *)local_of_proc(&c, "h", "q"))->value;
+    CHECK(is_name(q, "p"));
+    if (q->kind == AST_NAME) {
+        Ast *through = ((Ast_Name *)q)->through;
+        CHECK(through && is_member(&a, through, "p", "*int"));
     }
     token_list_free(c.list);
     arena_free(&a);
@@ -12186,5 +12210,12 @@ TEST(value_using_parameters_are_read_only) {
               "14:34: unknown identifier 'id'\n"
               "17:16: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
               "17:31: unknown identifier 'circle'\n");
+    // Any procedure may have one: a foreign one, and a #c_call one whose
+    // body names a field through it.
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "f :: (using e: *Entity) -> s32 #foreign libc;\n"
+                           "g :: (using e: *Entity) -> s32 #c_call { return cast(s32) id; }\n"
+                           "main :: () { }\n"),
+              "");
     arena_free(&a);
 }
