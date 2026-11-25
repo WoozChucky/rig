@@ -1,0 +1,40 @@
+// Mistakes in a switch on a tagged union (issue #224, spec 3.20), one
+// procedure each: a case that names no member, or a member it doesn't
+// have; a member named twice; one member missing, in a procedure whose
+// cases all return, which gets no second message; two missing; #through
+// ending a case; it written, or its address taken, when the switched value
+// is a parameter or a call; and a struct switched on. The last two
+// procedures have no mistake: #complete adds nothing, and a case; beside
+// every member is fine.
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+make :: () -> Shape { return .empty; }
+
+not_a_name :: (s: Shape) { if s == { case 0; case; } }
+no_such :: (s: Shape) { if s == { case .nope; case; } }
+twice :: (s: Shape) { if s == { case .circle; case .circle; case; } }
+one_missing :: (s: Shape) -> int {
+    if s == {
+        case .circle; return 1;
+        case .rect; return 2;
+    }
+}
+two_missing :: (s: Shape) { if s == { case .circle; } }
+through :: (s: Shape) {
+    if s == {
+        case .circle; #through;
+        case .rect;
+        case .empty;
+    }
+}
+f :: (s: Shape) { if s == { case .circle; it.r = 1; case; } }
+g :: () { if make() == { case .circle; q := *it; case; } }
+h :: () {
+    c: Circle;
+    if c == { case; }
+}
+complete :: (s: Shape) { if #complete s == { case .circle; case .rect; case .empty; } }
+every_and_default :: (s: Shape) { if s == { case .circle; case .rect; case .empty; case; } }
+
+main :: () { }

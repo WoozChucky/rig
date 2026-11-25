@@ -151,11 +151,11 @@ null          push_context  return        struct        true          union
 using         while
 ```
 
-`using` is reserved: no construct uses it yet, and writing it is a syntax error wherever it appears. `union` declares union types and starts anonymous members (section 3.19). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
+`using` is reserved: no construct uses it yet, and writing it is a syntax error wherever it appears. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has eleven:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has twelve:
 
 - `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
@@ -167,9 +167,10 @@ A directive is `#` followed immediately by a name, made of letters, digits and `
 - `#if`, which compiles code for one system and not the other, or on any other condition known while compiling (section 4.9);
 - `#caller_location`, a parameter's default value that is the place of each call leaving the parameter out (section 7.2);
 - `#complete`, which makes a switch on an enum name every member's value in its cases (section 6.14);
-- `#through`, the last statement of a switch's case, which goes on into the next case (section 6.14).
+- `#through`, the last statement of a switch's case, which goes on into the next case (section 6.14);
+- `#tagged`, after `union` in a declaration, which makes the union a tagged union, followed by its tag's type's name if one is written (section 3.20).
 
-The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. `#caller_location` is an expression, but the only place it may be is a parameter's whole default value, `loc: Source_Code_Location = #caller_location` (section 7.2): anywhere else a value goes, a body, a global's or a constant's value, an argument or part of a larger default, it is `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location`, at its `#`. Where no value goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive`, on the signature's line, as a `#run` there is, or starting the next, where a `#run` would be the next declaration; and at the top level, where a declaration's name should be, `expected identifier, found directive`. `#complete` goes right after a switch's `if`, `if #complete m == {`: after an `if` whose condition isn't followed by `== {` it is `#complete is for a switch, as in if #complete x == { ... }`, at it, and anywhere else a value goes it is `expected an expression, found directive`. `#through;` is only a switch's case's last statement, a case followed by another: anywhere else a statement starts, a block inside a case included, it is `#through can only end a switch's case, as in case 1; a(); #through;`, at it (section 6.14 gives the messages for one inside a case). After a signature, where the body should be, either is `expected '{', found directive`, as a `#run` there is. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. `#caller_location` is an expression, but the only place it may be is a parameter's whole default value, `loc: Source_Code_Location = #caller_location` (section 7.2): anywhere else a value goes, a body, a global's or a constant's value, an argument or part of a larger default, it is `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location`, at its `#`. Where no value goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive`, on the signature's line, as a `#run` there is, or starting the next, where a `#run` would be the next declaration; and at the top level, where a declaration's name should be, `expected identifier, found directive`. `#complete` goes right after a switch's `if`, `if #complete m == {`: after an `if` whose condition isn't followed by `== {` it is `#complete is for a switch, as in if #complete x == { ... }`, at it, and anywhere else a value goes it is `expected an expression, found directive`. `#through;` is only a switch's case's last statement, a case followed by another: anywhere else a statement starts, a block inside a case included, it is `#through can only end a switch's case, as in case 1; a(); #through;`, at it (section 6.14 gives the messages for one inside a case). After a signature, where the body should be, either is `expected '{', found directive`, as a `#run` there is. `#tagged` goes only right after a top-level declaration's `union`, `Shape :: union #tagged {`: after `struct` it is `#tagged is for a union, as in Shape :: union #tagged { ... }`, after an anonymous member's `union` it is `a tagged union can't be an anonymous member; declare it, as in Shape :: union #tagged { ... }`, each at it (section 3.20), anywhere a value goes `expected an expression, found directive`, and after a signature, where the body should be, `expected '{', found directive`, as a `#run` there is. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -373,6 +374,7 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - `string` (section 3.8);
 - struct types, declared by the program (section 3.9), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
 - union types, declared by the program, whose members all lie at offset 0, and the types of anonymous members, `union { ... }` and `struct { ... }` inside a struct or a union (section 3.19);
+- tagged union types, declared by the program with `union #tagged`, a tag saying which member they hold, then the members (section 3.20);
 - enum types, declared by the program with `enum` or `enum_flags`, each over an integer type (section 3.18), Preload's and Basic's among them, and the predeclared `Operating_System`, the systems a program can be built for (sections 2.5, 4.9);
 - procedure types `(int, int) -> int`, the types of procedure values (section 3.15).
 
@@ -490,12 +492,13 @@ A struct may have anonymous members among its fields, `union { ... };` and `stru
 | `[..]T` | 40 | 8 |
 | struct | section 3.9 | section 3.9 |
 | union | section 3.19 | section 3.19 |
+| tagged union | section 3.20 | section 3.20 |
 | enum | its integer type's | its integer type's |
 | procedure type | 8 | 8 |
 
 `size_of(T)` gives a type's size in bytes (section 5.16).
 
-No type may be larger than 2^40 bytes. A larger array type is `'[1099511627777]u8' is too big`, at its `[`; a larger struct or union is `'Huge' is too big`, at its name.
+No type may be larger than 2^40 bytes. A larger array type is `'[1099511627777]u8' is too big`, at its `[`; a larger struct, union or tagged union is `'Huge' is too big`, at its name.
 
 ### 3.12 Untyped constants
 
@@ -1037,7 +1040,7 @@ Look true ["VISIBLE", "SOLID", "GLOWING"] [1, 2, 4]
 
 ### 3.19 Union types
 
-A union is a type whose members all lie at the same place, at offset 0: it holds one of them at a time, as C's untagged unions do, and which one is the program's to know.
+A union is a type whose members all lie at the same place, at offset 0: it holds one of them at a time, as C's untagged unions do, and which one is the program's to know. A tagged union, `union #tagged`, knows it itself (section 3.20).
 
 ```ebnf
 StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
@@ -1184,6 +1187,118 @@ union(8 bytes) {kind = 2, union(8 bytes)} {n = 1, {a = 2, b = 3}}
 **Comparison.** Unions are not compared by any operator, as structs aren't: `'==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'`, `'<' needs numbers, not 'Value'`.
 
 **C.** A pointer to a union is passed to C as a pointer to a C union of the same layout (section 7.6), so a C function that takes a `union value *` is declared with a `*Value`. A union is not passed to or returned from C by value, for now, as a struct isn't: `a foreign procedure can't take a 'Value' yet; pass a pointer to it`, `a foreign procedure can't return a 'Value' yet`, and the same for a `#c_call` procedure.
+
+### 3.20 Tagged union types
+
+A tagged union is a union that knows which member it holds: a tag, a number saying which, comes first, then the members, over each other as a union's are. Its members are read only in a switch that names every one of them, where `it` is the member the case names, so a member is never read but when the union holds it.
+
+```ebnf
+TaggedDecl = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
+```
+
+```rig fragment
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+
+area :: (s: Shape) -> float {
+    if s == {
+        case .circle; return it.r * it.r * 3.14159;
+        case .rect;   return it.w * it.h;
+        case .empty;  return 0;
+    }
+}
+```
+
+**Declaration.** `#tagged` after `union` declares a tagged union, at the top level only, as a union is (section 3.19): inside a body, `S :: union #tagged` is `unions can only be declared at the top level, for now`. It is usable anywhere, before its declaration too, and each declaration is a type of its own. Its members are each a name and a type, followed by `;`, the last one too, at least one of them: empty braces are `a tagged union needs at least one member`, at its name. A member's type may be `void`: such a member holds nothing, and is only a name for one of the union's states, `empty` above. No anonymous member is among a tagged union's members (`a tagged union's member needs a name, as in circle: Circle;`, at its `union` or `struct`), and a tagged union is never an anonymous member (`union #tagged {` among any fields is `a tagged union can't be an anonymous member; declare it, as in Shape :: union #tagged { ... }`, at the `#tagged`). After `struct`, `#tagged` is `#tagged is for a union, as in Shape :: union #tagged { ... }`. Two members of one name are `'x' is already declared at PATH:L:C`; an `#if` among them and anything but a name where a member starts are a union's mistakes (section 3.19). The name is a type, not a value: `'Shape' is a type, not a value`.
+
+**The tag.** The members are numbered 0, 1, 2 and so on, in the order declared, and the tag holds the number of the member the union holds. Its type is the smallest unsigned integer type that holds every member's number, `u8` up to 256 members, `u16` up to 65536 and `u32` past that, unless one is written after `#tagged`, as an enum's integer type is (section 3.18): `Big :: union #tagged u32 { ... }`. The written one may be any integer type, signed too, since a C library's tag is often an `int`; it is a name only, and anything else after `#tagged` but the `{` is `expected '{', found '*'`. A type that isn't an integer type is `a tagged union's tag must be an integer type, not 'float32'`, at it, and the tag is then the smallest that counts the members. One too small to hold the last member's number is `a 'u8' tag can't count the 257 members of 'Big'`, at it, and the union has no type (an `s8` holds 127, so it counts 128 members).
+
+**Layout.** A tagged union is laid out as C lays out a struct of its tag and an anonymous union of its members: the tag at offset 0; every member at the tag's size rounded up to the largest alignment among the members (1 when every member is `void`); the whole aligned to the larger of the tag's alignment and that; and its size the members' offset plus the largest member's size, rounded up to that alignment. A `void` member has size 0 and alignment 1. So `Shape` is the C struct
+
+```c
+struct Shape {
+    uint8_t tag;   /* 0: circle, 1: rect, 2: empty */
+    union {
+        struct Circle circle;
+        struct Rect rect;
+    };
+};
+```
+
+12 bytes, aligned to 4, its members at 4; `union #tagged { d: float64; b: u8; }` is 16 bytes, its members at 8; and `union #tagged { on: void; off: void; }` is 1 byte, the tag alone. A tagged union cannot hold itself by value, directly or through structs, arrays, unions or other tagged unions: `'T' contains itself; it can hold a pointer to itself, *T`. Behind a pointer, in a view or in a resizable array it may, as a struct may (section 3.9). One larger than 2^40 bytes is `'T' is too big` (section 3.11).
+
+**Making one.** A tagged union's literal gives exactly one member, by name, and the union then holds that member: `Shape.{circle = Circle.{2}}`, or `.{rect = .{2, 3}}` where the type is known, as any literal without its type takes the one it meets (section 5.17). Values in order, and `Shape.{}`, say no member: `a tagged union's literal names its one member, as in Shape.{circle = c}`, at the literal. A second member is `a tagged union's literal gives one member; 'circle' is given already`, the same member twice `member 'circle' is given twice`, and a member it doesn't have `'Shape' has no member 'z'`, each at the name. A `void` member holds nothing to give: `Shape.{empty = x}` is `'Shape.empty' holds nothing; write Shape.empty`. It is written as a value of its own, `Shape.empty`, or `.empty` where the type is known (`Shape.{empty}` already means a literal whose value, in order, is the variable `empty`):
+
+```rig fragment
+Circle :: struct { r: float; }
+Shape :: union #tagged { circle: Circle; empty: void; }
+Holder :: struct { s: Shape; count: int; }
+
+nothing :: () -> Shape { return .empty; }
+
+E :: Shape.empty;
+shapes := Shape.[.{circle = .{1}}, .empty];
+holder := Holder.{s = .empty, count = 1};
+```
+
+A member that isn't `void` written so, `Shape.circle` or `.circle` as a value, is `'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}`, at its name; `.empty` with no type to meet is `this member's enum isn't known; write it with its enum, as in Mode.FREE`, as an enum's member is (section 3.18). A value made so is no place, as a literal isn't (section 5.1).
+
+**Zero value.** A tagged union that is zeroed, as a variable declared without a value is (section 4.3), has tag 0 and its bytes zero: it holds its first member, zeroed. `s: Shape;` holds a `Circle` whose `r` is 0.
+
+**Reading one.** A tagged union's members are not reached by `.`, to read or to write, through a pointer neither: `s.circle` is `a tagged union's member is read in a switch: if s == { case .circle; ... it ... }`, at `circle`, the message writing `s` as the program did, with `.*` after it when it is a pointer (`if p.* == {`, since `if p == {` would switch on the pointer). A member is read in a switch on the union (section 6.14), which switches on its tag:
+
+- Each case's value names a member, `.circle` or `Shape.circle`; anything else is `a tagged union's case names one of its members, as in case .circle;`, at its start, and a member the union doesn't have `'Shape' has no member 'z'`. A member named twice is `'Shape.circle' already has a case at PATH:L:C`, at the later; a second `case;` is the switch's own mistake.
+- Every member needs a case, or the switch a `case;`: the members missing are named in member order, in one message at the `if`, `this switch doesn't handle 'Shape.empty'; add its case or a 'case;'`, `... 'Shape.rect' and 'Shape.empty'; add their cases or a 'case;'`. It is judged once every case's value has checked with no error. A switch with a case for every member and a `case;` too is fine: its `case;` runs only for a tag no member has, which C may have written. `#complete` adds nothing: the switch is complete already.
+- `#through` can't end a case, `#through can't end a tagged union's case: the next case's 'it' is another member`, at it: each case sees only its own member.
+- Inside a case naming a member that isn't `void`, `it` is that member, of its type, declared in the case's own scope before its statements: so it hides an outer `it`, a loop's or an outer switch's, and a loop's or a switch's inside the case hides it in turn. It is the member in the union itself, not a copy, and a place exactly when the switched value is one (section 5.1): then `it.r = 3;`, `it = Circle.{5};` and `*it` write into the union. When the switched value is no place, a parameter, a call, a constant or a loop's iterator, `it` is read-only: `can't assign to 'it': it's a member of a switched value that isn't a place` (`can't take the address of 'it': ...`), at it. A `void` member's case and `case;` declare no `it`: there, `it` means whatever it means around the switch.
+
+```rig fragment
+Circle :: struct { r: float; }
+Shape :: union #tagged { circle: Circle; empty: void; }
+
+grow :: (shapes: []Shape) -> int {
+    grown := 0;
+    for * shapes {
+        if it.* == {
+            case .circle; it.r *= 2; grown += 1;
+            case .empty;
+        }
+    }
+    return grown;
+}
+```
+
+Here `for *` makes the loop's `it` a pointer to each element, `it.*` is a place, and in the case `it` is the element's `Circle`, written in the array. A case's statements may assign the whole union a new value, holding another member: `it` is still the bytes of the member the case named, as reading the wrong member of a C union is, and is the program's own business.
+
+**Testing the tag.** `s == .empty` and `s != .circle`, with the union on either side and a member's name on the other, `.NAME` or `Shape.NAME`, any member, `void` or not, are `bool`s: whether the union holds that member. A name the union doesn't have is `'Shape' has no member 'z'`. The test folds when the union is constant data (section 5.9), so `#if E == .empty` decides by it (section 4.9).
+
+**Comparison.** Two tagged unions aren't compared, nor is one with anything but a member's name: `s == t`, `s == null` and `s != 1` are `'==' compares a tagged union only with a member's name, as in s == .empty` (`'!='`), at the operator; `s < t` is `'<' needs numbers, not 'Shape'`.
+
+**Constants.** A tagged union's literal whose value is constant data (section 5.9), and `Shape.empty`, are constant data, a constant's value or a global's, as a struct's literal is. No member of one is folded, members being read only in a switch: `if K == {` on a constant `K` reads its read-only data, `it` read-only.
+
+**C.** A pointer to a tagged union is passed to C as a pointer to the C struct its layout is (above), so a C function that takes a `struct Shape *` is declared with a `*Shape`. A tagged union is not passed to or returned from C by value, for now, as a struct isn't: `a foreign procedure can't take a 'Shape' yet; pass a pointer to it`, `a foreign procedure can't return a 'Shape' yet`, and the same for a `#c_call` procedure.
+
+```rig error
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+
+area :: (s: Shape) -> float {
+    if s == {
+        case .circle; return it.r * it.r * 3.14159;
+        case .rect;   return it.w * it.h;
+    }
+}
+
+main :: () {}
+```
+
+```text
+example.rig:6:5: error: this switch doesn't handle 'Shape.empty'; add its case or a 'case;'
+        if s == {
+        ^
+```
 
 ## 4. Declarations and scope
 
@@ -1341,15 +1456,16 @@ A procedure's name is called (section 5.10), and used anywhere else it is a proc
 StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
 FieldDecl  = identifier ":" Type ";"
            | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
+TaggedDecl = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 ```
 
-A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19). Among either's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
+A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
 
 A struct's name, or a union's, is a type, not a value: used as a value it is `'Vec2' is a type, not a value`.
 
 ### 4.6 The top level
 
-Procedures, structs, unions, enums, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file. Preload's declarations are in the top level too, since every program imports it (section 2.14), so a program can't declare one of its names; Preload comes first in load order, so the error is at the program's declaration, naming Preload's.
+Procedures, structs, unions, tagged unions, enums, global variables and global constants make up the top level, with the `#load`s, the `#import`s, the `#run`s and the `#if`s, which declare no name (sections 2.13, 2.14, 7.8, 4.9). A top-level `#if`'s taken branch's declarations are the top level's, as if written in place of the `#if`, and a branch not taken's are nothing of the program's (section 4.9). There is one top level for the whole program: the declarations of every one of its files (section 2.13) are in it, as if they were written in one file. They share one set of names: a global cannot take a procedure's name, nor a struct a constant's, whether they are in one file or in two (`'x' is already declared at PATH:L:C`, naming where the first one is). The declarations are taken file by file in load order, so of two in different files the one in the file loaded later is reported, naming the one in the other file. Preload's declarations are in the top level too, since every program imports it (section 2.14), so a program can't declare one of its names; Preload comes first in load order, so the error is at the program's declaration, naming Preload's.
 
 Every top-level declaration is visible everywhere in the program, in every one of its files, before its declaration as well as after it: a procedure may call one declared after it or in another file, a struct may hold one declared after it, and a constant may be defined from one declared after it. An enum's members are not top-level names: they are reached through their enum (section 3.18).
 
@@ -1606,6 +1722,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 - **Procedure values** are compared with `==` and `!=` only, two of the same procedure type or one with `null`, as addresses (section 3.15). Two of different types are `mismatched types '(int, int) -> int' and '(int) -> int' for '=='`; a procedure value has no order (`'<' needs numbers, not '(int, int) -> int'`).
 - **Strings** are compared with `==` and `!=` only: two strings are equal when their counts are equal and so is each byte. A string meets no other type (`mismatched types 'string' and '*u8' for '=='`) and has no order (`'<' needs numbers, not 'string'`).
 - **Enums** are compared with all six, two values of the same enum type, as numbers of its integer type by its sign; a flags value also with `0` (section 3.18). An enum meets no other type: `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Two enum types don't meet either, and no cast makes one the other: `mismatched types 'Mode' and 'Look' for '=='`. A member without its enum on one side of `==` or `!=` takes the enum of the other side (`m == .FREE`); on both, it has none to take.
+- **Tagged unions** are tested with `==` and `!=` against a member's name only, `s == .empty`, `s != Shape.circle`, either order: whether the union holds that member (section 3.20). With anything else, another tagged union too, it is `'==' compares a tagged union only with a member's name, as in s == .empty`; a tagged union has no order (`'<' needs numbers, not 'Shape'`).
 
 Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'`.
 
@@ -1748,6 +1865,8 @@ A resizable array has two members more, `.allocated`, an `int`, and `.allocator`
 
 **Enum members.** When `e` is an enum's name, not in parentheses, `e.x` is the enum's member `x`, a constant of the enum type (section 3.18): `Mode.FREE`. A local of the enum's name hides it, as it hides any top-level name. A member the enum does not have is `'Mode' has no member 'FRE'`, at the member's name. A member is not a place (`can't assign to 'Mode.FREE': it's an enum's member`). `(Mode).FREE` is no member: the name in parentheses is a value, and an enum's name is a type (`'Mode' is a type, not a value`).
 
+**Tagged unions.** A tagged union's members are never reached by `.`: `s.circle`, read or written, through a pointer too, is `a tagged union's member is read in a switch: if s == { case .circle; ... it ... }`, the member being read in a switch's case as `it` (section 3.20). When `e` is a tagged union's name, not in parentheses, `e.x` is the value holding its member `x`, which must be `void`, `Shape.empty`, no place, as an enum's member is the enum's; a member that isn't `void` is `'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}`, and one it doesn't have `'Shape' has no member 'z'`.
+
 ### 5.13 Address and dereference
 
 The prefix `*x` takes the address of the place `x` (section 5.1): for an `x` of type `T` it gives a `*T`. A value that is not a place has no address, and the message says what it is instead, such as `can't take the address of 'a': it's a parameter`.
@@ -1797,6 +1916,8 @@ ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ]
 **Struct literals.** `Vec2.{1, 2}` makes a `Vec2` from values for its fields in order; `Vec2.{y = 2}` gives fields by name. A literal's values are either all named or all in order (`a struct literal's fields are all named or all in order, not both`). Fields not given are zero. Each value converts implicitly to its field's type. A literal must not give more values than the struct has fields (`'Vec2' has 2 fields, but this literal gives 3`), nor a field twice (`field 'x' is given twice`), nor a field the struct lacks (`'Vec2' has no field 'z'`). The type before the `.` must be a struct or a union (`a '.{' literal needs a struct type, not 'int'`). A name may reach through anonymous members, `Event.{kind = 1, key = k}`, as C's designated initializers do; in order, an anonymous member is one field, given a value of its type, `Event.{1, .{key = k}}` (section 3.19).
 
 **Union literals.** A union's literal gives one member, by name, `Value.{f = 1.5}`, and the rest of its bytes are zero; `Value.{}` is all zero. Values in order are `a union's literal names its one member, as in Value.{f = 1.5}`, a second member is `a union's literal gives one member; 'i' is given already`, and a member given twice is `member 'i' is given twice` (section 3.19).
+
+**Tagged union literals.** A tagged union's literal gives exactly one member, by name, `Shape.{circle = c}`, and the union holds it: values in order and `Shape.{}` are `a tagged union's literal names its one member, as in Shape.{circle = c}`, a second member `a tagged union's literal gives one member; 'circle' is given already`, and a `void` member `'Shape.empty' holds nothing; write Shape.empty`, since that member's value is `Shape.empty`, or `.empty` where the type is known (section 3.20).
 
 **Array literals.** `int.[1, 2, 3]` makes a `[3]int`: the name before the `.` is the elements' type, and each value converts implicitly to it. An array literal's values are always in order.
 
@@ -2047,10 +2168,10 @@ A block reaches its end unless its last statement is one of:
 - a block that does not reach its own end, or a `push_context` whose block does not (section 6.13);
 - an `if` with an `else`, neither of whose blocks reaches its end;
 - an `#if` whose taken branch does not reach its end (section 4.9): one that took no branch reaches it;
-- a switch past which no value goes on without a case, since it has a `case;`, or is `#complete` with a case for every member's value (a value no member has stops the program, section 6.14), and none of whose cases reaches its end, but one ending with `#through`, which goes on into the next case, judged in its turn (section 6.14). Only `case;` and `#complete` count: a `bool`'s switch with a case for each value and no `case;` reaches its end;
+- a switch past which no value goes on without a case, since it has a `case;`, or is `#complete` with a case for every member's value, or is on a tagged union with a case for every member (a value no member has stops the program, sections 6.14, 3.20), and none of whose cases reaches its end, but one ending with `#through`, which goes on into the next case, judged in its turn (section 6.14). Only `case;`, `#complete` and a tagged union's members count: a `bool`'s switch with a case for each value and no `case;` reaches its end;
 - a `while` whose condition is the constant `true` and that has no `break` of its own.
 
-An `if`, an `#if` or a `while` whose condition has an error is taken not to reach its end, so the condition's message is the only one; so is a switch whose switched expression has an error, whose `#complete` is refused, or that is `#complete` and doesn't cover every value, its message said. A `defer` changes nothing here: deferred code can't return (section 6.12), so a block that ends with a `defer` reaches its end, and one that ends with a `return` after a `defer` doesn't.
+An `if`, an `#if` or a `while` whose condition has an error is taken not to reach its end, so the condition's message is the only one; so is a switch whose switched expression has an error, whose `#complete` is refused, or that is `#complete` and doesn't cover every value, or a tagged union's switch with a mistake in a case's value or a member it doesn't handle, its message said. A `defer` changes nothing here: deferred code can't return (section 6.12), so a block that ends with a `defer` reaches its end, and one that ends with a `return` after a `defer` doesn't.
 
 ```rig
 first_even :: (values: []int) -> int {
@@ -2243,7 +2364,9 @@ many
 
 **Telling it from an `if`.** An `==` right before a `{` ends the expression it follows, however deep, and is never a comparison, since no expression starts with `{`. So `if a == b {` and `if x == .{1, 2} {` are `if`s, comparing, and `if (x) == {`, `if a && b == {` and `if it > limit == {` are switches on `x`, `a && b` and `it > limit`. Anywhere else an expression is followed by `== {`, it is the error for what was expected after the expression: `x := a == { };` is `expected ';', found '=='`, `if (x == {` is `expected ')', found '=='`, and `while x == {`, `#if x == {` and `push_context x == {` are `expected '{', found '=='`. There is no switch while compiling: an `#if` picks code, and a switch is always code that runs.
 
-**What it switches on.** `x` is checked once, as an operand: an integer, an enum (section 3.18), flags included, a `bool`, a `string` or a pointer, `*void` included. An untyped constant takes its default type (section 3.12): `if 3 == {` is on an `int`. Anything else, a float, a struct, an array, a view, a resizable array, a procedure value or an `Any`, is `a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'`, at `x`'s start, naming its type; `.FREE` alone is `this member's enum isn't known; write it with its enum, as in Mode.FREE`, as anywhere nothing gives it one. A switch on a constant is a statement as any other: each case is checked and compiled, and the one with the constant's value runs.
+**What it switches on.** `x` is checked once, as an operand: an integer, an enum (section 3.18), flags included, a `bool`, a `string`, a pointer, `*void` included, or a tagged union (below; a pointer to one is a pointer). An untyped constant takes its default type (section 3.12): `if 3 == {` is on an `int`. Anything else, a float, a struct, a union, an array, a view, a resizable array, a procedure value or an `Any`, is `a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float64'`, at `x`'s start, naming its type; `.FREE` alone is `this member's enum isn't known; write it with its enum, as in Mode.FREE`, as anywhere nothing gives it one. A switch on a constant is a statement as any other: each case is checked and compiled, and the one with the constant's value runs.
+
+**On a tagged union.** A switch on a tagged union switches on its tag: each case names a member, `case .circle;` or `case Shape.circle;`, and inside it `it` is that member, in the union itself; every member needs a case, or the switch a `case;`, and no case ends with `#through`. Section 3.20 gives its rules and messages; the rest of this section is the other switches', but for `case;`, the blocks and jumps, `else` and the syntax, which are the same. One with a case for every member reaches its end only through a case that does (section 6.11).
 
 **The cases' values.** Each converts to `x`'s type as an assignment's value does (section 6.4): `.FREE` takes `x`'s enum, an untyped constant its integer type, `null` its pointer type, and a value that doesn't convert is `a value of type 'string' doesn't convert to 'int' implicitly`, `'.FREE' needs an enum type, not 'int'` or `300 doesn't fit in 'u8'`. Each must be known while compiling, and is never worked out at run time:
 
@@ -2617,7 +2740,7 @@ A foreign procedure's parameters and result are numbers, enums, bools, pointers 
 | `*T`, `*void` | a pointer, `void *` |
 | a `#c_call` procedure type, `(*void, *void) -> s32 #c_call` | a pointer to a function, `int (*)(void *, void *)` |
 
-It returns at most one value (`a foreign procedure can return at most one value`). Structs, unions, arrays, views, resizable arrays and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data` (a view's and a resizable array's too), `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9), and a pointer to a union as a pointer to a C union of the same layout (section 3.19). A C function that takes a variable number of arguments is declared with `..` (below).
+It returns at most one value (`a foreign procedure can return at most one value`). Structs, unions, tagged unions, arrays, views, resizable arrays and strings are not passed to or returned from C: `a foreign procedure can't take a 'Vec2' yet; pass a pointer to it`, `a foreign procedure can't take a '[3]int'; pass its .data` (a view's and a resizable array's too), `a foreign procedure can't take a 'string'; pass its .data, which may not end with a zero, or a literal`, and `a foreign procedure can't return a 'Vec2' yet`. A pointer to a struct is passed as a pointer to a C struct of the same layout (section 3.9), a pointer to a union as a pointer to a C union of the same layout (section 3.19), and a pointer to a tagged union as a pointer to the C struct of its tag and a union of its members (section 3.20). A C function that takes a variable number of arguments is declared with `..` (below).
 
 ```rig
 malloc :: (size: u64) -> *void #foreign libc;
@@ -3513,7 +3636,7 @@ The sections defining each construct give its messages. Some of those met most o
 | `can't assign to 'Mode.FREE': it's an enum's member` | 3.18, 6.4 |
 | `can't take the address of 'Mode.FREE': it's an enum's member` | 3.18, 5.13 |
 | `can't cast 'Small' to 'Mode'` | 3.14, 3.18 |
-| `a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'` | 6.14 |
+| `a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float64'` | 6.14 |
 | `a case's value must be known while compiling` | 6.14 |
 | `a pointer's case can only be null, as in case null;` | 6.14 |
 | `this value already has a case at PATH:L:C` | 6.14 |
@@ -3534,6 +3657,23 @@ The sections defining each construct give its messages. Some of those met most o
 | `a union's literal names its one member, as in Value.{f = 1.5}` | 3.19, 5.17 |
 | `a union's literal gives one member; 'i' is given already` | 3.19, 5.17 |
 | `member 'i' is given twice` | 3.19, 5.17 |
+| `#tagged is for a union, as in Shape :: union #tagged { ... }` | 2.7, 3.20 |
+| `a tagged union needs at least one member` | 3.20 |
+| `a tagged union's member needs a name, as in circle: Circle;` | 3.20 |
+| `a tagged union can't be an anonymous member; declare it, as in Shape :: union #tagged { ... }` | 2.7, 3.20 |
+| `a tagged union's tag must be an integer type, not 'float32'` | 3.20 |
+| `a 'u8' tag can't count the 257 members of 'Big'` | 3.20 |
+| `a tagged union's member is read in a switch: if s == { case .circle; ... it ... }` | 3.20, 5.12 |
+| `'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}` | 3.20, 5.12 |
+| `'Shape.empty' holds nothing; write Shape.empty` | 3.20, 5.17 |
+| `a tagged union's literal names its one member, as in Shape.{circle = c}` | 3.20, 5.17 |
+| `a tagged union's literal gives one member; 'circle' is given already` | 3.20, 5.17 |
+| `a tagged union's case names one of its members, as in case .circle;` | 3.20, 6.14 |
+| `'Shape.circle' already has a case at PATH:L:C` | 3.20, 6.14 |
+| `this switch doesn't handle 'Shape.empty'; add its case or a 'case;'` | 3.20, 6.14 |
+| `#through can't end a tagged union's case: the next case's 'it' is another member` | 3.20, 6.14 |
+| `can't assign to 'it': it's a member of a switched value that isn't a place` | 3.20, 6.4 |
+| `'==' compares a tagged union only with a member's name, as in s == .empty` | 3.20, 5.6 |
 
 ### 9.4 Limits
 
@@ -3915,7 +4055,7 @@ A number literal may not be followed directly by a letter or a digit (section 2.
 
 ```ebnf
 File          = { TopLevel } .
-TopLevel      = ProcDecl | StructDecl | EnumDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl
+TopLevel      = ProcDecl | StructDecl | TaggedDecl | EnumDecl | ConstDecl | VarDecl | LoadDecl | ImportDecl | RunDecl
               | IfDirective .
 LoadDecl      = "#load" string_lit ";" .
 ImportDecl    = "#import" string_lit ";" .
@@ -3932,6 +4072,7 @@ Param         = identifier ":" [ ".." ] Type [ "=" Expression ] .
 StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
 FieldDecl     = identifier ":" Type ";"
               | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
+TaggedDecl    = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 
 EnumDecl      = identifier "::" ( "enum" | "enum_flags" ) [ identifier ] "{" { MemberDecl } "}" .
 MemberDecl    = identifier [ "::" Expression ] ";" .
@@ -3952,7 +4093,7 @@ ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
@@ -4033,7 +4174,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `else` | alternative of `if` and of `#if` | 6.5, 4.9 |
 | `enum` | enum type | 3.18 |
 | `enum_flags` | enum type of flags | 3.18 |
-| `union` | union type; an anonymous member, `union { ... };` | 3.19, 4.5 |
+| `union` | union type; an anonymous member, `union { ... };`; with `#tagged`, tagged union type | 3.19, 3.20, 4.5 |
 | `using` | reserved | 2.6 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
@@ -4054,9 +4195,10 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#caller_location` | the place of the call leaving out a parameter it is the default value of | 7.2, 2.7 |
 | `#complete` | a switch on an enum naming every member's value | 6.14 |
 | `#through` | the end of a switch's case, going on into the next case | 6.14 |
+| `#tagged` | tagged union | 3.20 |
 | `size_of` | a type's size | 5.16 |
 | `type_info` | a type's description | 5.19, 3.16 |
-| `it`, `it_index` | a loop's iterator and index | 6.7, 6.8 |
+| `it`, `it_index` | a loop's iterator and index; `it`, a tagged union's switch's case's member | 6.7, 6.8, 3.20, 6.14 |
 | `OS` | the system a program is built for, an `Operating_System` | 2.5, 4.9 |
 | `Operating_System` | the predeclared enum of the systems a program can be built for, `WINDOWS` and `LINUX` | 2.5, 4.9, 3.18 |
 | `array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset`, `array_free` | a resizable array's built-in procedures | 3.17, 2.5 |

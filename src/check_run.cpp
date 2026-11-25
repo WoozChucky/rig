@@ -78,7 +78,9 @@ static void reach_described(Reach *r, Type *t) {
 // #caller_location, a #run, whose operand was checked as it was, or an
 // enum's member, Mode.FREE (Ast_Member.of_enum) or .FREE: a constant,
 // whose enum's name in Mode.FREE (no value, so no type) is nothing to
-// walk, and .FREE has no operand.
+// walk, and .FREE has no operand. Nor for a tagged union's member written
+// with its type's name, Shape.empty (Ast_Member.of_tagged), whose name is
+// a type's too: a value made on the spot, or a tag test's or a case's name.
 static void push_operands(Array<Ast *> *list, Ast *e) {
     switch (e->kind) {
     case AST_CALL: {
@@ -95,9 +97,11 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
         break;
     case AST_CAST: array_add(list, ((Ast_Cast *)e)->value); break;
     case AST_DEREF: array_add(list, ((Ast_Deref *)e)->operand); break;
-    case AST_MEMBER:
-        if (!((Ast_Member *)e)->of_enum) array_add(list, ((Ast_Member *)e)->operand);
+    case AST_MEMBER: {
+        Ast_Member *m = (Ast_Member *)e;
+        if (!m->of_enum && !m->of_tagged) array_add(list, m->operand);
         break;
+    }
     case AST_INDEX:
         array_add(list, ((Ast_Index *)e)->index);
         array_add(list, ((Ast_Index *)e)->operand);
@@ -114,12 +118,14 @@ static void push_operands(Array<Ast *> *list, Ast *e) {
 // What a name whose declaration is `decl` is, when it doesn't exist while
 // compiling, in name_is_place's words: "a local", "a parameter", "the
 // loop's iterator" (a named one too), "the loop's index"
-// (loop_variable_kind); null for anything else, which does.
+// (loop_variable_kind); null for anything else, which does. A tagged
+// union's switch's it (spec 3.20) is "a local", read-only or not: why it
+// can't be written is no matter here.
 static const char *local_kind(Ast *decl) {
     if (decl && decl->kind == AST_PARAM) return "a parameter";
     if (!decl || decl->kind != AST_VAR || ((Ast_Var *)decl)->is_global) return nullptr;
     Ast_Var *var = (Ast_Var *)decl;
-    return var->is_iterator ? loop_variable_kind(var) : "a local";
+    return var->is_iterator && !var->is_case_member ? loop_variable_kind(var) : "a local";
 }
 
 // The operand of an expression #run runs while compiling, before any call

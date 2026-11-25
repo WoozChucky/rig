@@ -10202,7 +10202,7 @@ TEST(switches_reach_their_end_as_spec_6_11_says) {
               "45:1: 'bool_both' must return a value on every path, and this one reaches its end\n"
               "54:1: 'loop_break' must return a value on every path, and this one reaches its end\n"
               "61:1: 'middle_reaches' must return a value on every path, and this one reaches its end\n"
-              "64:8: a switch needs an integer, an enum, a bool, a string or a pointer, not 'float64'\n"
+              "64:8: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'float64'\n"
               "70:8: this switch is #complete, but 'Mode.B' has no case\n"
               "78:15: 'Mode' has no member 'C'\n"
               "83:8: #complete needs an enum, not 'int'\n"
@@ -10789,5 +10789,383 @@ TEST(unions_arent_compared_and_stay_out_of_c) {
               "5:13: a #c_call procedure can't take a 'Value' yet; pass a pointer to it\n"
               "5:23: a #c_call procedure can't return a 'Value' yet\n"
               "9:12: '==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Value'\n");
+    arena_free(&a);
+}
+
+// Issue #224: tagged unions (spec 3.20).
+
+// The types most of these tests use, three lines.
+#define TAGGED_SHAPES                          \
+    "Circle :: struct { r: float; }\n"         \
+    "Rect :: struct { w: float; h: float; }\n" \
+    "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
+
+// C's tagged unions, a tag and then a union of the members, as the pinned
+// clang lays them out: the layout spec 3.20 promises C.
+struct C_Tagged_Shape {
+    uint8_t tag;
+    union {
+        struct {
+            float r;
+        } circle;
+        struct {
+            float w, h;
+        } rect;
+    };
+};
+struct C_Tagged_Wide {
+    uint8_t tag;
+    union {
+        double d;
+        uint8_t b;
+    };
+};
+struct C_Tagged_Bytes {
+    uint8_t tag;
+    union {
+        uint8_t a[3];
+    };
+};
+struct C_Tagged_Chosen {
+    uint32_t tag;
+    union {
+        uint8_t a;
+    };
+};
+struct C_Tagged_Signed {
+    int16_t tag;
+    union {
+        int64_t i;
+    };
+};
+
+TEST(tagged_unions_are_laid_out_as_clang_lays_them_out) {
+    // The tag at 0, the members all at the tag's size rounded up to their
+    // largest alignment, the whole aligned as the larger of the tag and
+    // the members, its size rounded up to that; a void member takes no
+    // room.
+    Arena a = arena_make();
+    Checked c = check_src(&a, TAGGED_SHAPES
+                          "Wide :: union #tagged { d: float64; b: u8; }\n"
+                          "Bytes :: union #tagged { a: [3]u8; }\n"
+                          "Chosen :: union #tagged u32 { a: u8; }\n"
+                          "Signed :: union #tagged s16 { i: s64; }\n"
+                          "Flags :: union #tagged { on: void; off: void; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    struct Twin {
+        const char *name;
+        s64 size, align, offset;  // the C twin's
+        s64 rig_size, rig_align;  // what the plan says they are, in case the twin were wrong too
+        const char *tag;
+    };
+    const Twin twins[] = {
+        {"Shape", sizeof(C_Tagged_Shape), alignof(C_Tagged_Shape), offsetof(C_Tagged_Shape, circle), 12, 4, "u8"},
+        {"Wide", sizeof(C_Tagged_Wide), alignof(C_Tagged_Wide), offsetof(C_Tagged_Wide, d), 16, 8, "u8"},
+        {"Bytes", sizeof(C_Tagged_Bytes), alignof(C_Tagged_Bytes), offsetof(C_Tagged_Bytes, a), 4, 1, "u8"},
+        {"Chosen", sizeof(C_Tagged_Chosen), alignof(C_Tagged_Chosen), offsetof(C_Tagged_Chosen, a), 8, 4, "u32"},
+        {"Signed", sizeof(C_Tagged_Signed), alignof(C_Tagged_Signed), offsetof(C_Tagged_Signed, i), 16, 8, "s16"},
+    };
+    for (const Twin &twin : twins) {
+        Type *t = struct_named(&c, twin.name);
+        CHECK(t && t->is_tagged && !t->is_union);
+        if (!t) continue;
+        CHECK_EQ(t->size, twin.size);
+        CHECK_EQ(t->size, twin.rig_size);
+        CHECK_EQ((s64)type_align(t), twin.align);
+        CHECK_EQ((s64)type_align(t), twin.rig_align);
+        for (s64 i = 0; i < t->fields.count; i++) CHECK_EQ(t->fields[i].offset, twin.offset);
+        CHECK(t->tag_type);
+        if (t->tag_type) CHECK_STR(type_name(&a, t->tag_type), twin.tag);
+    }
+    CHECK_EQ(offsetof(C_Tagged_Shape, rect), offsetof(C_Tagged_Shape, circle));
+    CHECK_EQ(offsetof(C_Tagged_Wide, b), offsetof(C_Tagged_Wide, d));
+    Type *shape = struct_named(&c, "Shape");
+    CHECK_EQ(shape->fields.count, 3);
+    if (shape->fields.count == 3) {
+        CHECK_STR(shape->fields[2].name, "empty");
+        CHECK(shape->fields[2].type == &type_void);
+    }
+    // Every member void: no C twin (C has no void member), the tag alone.
+    Type *flags = struct_named(&c, "Flags");
+    CHECK_EQ(flags->size, 1);
+    CHECK_EQ(type_align(flags), 1);
+    CHECK_EQ(flags->fields.count, 2);
+    for (s64 i = 0; i < flags->fields.count; i++) CHECK_EQ(flags->fields[i].offset, 1);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// A tagged union Big of `count` int members, m0 up, its tag's type `tag`
+// (empty for none), and an empty main. Zero-terminated, in the arena.
+static const char *tagged_program(Arena *a, s64 count, const char *tag) {
+    Array<u8> text = {};
+    add_case_text(&text, "Big :: union #tagged ");
+    add_case_text(&text, tag);
+    add_case_text(&text, *tag ? " {" : "{");
+    for (s64 i = 0; i < count; i++) add_case_line(&text, " m%lld: int;", i);
+    add_case_text(&text, " }\nmain :: () { }\n");
+    const char *program = string_cstr(a, {text.data, text.count});
+    array_free(&text);
+    return program;
+}
+
+TEST(tagged_union_tag_types) {
+    // Without one written, the smallest unsigned type that numbers every
+    // member from 0; a written one must be an integer type that holds the
+    // last member's number.
+    Arena a = arena_make();
+    Checked c = check_src(&a, tagged_program(&a, 256, ""));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *big = struct_named(&c, "Big");
+    if (big->tag_type) CHECK_STR(type_name(&a, big->tag_type), "u8");
+    token_list_free(c.list);
+    c = check_src(&a, tagged_program(&a, 257, ""));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    big = struct_named(&c, "Big");
+    if (big->tag_type) CHECK_STR(type_name(&a, big->tag_type), "u16");
+    CHECK_EQ(big->fields.count, 257);
+    if (big->fields.count) CHECK_EQ(big->fields[0].offset, 8);  // u16, then ints at 8
+    token_list_free(c.list);
+    // An s8 holds 127: 128 members, not 129, which leaves Big no type.
+    CHECK_STR(check_source(&a, tagged_program(&a, 128, "s8")), "");
+    c = check_src(&a, tagged_program(&a, 129, "s8"));
+    CHECK_STR(messages(&a, &c.list->diag), "1:22: a 's8' tag can't count the 129 members of 'Big'\n");
+    CHECK(!struct_named(&c, "Big"));
+    token_list_free(c.list);
+    // Not an integer type: said, and the tag is the default.
+    c = check_src(&a, "F :: union #tagged float32 { a: int; }\nmain :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "1:20: a tagged union's tag must be an integer type, not 'float32'\n");
+    Type *f = struct_named(&c, "F");
+    CHECK(f && f->tag_type);
+    if (f && f->tag_type) CHECK_STR(type_name(&a, f->tag_type), "u8");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(tagged_union_literals_give_one_member) {
+    // One member by name, wherever the literal meets the tagged union:
+    // written, a declaration's type, an argument, a field, an element. Its
+    // index is the literal's tag, and its one field.
+    Arena a = arena_make();
+    Checked c = check_src(&a, TAGGED_SHAPES
+                          "Holder :: struct { s: Shape; n: int; }\n"
+                          "take :: (s: Shape) { }\n"
+                          "main :: () {\n"
+                          "    a := Shape.{circle = Circle.{2}};\n"
+                          "    b : Shape = .{rect = .{2, 3}};\n"
+                          "    take(.{circle = .{1}});\n"
+                          "    h := Holder.{s = .{rect = .{1, 2}}, n = 1};\n"
+                          "    v := Shape.[.{circle = .{1}}, .{rect = .{1, 1}}];\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Literal *literal = (Ast_Literal *)value_of(&c, "a");
+    CHECK_EQ(literal->tag, 0);
+    CHECK_EQ(literal->fields.count, 1);
+    if (literal->fields.count == 1) CHECK_EQ(literal->fields[0], 0);
+    literal = (Ast_Literal *)value_of(&c, "b");
+    CHECK_EQ(literal->tag, 1);
+    CHECK_STR(type_name(&a, literal->type), "Shape");
+    literal = (Ast_Literal *)value_of(&c, "h");
+    CHECK_EQ(literal->values.count, 2);
+    if (literal->values.count == 2) CHECK_EQ(((Ast_Literal *)literal->values[0])->tag, 1);
+    CHECK_STR(type_of(&a, &c, "v"), "[2]Shape");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(void_members_are_values) {
+    // Shape.empty, and .empty where the type is known, is the value holding
+    // that member: a literal the checker makes, constant data.
+    Arena a = arena_make();
+    Checked c = check_src(&a, TAGGED_SHAPES
+                          "Holder :: struct { s: Shape; n: int; }\n"
+                          "take :: (s: Shape) { }\n"
+                          "main :: () {\n"
+                          "    x := Shape.empty;\n"
+                          "    y : Shape = .empty;\n"
+                          "    take(.empty);\n"
+                          "    h := Holder.{s = .empty};\n"
+                          "    v := Shape.[.empty, .{circle = .{1}}];\n"
+                          "    E :: Shape.empty;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *shape = struct_named(&c, "Shape");
+    Ast_Member *x = (Ast_Member *)value_of(&c, "x");
+    CHECK_EQ(x->kind, AST_MEMBER);
+    CHECK(x->of_tagged && x->made);
+    CHECK_EQ(x->type, shape);
+    CHECK_EQ(x->index, 2);
+    if (x->made) {
+        CHECK_EQ(x->made->type, shape);
+        CHECK_EQ(x->made->tag, 2);
+        CHECK_EQ(x->made->values.count, 0);
+    }
+    Ast_Dot_Name *y = (Ast_Dot_Name *)value_of(&c, "y");
+    CHECK_EQ(y->kind, AST_DOT_NAME);
+    CHECK_EQ(y->type, shape);
+    CHECK(y->made && y->made->tag == 2);
+    Ast_Const *e = (Ast_Const *)local_named(&c, "E");
+    CHECK(e->is_data);
+    Ast *data;
+    CHECK(constant_data(e->value, &data) && data == ((Ast_Member *)e->value)->made);
+    CHECK(e->data == ((Ast_Member *)e->value)->made);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(cases_bind_it_as_the_member) {
+    // Each case naming a member that isn't void declares it, that member:
+    // a place when the switched value is one. A void member's case and
+    // case; declare none, so it there is the loop's.
+    Arena a = arena_make();
+    Checked c = check_src(&a, TAGGED_SHAPES
+                          "make :: () -> Shape { return .empty; }\n"
+                          "main :: () {\n"
+                          "    s: Shape;\n"
+                          "    shapes: [2]Shape;\n"
+                          "    if s == {\n"
+                          "        case .circle; it.r = 3;\n"
+                          "        case .rect; a := it.w;\n"
+                          "        case .empty; b := 1;\n"
+                          "    }\n"
+                          "    for shapes {\n"
+                          "        if it == {\n"
+                          "            case .circle; c := it.r;\n"
+                          "            case .empty; d := it;\n"
+                          "            case; e := it;\n"
+                          "        }\n"
+                          "    }\n"
+                          "    if make() == { case .circle; f := it.r; case; }\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Switch *s = switch_at(&c, 2);
+    CHECK(s && s->cases.count == 3);
+    if (s && s->cases.count == 3) {
+        const char *types[] = {"Circle", "Rect"};
+        for (s64 i = 0; i < 3; i++) {
+            Ast_Case *k = s->cases[i];
+            CHECK_EQ(k->member, (s32)i);
+            if (i == 2) {
+                CHECK(!k->it);
+                continue;
+            }
+            CHECK(k->it);
+            if (!k->it) continue;
+            CHECK_STR(type_name(&a, k->it->type), types[i]);
+            CHECK_STR(k->it->name, "it");
+            CHECK(k->it->is_case_member && !k->it->is_iterator);
+            CHECK_EQ(k->it->pos.line, 9 + (s32)i);
+        }
+    }
+    Ast_For *loop = (Ast_For *)c.file->procs[c.file->procs.count - 1]->body->statements[3];
+    CHECK_EQ(loop->kind, AST_FOR);
+    Ast_Switch *inner = (Ast_Switch *)loop->body->statements[0];
+    CHECK_EQ(inner->kind, AST_SWITCH);
+    if (inner->kind == AST_SWITCH && inner->cases.count == 3) {
+        CHECK(inner->cases[0]->it && inner->cases[0]->it->is_iterator);
+        CHECK(!inner->cases[1]->it && !inner->cases[2]->it);
+        CHECK_EQ(inner->cases[2]->member, -1);
+        const char *names[] = {"d", "e"};
+        for (s64 i = 0; i < 2; i++) {
+            Ast_Var *var = (Ast_Var *)find_local(inner->cases[1 + i]->block, names[i]);
+            CHECK(var);
+            if (!var) continue;
+            CHECK_STR(type_name(&a, var->type), "Shape");
+            CHECK(var->value->kind == AST_NAME && ((Ast_Name *)var->value)->decl == loop->iterator);
+        }
+    }
+    s = switch_at(&c, 4);
+    CHECK(s && s->cases.count == 2);
+    if (s && s->cases.count == 2) {
+        CHECK(s->cases[0]->it && s->cases[0]->it->is_iterator);
+        CHECK_EQ(s->cases[1]->member, -1);
+        CHECK(!s->cases[1]->it);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(tagged_switches_cover_every_member) {
+    // Every member named, or a case;: a switch whose cases all return then
+    // doesn't reach its end. One that misses a member says so, alone.
+    Arena a = arena_make();
+    const char *program = TAGGED_SHAPES
+        "every :: (s: Shape) -> int { if s == { case .circle; return 1; case .rect; return 2; "
+        "case .empty; return 3; } }\n"
+        "some :: (s: Shape) -> int { if s == { case .circle; return 1; case; return 0; } }\n"
+        "two :: (s: Shape) -> int { if s == { case .circle; return 1; case .rect; return 2; } }\n"
+        "complete :: (s: Shape) { if #complete s == { case .circle; case .rect; case .empty; } }\n"
+        "main :: () { }\n";
+    Checked c = check_src(&a, program);
+    CHECK_STR(messages(&a, &c.list->diag),
+              "6:28: this switch doesn't handle 'Shape.empty'; add its case or a 'case;'\n");
+    const char *procs[] = {"every", "some", "two", "complete"};
+    Ast_Switch *switches[4];
+    for (s64 i = 0; i < 4; i++) {
+        switches[i] = (Ast_Switch *)((Ast_Proc *)top_level_named(c.file, procs[i]))->body->statements[0];
+        CHECK_EQ(switches[i]->kind, AST_SWITCH);
+    }
+    CHECK(switches[0]->covers_every_value && switches[0]->checks_no_case && !switches[0]->failed);
+    CHECK(switches[1]->default_case && !switches[1]->checks_no_case && !switches[1]->covers_every_value);
+    CHECK(switches[2]->failed && !switches[2]->covers_every_value);
+    CHECK(switches[3]->covers_every_value && !switches[3]->failed);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(tag_tests_are_bools) {
+    // == and != between a tagged union and a member's name, either order,
+    // .NAME or Shape.NAME, any member: a bool, folded when the union is
+    // constant data, so a top-level #if decides by one.
+    Arena a = arena_make();
+    Checked c = check_src(&a, TAGGED_SHAPES
+                          "K :: Shape.{circle = .{1}};\n"
+                          "main :: () {\n"
+                          "    s: Shape;\n"
+                          "    a := s == .empty;\n"
+                          "    b := .circle != s;\n"
+                          "    c := Shape.rect == s;\n"
+                          "    d := K == .circle;\n"
+                          "    e := K != Shape.circle;\n"
+                          "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Type *shape = struct_named(&c, "Shape");
+    const char *names[] = {"a", "b", "c"};
+    const s32 members[] = {2, 0, 1};
+    for (s64 i = 0; i < 3; i++) {
+        CHECK_STR(type_of(&a, &c, names[i]), "bool");
+        Ast_Binary *test = (Ast_Binary *)value_of(&c, names[i]);
+        CHECK_EQ(test->kind, AST_BINARY);
+        CHECK_EQ(test->operand_type, shape);
+        CHECK_EQ(test->tag_member, members[i]);
+        CHECK(!test->is_constant);
+    }
+    CHECK(folds_to(&c, "d", 1));
+    CHECK(folds_to(&c, "e", 0));
+    token_list_free(c.list);
+    // A top-level #if decides by one, as the loader decides it: the branch
+    // not taken would make n a string's.
+    CHECK_STR(check_loaded(&a,
+                           TAGGED_SHAPES "E :: Shape.empty;\n"
+                                         "#if E == .empty { X :: 1; } else { X :: \"no\"; }\n"
+                                         "#if E != Shape.circle { Y :: 2; } else { Y :: \"no\"; }\n"
+                                         "main :: () { n : int = X + Y; }\n",
+                           SYSTEM_WINDOWS),
+              "");
+    arena_free(&a);
+}
+
+TEST(tagged_unions_contain_themselves_as_structs_do) {
+    // By value, directly or through a struct, a tagged union holding itself
+    // is a circle; behind a pointer it's fine.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "T :: union #tagged { leaf: int; t: T; }\n"
+                               "U :: struct { s: V; }\n"
+                               "V :: union #tagged { u: U; none: void; }\n"
+                               "L :: union #tagged { leaf: int; next: *L; }\n"
+                               "main :: () { }\n"),
+              "1:1: 'T' contains itself; it can hold a pointer to itself, *T\n"
+              "2:1: 'U' contains itself; it can hold a pointer to itself, *U\n");
     arena_free(&a);
 }

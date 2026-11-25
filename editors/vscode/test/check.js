@@ -1122,6 +1122,17 @@ check('the grammar colours union declarations and anonymous members', () => {
     assertScopes('    struct { lo: u16; hi: u16; };', { struct: 'storage.type.rig', u16: [PRIMITIVE, PRIMITIVE] });
 });
 
+// A tagged union's name is a type's too (issue #224), #tagged a directive
+// as any, and its tag's type a built-in type, as an enum's integer type is.
+check('the grammar colours tagged union declarations', () => {
+    assertScopes('Shape :: union #tagged u32 {', {
+        Shape: TYPE,
+        union: 'storage.type.rig',
+        '#tagged': 'keyword.other.directive.rig',
+        u32: PRIMITIVE,
+    });
+});
+
 // The switch (issue #222): case is a keyword of control, as if is; #complete
 // and #through are directives, which one rule colours, whatever their name.
 check('the grammar colours a switch', () => {

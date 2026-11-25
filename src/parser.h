@@ -7,6 +7,8 @@
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
 //               | IDENT '::' ('struct' | 'union') members           a struct or a union and its fields
+//               | IDENT '::' 'union' '#tagged' [IDENT] '{' {IDENT ':' type ';'} '}'
+//                                                                   a tagged union: its tag's type, its members
 //               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
 //                                                                   an enum: its integer type, its members
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
@@ -95,6 +97,12 @@
 // a ';' after its '}'; its braces inside another's are levels, at most
 // MAX_DEPTH of them. Which member a literal gives, and how a field reached
 // through anonymous members is found, are the checker's.
+//
+// Tagged unions (spec 3.20) are unions declared with #tagged after the
+// keyword, and their tag's type's name, if any, after it: `Shape :: union
+// #tagged { circle: Circle; empty: void; }`, `Big :: union #tagged u32 {
+// ... }`, at the top level only. Their members are named, at least one;
+// no anonymous member is among them, and none is a tagged union.
 //
 // Enums are Jai's (spec 3.18): `Mode :: enum { ALLOCATE; RESIZE; }`, or
 // `Look :: enum_flags u8 { VISIBLE; SOLID; }` with its integer type named,

@@ -349,9 +349,15 @@ bool constant_data(Ast *e, Ast **value) {
         return true;
     }
     case AST_MEMBER: {
+        // Shape.empty, a tagged union's member that holds nothing written
+        // as a value (spec 3.20), is the literal it means.
+        Ast_Member *m = (Ast_Member *)e;
+        if (m->made) {
+            *value = m->made;
+            return true;
+        }
         // A struct's field, not a pointer's (whose struct is elsewhere), nor
         // an array's or a string's .count or .data (index -1).
-        Ast_Member *m = (Ast_Member *)e;
         Type *s = m->operand->type;
         Ast *whole;
         if (!s || s->kind != TYPE_STRUCT || m->index < 0 || !constant_data(m->operand, &whole)) return false;
@@ -417,6 +423,14 @@ bool constant_data(Ast *e, Ast **value) {
         Ast_Run *run = (Ast_Run *)e;
         if (!run->value || run->is_constant) return false;
         *value = run->value;
+        return true;
+    }
+    case AST_DOT_NAME: {
+        // .empty meeting a tagged union, as Shape.empty; an enum's member
+        // is a constant, no data.
+        Ast_Literal *made = ((Ast_Dot_Name *)e)->made;
+        if (!made) return false;
+        *value = made;
         return true;
     }
     default: return false;
@@ -535,6 +549,75 @@ static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at
     return member->type ? member : nullptr;
 }
 
+// The index of tagged union t's member `name` (spec 3.20), in its fields;
+// -1 after "'Shape' has no member 'z'", at `at`. t is laid out.
+static s32 tagged_member_index(Checker *c, Type *t, String name, Position at) {
+    for (s64 i = 0; i < t->fields.count; i++) {
+        if (string_eq(t->fields[i].name, name)) return (s32)i;
+    }
+    diag_error(c->diag, at, "'" STR_FMT "' has no member '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
+               STR_ARG(name));
+    return -1;
+}
+
+// Tagged union t's member `name` written as a value, `e` (Shape.empty, or
+// .empty meeting t; spec 3.20), the name at `at`: the value holding it,
+// a literal of t made here, with that member's tag and no value, as
+// Shape.{empty} would be if it didn't already mean a literal whose first
+// field is the variable empty. Only a void member, which holds nothing,
+// is written so: any other is "'Shape.circle' holds a 'Circle'; make one
+// with Shape.{circle = ...}", at its name, and a name t has no member of
+// is "'Shape' has no member 'z'"; null after either, and when t has no
+// layout (said). *index is the member's, or -1.
+static Ast_Literal *void_member_value(Checker *c, Type *t, String name, Position at, Ast *e, s32 *index) {
+    *index = -1;
+    if (!check_layout(c, t)) return nullptr;
+    *index = tagged_member_index(c, t, name, at);
+    if (*index < 0) return nullptr;
+    Type *member = t->fields[*index].type;
+    if (member != &type_void) {
+        if (member) {
+            diag_error(c->diag, at,
+                       "'" STR_FMT "." STR_FMT "' holds a '" STR_FMT "'; make one with " STR_FMT ".{" STR_FMT
+                       " = ...}",
+                       STR_ARG(type_name(c->arena, t)), STR_ARG(name), STR_ARG(type_name(c->arena, member)),
+                       STR_ARG(type_name(c->arena, t)), STR_ARG(name));
+        }
+        return nullptr;
+    }
+    Ast_Literal *literal = ast_new<Ast_Literal>(c->arena, AST_LITERAL, e->pos);
+    literal->start = e->start;
+    literal->type = t;
+    literal->tag = *index;
+    return literal;
+}
+
+s32 tagged_member_named(Checker *c, Type *t, Ast *e) {
+    String name;
+    Position at;
+    if (e->kind == AST_DOT_NAME) {
+        name = ((Ast_Dot_Name *)e)->name;
+        at = ((Ast_Dot_Name *)e)->name_pos;
+    } else if (e->kind == AST_MEMBER) {
+        Ast_Member *m = (Ast_Member *)e;
+        if (m->operand->kind != AST_NAME || ast_in_parentheses(m->operand)) return -2;
+        Ast_Name *operand = (Ast_Name *)m->operand;
+        Ast *decl = check_lookup(c, operand->name);
+        if (!decl || decl->kind != AST_STRUCT || ((Ast_Struct *)decl)->declared != t) return -2;
+        operand->decl = decl;
+        m->of_tagged = (Ast_Struct *)decl;
+        name = m->name;
+        at = m->pos;
+    } else {
+        return -2;
+    }
+    s32 index = tagged_member_index(c, t, name, at);
+    if (index < 0) return -1;
+    if (e->kind == AST_MEMBER) ((Ast_Member *)e)->index = index;
+    e->type = t;
+    return index;
+}
+
 // e, of type_untyped_member, meeting type `to` (check_convert): a .NAME
 // becomes the member of that name of enum `to`, a constant of it; .A | .B
 // (& ^ too, and .A | 0) and ~.A, which waited for a flags type, convert
@@ -544,8 +627,14 @@ static Ast_Const *find_enum_member(Checker *c, Type *t, String name, Position at
 // needs integers, not 'Mode'", "'~' needs an integer, not 'Mode'"), as for
 // two values of it; .A | 1 meeting a flags type, a mismatch at the
 // operator, as f | 1 is. After any of these, e has no type.
+//
+// A .NAME meeting a tagged union (spec 3.20) is its member that holds
+// nothing, .empty, as Shape.empty is (void_member_value): the literal it
+// means is in Ast_Dot_Name.made. An operator meeting one is refused as on
+// an enum that isn't flags ("'|' needs integers, not 'Shape'").
 static void convert_member(Checker *c, Ast *e, Type *to) {
-    if (to->kind != TYPE_ENUM) {
+    bool tagged = to->kind == TYPE_STRUCT && to->is_tagged;
+    if (to->kind != TYPE_ENUM && !tagged) {
         Ast_Dot_Name *first = first_dot_name(e);
         diag_error(c->diag, first->pos, "'." STR_FMT "' needs an enum type, not '" STR_FMT "'", STR_ARG(first->name),
                    STR_ARG(type_name(c->arena, to)));
@@ -553,6 +642,13 @@ static void convert_member(Checker *c, Ast *e, Type *to) {
         return;
     }
     e->type = nullptr;
+    if (e->kind == AST_DOT_NAME && tagged) {
+        Ast_Dot_Name *dot = (Ast_Dot_Name *)e;
+        s32 index;
+        dot->made = void_member_value(c, to, dot->name, dot->name_pos, e, &index);
+        if (dot->made) e->type = to;
+        return;
+    }
     if (e->kind == AST_DOT_NAME) {
         Ast_Dot_Name *dot = (Ast_Dot_Name *)e;
         s32 index;
@@ -1931,9 +2027,20 @@ static Type *check_unify_enums(Checker *c, Ast_Binary *b, Type *left, Type *righ
 // a flags value with 0 too. Anything else isn't compared: "'==' needs
 // numbers, bools, pointers, procedure values, strings or enums, not
 // 'Vec2'", "'<' needs numbers, not 'Vec2'".
+//
+// A tagged union (spec 3.20) is compared by == and != only with a member's
+// name, a tag test (check_binary): with anything else, another tagged union
+// too, "'==' compares a tagged union only with a member's name, as in s ==
+// .empty". Its order operators are any struct's ("'<' needs numbers, not
+// 'Shape'").
 static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right) {
     const char *op = token_kind_name(b->op);
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
+    bool tagged = (left->kind == TYPE_STRUCT && left->is_tagged) || (right->kind == TYPE_STRUCT && right->is_tagged);
+    if (equality && tagged) {
+        diag_error(c->diag, b->pos, "%s compares a tagged union only with a member's name, as in s == .empty", op);
+        return nullptr;
+    }
     Type *t;
     Type *not_equatable = !takes_equality(left) ? left : !takes_equality(right) ? right : nullptr;
     if (equality && not_equatable) {
@@ -1985,6 +2092,37 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
     return &type_bool;
 }
 
+// Whether e may be a member's name in a tag test (spec 3.20), as written:
+// .NAME, or T.NAME where T is a name, not in parentheses, that declares a
+// tagged union (a local of the name hiding it, as for an enum's member).
+// Only looked up, not checked.
+static bool names_a_member(Checker *c, Ast *e) {
+    if (e->kind == AST_DOT_NAME) return true;
+    if (e->kind != AST_MEMBER) return false;
+    Ast *operand = ((Ast_Member *)e)->operand;
+    if (operand->kind != AST_NAME || ast_in_parentheses(operand)) return false;
+    Ast *decl = check_lookup(c, ((Ast_Name *)operand)->name);
+    return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_tagged;
+}
+
+// A tag test, s == .empty or s != .circle (spec 3.20): b's operand `value`
+// a tagged union of type t, its other operand naming t's member `member`
+// (tagged_member_named). A bool, b->operand_type t and b->tag_member the
+// member. When the union is constant data (constant_data), its literal's
+// tag is known, zero for one left out, and the test folds: `#if E ==
+// .empty` decides.
+static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
+    b->operand_type = t;
+    b->tag_member = member;
+    Ast *whole;
+    if (constant_data(value, &whole) && (!whole || (whole->kind == AST_LITERAL && whole->type == t))) {
+        s32 tag = whole ? ((Ast_Literal *)whole)->tag : 0;
+        b->is_constant = true;
+        b->constant = (tag == member) == (b->op == TOKEN_EQUAL_EQUAL);
+    }
+    return &type_bool;
+}
+
 // + - * / % & | ^ << >> (spec 6.4), and the comparisons and && || (above).
 // + - * / take two numbers, the others two integers; they meet at a type
 // (check_unify_numbers) that is also the result's. Untyped with untyped
@@ -2012,11 +2150,36 @@ static Type *check_comparison(Checker *c, Ast_Binary *b, Type *left, Type *right
 // waits too, the untyped 0 being the empty set of the flags type it meets,
 // and so do .A | 1 and .A | 1.5, which that type then refuses as it
 // refuses f | 1 (convert_member). Anywhere else, it meets no type.
+//
+// A tag test (spec 3.20), == or != between a tagged union and a member's
+// name, .NAME or Shape.NAME, either order, any member, void or not, is a
+// bool: whether the union holds that member (check_tag_test).
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
-    Type *left = equality || bitwise ? check_member_operand(c, b->left) : check_operand(c, b->left);
-    Type *right = equality || bitwise ? check_member_operand(c, b->right) : check_operand(c, b->right);
+    Type *left = nullptr, *right = nullptr;
+    bool left_checked = false, right_checked = false;
+    // With a member's name on one side only, the other is checked first:
+    // only once it's known to be a tagged union is the name looked up in
+    // it, never checked as a value (Shape.circle as a value is refused).
+    bool left_names = equality && names_a_member(c, b->left);
+    bool right_names = equality && names_a_member(c, b->right);
+    if (left_names != right_names) {
+        Ast *value = left_names ? b->right : b->left;
+        Type *t = check_member_operand(c, value);
+        if (!t) return nullptr;  // the name says nothing more
+        if (t->kind == TYPE_STRUCT && t->is_tagged) {
+            s32 member = tagged_member_named(c, t, left_names ? b->left : b->right);
+            if (member == -1) return nullptr;
+            if (member >= 0) return check_tag_test(b, t, value, member);
+            // Another tagged union's member: a value of that one, compared
+            // below as any other value.
+        }
+        *(left_names ? &right : &left) = t;
+        *(left_names ? &right_checked : &left_checked) = true;
+    }
+    if (!left_checked) left = equality || bitwise ? check_member_operand(c, b->left) : check_operand(c, b->left);
+    if (!right_checked) right = equality || bitwise ? check_member_operand(c, b->right) : check_operand(c, b->right);
     if (!left || !right) return nullptr;
     if (left == &type_untyped_member || right == &type_untyped_member) {
         Ast *other = left == &type_untyped_member ? b->right : b->left;
@@ -2289,6 +2452,7 @@ static Type *check_cast(Checker *c, Ast_Cast *cast) {
 }
 
 const char *loop_variable_kind(Ast_Var *var) {
+    if (var->is_case_member) return "a member of a switched value that isn't a place";
     // it_index is the only one by that name: check_for reports an iterator
     // called it_index and doesn't declare it.
     return string_eq(var->name, str("it_index")) ? "the loop's index" : "the loop's iterator";
@@ -2307,7 +2471,10 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         // A variable has a slot, its place in memory (a global's in the
         // program's file), but a for loop's iterator and it_index are
         // read-only (spec 6.7): the loop sets them, each iteration, and a
-        // pointer to one would let the body change it.
+        // pointer to one would let the body change it. So is a tagged
+        // union's switch's it when what was switched on is no place (spec
+        // 3.20): it's the member in a value that lives nowhere the program
+        // could see a change, a parameter's, a call's or a constant's.
         what = loop_variable_kind((Ast_Var *)decl);
         break;
     }
@@ -2359,8 +2526,9 @@ bool expr_is_place(Ast *e) {
     case AST_CONTEXT: return true;  // the current context, wherever it lies (spec 7.10)
     case AST_MEMBER: {
         // An enum's member (Mode.FREE) is a constant, and its operand, the
-        // enum's name, has no type.
-        if (((Ast_Member *)e)->of_enum) return false;
+        // enum's name, has no type; a tagged union's (Shape.empty) is a
+        // value made on the spot, its operand a type's name too.
+        if (((Ast_Member *)e)->of_enum || ((Ast_Member *)e)->of_tagged) return false;
         Type *t = ((Ast_Member *)e)->operand->type;
         return type_is_pointer(t) || (t->kind != TYPE_ARRAY && expr_is_place(((Ast_Member *)e)->operand));
     }
@@ -2383,8 +2551,9 @@ Ast_Name *constant_root(Ast *e) {
         case AST_MEMBER: {
             // A struct's field: one reached through a pointer is elsewhere,
             // and a sequence's .count and .data aren't its bytes. An enum's
-            // member is a scalar constant, no data.
-            if (((Ast_Member *)e)->of_enum) return nullptr;
+            // member is a scalar constant, no data; a tagged union's,
+            // Shape.empty, no part of any.
+            if (((Ast_Member *)e)->of_enum || ((Ast_Member *)e)->of_tagged) return nullptr;
             Ast *operand = ((Ast_Member *)e)->operand;
             if (!operand->type || operand->type->kind != TYPE_STRUCT) return nullptr;
             e = operand;
@@ -2422,6 +2591,8 @@ bool is_place(Checker *c, Ast *e, bool for_writing) {
                        STR_ARG(m->of_enum->name), STR_ARG(m->name));
             return false;
         }
+        // Shape.empty is a value made on the spot, as 1 + 2 is (below).
+        if (m->of_tagged) break;
         if (m->operand->type->kind != TYPE_ARRAY) return is_place(c, m->operand, for_writing);
         if (for_writing) {
             diag_error(c->diag, m->pos, "can't assign to an array's '" STR_FMT "'", STR_ARG(m->name));
@@ -2687,6 +2858,41 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
     return is_place(c, m->operand, false) ? type_pointer_to(t->element) : nullptr;
 }
 
+// Where the byte at `at` is in source text `text`: lines and columns count
+// from 1, a column in bytes, line 1's after the UTF-8 byte-order mark, as
+// the lexer counts them.
+static s64 source_offset(String text, Position at) {
+    s64 offset = text.count >= 3 && memcmp(text.data, "\xEF\xBB\xBF", 3) == 0 ? 3 : 0;
+    for (s32 line = 1; line < at.line && offset < text.count; offset++) {
+        if (text.data[offset] == '\n') line++;
+    }
+    return offset + at.col - 1;
+}
+
+// Whether byte b is white space between tokens.
+static bool is_blank(u8 b) {
+    return b == ' ' || b == '\t' || b == '\r' || b == '\n';
+}
+
+// How a message writes member m's operand (check_member): its source text,
+// from its start to the '.' before m's name, the white space around that
+// '.' left out, when it lies on one line, as `s`, `shapes[0]` or `p`
+// usually does; otherwise just "s".
+static String operand_text(Checker *c, Ast_Member *m) {
+    String text = c->diag->files[m->start.file].text;
+    s64 start = source_offset(text, m->start);
+    s64 end = m->pos.file == m->start.file ? source_offset(text, m->pos) : -1;
+    if (end > text.count) end = -1;
+    while (end > start && is_blank(text.data[end - 1])) end--;
+    if (end > start && text.data[end - 1] == '.') end--;
+    while (end > start && is_blank(text.data[end - 1])) end--;
+    String operand = end > start ? string_slice(text, start, end - start) : String{};
+    for (s64 i = 0; i < operand.count; i++) {
+        if (operand.data[i] == '\n') return str("s");
+    }
+    return operand.count ? operand : str("s");
+}
+
 // e.x: the field x of struct e, or of the struct e points at (p.x is
 // p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
@@ -2722,6 +2928,16 @@ static Type *check_sequence_member(Checker *c, Ast_Member *m, Type *t) {
 // as a value: an enum's name is a type, so it has no type of its own. In
 // parentheses, (Mode).FREE, it's an operand as any other, a type used as a
 // value.
+//
+// Tagged unions (spec 3.20): e.x where e so names one, Shape.empty, is the
+// value holding its member x, which must hold nothing (void_member_value),
+// m->of_tagged the union and m->made the literal it means. A member of a
+// tagged union value, or of one a pointer points at, is never reached by
+// '.', reading or writing: which one the union holds is known only at run
+// time, so it's read in a switch, whose case knows (checker.cpp's
+// check_switch): "a tagged union's member is read in a switch: if s == {
+// case .circle; ... it ... }", at the member's name, the operand as
+// written (operand_text), with .* after it through a pointer.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
     if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
@@ -2736,6 +2952,15 @@ static Type *check_member(Checker *c, Ast_Member *m) {
             m->is_constant = true;
             m->constant = member->constant;
             return e->declared;
+        }
+        if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_tagged) {
+            name->decl = decl;
+            Ast_Struct *s = (Ast_Struct *)decl;
+            m->of_tagged = s;
+            if (!s->declared) return nullptr;  // a circle, said
+            Type *t = s->declared;
+            m->made = void_member_value(c, t, m->name, m->pos, m, &m->index);
+            return m->made ? t : nullptr;
         }
     }
     Type *t = check_operand(c, m->operand);
@@ -2754,6 +2979,15 @@ static Type *check_member(Checker *c, Ast_Member *m) {
     if (s->kind != TYPE_STRUCT) {
         diag_error(c->diag, m->pos, "'." STR_FMT "' needs a struct or a pointer to one, not '" STR_FMT "'",
                    STR_ARG(m->name), STR_ARG(type_name(c->arena, t)));
+        return nullptr;
+    }
+    if (s->is_tagged) {
+        // Through a pointer, the switch is on what it points at: `if p ==
+        // {` would be on the pointer.
+        diag_error(c->diag, m->pos,
+                   "a tagged union's member is read in a switch: if " STR_FMT "%s == { case ." STR_FMT
+                   "; ... it ... }",
+                   STR_ARG(operand_text(c, m)), s == t ? "" : ".*", STR_ARG(m->name));
         return nullptr;
     }
     if (!check_layout(c, s)) return nullptr;
@@ -2810,20 +3044,23 @@ static void check_stray_value(Checker *c, Ast *value) {
 // isn't a field ("'Vec2' has no field 'z'"; a union's, "'Value' has no
 // member 'z'"), or is given twice ("field 'x' is given twice"; a union's,
 // "member 'i' is given twice"), or a union's second member ("a union's
-// literal gives one member; 'i' is given already", spec 3.19), each said at
-// the name. A name reached through anonymous members (type_find_member), as
-// C's designated initializers reach them, goes to the outermost of them:
-// the values whose names go through one anonymous member are grouped, in
-// order, into a literal of its type made here, untyped, `.{key = k}`, at
-// the first of those names, which takes the member's place in the literal,
-// as if written so. Checked in turn, the group puts its own names where
-// they go, the same way, so an anonymous union reached by two names is a
-// union given two members. A group moves its values away from where they
-// were written, which is the order they're evaluated in (spec 5.17): so
-// each value keeps that place, among the values the program wrote
-// (Ast_Literal.written), the group's own passed on to the groups inside it.
-// A name of an anonymous member still under way isn't found, a circle
-// (check_member_under_way), as e.x's.
+// literal gives one member; 'i' is given already", spec 3.19; a tagged
+// union's, "a tagged union's literal ...", spec 3.20), or a tagged union's
+// member that holds nothing ("'Shape.empty' holds nothing; write
+// Shape.empty"), each said at the name. A name reached through anonymous
+// members (type_find_member), as C's designated initializers reach them,
+// goes to the outermost of them: the values whose names go through one
+// anonymous member are grouped, in order, into a literal of its type made
+// here, untyped, `.{key = k}`, at the first of those names, which takes
+// the member's place in the literal, as if written so. Checked in turn,
+// the group puts its own names where they go, the same way, so an
+// anonymous union reached by two names is a union given two members. A
+// group moves its values away from where they were written, which is the
+// order they're evaluated in (spec 5.17): so each value keeps that place,
+// among the values the program wrote (Ast_Literal.written), the group's
+// own passed on to the groups inside it. A name of an anonymous member
+// still under way isn't found, a circle (check_member_under_way), as
+// e.x's.
 static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
     Array<Ast *> values = {};  // the literal's, grouped
     Array<String> names = {};
@@ -2843,17 +3080,21 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
         bool given_before = false;
         for (s64 j = 0; j < i; j++) given_before |= string_eq(literal->names[j], name);
         s32 field = -1;
+        bool members = t->is_union || t->is_tagged;  // a union's words, "member", not "field"
         if (!path.count) {
             if (!check_member_under_way(c, t, name)) {
                 diag_error(c->diag, at, "'" STR_FMT "' has no %s '" STR_FMT "'", STR_ARG(type_name(c->arena, t)),
-                           t->is_union ? "member" : "field", STR_ARG(name));
+                           members ? "member" : "field", STR_ARG(name));
             }
         } else if (given_before) {
-            diag_error(c->diag, at, "%s '" STR_FMT "' is given twice", t->is_union ? "member" : "field",
+            diag_error(c->diag, at, "%s '" STR_FMT "' is given twice", members ? "member" : "field", STR_ARG(name));
+        } else if (members && first_field >= 0 && path[0] != first_field) {
+            diag_error(c->diag, at, "a %sunion's literal gives one member; '" STR_FMT "' is given already",
+                       t->is_tagged ? "tagged " : "", STR_ARG(first_name));
+        } else if (t->is_tagged && t->fields[path[0]].type == &type_void) {
+            diag_error(c->diag, at, "'" STR_FMT "." STR_FMT "' holds nothing; write " STR_FMT "." STR_FMT,
+                       STR_ARG(type_name(c->arena, t)), STR_ARG(name), STR_ARG(type_name(c->arena, t)),
                        STR_ARG(name));
-        } else if (t->is_union && first_field >= 0 && path[0] != first_field) {
-            diag_error(c->diag, at, "a union's literal gives one member; '" STR_FMT "' is given already",
-                       STR_ARG(first_name));
         } else {
             field = path[0];
         }
@@ -2915,12 +3156,23 @@ static void place_named_values(Checker *c, Ast_Literal *literal, Type *t) {
 // any of these, a value with no field to go to is still checked for its own
 // mistakes (check_stray_value). A late field's type is made before its
 // value meets it, if it isn't yet (check_late_field).
+//
+// A tagged union's literal (spec 3.20) gives exactly one member, by name,
+// which it holds: Shape.{circle = c}. In order, and with no value at all,
+// it's "a tagged union's literal names its one member, as in Shape.{circle
+// = c}", at the literal: there is no tagged union's literal with no member,
+// Shape.{} (a zeroed one holds its first member, but says so nowhere). Its
+// member's index is its tag (Ast_Literal.tag), and its fields {index}.
 static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
     if (!check_layout(c, t)) return;  // its fields aren't known: said already
     literal->fields.count = 0;
     if (!literal->names.count) {
         bool fits = true;
-        if (t->is_union && literal->values.count) {
+        if (t->is_tagged) {
+            diag_error(c->diag, literal->start,
+                       "a tagged union's literal names its one member, as in Shape.{circle = c}");
+            fits = false;
+        } else if (t->is_union && literal->values.count) {
             diag_error(c->diag, literal->start, "a union's literal names its one member, as in Value.{f = 1.5}");
             fits = false;
         } else if (literal->values.count > t->fields.count) {
@@ -2936,6 +3188,7 @@ static void check_literal_values(Checker *c, Ast_Literal *literal, Type *t) {
     }
     for (s64 i = 0; i < literal->values.count; i++) {
         s32 field = literal->fields[i];
+        if (field >= 0 && t->is_tagged) literal->tag = field;
         if (field < 0) {
             check_stray_value(c, literal->values[i]);
             continue;

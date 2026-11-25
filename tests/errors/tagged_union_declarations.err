@@ -1,0 +1,18 @@
+tests/errors/tagged_union_declarations.rig:6:34: error: 'i' is already declared at tests/errors/tagged_union_declarations.rig:6:26
+    Twice :: union #tagged { i: int; i: float; }
+                                     ^
+tests/errors/tagged_union_declarations.rig:7:1: error: 'Self' contains itself; it can hold a pointer to itself, *Self
+    Self :: union #tagged { s: Self; }
+    ^
+tests/errors/tagged_union_declarations.rig:8:23: error: a tagged union's tag must be an integer type, not 'string'
+    Text :: union #tagged string { a: int; }
+                          ^
+tests/errors/tagged_union_declarations.rig:9:31: error: unknown type 'Nope'
+    Unknown :: union #tagged { n: Nope; }
+                                  ^
+tests/errors/tagged_union_declarations.rig:12:12: error: a foreign procedure can't take a 'Shape' yet; pass a pointer to it
+    bad :: (s: Shape) #foreign libc;
+               ^
+tests/errors/tagged_union_declarations.rig:13:19: error: 'Shape' is a type, not a value
+    main :: () { v := Shape; }
+                      ^

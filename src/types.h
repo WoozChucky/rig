@@ -102,6 +102,9 @@ struct Type {
     bool is_flags;        // TYPE_ENUM: enum_flags
     Ast_Enum *enum_decl;  // TYPE_ENUM: its declaration, its members' names and values
     bool is_union;        // TYPE_STRUCT: a union, every field at offset 0 (spec 3.19)
+    bool is_tagged;       // TYPE_STRUCT: a tagged union (spec 3.20); fields are its members, all at
+                          // fields[0].offset, a void member's of type void
+    Type *tag_type;       // is_tagged: the tag's integer type, at offset 0
 };
 
 // The largest size a type may have, 2^40 bytes (a terabyte): an array over
