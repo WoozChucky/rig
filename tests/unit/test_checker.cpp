@@ -7455,8 +7455,8 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
     // program reads it through Preload's structs, which the checker lays
     // out as any struct. The two must agree: each struct's size,
     // alignment, field offsets and field types, and each tag's value. Each
-    // kind's struct starts with its Type_Info, info, so a *Type_Info casts
-    // to it. Resizable_Array is a [..]T's layout (spec 3.17), which lowering
+    // kind's struct starts with its Type_Info, using info, so a *Type_Info
+    // casts to it and t.size reads it. Resizable_Array is a [..]T's layout (spec 3.17), which lowering
     // and Preload's helpers read alike, aligned as a [..]T is
     // (type_resizable_of), not as type information is.
     s32 resizable_align = type_resizable_of(&type_int)->align;
@@ -7564,6 +7564,9 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
             CHECK_EQ(index, f);  // in the order given here
             CHECK_EQ(t->fields[index].offset, s->fields[f].offset);
             CHECK_STR(type_name(&a, t->fields[index].type), s->fields[f].type);
+            // A kind's info is `using info: Type_Info;` (spec 3.16, 3.21),
+            // so t.size reads it; every other field is an ordinary one.
+            CHECK_EQ(t->fields[index].is_using, string_eq(t->fields[index].name, str("info")));
         }
         array_free(&path);
     }

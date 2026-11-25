@@ -355,7 +355,7 @@ print_item :: (builder: *String_Builder, item: Any, nested: bool) {
 //     an integer is: a value no member has is allowed (cast(Mode) 7 is 7).
 print_enum :: (builder: *String_Builder, e: *Type_Info_Enum, p: *void) {
     signed := (cast(*Type_Info_Integer) e.underlying).signed;
-    size := e.info.size;
+    size := e.size;
     value := print_read_integer(p, size, signed);
     for e.values {
         if it == value {
