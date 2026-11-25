@@ -723,6 +723,9 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
         binary->op = op->kind;
         binary->left = left;
         binary->right = right;
+        Token *last = &p->tokens[p->next - 1];  // the right operand's last token
+        s32 width = (s32)last->text.count + (last->kind == TOKEN_DIRECTIVE ? 1 : 0);  // a directive's '#'
+        binary->end = {last->pos.file, last->pos.line, last->pos.col + width};
         left = binary;
     }
     return left;

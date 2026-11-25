@@ -14,7 +14,9 @@
 // switch shows the operand as written, without the spaces around the '.',
 // or as s; a void member read or written, which holds nothing, its
 // message the tag test to write; and a tag test and a switch's case
-// naming a member beside a pointer, whose message adds the .* to write.
+// naming a member, .NAME or Shape.NAME, beside a pointer, whose message
+// adds the .* to write, after the pointer as written, on either side, in
+// parentheses when the .* wouldn't apply to all of it.
 Circle :: struct { r: float; }
 Rect :: struct { w: float; h: float; }
 Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
@@ -60,4 +62,10 @@ main :: () {
     u := p == .circle;
     u2 := .rect != p;
     if p == { case .circle; case; }
+    ps: [2]*Shape;
+    u3 := *s == .circle;
+    u4 := .circle == ps[0];
+    u5 := .rect != p + 0;
+    u6 := p == Shape.circle;
+    if *s == { case Shape.circle; case; }
 }

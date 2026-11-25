@@ -1332,7 +1332,7 @@ main :: () {
 example.rig:11:5: runtime error: no case for value 7 of 'Shape'
 ```
 
-**Testing the tag.** `s == .empty` and `s != .circle`, with the union on either side and a member's name on the other, `.NAME` or `Shape.NAME`, any member, `void` or not, are `bool`s: whether the union holds that member. Beside a `.NAME`, `Shape.empty` is the union, a value: `.circle == Shape.empty` is false. With `Shape.NAME` on both sides, the one naming a `void` member is the union, the left one when both do: `Shape.circle == Shape.empty` is false, and `Shape.empty == Shape.empty` true; with neither `void`, both are values, and `Shape.circle` is refused as one (above). A name the union doesn't have is `'Shape' has no member 'z'`. A `.NAME` beside a pointer to the union, `p == .circle`, is `'.circle' needs an enum type, not '*Shape'; write p.* == .circle`, at the `.`: the test is on what it points at; so is a `.NAME` case in a switch on the pointer, `if p == {`, whose message ends `write if p.* == {`. The test folds when the union is constant data (section 5.9), so `#if E == .empty` decides by it (section 4.9). At run time it reads the tag alone.
+**Testing the tag.** `s == .empty` and `s != .circle`, with the union on either side and a member's name on the other, `.NAME` or `Shape.NAME`, any member, `void` or not, are `bool`s: whether the union holds that member. Beside a `.NAME`, `Shape.empty` is the union, a value: `.circle == Shape.empty` is false. With `Shape.NAME` on both sides, the one naming a `void` member is the union, the left one when both do: `Shape.circle == Shape.empty` is false, and `Shape.empty == Shape.empty` true; with neither `void`, both are values, and `Shape.circle` is refused as one (above). A name the union doesn't have is `'Shape' has no member 'z'`. A `.NAME` beside a pointer to the union, `p == .circle`, is `'.circle' needs an enum type, not '*Shape'; write p.* == .circle`, at the `.`, and a `Shape.NAME` there `'Shape.circle' names a member of 'Shape', not '*Shape'; write p.* == Shape.circle`, at its name: the test is on what it points at. So is a member's name as a case in a switch on the pointer, `if p == {`, whose message ends `write if p.* == {`. The hint writes the pointer as the program did, on its side of the operator, in parentheses unless it is a name, a member, an index, a call or a dereference, or in them already: `*s == .circle` gets `write (*s).* == .circle`. The test folds when the union is constant data (section 5.9), so `#if E == .empty` decides by it (section 4.9). At run time it reads the tag alone.
 
 ```rig
 #import "Basic";
@@ -3772,6 +3772,7 @@ The sections defining each construct give its messages. Some of those met most o
 | `'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}` | 3.20, 5.12 |
 | `'Shape.empty' holds nothing; test it with s == .empty` | 3.20, 5.12 |
 | `'.circle' needs an enum type, not '*Shape'; write p.* == .circle` | 3.20, 5.6, 6.14 |
+| `'Shape.circle' names a member of 'Shape', not '*Shape'; write p.* == Shape.circle` | 3.20, 5.6, 6.14 |
 | `'Shape.empty' holds nothing; write Shape.empty` | 3.20, 5.17 |
 | `a tagged union's literal names its one member, as in Shape.{circle = c}` | 3.20, 5.17 |
 | `a tagged union's literal gives one member; 'circle' is given already` | 3.20, 5.17 |

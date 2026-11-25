@@ -486,6 +486,9 @@ struct Ast_Binary : Ast {
                          // operands', the result an int); a tag test's (s == .empty, spec
                          // 3.20), the tagged union
     s32 tag_member;      // a tag test (operand_type is a tagged union): the member's index
+    Position end;        // just past its last token, the right operand's, as the parser read it
+                         // ({} for one made after parsing): where a message's copy of that
+                         // operand ends
 };
 
 // The procedures built into the language for resizable arrays (spec 3.17),

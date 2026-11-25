@@ -1,102 +1,117 @@
-tests/errors/tagged_union_uses.rig:28:12: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:30:12: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
         x := s.circle;
                ^
-tests/errors/tagged_union_uses.rig:29:7: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:31:7: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
         s.circle.r = 1;
           ^
-tests/errors/tagged_union_uses.rig:30:12: error: a tagged union's member is read in a switch: if p.* == { case .rect; ... it ... }
+tests/errors/tagged_union_uses.rig:32:12: error: a tagged union's member is read in a switch: if p.* == { case .rect; ... it ... }
         y := p.rect;
                ^
-tests/errors/tagged_union_uses.rig:31:21: error: a tagged union's member is read in a switch: if shapes[0] == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:33:21: error: a tagged union's member is read in a switch: if shapes[0] == { case .circle; ... it ... }
         z := *shapes[0].circle;
                         ^
-tests/errors/tagged_union_uses.rig:32:12: error: 'Shape' has no member 'nope'
+tests/errors/tagged_union_uses.rig:34:12: error: 'Shape' has no member 'nope'
         w := s.nope;
                ^
-tests/errors/tagged_union_uses.rig:33:5: error: only a variable, a field or an element can be assigned to
+tests/errors/tagged_union_uses.rig:35:5: error: only a variable, a field or an element can be assigned to
         Shape.empty = s;
         ^
-tests/errors/tagged_union_uses.rig:34:11: error: only a variable, a field or an element has an address
+tests/errors/tagged_union_uses.rig:36:11: error: only a variable, a field or an element has an address
         q := *Shape.empty;
               ^
-tests/errors/tagged_union_uses.rig:35:39: error: can't assign to 'it': it's a member of a switched value that isn't a place
+tests/errors/tagged_union_uses.rig:37:39: error: can't assign to 'it': it's a member of a switched value that isn't a place
         if Shape.empty == { case .circle; it.r = 1; case; }
                                           ^
-tests/errors/tagged_union_uses.rig:36:10: error: a tagged union's literal names its one member, as in Shape.{circle = c}
+tests/errors/tagged_union_uses.rig:38:10: error: a tagged union's literal names its one member, as in Shape.{circle = c}
         a := Shape.{Circle.{1}};
              ^
-tests/errors/tagged_union_uses.rig:37:10: error: a tagged union's literal names its one member, as in Shape.{circle = c}
+tests/errors/tagged_union_uses.rig:39:10: error: a tagged union's literal names its one member, as in Shape.{circle = c}
         b := Shape.{};
              ^
-tests/errors/tagged_union_uses.rig:38:32: error: a tagged union's literal gives one member; 'circle' is given already
+tests/errors/tagged_union_uses.rig:40:32: error: a tagged union's literal gives one member; 'circle' is given already
         c := Shape.{circle = .{1}, rect = .{1, 2}};
                                    ^
-tests/errors/tagged_union_uses.rig:39:32: error: member 'circle' is given twice
+tests/errors/tagged_union_uses.rig:41:32: error: member 'circle' is given twice
         d := Shape.{circle = .{1}, circle = .{2}};
                                    ^
-tests/errors/tagged_union_uses.rig:40:17: error: 'Shape.empty' holds nothing; write Shape.empty
+tests/errors/tagged_union_uses.rig:42:17: error: 'Shape.empty' holds nothing; write Shape.empty
         e := Shape.{empty = 1};
                     ^
-tests/errors/tagged_union_uses.rig:41:17: error: 'Shape' has no member 'z'
+tests/errors/tagged_union_uses.rig:43:17: error: 'Shape' has no member 'z'
         f := Shape.{z = 1};
                     ^
-tests/errors/tagged_union_uses.rig:42:16: error: 'Shape' has no member 'z'
+tests/errors/tagged_union_uses.rig:44:16: error: 'Shape' has no member 'z'
         g := Shape.z;
                    ^
-tests/errors/tagged_union_uses.rig:43:16: error: 'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}
+tests/errors/tagged_union_uses.rig:45:16: error: 'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}
         h := Shape.circle;
                    ^
-tests/errors/tagged_union_uses.rig:44:18: error: 'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}
+tests/errors/tagged_union_uses.rig:46:18: error: 'Shape.circle' holds a 'Circle'; make one with Shape.{circle = ...}
         i : Shape = .circle;
                      ^
-tests/errors/tagged_union_uses.rig:45:12: error: '==' compares a tagged union only with a member's name, as in s == .empty
+tests/errors/tagged_union_uses.rig:47:12: error: '==' compares a tagged union only with a member's name, as in s == .empty
         j := s == t;
                ^
-tests/errors/tagged_union_uses.rig:46:12: error: '!=' compares a tagged union only with a member's name, as in s == .empty
+tests/errors/tagged_union_uses.rig:48:12: error: '!=' compares a tagged union only with a member's name, as in s == .empty
         k := s != 1;
                ^
-tests/errors/tagged_union_uses.rig:47:12: error: '<' needs numbers, not 'Shape'
+tests/errors/tagged_union_uses.rig:49:12: error: '<' needs numbers, not 'Shape'
         l := s < t;
                ^
-tests/errors/tagged_union_uses.rig:48:16: error: 'Shape' has no member 'nope'
+tests/errors/tagged_union_uses.rig:50:16: error: 'Shape' has no member 'nope'
         m := s == .nope;
                    ^
-tests/errors/tagged_union_uses.rig:49:13: error: '==' compares a tagged union only with a member's name, as in s == .empty
+tests/errors/tagged_union_uses.rig:51:13: error: '==' compares a tagged union only with a member's name, as in s == .empty
         m2 := s == Other.none;
                 ^
-tests/errors/tagged_union_uses.rig:50:22: error: '!=' compares a tagged union only with a member's name, as in s == .empty
+tests/errors/tagged_union_uses.rig:52:22: error: '!=' compares a tagged union only with a member's name, as in s == .empty
         m3 := Other.none != s;
                          ^
-tests/errors/tagged_union_uses.rig:51:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
+tests/errors/tagged_union_uses.rig:53:10: error: this member's enum isn't known; write it with its enum, as in Mode.FREE
         n := .empty;
              ^
-tests/errors/tagged_union_uses.rig:52:24: error: '|' needs integers, not 'Shape'
+tests/errors/tagged_union_uses.rig:54:24: error: '|' needs integers, not 'Shape'
         o : Shape = .empty | .empty;
                            ^
-tests/errors/tagged_union_uses.rig:53:15: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:55:15: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
         x2 := s . circle;
                   ^
-tests/errors/tagged_union_uses.rig:54:15: error: a tagged union's member is read in a switch: if (s) == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:56:15: error: a tagged union's member is read in a switch: if (s) == { case .circle; ... it ... }
         x3 := (s).circle;
                   ^
-tests/errors/tagged_union_uses.rig:56:12: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:58:12: error: a tagged union's member is read in a switch: if s == { case .circle; ... it ... }
             0].circle;
                ^
-tests/errors/tagged_union_uses.rig:57:23: error: a tagged union's member is read in a switch: if shapes[ 1 ] == { case .circle; ... it ... }
+tests/errors/tagged_union_uses.rig:59:23: error: a tagged union's member is read in a switch: if shapes[ 1 ] == { case .circle; ... it ... }
         x5 := shapes[ 1 ].circle;
                           ^
-tests/errors/tagged_union_uses.rig:58:12: error: 'Shape.empty' holds nothing; test it with s == .empty
+tests/errors/tagged_union_uses.rig:60:12: error: 'Shape.empty' holds nothing; test it with s == .empty
         v := s.empty;
                ^
-tests/errors/tagged_union_uses.rig:59:7: error: 'Shape.empty' holds nothing; test it with p.* == .empty
+tests/errors/tagged_union_uses.rig:61:7: error: 'Shape.empty' holds nothing; test it with p.* == .empty
         p.empty = 1;
           ^
-tests/errors/tagged_union_uses.rig:60:15: error: '.circle' needs an enum type, not '*Shape'; write p.* == .circle
+tests/errors/tagged_union_uses.rig:62:15: error: '.circle' needs an enum type, not '*Shape'; write p.* == .circle
         u := p == .circle;
                   ^
-tests/errors/tagged_union_uses.rig:61:11: error: '.rect' needs an enum type, not '*Shape'; write .rect != p.*
+tests/errors/tagged_union_uses.rig:63:11: error: '.rect' needs an enum type, not '*Shape'; write .rect != p.*
         u2 := .rect != p;
               ^
-tests/errors/tagged_union_uses.rig:62:20: error: '.circle' needs an enum type, not '*Shape'; write if p.* == {
+tests/errors/tagged_union_uses.rig:64:20: error: '.circle' needs an enum type, not '*Shape'; write if p.* == {
         if p == { case .circle; case; }
                        ^
+tests/errors/tagged_union_uses.rig:66:17: error: '.circle' needs an enum type, not '*Shape'; write (*s).* == .circle
+        u3 := *s == .circle;
+                    ^
+tests/errors/tagged_union_uses.rig:67:11: error: '.circle' needs an enum type, not '*Shape'; write .circle == ps[0].*
+        u4 := .circle == ps[0];
+              ^
+tests/errors/tagged_union_uses.rig:68:11: error: '.rect' needs an enum type, not '*Shape'; write .rect != (p + 0).*
+        u5 := .rect != p + 0;
+              ^
+tests/errors/tagged_union_uses.rig:69:22: error: 'Shape.circle' names a member of 'Shape', not '*Shape'; write p.* == Shape.circle
+        u6 := p == Shape.circle;
+                         ^
+tests/errors/tagged_union_uses.rig:70:27: error: 'Shape.circle' names a member of 'Shape', not '*Shape'; write if (*s).* == {
+        if *s == { case Shape.circle; case; }
+                              ^

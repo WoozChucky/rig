@@ -694,17 +694,6 @@ static void convert_member(Checker *c, Ast *e, Type *to) {
     e->is_constant = true;
 }
 
-bool report_member_on_pointer(Checker *c, Ast *e, Type *to, String fix) {
-    if (e->kind != AST_DOT_NAME || !type_is_pointer(to)) return false;
-    Type *pointee = to->pointee;
-    if (pointee->kind != TYPE_STRUCT || !pointee->is_tagged) return false;
-    Ast_Dot_Name *dot = (Ast_Dot_Name *)e;
-    diag_error(c->diag, dot->pos, "'." STR_FMT "' needs an enum type, not '" STR_FMT "'; write " STR_FMT,
-               STR_ARG(dot->name), STR_ARG(type_name(c->arena, to)), STR_ARG(fix));
-    e->type = nullptr;
-    return true;
-}
-
 bool check_convert(Checker *c, Ast *e, Type *to) {
     Type *from = e->type;
     if (!from || !to) return true;
@@ -2138,6 +2127,70 @@ static bool names_a_void_member(Checker *c, Ast_Member *e) {
     return false;
 }
 
+// Whether source text `written` is all in one pair of parentheses: its
+// first '(' closed by its last byte (a string literal's bytes skipped).
+static bool in_one_pair_of_parentheses(String written) {
+    if (written.count < 2 || written.data[0] != '(') return false;
+    s64 depth = 0;
+    for (s64 i = 0; i < written.count; i++) {
+        u8 b = written.data[i];
+        if (b == '"') {
+            for (i++; i < written.count && written.data[i] != '"'; i++) {
+                if (written.data[i] == '\\') i++;
+            }
+            continue;
+        }
+        if (b == '(') depth++;
+        if (b == ')' && --depth == 0) return i == written.count - 1;
+    }
+    return false;
+}
+
+String pointer_text(Checker *c, Ast *e, Position end) {
+    String written = source_text(c, e->start, end, 0);
+    bool postfix = e->kind == AST_NAME || e->kind == AST_MEMBER || e->kind == AST_INDEX || e->kind == AST_CALL ||
+                   e->kind == AST_DEREF;
+    if (postfix || in_one_pair_of_parentheses(written)) return written;
+    return string_printf(c->arena, "(" STR_FMT ")", STR_ARG(written));
+}
+
+bool report_member_on_pointer(Checker *c, Ast *e, Type *to, Ast_Binary *test, Ast_Switch *s) {
+    if (!type_is_pointer(to) || to->pointee->kind != TYPE_STRUCT || !to->pointee->is_tagged) return false;
+    if (!names_a_member(c, e)) return false;
+    // Shape.NAME names a member only of Shape: Other.circle is no hint's.
+    Ast_Member *named = e->kind == AST_MEMBER ? (Ast_Member *)e : nullptr;
+    if (named && ((Ast_Struct *)check_lookup(c, ((Ast_Name *)named->operand)->name))->declared != to->pointee) {
+        return false;
+    }
+    String name = named ? string_printf(c->arena, STR_FMT "." STR_FMT,
+                                        STR_ARG(((Ast_Name *)named->operand)->name), STR_ARG(named->name))
+                        : string_printf(c->arena, "." STR_FMT, STR_ARG(((Ast_Dot_Name *)e)->name));
+    String fix;
+    if (test) {
+        Ast *pointer = test->left == e ? test->right : test->left;
+        String written = pointer_text(c, pointer, pointer == test->left ? test->pos : test->end);
+        String op = str(token_kind_name(test->op));
+        op = string_slice(op, 1, op.count - 2);  // without its quotes
+        fix = pointer == test->left ? string_printf(c->arena, STR_FMT ".* " STR_FMT " " STR_FMT, STR_ARG(written),
+                                                    STR_ARG(op), STR_ARG(name))
+                                    : string_printf(c->arena, STR_FMT " " STR_FMT " " STR_FMT ".*", STR_ARG(name),
+                                                    STR_ARG(op), STR_ARG(written));
+    } else {
+        fix = string_printf(c->arena, "if " STR_FMT ".* == {", STR_ARG(pointer_text(c, s->value, s->equals)));
+    }
+    String pointer_type = type_name(c->arena, to);
+    if (named) {
+        diag_error(c->diag, named->pos,
+                   "'" STR_FMT "' names a member of '" STR_FMT "', not '" STR_FMT "'; write " STR_FMT,
+                   STR_ARG(name), STR_ARG(type_name(c->arena, to->pointee)), STR_ARG(pointer_type), STR_ARG(fix));
+    } else {
+        diag_error(c->diag, e->pos, "'" STR_FMT "' needs an enum type, not '" STR_FMT "'; write " STR_FMT,
+                   STR_ARG(name), STR_ARG(pointer_type), STR_ARG(fix));
+    }
+    e->type = nullptr;
+    return true;
+}
+
 // A tag test, s == .empty or s != .circle (spec 3.20): b's operand `value`
 // a tagged union of type t, its other operand naming t's member `member`
 // (tagged_member_named). A bool, b->operand_type t and b->tag_member the
@@ -2188,8 +2241,8 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // name, .NAME or Shape.NAME, either order, any member, void or not, is a
 // bool: whether the union holds that member (check_tag_test). The union
 // may itself be written Shape.empty, beside a .NAME or a Shape.NAME. A
-// .NAME beside a pointer to one is "'.circle' needs an enum type, not
-// '*Shape'; write p.* == .circle" (report_member_on_pointer).
+// member's name beside a pointer to one is "'.circle' needs an enum type,
+// not '*Shape'; write p.* == .circle" (report_member_on_pointer).
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -2219,6 +2272,8 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
         Ast *value = left_names ? b->right : b->left;
         Type *t = check_member_operand(c, value);
         if (!t) return nullptr;  // the name says nothing more
+        // On a pointer to a tagged union, the test is on what it points at.
+        if (report_member_on_pointer(c, left_names ? b->left : b->right, t, b, nullptr)) return nullptr;
         if (t->kind == TYPE_STRUCT && t->is_tagged) {
             s32 member = tagged_member_named(c, t, left_names ? b->left : b->right);
             if (member == -1) return nullptr;
@@ -2242,28 +2297,7 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
             return nullptr;
         }
         Ast *member = left == &type_untyped_member ? b->left : b->right;
-        Type *to = left == &type_untyped_member ? right : left;
-        if (equality && member->kind == AST_DOT_NAME && type_is_pointer(to)) {
-            // A tag test on a pointer is on what it points at: p.* ==
-            // .circle. The pointer's text, as written, when it's on the
-            // left, where its end, the operator, is known; on the right,
-            // its name, or s.
-            String name = ((Ast_Dot_Name *)member)->name;
-            String op = str(token_kind_name(b->op));
-            op = string_slice(op, 1, op.count - 2);  // without its quotes
-            String fix;
-            if (member == b->right) {
-                fix = string_printf(c->arena, STR_FMT ".* " STR_FMT " ." STR_FMT,
-                                    STR_ARG(source_text(c, b->left->start, b->pos, 0)), STR_ARG(op), STR_ARG(name));
-            } else {
-                bool named = b->right->kind == AST_NAME && !ast_in_parentheses(b->right);
-                String pointer = named ? ((Ast_Name *)b->right)->name : str("s");
-                fix = string_printf(c->arena, "." STR_FMT " " STR_FMT " " STR_FMT ".*", STR_ARG(name), STR_ARG(op),
-                                    STR_ARG(pointer));
-            }
-            if (report_member_on_pointer(c, member, to, fix)) return nullptr;
-        }
-        check_convert(c, member, to);
+        check_convert(c, member, left == &type_untyped_member ? right : left);
         if (!member->type) return nullptr;
         left = b->left->type;
         right = b->right->type;

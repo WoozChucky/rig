@@ -296,12 +296,22 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e);
 // or `to` is in another file.
 String source_text(Checker *c, Position from, Position to, u8 drop);
 
-// A .NAME meeting a pointer to a tagged union (spec 3.20), `to`, in a tag
-// test or a switch's case: "'.circle' needs an enum type, not '*Shape';
-// write p.* == .circle", the hint `fix` (or "if p.* == {"). True after
-// saying it; false, nothing said, when e is no .NAME or `to` no such
-// pointer.
-bool report_member_on_pointer(Checker *c, Ast *e, Type *to, String fix);
+// How a hint writes pointer e, whose source ends at `end`, before a .*:
+// its source text (source_text), in parentheses unless e is a name, a
+// member, an index, a call or a dereference, or in them already, so the
+// .* applies to all of it: `(p + 1).*`, `(*s).*`, `h.p.*`.
+String pointer_text(Checker *c, Ast *e, Position end);
+
+// A member's name e, .circle or Shape.circle, meeting a pointer to a
+// tagged union (spec 3.20), `to`, in tag test `test` or in switch s's case
+// (the other null): the test is on what it points at, so the hint writes
+// the pointer (pointer_text) with .* after it. A .NAME is "'.circle' needs
+// an enum type, not '*Shape'; write p.* == .circle", Shape.NAME
+// "'Shape.circle' names a member of 'Shape', not '*Shape'; write p.* ==
+// Shape.circle", a case's hint "if p.* == {", at the '.' or at the
+// member's name. True after saying it; false, nothing said, when `to` is
+// no such pointer, or e no name of a member of what it points at.
+bool report_member_on_pointer(Checker *c, Ast *e, Type *to, Ast_Binary *test, Ast_Switch *s);
 
 // p += n or p -= n (`op_name`, at `at`), p's type the pointer type
 // `pointer`, or the offset of p + n, n + p or p - n: n must be an integer

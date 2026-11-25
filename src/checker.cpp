@@ -2317,11 +2317,12 @@ static String case_key(Type *t, Ast *value) {
 // whose bytes are compared; a pointer's null, the one pointer that's
 // is_constant: a string literal's address has no number until the program
 // is linked, so "a pointer's case can only be null, as in case null;", for
-// any other value of a pointer switch; a .NAME in a switch on a pointer to
-// a tagged union is "'.circle' needs an enum type, not '*Shape'; write if
-// p.* == {" (report_member_on_pointer). Any other value is "a case's value
-// must be known while compiling", unless it needs a #run that failed, said
-// already (has_failed_run). Never evaluated at run time.
+// any other value of a pointer switch; a member's name, .circle or
+// Shape.circle, in a switch on a pointer to a tagged union is "'.circle'
+// needs an enum type, not '*Shape'; write if p.* == {"
+// (report_member_on_pointer). Any other value is "a case's value must be
+// known while compiling", unless it needs a #run that failed, said already
+// (has_failed_run). Never evaluated at run time.
 //
 // Once a value checked with no error, it's looked up in a table of the
 // values that did before it (case_key), each the first case to have it, so
@@ -2400,14 +2401,10 @@ static void check_switch(Checker *c, Ast_Switch *s) {
             check_value(c, value);
         } else {
             s64 errors = c->diag->error_count;
-            bool checked = check_value(c, value);
-            // A switch on a pointer is on the pointer: a .NAME on a pointer
-            // to a tagged union means what it points at, `if p.* == {`.
-            if (checked && value->kind == AST_DOT_NAME && type_is_pointer(t)) {
-                String fix = string_printf(c->arena, "if " STR_FMT ".* == {",
-                                           STR_ARG(source_text(c, s->value->start, s->equals, 0)));
-                if (report_member_on_pointer(c, value, t, fix)) checked = false;
-            }
+            // A switch on a pointer is on the pointer: a member's name on a
+            // pointer to a tagged union means what it points at, `if p.* ==
+            // {`, said before the name is checked as a value.
+            bool checked = !report_member_on_pointer(c, value, t, nullptr, s) && check_value(c, value);
             if (checked && !check_convert(c, value, t)) report_no_conversion(c, value, t);
             bool fine = value->type && c->diag->error_count == errors;
             if (fine && type_is_pointer(t) && !value->is_constant) {
