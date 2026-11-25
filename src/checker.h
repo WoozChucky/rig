@@ -1208,8 +1208,9 @@
 //   using parameter's struct at depth 0, in parameter order), then at the
 //   top level (check_lookup): locals, a loop's or a case's it and the
 //   parameters hide such a field, which hides globals, constants,
-//   procedures and enums; types are never looked up there. Two at one
-//   depth are "'x' is ambiguous: 'a.x' or 'b.x'". A value parameter's
+//   procedures, enums and structs, named as values; written types and
+//   literals' types are never looked up there. Two at one depth are "'x' is
+//   ambiguous: 'a.x' or 'b.x'". A value parameter's
 //   fields are read-only ("can't assign to 'id': it's a field of the
 //   parameter 'e'", and the address's), through a pointer they're places;
 //   in a default value they're refused ("a default value can't use 'id', a

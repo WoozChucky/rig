@@ -2,7 +2,9 @@
 // calls procedures whose bodies name their using parameters' fields, as
 // the program does when it runs. A constant is baked from a Player such
 // procedures made, a #run in a body converts a *Player into a using
-// *Entity parameter, and a top-level #run prints what it moved.
+// *Entity parameter, and a top-level #run prints what it moved. A #run in
+// a using body reaches a procedure declared after it, whose body is checked
+// there: its id is the global's, never the outer body's field.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -36,6 +38,15 @@ described :: () -> int {
     return describe(*p);
 }
 
+id := 7;
+
+reached :: (using e: *Entity) -> int {
+    v := #run late();
+    return v * 100 + id;
+}
+
+late :: () -> int { return id; }
+
 B :: #run build();
 
 #run {
@@ -48,4 +59,6 @@ main :: () {
     print("{} {} {} {}\n", B.position.x, B.position.y, B.health, B.id);
     d := #run described();
     print("{}\n", d);
+    e := Entity.{id = 1};
+    print("{}\n", reached(*e));
 }

@@ -4,7 +4,8 @@
 // using field further in too. A local and another parameter hide such a
 // name, and it hides a global; a field that holds a procedure is called
 // through its value; a value parameter's pointer field still writes where
-// it points; print takes a field by its place. A *Player goes into a
+// it points, and for * over its resizable array field writes the shared
+// elements; print takes a field by its place. A *Player goes into a
 // using *Entity parameter, moved to its entity field.
 #import "Basic";
 
@@ -48,6 +49,10 @@ sum :: (using b: *Bag) -> int {
     return t;
 }
 
+grow :: (using b: Bag) {
+    for * items { it.* += 10; }
+}
+
 double :: (n: int) -> int { return n * 2; }
 
 fire :: (using h: Handler, n: int) -> int {
@@ -80,6 +85,8 @@ main :: () {
     array_add(*b.items, 1);
     array_add(*b.items, 2);
     print("{}\n", sum(*b));
+    grow(b);
+    print("{}\n", b.items);
 
     print("{}\n", fire(.{double}, 21));
 

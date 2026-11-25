@@ -1,6 +1,7 @@
 // using parameters' mistakes (issue #225, spec 3.21), one procedure each: a
-// value parameter's field assigned to and its address taken; a field used
-// in a default value and in a #run, where the parameter doesn't exist;
+// value parameter's field assigned to, added to and its address taken, and
+// its array field gone over with for *, which takes its address; a field
+// used in a default value and in a #run, where the parameter doesn't exist;
 // using on a parameter whose type isn't a struct or a pointer to one; a
 // name two using parameters reach at one depth; and a name no scope, no
 // using parameter and no top-level declaration has.
@@ -8,11 +9,14 @@ Vec2 :: struct { x: float; y: float; }
 Entity :: struct { id: int; position: Vec2; }
 A :: struct { x: int; }
 B :: struct { x: float; }
+Arr :: struct { arr: [2]int; }
 
 twice :: (n: int) -> int { return n * 2; }
 
 assign :: (using e: Entity) { id = 1; }
 address :: (using e: Entity) { p := *id; }
+bump :: (using e: Entity) { id += 1; }
+fixed :: (using a: Arr) { for * arr { it.* += 1; } }
 defaults :: (using e: *Entity, n: int = id) { }
 run :: (using e: *Entity) { v := #run twice(id); }
 not_a_struct :: (using n: int) { }

@@ -377,10 +377,14 @@ static Ast *find_name(Checker *c, String name) {
 // Between the scopes and the top level, the fields the procedure's using
 // parameters reach (spec 3.21, 4.7): locals, a loop's it, a case's it and
 // the parameters themselves hide them, and they hide the globals,
-// constants, procedures and enums of their names. Types are found by
-// find_name, which never looks there: a field is no type. A name two
-// parameters' fields reach at one depth, or the walk finding a circle, is
-// still theirs: check_using_name says so.
+// constants, procedures, enums and structs of their names, the name being
+// a value there (Mode.A, Shape.empty, a callee). A written type and a
+// literal's are found by find_name, which never looks there: a field is no
+// type. A name the walk finds twice at one depth (across the parameters or
+// in one) is still theirs, and check_using_name says it's ambiguous; so is
+// one whose walk meets a circle, which the walk says
+// (check_member_under_way): root isn't set, and check_using_name leaves
+// the name undeclared.
 Ast *check_lookup(Checker *c, String name, bool *through_using) {
     if (through_using) *through_using = false;
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {

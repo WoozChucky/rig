@@ -12044,8 +12044,9 @@ TEST(using_parameters_name_their_fields) {
 TEST(using_parameter_names_come_between_locals_and_globals) {
     // Locals, the other parameters, a for's it and a tagged switch's case's
     // it hide a using parameter's field; the field hides a global, a
-    // procedure and an enum. Two at the first depth, across parameters, are
-    // ambiguous. (A view of items: a resizable array needs Preload.)
+    // procedure, an enum, and a struct's name used as a value. Two at the
+    // first depth, across parameters or in one, are ambiguous. (A view of
+    // items: a resizable array needs Preload.)
     Arena a = arena_make();
     Checked c = check_src(&a, USING_PLAYER
                           "id := \"global\";\n"
@@ -12053,7 +12054,7 @@ TEST(using_parameter_names_come_between_locals_and_globals) {
                           "Circle :: struct { r: float; }\n"
                           "Shape :: union #tagged { circle: Circle; }\n"
                           "Bag :: struct { items: []int; Mode: int; it: string; }\n"
-                          "f :: (using e: *Entity, health: int) {\n"
+                          "f :: (using p: *Player, health: string) {\n"
                           "    a := id;\n"
                           "    {\n"
                           "        id := 1.5;\n"
@@ -12072,7 +12073,7 @@ TEST(using_parameter_names_come_between_locals_and_globals) {
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK_STR(type_in(&a, &c, "f", "a"), "int");
     CHECK_STR(type_in(&a, &c, "f", "b"), "float32");
-    CHECK_STR(type_in(&a, &c, "f", "hp"), "int");
+    CHECK_STR(type_in(&a, &c, "f", "hp"), "string");
     CHECK_STR(type_in(&a, &c, "g", "c"), "string");
     CHECK_STR(type_in(&a, &c, "h", "m"), "int");
     CHECK_STR(type_in(&a, &c, "h", "d"), "int");
@@ -12080,16 +12081,37 @@ TEST(using_parameter_names_come_between_locals_and_globals) {
     CHECK_STR(type_in(&a, &c, "h", "k"), "Circle");
     token_list_free(c.list);
     // The field hides the procedure: a Vec2 can't be called. Two fields
-    // named x at depth 0, one in each parameter's struct.
+    // named x at depth 0, one in each parameter's struct, each path written
+    // from its own parameter's struct (a's x is A3's second field); and two
+    // named id at depth 1, both in one parameter's struct.
     CHECK_STR(check_source(&a, USING_PLAYER
                            "position :: () { }\n"
                            "A :: struct { x: int; }\n"
                            "A2 :: struct { x: int; }\n"
+                           "A3 :: struct { y: int; x: int; }\n"
+                           "Two :: struct { using a: Entity; using b: Entity; }\n"
                            "k :: (using e: *Entity) { position(); }\n"
                            "j :: (using a: *A, using b: *A2) -> int { return x; }\n"
+                           "j3 :: (using a: *A3, using b: *A) -> int { return x; }\n"
+                           "amb :: (using t: *Two) -> int { return id; }\n"
                            "main :: () { }\n"),
-              "7:27: 'position' isn't a procedure, so it can't be called\n"
-              "8:50: 'x' is ambiguous: 'a.x' or 'b.x'\n");
+              "9:27: 'position' isn't a procedure, so it can't be called\n"
+              "10:50: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "11:51: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "12:40: 'id' is ambiguous: 't.a.id' or 't.b.id'\n");
+    // A field hides a struct's or a tagged union's name where the name is a
+    // value, as it hides an enum's: Shape.empty and Vec2() name the field. A
+    // written type and a literal's type are never a field's.
+    CHECK_STR(check_source(&a, "Circle :: struct { r: float; }\n"
+                               "Shape :: union #tagged { circle: Circle; empty: void; }\n"
+                               "Vec2 :: struct { x: float; y: float; }\n"
+                               "Bag :: struct { Shape: int; Vec2: int; }\n"
+                               "f :: (using b: *Bag) -> bool { s: Shape; return s == Shape.empty; }\n"
+                               "g :: (using b: *Bag) { s := Shape.{circle = .{1}}; v := Vec2.{1, 2}; w: Vec2; }\n"
+                               "h :: (using b: *Bag) { Vec2(1); }\n"
+                               "main :: () { }\n"),
+              "5:60: '.empty' needs a struct or a pointer to one, not 'int'\n"
+              "7:24: 'Vec2' isn't a procedure, so it can't be called\n");
     arena_free(&a);
 }
 
@@ -12097,6 +12119,7 @@ TEST(value_using_parameters_are_read_only) {
     // A value parameter's fields are read-only, reached through using too;
     // through a pointer, the parameter's or a field's, they're places. In a
     // default value and in a #run, a field is refused as its parameter is.
+    // A variadic parameter is a view, so it takes no using.
     Arena a = arena_make();
     CHECK_STR(check_source(&a, USING_PLAYER
                            "Transform :: struct { x: float; y: float; }\n"
@@ -12109,11 +12132,13 @@ TEST(value_using_parameters_are_read_only) {
                            "d :: (using e: *Entity, n: int = id) { }\n"
                            "r :: (using e: *Entity) { v := #run twice(id); }\n"
                            "u :: (using n: int) { }\n"
+                           "v :: (using e: ..*Entity) { }\n"
                            "main :: () { }\n"),
               "7:26: can't assign to 'id': it's a field of the parameter 'e'\n"
               "8:32: can't take the address of 'id': it's a field of the parameter 'e'\n"
               "11:34: a default value can't use 'id', a field of the parameter 'e'\n"
               "12:43: #run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling\n"
-              "13:16: 'using' needs a struct or a pointer to one, not 'int'\n");
+              "13:16: 'using' needs a struct or a pointer to one, not 'int'\n"
+              "14:18: 'using' needs a struct or a pointer to one, not '[]*Entity'\n");
     arena_free(&a);
 }

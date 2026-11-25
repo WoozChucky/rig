@@ -1962,7 +1962,7 @@ static s32 lower_address(Lowering *l, Ast *e) {
     if (e->kind == AST_MEMBER) return lower_member_address(l, (Ast_Member *)e);
     if (e->kind == AST_INDEX) return lower_index_address(l, (Ast_Index *)e);
     if (e->kind == AST_CONTEXT) return load_context(l);  // the current context's own address
-    RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
+    RIG_ASSERT(e->kind == AST_NAME);  // a variable or a using parameter's field: the checker allowed nothing else
     Ast_Name *name = (Ast_Name *)e;
     if (name->through) return lower_address(l, name->through);  // a using parameter's field (spec 3.21)
     return address_of(l, name->decl);
