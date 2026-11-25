@@ -3092,8 +3092,8 @@ static String operand_text(Checker *c, Ast_Member *m) {
 
 // How far a using walk for a name looks into a struct it reaches
 // (using_reach): not at all, its declaration holding the name nowhere; at
-// its own fields, which may hold it; or only past them, at the structs its
-// using fields reach.
+// its own fields, which may hold it, and past them when the depth has none;
+// or only past them, at the structs its using fields reach.
 enum Using_Reach {
     REACH_NONE,
     REACH_OWN,
@@ -3204,15 +3204,15 @@ static Using_Reach using_reach(Checker *c, Type *t, String name) {
 // searched, not before: a name found at a shallower depth needs nothing
 // deeper, and making a type or a layout it doesn't need could meet a
 // circle that isn't there (a #run during the layouts reading a field of
-// its own). One reached through a using field is the field's type's, or
-// the struct it points at: a pointer using field's type is made first if
-// it isn't yet (check_late_field), which says whether using takes it. How
-// far the walk looks into it is then known (using_reach). It isn't
-// searched (no type) when the field's type is unknown (an error, a
-// circle), nor when using_search_needed says so, nor when its declaration
-// can't hold the name: a name found nowhere, a global or a procedure a
-// using body names, reaches every depth, and would lay out every struct
-// the walk reaches. Nothing is laid out here.
+// its own). One reached through a using field is the field's type, or the
+// struct it points at: a pointer using field's type is made first if it
+// isn't yet (check_late_field), which says whether using takes it. How far
+// the walk looks into it is then known (using_reach). It isn't searched
+// (no type) when the field's type is unknown (an error, a circle), nor
+// when using_search_needed says so, nor when its declaration can't hold
+// the name: a name found nowhere, a global or a procedure a using body
+// names, reaches every depth, and would lay out every struct the walk
+// reaches. The struct itself isn't laid out here.
 static void take_using_struct(Using_Walk *w, s64 at) {
     Type *held = w->list[at].type;  // one the walk starts at
     if (w->list[at].outer >= 0) {
@@ -3293,17 +3293,17 @@ static s32 using_found_path(Using_Walk *w, s32 k, Array<s32> *path) {
 // Each depth lays out (check_layout) only the structs whose own fields may
 // hold the name (using_reach), and searches them; one still under way is
 // searched as it is, its fields so far, as e.x's is. Only once the depth
-// has no match are the rest it takes laid out, as they then must be, to
-// queue their using fields for the next. So a struct the name is past
-// isn't laid out when the name is found before it: that layout may be a
-// circle (a #run during the layouts), one the name doesn't need. A layout
-// that fails is a circle, or another mistake, said: -1 is returned, as
-// e.y.x says nothing more when y's struct has none. So is a depth without
-// the name that searches a struct still under way holding it in an
-// anonymous member not in its fields yet, a circle, said
-// (check_member_under_way) as e.x's is. check_find_member starts it at
-// one struct; a procedure's using parameters start it at each one's
-// struct, in parameter order.
+// has no match are the others whose using fields may reach it laid out,
+// as they then must be, to queue those fields for the next. So a struct
+// the name is past isn't laid out when the name is found before it: that
+// layout may be a circle (a #run during the layouts), one the name doesn't
+// need. A layout that fails is a circle, or another mistake, said: -1 is
+// returned, as e.y.x says nothing more when y's struct has none. So is a
+// depth without the name that searches a struct still under way holding
+// it in an anonymous member not in its fields yet, a circle, said
+// (check_member_under_way) as e.x's is. check_find_member starts it at one
+// struct; a procedure's using parameters start it at each one's struct, in
+// parameter order.
 static s32 find_through_using(Checker *c, Type **roots, s32 count, String name, Array<s32> *path, s32 *path_root,
                               Array<s32> *other, s32 *other_root) {
     path->count = 0;

@@ -1187,10 +1187,11 @@
 //   an earlier depth, and one struct through two paths at most at one
 //   depth, so it ends on cycles and stays small. At a depth it lays out
 //   only the structs whose own fields may hold x, by their declarations,
-//   and the others it reaches there only once the depth has no x, to go
-//   past them: a layout x doesn't need may be a circle (a #run during the
-//   layouts). One that fails, said, ends the walk, and nothing more is
-//   said of x, as of e.y.x when y's struct has no layout.
+//   and the others there whose using fields may reach it only once the
+//   depth has no x, to go past them: a layout x doesn't need may be a
+//   circle (a #run during the layouts). One that fails, said, ends the
+//   walk, and nothing more is said of x, as of e.y.x when y's struct has
+//   no layout.
 // - A literal names its struct's own fields (type_find_member): a name
 //   reached through a using field is "a literal can't name 'position',
 //   reached through 'entity'; name 'entity', as in Player.{entity =

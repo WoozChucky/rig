@@ -325,8 +325,8 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e);
 // member not in its fields yet: a circle, said (check_member_under_way).
 // Makes the type of each pointer using field queued for a depth once the
 // walk reaches that depth; there it lays out the structs whose own fields
-// may hold the name, and the others it reaches only once the depth has no
-// match, to go on past them.
+// may hold the name, and the others whose using fields may reach it only
+// once the depth has no match, to go on past them.
 s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other);
 
 // Where `name` is among the fields the using parameters reach

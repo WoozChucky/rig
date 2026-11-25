@@ -11585,17 +11585,26 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
     }
     // One whose using field reaches it is laid out, and is the circle it
     // closes: C, in it, has no fields to search, so the walk ends there,
-    // the circle alone said, as b.c.d.g says it.
+    // the circle alone said, as b.c.d.g says it: for a bare name, a field,
+    // a literal's name and an assignment's target, h there not taken for
+    // the procedure ("can't assign to 'h': it's a procedure").
     const char *reached = "A :: struct { arr: [#run f(null)]int; }\n"
                           "B :: struct { using c: *C; }\n"
                           "C :: struct { a: A; using d: *D; }\n"
-                          "D :: struct { g: int; }\n"
-                          "f :: %s -> int { return %s; }\n"
+                          "D :: struct { g: int; h: int; }\n"
+                          "h :: () -> int { return 3; }\n"
+                          "f :: %s -> int { %s }\n"
                           "main :: () { x: A; }\n";
-    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, "(using b: *B)", "g"))),
-              "1:1: 'A' is defined in terms of itself\n");
-    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, "(b: *B)", "b.g"))),
-              "1:1: 'A' is defined in terms of itself\n");
+    const char *reaching[][2] = {
+        {"(using b: *B)", "return g;"},
+        {"(b: *B)", "return b.g;"},
+        {"(b: *B)", "v := B.{g = 1}; return 2;"},
+        {"(using b: *B)", "h = 4; return 2;"},
+    };
+    for (s64 i = 0; i < 4; i++) {
+        CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, reaching[i][0], reaching[i][1]))),
+                  "1:1: 'A' is defined in terms of itself\n");
+    }
     arena_free(&a);
 }
 
