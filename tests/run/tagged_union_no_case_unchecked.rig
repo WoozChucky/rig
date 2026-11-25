@@ -1,0 +1,20 @@
+// A switch on a tagged union without case; that meets a tag no member has
+// stops the program with bounds checks off too (issue #224, spec 3.20,
+// 7.7, 8.1): it's no bounds check. The tag's type is an s8 here, so the
+// byte 0x80 is written as -128.
+#import "Basic";
+
+Signed :: union #tagged s8 { number: int; none: void; }
+
+memset :: (dest: *Signed, c: s32, count: u64) -> *Signed #foreign libc;
+
+main :: () {
+    print("before\n");
+    s: Signed;
+    memset(*s, 0x80, 1);
+    if s == {
+        case .number; print("number\n");
+        case .none;   print("none\n");
+    }
+    print("after\n");
+}

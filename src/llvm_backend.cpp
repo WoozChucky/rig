@@ -938,7 +938,8 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
         b->debug, composite_tag(t), (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
     remember_debug_type(b, t, Debug_Type{temporary, 1});
-    s64 most = t->kind == TYPE_STRUCT ? t->fields.count : t->kind == TYPE_RESIZABLE ? 4 : 2;
+    // A tagged union has two, whatever its members (tagged_members).
+    s64 most = t->kind == TYPE_STRUCT ? (t->is_tagged ? 2 : t->fields.count) : t->kind == TYPE_RESIZABLE ? 4 : 2;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, most ? most : 1);
     s32 levels = 1;
     s64 count = make_members(b, t, depth, temporary, file, members, &levels);
@@ -980,6 +981,83 @@ static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LL
                                   field->offset, part_debug_type(b, field->type, depth, levels));
     }
     return t->fields.count;
+}
+
+// A tagged union, t (spec 3.20, 10.7): the C struct it's laid out as,
+// `struct { tag; union { ... }; }`, of two members, at its declaration's
+// line:
+// - `tag`, at 0, of an enumeration with no name, an enumerator for each
+//   member, named as the member and valued its index, over the tag's type,
+//   as debug_enum makes an enum's (an s32's values kept at 64 bits, for
+//   cdb), so a debugger shows `tag = circle`;
+// - when any member holds something, a member with no name at the
+//   members' offset, of a union with no name of those members, each at 0
+//   and at its declaration's line, as clang describes C's anonymous union:
+//   so `s.circle` shows the member in a debugger, as in C. A void member
+//   holds nothing to show, and is only an enumerator.
+// The union has no Type of its own, so it's made here as debug_struct
+// makes one, a replaceable temporary first, which its members are scoped
+// in, then the real union: a member's type that leads back to the tagged
+// union finds the tagged union's own temporary (debug_struct's step 1).
+// The union is a level of its own, below the struct: its members' types
+// are made two levels down, and a stand-in when they'd leave the union
+// DEBUG_TYPE_LEVELS levels or more (as part_debug_type does a level up),
+// so the struct has no more than that. The enumeration and its base type
+// are two levels, never cut.
+static s64 tagged_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef file,
+                          LLVMMetadataRef *members, s32 *levels) {
+    RIG_ASSERT(t->fields.count == t->decl->fields.count && t->fields.count > 0);
+    unsigned line = type_debug_line(t);
+    Type *tag = t->tag_type;
+    LLVMMetadataRef *names = arena_new_array<LLVMMetadataRef>(b->arena, t->fields.count);
+    u64 bits = tag->is_signed && tag->size == 4 ? 64 : (u64)tag->size * 8;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        String name = t->fields[i].name;
+        u64 words[1] = {(u64)i};
+        names[i] = LLVMDIBuilderCreateEnumeratorOfArbitraryPrecision(b->debug, (const char *)name.data,
+                                                                     (size_t)name.count, bits, words, !tag->is_signed);
+    }
+    LLVMMetadataRef base = debug_type_at(b, tag, depth + 2).node;
+    LLVMMetadataRef enumeration =
+        LLVMDIBuilderCreateEnumerationType(b->debug, file, "", 0, file, line, (u64)tag->size * 8,
+                                           (u32)tag->align * 8, names, (unsigned)t->fields.count, base);
+    if (*levels < 3) *levels = 3;
+    members[0] = debug_member(b, in, file, str("tag"), line, tag->size, 0, enumeration);
+
+    // The union: its size the largest member's, rounded up to the largest
+    // alignment, as C's.
+    s64 held = 0, size = 0, align = 1;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        Type *member = t->fields[i].type;
+        RIG_ASSERT(member);  // a field's type is null only after an error
+        if (member == &type_void) continue;
+        held++;
+        if (member->size > size) size = member->size;
+        if (member->align > align) align = member->align;
+    }
+    if (!held) return 1;
+    size = (size + align - 1) / align * align;
+    LLVMMetadataRef temporary =
+        LLVMDIBuilderCreateReplaceableCompositeType(b->debug, DW_TAG_union_type, "", 0, file, file, line, 0,
+                                                    (u64)size * 8, (u32)align * 8, LLVMDIFlagZero, "", 0);
+    LLVMMetadataRef *parts = arena_new_array<LLVMMetadataRef>(b->arena, held);
+    s32 union_levels = 1;
+    s64 n = 0;
+    for (s64 i = 0; i < t->fields.count; i++) {
+        Type_Field *field = &t->fields[i];
+        if (field->type == &type_void) continue;
+        Debug_Type made = debug_type_at(b, field->type, depth + 2);
+        if (made.levels >= DEBUG_TYPE_LEVELS - 1) made = stand_in_debug_type(b, field->type);
+        if (union_levels < made.levels + 1) union_levels = made.levels + 1;
+        parts[n++] = debug_member(b, temporary, file, field->name, (unsigned)t->decl->fields[i]->pos.line,
+                                  field->type->size, 0, made.node);
+    }
+    LLVMMetadataRef real = LLVMDIBuilderCreateUnionType(b->debug, file, "", 0, file, line, (u64)size * 8,
+                                                        (u32)align * 8, LLVMDIFlagZero, parts, (unsigned)held, 0, "", 0);
+    LLVMMetadataReplaceAllUsesWith(temporary, real);
+    if (*levels < union_levels + 1) *levels = union_levels + 1;
+    members[1] = debug_member(b, in, file, String{}, line, size, t->fields[0].offset, real);
+    return 2;
 }
 
 // A view, []T, or a string: the struct they're laid out as (types.h),
@@ -1207,7 +1285,7 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
     case TYPE_VIEW:
     case TYPE_STRING: return debug_struct(b, t, type_name(b->arena, t), depth, view_members);
     case TYPE_RESIZABLE: return debug_struct(b, t, type_name(b->arena, t), depth, resizable_members);
-    case TYPE_STRUCT: return debug_struct(b, t, t->name, depth, struct_members);
+    case TYPE_STRUCT: return debug_struct(b, t, t->name, depth, t->is_tagged ? tagged_members : struct_members);
     default: RIG_ASSERT(!"a type no variable has"); return {};
     }
 }

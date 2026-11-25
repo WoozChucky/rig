@@ -266,6 +266,39 @@ static Ast_Literal *baked_literal(Baking *b, Type *t, s64 count) {
 
 static Ast *bake_value(Baking *b, Type *t, const u8 *at);
 
+// A tagged union of type t whose bytes are at `at` (spec 3.20, 7.8): a
+// literal of t holding the member its tag names (Ast_Literal.tag, the tag
+// read as its type's sign reads it), and, unless that member holds
+// nothing, the member's value, baked as any value of its type is, at the
+// members' offset. The tag says which member's bytes are live, so they're
+// read as that member, where a union's are only bytes (bake_value): a
+// string or a view among them is copied, a pointer that isn't null
+// refused. A tag no member has, as C may write one, is "#run failed: its
+// result holds a tagged union whose tag names no member": nothing says
+// whose bytes to bake.
+static Ast *bake_tagged(Baking *b, Type *t, const u8 *at) {
+    Type *tag_type = t->tag_type;
+    s64 tag = (s64)read_bits(at, tag_type->size);
+    if (tag_type->is_signed && tag_type->size < 8) {
+        s32 shift = 64 - 8 * (s32)tag_type->size;
+        tag = (s64)((u64)tag << shift) >> shift;
+    }
+    if (tag < 0 || tag >= t->fields.count) {
+        return refuse(b, "#run failed: its result holds a tagged union whose tag names no member");
+    }
+    Type_Field *member = &t->fields[tag];
+    RIG_ASSERT(member->type);  // made by the walk (check_run.cpp's walk_type)
+    bool holds = member->type != &type_void;
+    Ast_Literal *literal = baked_literal(b, t, holds ? 1 : 0);
+    literal->tag = (s32)tag;
+    if (!holds) return literal;
+    Ast *value = bake_value(b, member->type, at + member->offset);
+    if (!value) return nullptr;
+    array_add(&literal->values, value);
+    array_add(&literal->fields, (s32)tag);
+    return literal;
+}
+
 // The string literal of the `count` bytes at `data`, copied, with a zero
 // after them as a written literal's have: is_baked, so a global holding it
 // gets bytes of its own (lower.cpp's string_copy_global).
@@ -317,6 +350,9 @@ static Ast *bake_elements(Baking *b, Type *array, const u8 *at) {
 //   refused: an address from compile time in them means nothing at run
 //   time, the program's business, as reading the wrong member is (spec
 //   7.8).
+// - A tagged union is a literal of its tag and the value of the member the
+//   tag names, if it holds one (bake_tagged, spec 3.20): the tag says which
+//   member's bytes are live, so they're baked as that member.
 // - An array [N]T is a literal of its N elements.
 // - A view []T is the array literal of its elements, a [count]T
 //   (check_array_type, which says so when that's too big, and stops the
@@ -356,6 +392,7 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
     // A view of its elements bakes as any view does.
     case TYPE_RESIZABLE: return refuse(b, "#run's result holds a resizable array, which can't be baked, for now");
     case TYPE_STRUCT: {
+        if (t->is_tagged) return bake_tagged(b, t, at);
         if (t->is_union) {
             // Its bytes, all of them, whichever member wrote them (spec 3.19,
             // 7.8): copied into the checker's arena, the literal's only

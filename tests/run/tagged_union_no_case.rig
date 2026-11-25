@@ -1,0 +1,23 @@
+// A switch on a tagged union without case; that meets a tag no member has
+// (here written by C's memset, as C may write one) stops the program at its
+// `if` (issue #224, spec 3.20, 6.14, 8.1), the tag written as its type's
+// sign reads it. Compiled and interpreted.
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+
+memset :: (dest: *Shape, c: s32, count: u64) -> *Shape #foreign libc;
+
+main :: () {
+    print("before\n");
+    s: Shape;
+    memset(*s, 7, 1);
+    if s == {
+        case .circle; print("circle\n");
+        case .rect;   print("rect\n");
+        case .empty;  print("empty\n");
+    }
+    print("after\n");
+}

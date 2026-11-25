@@ -1,0 +1,49 @@
+// Tagged unions baked from #run (issue #224, spec 7.8): a tagged union is
+// baked as its tag and the value of the member it holds, baked as any value
+// of that member's type is: a string's bytes copied, so a baked string
+// member is the program's own; a member that holds nothing gives no value.
+// A switch inside a #run's procedure writes through its it as at run time.
+// A top-level #run sees the layout too (its output is the .build.out).
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Label :: union #tagged { text: string; none: void; }
+
+make :: () -> Shape { return .{rect = .{2, 3}}; }
+
+label :: () -> Label { return .{text = "baked"}; }
+
+nothing :: () -> Label { return .none; }
+
+// make's rect, twice as wide, written through a switch's it.
+doubled :: () -> Shape {
+    s := make();
+    if s == { case .rect; it.w *= 2; case; }
+    return s;
+}
+
+B :: #run make();
+L :: #run label();
+N :: #run nothing();
+D :: #run doubled();
+
+show :: (l: Label) {
+    if l == {
+        case .text; print("text {}\n", it);
+        case .none; print("none\n");
+    }
+}
+
+#run {
+    print("{}\n", size_of(Shape));
+}
+
+main :: () {
+    if B == { case .rect; print("rect {} {}\n", it.w, it.h); case; print("not a rect\n"); }
+    show(L);
+    show(N);
+    if D == { case .rect; print("rect {} {}\n", it.w, it.h); case; print("not a rect\n"); }
+    print("{} {}\n", B == .rect, N == .none);
+}

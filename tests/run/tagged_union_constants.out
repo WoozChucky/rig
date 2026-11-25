@@ -1,0 +1,14 @@
+2.0 3.0
+rect 2.0 3.0
+empty
+E holds empty
+true false false
+circle 1.0
+circle 9.0
+empty
+rect 4.0 5.0
+empty
+rect 2.0 3.0
+empty
+3
+circle 2.0

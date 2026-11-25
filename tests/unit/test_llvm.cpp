@@ -1513,6 +1513,10 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    kind: s32;\n"
                                 "    union { key: Key; mouse: Mouse; };\n"
                                 "}\n"
+                                "Circle :: struct { r: float; }\n"
+                                "Rect :: struct { w: float; h: float; }\n"
+                                "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
+                                "Bytes :: union #tagged { a: [3]u8; }\n"
                                 "main :: () {\n"
                                 "    value: Value;\n"
                                 "    event: Event;\n"
@@ -1534,6 +1538,8 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    wide: u32;\n"
                                 "    v: []int;\n"
                                 "    s := \"hi\";\n"
+                                "    shape: Shape;\n"
+                                "    bytes: Bytes;\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -1642,6 +1648,67 @@ TEST(llvm_debug_types_of_every_kind) {
         CHECK(string_eq(attached(&a, key, "scope:"), inner_node));
         CHECK(string_eq(attached(&a, mouse, "scope:"), inner_node));
         CHECK(!contains(key, "offset:") && !contains(mouse, "offset:"));
+        // A tagged union (spec 10.7) is a struct named as it, of two members:
+        // tag, at 0, of an enumeration with no name of its members' names,
+        // numbered from 0, over the tag's type; and a member with no name,
+        // at the members' offset, of a union with no name of the members
+        // that hold something, each at 0. A void member is no member of it.
+        String shape_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Shape\"");
+        CHECK(contains(shape_line, "size: 96"));
+        String shape = defined_node(shape_line);
+        CHECK(shape.count > 0);
+        String tag = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                   "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                                   "scope: " STR_FMT ",",
+                                                                   STR_ARG(shape))));
+        CHECK(tag.count > 0);
+        CHECK(!contains(tag, "offset:"));
+        String tag_type = node_line(&a, text, attached(&a, tag, "baseType:"));
+        CHECK(contains(tag_type, "!DICompositeType(tag: DW_TAG_enumeration_type, "));
+        CHECK(!contains(tag_type, "name:"));
+        CHECK(contains(tag_type, "size: 8"));
+        CHECK(contains(node_line(&a, text, attached(&a, tag_type, "baseType:")), "!DIBasicType(name: \"u8\""));
+        String circle_tag = defined_node(line_with(text, "!DIEnumerator(name: \"circle\", value: 0, isUnsigned: true)"));
+        String rect_tag = defined_node(line_with(text, "!DIEnumerator(name: \"rect\", value: 1, isUnsigned: true)"));
+        String empty_tag = defined_node(line_with(text, "!DIEnumerator(name: \"empty\", value: 2, isUnsigned: true)"));
+        CHECK(circle_tag.count > 0 && rect_tag.count > 0 && empty_tag.count > 0);
+        CHECK(contains(node_line(&a, text, attached(&a, tag_type, "elements:")),
+                       string_cstr(&a, string_printf(&a, "!{" STR_FMT ", " STR_FMT ", " STR_FMT "}",
+                                                     STR_ARG(circle_tag), STR_ARG(rect_tag), STR_ARG(empty_tag)))));
+        String members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                       "!DIDerivedType(tag: DW_TAG_member, scope: " STR_FMT
+                                                                       ",",
+                                                                       STR_ARG(shape))));
+        CHECK(contains(members, "size: 64, offset: 32)"));
+        String members_type = node_line(&a, text, attached(&a, members, "baseType:"));
+        CHECK(contains(members_type, "!DICompositeType(tag: DW_TAG_union_type, "));
+        CHECK(!contains(members_type, "name:"));
+        CHECK(contains(members_type, "size: 64"));
+        String members_node = defined_node(members_type);
+        CHECK(members_node.count > 0);
+        String circle = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"circle\"");
+        String rect = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"rect\"");
+        CHECK(string_eq(attached(&a, circle, "scope:"), members_node));
+        CHECK(string_eq(attached(&a, rect, "scope:"), members_node));
+        CHECK(!contains(circle, "offset:") && !contains(rect, "offset:"));
+        CHECK(!contains(text, "!DIDerivedType(tag: DW_TAG_member, name: \"empty\""));
+        // One member, two debug members: the tag and the union holding it.
+        String bytes_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Bytes\"");
+        CHECK(contains(bytes_line, "size: 32"));
+        String bytes = defined_node(bytes_line);
+        CHECK(bytes.count > 0);
+        CHECK(contains(text, string_cstr(&a, string_printf(&a,
+                                                           "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                           "scope: " STR_FMT ",",
+                                                           STR_ARG(bytes)))));
+        String bytes_members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                             "!DIDerivedType(tag: DW_TAG_member, "
+                                                                             "scope: " STR_FMT ",",
+                                                                             STR_ARG(bytes))));
+        CHECK(contains(bytes_members, "size: 24, offset: 8)"));
+        String bytes_union = defined_node(node_line(&a, text, attached(&a, bytes_members, "baseType:")));
+        CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"a\""), "scope:"),
+                        bytes_union));
     }
     arena_free(&a);
 }

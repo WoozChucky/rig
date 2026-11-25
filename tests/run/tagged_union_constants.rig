@@ -1,0 +1,57 @@
+// Tagged unions as constant data (issue #224, spec 3.20), compiled and
+// interpreted: a constant's literal switched on and tested, a constant
+// holding a member that holds nothing, Shape.empty, whose tag #if tests
+// while compiling; a global given a literal, which main changes, through
+// a switch's it and whole; a global array of them, and a global struct
+// holding .empty.
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Holder :: struct { s: Shape; n: int; }
+
+K :: Shape.{rect = .{2, 3}};
+E :: Shape.empty;
+
+g : Shape = .{circle = .{1}};
+pair : [2]Shape = .[.{rect = .{4, 5}}, .empty];
+held := Holder.{s = .empty, n = 3};
+
+#if E == .empty {
+    WHICH :: "E holds empty";
+} else {
+    WHICH :: "E holds something";
+}
+
+show :: (s: Shape) {
+    if s == {
+        case .circle; print("circle {}\n", it.r);
+        case .rect;   print("rect {} {}\n", it.w, it.h);
+        case .empty;  print("empty\n");
+    }
+}
+
+main :: () {
+    if K == { case .rect; print("{} {}\n", it.w, it.h); case; print("not a rect\n"); }
+    show(K);
+    show(E);
+    print("{}\n", WHICH);
+    print("{} {} {}\n", K == .rect, E != .empty, K == .circle);
+
+    show(g);
+    if g == { case .circle; it.r = 9; case; }
+    show(g);
+    g = .empty;
+    show(g);
+
+    show(pair[0]);
+    show(pair[1]);
+    pair[1] = K;
+    show(pair[1]);
+
+    show(held.s);
+    print("{}\n", held.n);
+    held.s = .{circle = .{2}};
+    show(held.s);
+}

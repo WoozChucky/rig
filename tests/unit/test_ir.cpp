@@ -7544,3 +7544,59 @@ TEST(a_pointer_switch_switches_on_its_address) {
     CHECK(contains(main, ", b2 [0: b1]\n"));
     arena_free(&a);
 }
+
+// The value an IR line gives, "%N", from "  %N = ..."; {} for none.
+static String value_given(String line) {
+    s64 start = index_of(line, "%"), end = index_of(line, " = ");
+    if (start < 0 || end < start) return {};
+    return string_slice(line, start, end - start);
+}
+
+TEST(a_tagged_switch_reads_its_tag_once) {
+    // A switch on a tagged union (spec 3.20) works out the switched value's
+    // address once, at the `if`: through a pointer, s.*'s one null check,
+    // at its '.', 5:9. The tag is loaded from that address, at offset 0, an
+    // i8 for Shape's u8, and one switch on it sends each member's index to
+    // its case; with no case;, a tag no member has goes to __rig_no_case.
+    // A case's it is that address plus the members' offset, 4: the member
+    // in the union itself, not a copy, so g's it.r reads the caller's copy,
+    // the parameter %0, at 4.
+    Arena a = arena_make();
+    String ir = ir_print_debug(&a, lower_source(&a,
+                                                "Circle :: struct { r: float; }\n"
+                                                "Rect :: struct { w: float; h: float; }\n"
+                                                "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
+                                                "f :: (s: *Shape) -> int {\n"
+                                                "    if s.* == { case .circle; return 1; case .rect; return 2; "
+                                                "case .empty; return 3; }\n"
+                                                "}\n"
+                                                "g :: (s: Shape) -> float {\n"
+                                                "    if s == { case .circle; return it.r; case; return 0; }\n"
+                                                "}\n"
+                                                "main :: () { }\n"));
+    String f = proc_ir(ir, "f");
+    CHECK_EQ(count_of(f, "panic @str."), 1);
+    CHECK(contains(line_with(f, "panic @str."), "  ; 5:9 "));
+    // s's value, loaded from its slot, %1, once: the union's address.
+    CHECK_EQ(count_of(f, "= load ptr %1  "), 1);
+    String address = value_given(line_with(f, "= load ptr %1  "));
+    CHECK(address.count > 0);
+    CHECK_EQ(count_of(f, "= load i8 "), 1);
+    CHECK(contains(f, string_cstr(&a, string_printf(&a, "= load i8 " STR_FMT "  ", STR_ARG(address)))));
+    String tag = value_given(line_with(f, "= load i8 "));
+    CHECK_EQ(count_of(f, "switch i8 "), 1);
+    String dispatch = line_with(f, "switch i8 ");
+    CHECK(contains(dispatch, string_cstr(&a, string_printf(&a, "switch i8 " STR_FMT ", b", STR_ARG(tag)))));
+    CHECK(contains(dispatch, " [0: b") && contains(dispatch, ", 1: b") && contains(dispatch, ", 2: b"));
+    CHECK_EQ(count_of(f, "call @__rig_no_case("), 1);
+
+    String g = proc_ir(ir, "g");
+    CHECK(contains(g, "= load i8 %0  "));
+    CHECK(!contains(g, " copy "));
+    String four = value_given(line_with(g, "= const i64 4  "));
+    CHECK(four.count > 0);
+    String member = string_printf(&a, "= ptradd %%0, " STR_FMT "  ", STR_ARG(four));
+    CHECK(contains(g, string_cstr(&a, member)));
+    CHECK(!contains(g, "__rig_no_case"));
+    arena_free(&a);
+}

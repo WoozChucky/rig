@@ -1,0 +1,104 @@
+// Tagged unions (issue #224, spec 3.20), compiled and interpreted: a tag,
+// then the members over each other, laid out as C lays out a struct of the
+// tag and an anonymous union of the members; a zeroed one holds its first
+// member, zeroed; a tagged union copied whole, by assignment, as an
+// argument and as a result, held in a struct, an array literal and a
+// resizable array, each read back by a switch; a member that holds
+// nothing written as a value, .empty, as an argument, a result and a
+// field; and the tag tested by == and !=.
+#import "Basic";
+
+Circle :: struct { r: float; }
+Rect :: struct { w: float; h: float; }
+Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Wide :: union #tagged { d: float64; b: u8; }
+Bytes :: union #tagged { a: [3]u8; }
+Flags :: union #tagged { on: void; off: void; }
+Holder :: struct { s: Shape; n: int; }
+
+// What s holds: its member's name and its fields.
+show :: (s: Shape) {
+    if s == {
+        case .circle; print("circle {}\n", it.r);
+        case .rect;   print("rect {} {}\n", it.w, it.h);
+        case .empty;  print("empty\n");
+    }
+}
+
+// s twice as big, the same member: a tagged union as a parameter and a
+// result, made by literals meeting the result's type.
+grow :: (s: Shape) -> Shape {
+    if s == {
+        case .circle; return .{circle = .{it.r * 2}};
+        case .rect;   return .{rect = .{it.w * 2, it.h * 2}};
+        case .empty;  return .empty;
+    }
+}
+
+nothing :: () -> Shape { return .empty; }
+
+is_empty :: (s: Shape) -> bool { return s == .empty; }
+
+main :: () {
+    // The sizes: Shape 12 (a u8 tag, the members at 4), Wide 16 (the
+    // members at 8), Bytes 4 (the members at 1), Flags 1 (the tag alone),
+    // and [3]Shape 36, each element 12 bytes from the last.
+    print("{} {} {} {} {}\n", size_of(Shape), size_of(Wide), size_of(Bytes), size_of(Flags), size_of([3]Shape));
+    three: [3]Shape;
+    print("{}\n", cast(int) *three[1] - cast(int) *three[0]);
+
+    // Zeroed: tag 0, its first member, a circle of radius 0.
+    zero: Shape;
+    show(zero);
+
+    // Copied whole, by assignment: changing a doesn't change b.
+    a := Shape.{rect = .{2, 3}};
+    b := a;
+    a = .{circle = .{1}};
+    show(a);
+    show(b);
+
+    // As an argument and a result, a literal and .empty as arguments, and
+    // .empty as a result.
+    show(grow(b));
+    show(grow(.{circle = .{1.5}}));
+    show(grow(.empty));
+    show(.empty);
+    show(nothing());
+
+    // Held in a struct, given there by a literal and by .empty.
+    h := Holder.{s = .{rect = .{4, 5}}, n = 7};
+    show(h.s);
+    h.s = .empty;
+    show(h.s);
+    print("{}\n", h.n);
+    e := Holder.{s = .empty, n = 1};
+    show(e.s);
+
+    // In an array literal and a resizable array.
+    shapes := Shape.[.{circle = .{1}}, .{rect = .{2, 3}}, .empty];
+    for shapes { show(it); }
+    grown: [..]Shape;
+    array_add(*grown, Shape.{circle = .{6}});
+    array_add(*grown, .empty);
+    array_add(*grown, .{rect = .{7, 8}});
+    for grown { show(it); }
+    array_free(*grown);
+
+    // The tag tested, the union on either side.
+    s := Shape.{circle = .{1}};
+    print("{} {} {}\n", s == .empty, s != .circle, Shape.rect == s);
+    s = .empty;
+    print("{} {} {} {}\n", s == .empty, s != .circle, Shape.rect == s, is_empty(s));
+    print("{} {}\n", .circle == Shape.empty, Shape.empty == Shape.empty);
+
+    // The other layouts' members, read in switches.
+    w := Wide.{b = 9};
+    if w == { case .d; print("d {}\n", it); case .b; print("b {}\n", it); }
+    w = .{d = 2.5};
+    if w == { case .d; print("d {}\n", it); case .b; print("b {}\n", it); }
+    bytes := Bytes.{a = .[1, 2, 3]};
+    if bytes == { case .a; print("{} {} {}\n", it[0], it[1], it[2]); }
+    flag := Flags.off;
+    print("{} {}\n", flag == .on, flag == .off);
+}
