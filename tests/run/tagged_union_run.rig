@@ -2,6 +2,7 @@
 // baked as its tag and the value of the member it holds, baked as any value
 // of that member's type is: a string's bytes copied, so a baked string
 // member is the program's own; a member that holds nothing gives no value.
+// One in a struct's field or an array's element is baked the same way.
 // A switch inside a #run's procedure writes through its it as at run time.
 // A top-level #run sees the layout too (its output is the .build.out).
 #import "Basic";
@@ -17,6 +18,12 @@ label :: () -> Label { return .{text = "baked"}; }
 
 nothing :: () -> Label { return .none; }
 
+Box :: struct { a: Label; b: Label; k: int; }
+
+boxed :: () -> Box { return .{a = .{text = "first"}, b = .none, k = 7}; }
+
+labels :: () -> [3]Label { return .[.none, .{text = "second"}, .{text = "third"}]; }
+
 // make's rect, twice as wide, written through a switch's it.
 doubled :: () -> Shape {
     s := make();
@@ -28,6 +35,8 @@ B :: #run make();
 L :: #run label();
 N :: #run nothing();
 D :: #run doubled();
+X :: #run boxed();
+A :: #run labels();
 
 show :: (l: Label) {
     if l == {
@@ -46,4 +55,8 @@ main :: () {
     show(N);
     if D == { case .rect; print("rect {} {}\n", it.w, it.h); case; print("not a rect\n"); }
     print("{} {}\n", B == .rect, N == .none);
+    show(X.a);
+    show(X.b);
+    print("{}\n", X.k);
+    for A { show(it); }
 }

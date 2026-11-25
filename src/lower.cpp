@@ -3133,6 +3133,25 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, Type *t, s32 value) {
     return fail;
 }
 
+// Where the first of a block's statements that has code of its own is
+// (statement_position), into `at`: a defer, a constant and an #if add none
+// (lower_statement), but an #if's taken branch may. False, `at` untouched,
+// when none has.
+static bool first_code_position(Ast_Block *block, Position *at) {
+    for (s64 i = 0; i < block->statements.count; i++) {
+        Ast *s = block->statements[i];
+        if (s->kind == AST_DEFER || s->kind == AST_CONST) continue;
+        if (s->kind == AST_IF_DIRECTIVE) {
+            Ast_Block *taken = ((Ast_If_Directive *)s)->taken;
+            if (taken && first_code_position(taken, at)) return true;
+            continue;
+        }
+        *at = statement_position(s);
+        return true;
+    }
+    return false;
+}
+
 // The statements of case k of a switch on a tagged union (spec 3.20), when
 // the case declares it: a block and a scope of their own, starting at the
 // `case`, as lower_scoped_block makes a case's, with it declared first. it
@@ -3146,9 +3165,9 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, Type *t, s32 value) {
 // address in the slot at the switch's `if`, with the dispatch, before it,
 // so all of the `if` line's code is in one piece, where cdb can break
 // (runner.cpp). The case reads it back from the slot, at its first
-// statement (at its '}' when it has none), in its scope: the case's first
-// instruction is then that line's, inside the case's scope, where it is
-// shown, so a breakpoint there shows it. (Using the dispatch's own value
+// statement with code (first_code_position), in its scope: the case's
+// first instruction is then that line's, inside the case's scope, where it
+// is shown, so a breakpoint there shows it. (Using the dispatch's own value
 // instead, the code generator would reload it from the stack first, with
 // no line of its own, before the case's scope starts.) Stepping from the
 // `if` goes straight to the first statement, never to a `case` line (spec
@@ -3160,7 +3179,9 @@ static void lower_tagged_case(Lowering *l, Ast_Case *k, s32 slot, Ast_Proc *sour
     s64 mark = l->defers.count;
     Ast_Block *block = k->block;
     l->scope = new_scope(l, block->pos);
-    place(l, block->statements.count ? statement_position(block->statements[0]) : block->end, l->scope);
+    Position at = block->end;  // the switch's '}', when no statement has code
+    first_code_position(block, &at);
+    place(l, at, l->scope);
     s32 member = emit_load(l, IR_PTR, slot);
     Ast_Var *it = k->it;
     array_add(&l->locals, {it, member});

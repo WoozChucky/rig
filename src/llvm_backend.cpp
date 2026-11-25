@@ -939,7 +939,8 @@ static Debug_Type debug_struct(Backend *b, Type *t, String name, s32 depth,
         b->debug, composite_tag(t), (const char *)name.data, (size_t)name.count, file, file, line, 0,
         (u64)t->size * 8, (u32)t->align * 8, LLVMDIFlagZero, "", 0);
     remember_debug_type(b, t, Debug_Type{temporary, 1});
-    // A tagged union has two, whatever its members (tagged_members).
+    // A tagged union has two at most, whatever its members: the tag, and the
+    // union of its members unless all are void (tagged_members).
     s64 most = t->kind == TYPE_STRUCT ? (t->is_tagged ? 2 : t->fields.count) : t->kind == TYPE_RESIZABLE ? 4 : 2;
     LLVMMetadataRef *members = arena_new_array<LLVMMetadataRef>(b->arena, most ? most : 1);
     s32 levels = 1;

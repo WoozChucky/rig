@@ -7616,3 +7616,53 @@ TEST(a_tagged_switch_reads_its_tag_once) {
     CHECK(index_of(g, string_cstr(&a, read)) > switch_at);
     arena_free(&a);
 }
+
+TEST(a_tagged_case_reads_it_back_at_its_first_line_with_code) {
+    // A defer, a constant and an #if add no code of their own (spec 10.7),
+    // so a case's it is read back from its slot at the first statement
+    // that has some, the return at 10:9, past them and into the #if's
+    // branch: nothing is at 7:9, 8:9 or 9:9, and the deferred copies are at
+    // g()'s own column. A case with no such statement reads it back at its
+    // end, the switch's '}', 14:5.
+    Arena a = arena_make();
+    String f = proc_ir(ir_print_debug(&a, lower_source(&a,
+                                                       "Circle :: struct { r: float; }\n"
+                                                       "Shape :: union #tagged { circle: Circle; rect: Circle; }\n"
+                                                       "g :: () {}\n"
+                                                       "f :: (s: Shape) -> float {\n"
+                                                       "    if s == {\n"
+                                                       "    case .circle;\n"
+                                                       "        defer g();\n"
+                                                       "        K :: 2;\n"
+                                                       "        #if true { defer g(); }\n"
+                                                       "        return it.r;\n"
+                                                       "    case .rect;\n"
+                                                       "        defer g();\n"
+                                                       "        K :: 3;\n"
+                                                       "    }\n"
+                                                       "    return 0;\n"
+                                                       "}\n"
+                                                       "main :: () { }\n")),
+                       "f");
+    CHECK(!contains(f, "  ; 7:9 "));
+    CHECK(!contains(f, "  ; 8:9 "));
+    CHECK(!contains(f, "  ; 9:9 "));
+    CHECK(!contains(f, "  ; 12:9 "));
+    CHECK(!contains(f, "  ; 13:9 "));
+    Array<String> slots = {};
+    for (String rest = f; contains(rest, "= local ptr  ");) {
+        String line = line_with(rest, "= local ptr  ");
+        array_add(&slots, value_given(line));
+        s64 at = index_of(rest, string_cstr(&a, line)) + line.count;
+        rest = string_slice(rest, at, rest.count - at);
+    }
+    CHECK_EQ(slots.count, 2);
+    if (slots.count == 2) {
+        String circle = line_with(f, string_cstr(&a, string_printf(&a, "= load ptr " STR_FMT "  ", STR_ARG(slots[0]))));
+        String rect = line_with(f, string_cstr(&a, string_printf(&a, "= load ptr " STR_FMT "  ", STR_ARG(slots[1]))));
+        CHECK(contains(circle, "  ; 10:9 s"));
+        CHECK(contains(rect, "  ; 14:5 s"));
+    }
+    array_free(&slots);
+    arena_free(&a);
+}

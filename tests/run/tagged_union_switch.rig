@@ -5,7 +5,8 @@
 // struct's field, an array's element or each element of a for *; a call
 // switched on runs once; a defer in a case runs as the case is left;
 // continue and break in a case act on the loop around the switch; a switch
-// on it inside a case, a tagged union holding another, binds it again; in a
+// on it inside a case, a tagged union holding another, binds it again; a
+// loop inside a case has its own it, and the case's is back after it; in a
 // void member's case and in case;, it is the loop's element; case; takes
 // the members no case names; and a constant is switched on as any value is.
 #import "Basic";
@@ -115,6 +116,15 @@ main :: () {
                 }
             case .none; print("none\n");
         }
+    }
+
+    // A loop inside a case: its it is the loop's element, and after it the
+    // case's it is the member again.
+    if s == {
+        case .circle;
+            for 0..1 { print("loop {}\n", it); }
+            print("member {}\n", it.r);
+        case;
     }
 
     // In a void member's case and in case;, it is the loop's element;

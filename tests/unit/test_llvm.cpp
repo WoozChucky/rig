@@ -1519,6 +1519,8 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Bytes :: union #tagged { a: [3]u8; }\n"
                                 "Odd :: union #tagged s32 { odd_bytes: [3]u8; odd_half: u16; }\n"
                                 "Flags :: union #tagged { on: void; off: void; }\n"
+                                "List :: union #tagged { link: *List; end: void; }\n"
+                                "Branch :: union #tagged { leaf: int; kids: []Branch; }\n"
                                 "main :: () {\n"
                                 "    value: Value;\n"
                                 "    event: Event;\n"
@@ -1544,6 +1546,8 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    bytes: Bytes;\n"
                                 "    odd: Odd;\n"
                                 "    flags: Flags;\n"
+                                "    list: List;\n"
+                                "    branch: Branch;\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -1751,6 +1755,21 @@ TEST(llvm_debug_types_of_every_kind) {
                                                             STR_ARG(flags)))));
         CHECK(contains(node_line(&a, text, attached(&a, flags_line, "elements:")), "!{!"));
         CHECK(!contains(node_line(&a, text, attached(&a, flags_line, "elements:")), ", !"));
+        // A tagged union that points at itself is made once, as Node is, its
+        // pointer member pointing back at the same node; one holding a view
+        // of itself is made once, as Tree is, with its view.
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"List\"") == 1);
+        String list = defined_node(line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"List\""));
+        CHECK(list.count > 0);
+        String link = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"link\"");
+        String link_type = node_line(&a, text, attached(&a, link, "baseType:"));
+        CHECK(contains(link_type, "!DIDerivedType(tag: DW_TAG_pointer_type, baseType: "));
+        CHECK(string_eq(attached(&a, link_type, "baseType:"), list));
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Branch\"") == 1);
+        CHECK(count_of(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Branch\"") == 1);
+        String kids = line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"kids\"");
+        CHECK(contains(node_line(&a, text, attached(&a, kids, "baseType:")),
+                       "!DICompositeType(tag: DW_TAG_structure_type, name: \"[]Branch\""));
     }
     arena_free(&a);
 }
