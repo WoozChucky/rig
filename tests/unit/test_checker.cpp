@@ -10838,6 +10838,12 @@ struct C_Tagged_Signed {
         int64_t i;
     };
 };
+struct C_Tagged_Long {
+    int64_t tag;
+    union {
+        uint8_t a;
+    };
+};
 
 TEST(tagged_unions_are_laid_out_as_clang_lays_them_out) {
     // The tag at 0, the members all at the tag's size rounded up to their
@@ -10850,6 +10856,7 @@ TEST(tagged_unions_are_laid_out_as_clang_lays_them_out) {
                           "Bytes :: union #tagged { a: [3]u8; }\n"
                           "Chosen :: union #tagged u32 { a: u8; }\n"
                           "Signed :: union #tagged s16 { i: s64; }\n"
+                          "Long :: union #tagged int { a: u8; }\n"
                           "Flags :: union #tagged { on: void; off: void; }\n"
                           "main :: () { }\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
@@ -10865,6 +10872,7 @@ TEST(tagged_unions_are_laid_out_as_clang_lays_them_out) {
         {"Bytes", sizeof(C_Tagged_Bytes), alignof(C_Tagged_Bytes), offsetof(C_Tagged_Bytes, a), 4, 1, "u8"},
         {"Chosen", sizeof(C_Tagged_Chosen), alignof(C_Tagged_Chosen), offsetof(C_Tagged_Chosen, a), 8, 4, "u32"},
         {"Signed", sizeof(C_Tagged_Signed), alignof(C_Tagged_Signed), offsetof(C_Tagged_Signed, i), 16, 8, "s16"},
+        {"Long", sizeof(C_Tagged_Long), alignof(C_Tagged_Long), offsetof(C_Tagged_Long, a), 16, 8, "int"},
     };
     for (const Twin &twin : twins) {
         Type *t = struct_named(&c, twin.name);
@@ -10881,17 +10889,20 @@ TEST(tagged_unions_are_laid_out_as_clang_lays_them_out) {
     CHECK_EQ(offsetof(C_Tagged_Shape, rect), offsetof(C_Tagged_Shape, circle));
     CHECK_EQ(offsetof(C_Tagged_Wide, b), offsetof(C_Tagged_Wide, d));
     Type *shape = struct_named(&c, "Shape");
-    CHECK_EQ(shape->fields.count, 3);
-    if (shape->fields.count == 3) {
+    CHECK(shape && shape->fields.count == 3);
+    if (shape && shape->fields.count == 3) {
         CHECK_STR(shape->fields[2].name, "empty");
         CHECK(shape->fields[2].type == &type_void);
     }
     // Every member void: no C twin (C has no void member), the tag alone.
     Type *flags = struct_named(&c, "Flags");
-    CHECK_EQ(flags->size, 1);
-    CHECK_EQ(type_align(flags), 1);
-    CHECK_EQ(flags->fields.count, 2);
-    for (s64 i = 0; i < flags->fields.count; i++) CHECK_EQ(flags->fields[i].offset, 1);
+    CHECK(flags);
+    if (flags) {
+        CHECK_EQ(flags->size, 1);
+        CHECK_EQ(type_align(flags), 1);
+        CHECK_EQ(flags->fields.count, 2);
+        for (s64 i = 0; i < flags->fields.count; i++) CHECK_EQ(flags->fields[i].offset, 1);
+    }
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -10918,15 +10929,27 @@ TEST(tagged_union_tag_types) {
     Checked c = check_src(&a, tagged_program(&a, 256, ""));
     CHECK_STR(messages(&a, &c.list->diag), "");
     Type *big = struct_named(&c, "Big");
-    if (big->tag_type) CHECK_STR(type_name(&a, big->tag_type), "u8");
+    CHECK(big && big->tag_type);
+    if (big && big->tag_type) CHECK_STR(type_name(&a, big->tag_type), "u8");
     token_list_free(c.list);
     c = check_src(&a, tagged_program(&a, 257, ""));
     CHECK_STR(messages(&a, &c.list->diag), "");
     big = struct_named(&c, "Big");
-    if (big->tag_type) CHECK_STR(type_name(&a, big->tag_type), "u16");
-    CHECK_EQ(big->fields.count, 257);
-    if (big->fields.count) CHECK_EQ(big->fields[0].offset, 8);  // u16, then ints at 8
+    CHECK(big && big->tag_type);
+    if (big && big->tag_type) CHECK_STR(type_name(&a, big->tag_type), "u16");
+    CHECK(big && big->fields.count == 257);
+    if (big && big->fields.count) CHECK_EQ(big->fields[0].offset, 8);  // u16, then ints at 8
     token_list_free(c.list);
+    // 64 bits, signed or not, count any number of members.
+    const char *wide[] = {"int", "u64", "s64"};
+    for (const char *tag : wide) {
+        c = check_src(&a, tagged_program(&a, 2, tag));
+        CHECK_STR(messages(&a, &c.list->diag), "");
+        big = struct_named(&c, "Big");
+        CHECK(big && big->tag_type);
+        if (big && big->tag_type) CHECK_STR(type_name(&a, big->tag_type), tag);
+        token_list_free(c.list);
+    }
     // An s8 holds 127: 128 members, not 129, which leaves Big no type.
     CHECK_STR(check_source(&a, tagged_program(&a, 128, "s8")), "");
     c = check_src(&a, tagged_program(&a, 129, "s8"));
@@ -11011,6 +11034,24 @@ TEST(void_members_are_values) {
     CHECK(constant_data(e->value, &data) && data == ((Ast_Member *)e->value)->made);
     CHECK(e->data == ((Ast_Member *)e->value)->made);
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(late_members_are_not_void_values) {
+    // A pointer member's type is made late, after the top level's values
+    // are checked: written as a value there it's still refused, as a member
+    // holding something, not taken for one holding nothing.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "L :: union #tagged { next: *L; none: void; }\n"
+                               "g := L.next;\n"
+                               "K :: L.next;\n"
+                               "h : L = .next;\n"
+                               "f :: (s: L = .next) { }\n"
+                               "main :: () { }\n"),
+              "2:8: 'L.next' holds a '*L'; make one with L.{next = ...}\n"
+              "3:8: 'L.next' holds a '*L'; make one with L.{next = ...}\n"
+              "4:10: 'L.next' holds a '*L'; make one with L.{next = ...}\n"
+              "5:15: 'L.next' holds a '*L'; make one with L.{next = ...}\n");
     arena_free(&a);
 }
 
@@ -11128,6 +11169,8 @@ TEST(tag_tests_are_bools) {
                           "    c := Shape.rect == s;\n"
                           "    d := K == .circle;\n"
                           "    e := K != Shape.circle;\n"
+                          "    f := .circle == Shape.empty;\n"
+                          "    g := Shape.empty == .empty;\n"
                           "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     Type *shape = struct_named(&c, "Shape");
@@ -11143,14 +11186,24 @@ TEST(tag_tests_are_bools) {
     }
     CHECK(folds_to(&c, "d", 1));
     CHECK(folds_to(&c, "e", 0));
+    // Shape.empty, a value, beside a .NAME: the .NAME is the member's name.
+    CHECK(folds_to(&c, "f", 0));
+    CHECK(folds_to(&c, "g", 1));
     token_list_free(c.list);
     // A top-level #if decides by one, as the loader decides it: the branch
-    // not taken would make n a string's.
+    // not taken would make n a string's. .empty in a constant's literal is
+    // constant data too, and a tagged union left out of one holds its
+    // first member.
     CHECK_STR(check_loaded(&a,
-                           TAGGED_SHAPES "E :: Shape.empty;\n"
+                           TAGGED_SHAPES "Holder :: struct { s: Shape; n: int; }\n"
+                                         "E :: Shape.empty;\n"
+                                         "H :: Holder.{s = .empty};\n"
+                                         "Z :: Holder.{n = 1};\n"
                                          "#if E == .empty { X :: 1; } else { X :: \"no\"; }\n"
                                          "#if E != Shape.circle { Y :: 2; } else { Y :: \"no\"; }\n"
-                                         "main :: () { n : int = X + Y; }\n",
+                                         "#if H.s == .empty { P :: 3; } else { P :: \"no\"; }\n"
+                                         "#if Z.s == .circle { Q :: 4; } else { Q :: \"no\"; }\n"
+                                         "main :: () { n : int = X + Y + P + Q; }\n",
                            SYSTEM_WINDOWS),
               "");
     arena_free(&a);

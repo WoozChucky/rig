@@ -574,6 +574,9 @@ static Ast_Literal *void_member_value(Checker *c, Type *t, String name, Position
     if (!check_layout(c, t)) return nullptr;
     *index = tagged_member_index(c, t, name, at);
     if (*index < 0) return nullptr;
+    // A member holding a pointer or a view has its type made late, after a
+    // global's or a constant's value is checked: made here if it isn't yet.
+    check_late_field(c, t, *index);
     Type *member = t->fields[*index].type;
     if (member != &type_void) {
         if (member) {
@@ -2153,7 +2156,8 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 //
 // A tag test (spec 3.20), == or != between a tagged union and a member's
 // name, .NAME or Shape.NAME, either order, any member, void or not, is a
-// bool: whether the union holds that member (check_tag_test).
+// bool: whether the union holds that member (check_tag_test). The union
+// may itself be written Shape.empty, beside a .NAME.
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
@@ -2164,6 +2168,11 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     // it, never checked as a value (Shape.circle as a value is refused).
     bool left_names = equality && names_a_member(c, b->left);
     bool right_names = equality && names_a_member(c, b->right);
+    // Beside a .NAME, Shape.NAME is a value (Shape.empty), the .NAME the
+    // member's name: .circle == Shape.empty is a tag test.
+    if (left_names && right_names && (b->left->kind == AST_DOT_NAME) != (b->right->kind == AST_DOT_NAME)) {
+        *(b->left->kind == AST_DOT_NAME ? &right_names : &left_names) = false;
+    }
     if (left_names != right_names) {
         Ast *value = left_names ? b->right : b->left;
         Type *t = check_member_operand(c, value);

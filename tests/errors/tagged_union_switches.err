@@ -1,27 +1,33 @@
-tests/errors/tagged_union_switches.rig:14:43: error: a tagged union's case names one of its members, as in case .circle;
+tests/errors/tagged_union_switches.rig:15:43: error: a tagged union's case names one of its members, as in case .circle;
     not_a_name :: (s: Shape) { if s == { case 0; case; } }
                                               ^
-tests/errors/tagged_union_switches.rig:15:41: error: 'Shape' has no member 'nope'
+tests/errors/tagged_union_switches.rig:16:41: error: 'Shape' has no member 'nope'
     no_such :: (s: Shape) { if s == { case .nope; case; } }
                                             ^
-tests/errors/tagged_union_switches.rig:16:52: error: 'Shape.circle' already has a case at tests/errors/tagged_union_switches.rig:16:38
+tests/errors/tagged_union_switches.rig:17:52: error: 'Shape.circle' already has a case at tests/errors/tagged_union_switches.rig:17:38
     twice :: (s: Shape) { if s == { case .circle; case .circle; case; } }
                                                        ^
-tests/errors/tagged_union_switches.rig:18:5: error: this switch doesn't handle 'Shape.empty'; add its case or a 'case;'
+tests/errors/tagged_union_switches.rig:19:5: error: this switch doesn't handle 'Shape.empty'; add its case or a 'case;'
         if s == {
         ^
-tests/errors/tagged_union_switches.rig:23:29: error: this switch doesn't handle 'Shape.rect' and 'Shape.empty'; add their cases or a 'case;'
+tests/errors/tagged_union_switches.rig:24:29: error: this switch doesn't handle 'Shape.rect' and 'Shape.empty'; add their cases or a 'case;'
     two_missing :: (s: Shape) { if s == { case .circle; } }
                                 ^
-tests/errors/tagged_union_switches.rig:26:23: error: #through can't end a tagged union's case: the next case's 'it' is another member
+tests/errors/tagged_union_switches.rig:27:23: error: #through can't end a tagged union's case: the next case's 'it' is another member
             case .circle; #through;
                           ^
-tests/errors/tagged_union_switches.rig:31:43: error: can't assign to 'it': it's a member of a switched value that isn't a place
+tests/errors/tagged_union_switches.rig:32:43: error: can't assign to 'it': it's a member of a switched value that isn't a place
     f :: (s: Shape) { if s == { case .circle; it.r = 1; case; } }
                                               ^
-tests/errors/tagged_union_switches.rig:32:46: error: can't take the address of 'it': it's a member of a switched value that isn't a place
+tests/errors/tagged_union_switches.rig:33:46: error: can't take the address of 'it': it's a member of a switched value that isn't a place
     g :: () { if make() == { case .circle; q := *it; case; } }
                                                  ^
-tests/errors/tagged_union_switches.rig:35:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'Circle'
+tests/errors/tagged_union_switches.rig:34:62: error: #run can't use 'it': it's a local, which doesn't exist while compiling
+    run_member :: (s: Shape) { if s == { case .circle; y := #run it.r; case; } }
+                                                                 ^
+tests/errors/tagged_union_switches.rig:37:39: error: #run can't use 'it': it's a local, which doesn't exist while compiling
+        if s == { case .circle; y := #run it.r; case; }
+                                          ^
+tests/errors/tagged_union_switches.rig:41:8: error: a switch needs an integer, an enum, a bool, a string, a pointer or a tagged union, not 'Circle'
         if c == { case; }
            ^

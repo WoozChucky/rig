@@ -4,8 +4,11 @@
 // in order, with no member, giving two members, or one twice, or a value
 // to a void member, or a member it doesn't have; a member it doesn't have,
 // or one that isn't void, written as a value; == and != with anything but
-// a member's name, and <; a tag test naming a member it doesn't have; and a
-// void member's name meeting no type.
+// a member's name, and <; a tag test naming a member it doesn't have; a
+// void member's name meeting no type; two of them in an operator meeting
+// the union; and a member read with spaces around its '.', in parentheses,
+// or over two lines, whose switch shows the operand without the spaces, as
+// written, or as s.
 Circle :: struct { r: float; }
 Rect :: struct { w: float; h: float; }
 Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
@@ -33,4 +36,9 @@ main :: () {
     l := s < t;
     m := s == .nope;
     n := .empty;
+    o : Shape = .empty | .empty;
+    x2 := s . circle;
+    x3 := (s).circle;
+    x4 := shapes[
+        0].circle;
 }

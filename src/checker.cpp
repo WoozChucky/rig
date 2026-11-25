@@ -2547,10 +2547,11 @@ static bool reaches_end(Ast_Block *block);
 // - an #if (spec 4.9), when its taken branch can't: the #if is only that
 //   branch's code. One that took none goes past, as an empty block does.
 // - a switch (spec 6.14), when a value may find no case (it has no `case;`
-//   and doesn't cover every value: only `case;` and #complete count, so a
-//   bool's switch with both values and no `case;` goes past too), or when
-//   a case that doesn't end with #through reaches its end. One ending with
-//   #through goes on into the next case, which is judged in its turn.
+//   and doesn't cover every value: only `case;`, #complete and a tagged
+//   union's switch with a case for every member count, so a bool's switch
+//   with both values and no `case;` goes past too), or when a case that
+//   doesn't end with #through reaches its end. One ending with #through
+//   goes on into the next case, which is judged in its turn.
 // A break or continue leaves the block too, but goes on elsewhere in its
 // loop; the rule is only asked about statements outside any loop body (a
 // procedure's body, and the blocks, ifs, #ifs, pushes and switches' cases
@@ -2560,9 +2561,10 @@ static bool reaches_end(Ast_Block *block);
 // its branches do; so is an #if any of whose chain's conditions failed
 // (Ast_If_Directive.failed), which check_if_condition reported, a condition
 // not known while compiling included; and so is a switch whose switched
-// expression had an error, whose #complete was refused, or that is
-// #complete and doesn't cover every value (Ast_Switch.failed), which
-// check_switch reported. That's a policy,
+// expression had an error, whose #complete was refused, that is #complete
+// and doesn't cover every value, or that is a tagged union's with a case's
+// error or a member it doesn't handle (Ast_Switch.failed), which
+// check_switch (check_tagged_switch) reported. That's a policy,
 // so the condition's message is the only one: for `while 1` (likely meant
 // as `while true`) a missing-return message would be wrong, and for an if
 // a real missing return shows up once the condition is fixed.

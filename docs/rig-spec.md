@@ -1271,7 +1271,7 @@ grow :: (shapes: []Shape) -> int {
 
 Here `for *` makes the loop's `it` a pointer to each element, `it.*` is a place, and in the case `it` is the element's `Circle`, written in the array. A case's statements may assign the whole union a new value, holding another member: `it` is still the bytes of the member the case named, as reading the wrong member of a C union is, and is the program's own business.
 
-**Testing the tag.** `s == .empty` and `s != .circle`, with the union on either side and a member's name on the other, `.NAME` or `Shape.NAME`, any member, `void` or not, are `bool`s: whether the union holds that member. A name the union doesn't have is `'Shape' has no member 'z'`. The test folds when the union is constant data (section 5.9), so `#if E == .empty` decides by it (section 4.9).
+**Testing the tag.** `s == .empty` and `s != .circle`, with the union on either side and a member's name on the other, `.NAME` or `Shape.NAME`, any member, `void` or not, are `bool`s: whether the union holds that member. Beside a `.NAME`, `Shape.empty` is the union, a value: `.circle == Shape.empty` is false. A name the union doesn't have is `'Shape' has no member 'z'`. The test folds when the union is constant data (section 5.9), so `#if E == .empty` decides by it (section 4.9).
 
 **Comparison.** Two tagged unions aren't compared, nor is one with anything but a member's name: `s == t`, `s == null` and `s != 1` are `'==' compares a tagged union only with a member's name, as in s == .empty` (`'!='`), at the operator; `s < t` is `'<' needs numbers, not 'Shape'`.
 
@@ -1626,7 +1626,7 @@ Each system takes its own branches, and the program prints the same on both: `11
 
 ### 5.1 Operands and places
 
-The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), an enum's member, `Mode.FREE`, or `.FREE` without its enum, which takes the enum it meets (section 3.18), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups.
+The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), an enum's member, `Mode.FREE`, or `.FREE` without its enum, which takes the enum it meets (section 3.18), a tagged union's `void` member as a value, `Shape.empty`, or `.empty` where the type is known (section 3.20), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups.
 
 Some expressions denote memory. These are **places**: they can be assigned to (section 6.4) and their address can be taken (section 5.13). The places are:
 
@@ -1637,7 +1637,7 @@ Some expressions denote memory. These are **places**: they can be assigned to (s
 - an element of an array that is a place, and an element of a view, a resizable array, a pointer or a string (`v[i]`, `p[i]`, `s[i]`), unless the string is part of a constant;
 - a view's or a string's `.count` and `.data`, when the view or string is a place, and a resizable array's `.count`, `.data`, `.allocated` and `.allocator`, when the array is one (section 3.17).
 
-These are not places, and the messages say which they are: a constant, and every part of one, its fields and elements and a string constant's bytes (`it's a constant`, naming the constant), an enum's member (`it's an enum's member`, naming it as `Mode.FREE`), a parameter (`it's a parameter`), a loop's iterator or index (`it's the loop's iterator`, `it's the loop's index`), a procedure (`it's a procedure`), and any other value, such as a call's result or an arithmetic result (`only a variable, a field or an element can be assigned to`, `only a variable, a field or an element has an address`). An array's `.count` and `.data` are never places.
+These are not places, and the messages say which they are: a constant, and every part of one, its fields and elements and a string constant's bytes (`it's a constant`, naming the constant), an enum's member (`it's an enum's member`, naming it as `Mode.FREE`), a parameter (`it's a parameter`), a loop's iterator or index (`it's the loop's iterator`, `it's the loop's index`), a tagged union's case's `it` when the switched value isn't a place (`it's a member of a switched value that isn't a place`, section 3.20), a procedure (`it's a procedure`), and any other value, such as a call's result or an arithmetic result (`only a variable, a field or an element can be assigned to`, `only a variable, a field or an element has an address`). An array's `.count` and `.data` are never places.
 
 ### 5.2 Operators and precedence
 
@@ -1752,6 +1752,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - an enum's member, `Mode.FREE`, and `.FREE` once it takes its enum (section 3.18);
 - `size_of(T)` and an array's `.count`;
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
+- a tag test, `s == .empty` or `s != Shape.circle`, whose tagged union is constant data (section 3.20);
 - a cast of a constant to a number type, an enum type or `bool`, and a cast of `null` to a pointer type;
 - `#run e` whose value is a number, a `bool` or `null` (section 7.8): a call is never a constant, but a `#run` of one is, since its value is worked out while compiling. One whose value is a procedure value stands for that procedure, as a constant naming it does (section 4.2);
 - a part of constant data (below) that is a number, a `bool` or `null`: a field (`ORIGIN.y`), an element at a constant index (`PRIMES[2]`), a string's byte at a constant index (`NAME[1]`, a `u8`), or a string's `.count` (`NAME.count`, an `int`). A literal's parts fold too: `Vec2.{5, 6}.y` is 6, `"abc"[0]` is 97 and `"abc".count` is 3. A field or element that a literal leaves out is 0, `false` or `null`, and a string it leaves out is the empty string: its `.count` is 0 and its `.data` is `null`.
@@ -1759,7 +1760,8 @@ A constant expression is one whose value is known while compiling. The compiler 
 **Constant data** is a value known while compiling that is a string, a struct or an array, or a string's bytes seen as a `[]u8`:
 
 - a string literal;
-- a struct or array literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth, and none of them converted to `Any`, which a constant can't hold (section 3.16);
+- a struct, array or tagged union's literal whose every value is a constant, a procedure (its name, or a constant naming one, section 3.15), a string literal's address (section 3.8) or constant data, nested to any depth, and none of them converted to `Any`, which a constant can't hold (section 3.16);
+- a tagged union's `void` member as a value, `Shape.empty`, or `.empty` where the type is known (section 3.20);
 - the name of a constant holding data (section 4.2);
 - a field of constant data, of a struct and not reached through a pointer, and an element of an array that is constant data, at a constant index; a union's member only when it is the member its literal gives, or the literal gives none, since any other is another member's bytes, read where it's used (section 3.19), and never a `#run`'s baked union's member, which is read from its bytes (section 7.8);
 - a cast of constant data to its own type, or between `string` and `[]u8`;
