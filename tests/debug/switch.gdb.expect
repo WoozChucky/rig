@@ -4,9 +4,9 @@ $1 = 4
 20	            putchar(51);
 23	    }
 24	    putchar(10);
-No symbol "twice" in current context.
 switch.rig:26
 30	            putchar(66);
+No symbol "twice" in current context.
 !13	        case 1;
 !14	            putchar(49);
 !15	        case 2;

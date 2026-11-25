@@ -1,4 +1,5 @@
 break switch.rig:12
+break switch.rig:26
 run
 next
 next
@@ -7,7 +8,6 @@ next
 next
 next
 next
-print twice
-break switch.rig:26
 continue
 next
+print twice
