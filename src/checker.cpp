@@ -1310,14 +1310,15 @@ static bool using_takes(Checker *c, Ast_Type *written, Type *type) {
 // An anonymous member is a field with no name, of a type of its own made
 // here (make_anonymous_type), whose fields are laid out first, as s's are;
 // then it's placed as any field is. Its fields are reached as its outer
-// struct's (type_find_member), as C reaches them, so a name is declared
-// once in all the braces of one top-level declaration, nested to any
-// depth: `reachable` holds the named fields so far, in source order, from
-// the top-level declaration's first. A field whose name is in it, in its
-// own braces or in others', is "'x' is already declared at PATH:L:C", and
-// isn't kept (Ast_Field.index -1), though a late one's type is still made,
-// for its own mistakes; so the one field a name finds is the first
-// declared. Anonymous members' empty names clash with nothing.
+// struct's (check_find_member for a use, type_find_member for a literal),
+// as C reaches them, so a name is declared once in all the braces of one
+// top-level declaration, nested to any depth: `reachable` holds the named
+// fields so far, in source order, from the top-level declaration's first.
+// A field whose name is in it, in its own braces or in others', is "'x' is
+// already declared at PATH:L:C", and isn't kept (Ast_Field.index -1),
+// though a late one's type is still made, for its own mistakes; so the one
+// field a name finds is the first declared. Anonymous members' empty names
+// clash with nothing.
 //
 // A using field (spec 3.21) is laid out as any field is, one field holding
 // its whole struct, or a pointer to one: nothing is flattened. Its

@@ -11490,6 +11490,44 @@ TEST(using_reaches_a_struct_under_way) {
     CHECK_STR(messages(&a, &c.list->diag), "");
     CHECK_STR(type_of(&a, &c, "n"), "int");
     token_list_free(c.list);
+    // A name the walk doesn't find, held by an anonymous member of a struct
+    // it reached that's still under way, is the circle, as t.s.y's is, not
+    // "'T' has no field 'y'".
+    const char *in_union = "T :: struct { using s: *S; }\n"
+                           "S :: struct { k: int; union { y: int; arr: [N]int; }; }\n"
+                           "N :: #run f();\n"
+                           "f :: () -> int { t: T; if false { return t.%s; } return 2; }\n"
+                           "main :: () { s: S; }\n";
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, in_union, "y"))),
+              "2:1: 'S' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, in_union, "s.y"))),
+              "2:1: 'S' is defined in terms of itself\n");
+    arena_free(&a);
+}
+
+TEST(using_walks_lay_out_only_the_structs_they_enter) {
+    // A name found at one depth needs nothing deeper: reading T's own field
+    // in a #run during the layouts doesn't lay out U, or make the late using
+    // field's type, so a struct waiting on that #run isn't a circle.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "A :: struct { arr: [N]int; }\n"
+                          "N :: #run f();\n"
+                          "f :: () -> int { t: T; t.a = 2; return t.a; }\n"
+                          "T :: struct { a: int; using p: *U; }\n"
+                          "U :: struct { b: [N]int; }\n"
+                          "main :: () { x: A; u: U; n := x.arr; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "[2]int");
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "T :: struct { v: int; using s: *S; }\n"
+                           "A :: struct { arr: [M]int; }\n"
+                           "M :: #run g();\n"
+                           "g :: () -> int { t: T; return t.v + 2; }\n"
+                           "S :: struct { b: [size_of(A)]int; }\n"
+                           "main :: () { a: A; }\n"),
+              "");
     arena_free(&a);
 }
 
@@ -11594,6 +11632,26 @@ TEST(using_chains_follow_pointer_fields) {
         Ast *transform = ((Ast_Member *)x)->operand;
         CHECK(is_member(&a, transform, "transform", "*Transform"));
         if (transform->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)transform)->operand, "s"));
+    }
+    token_list_free(c.list);
+    // Two using pointers in a row: item.x is item.h.t.x, each pointer
+    // followed by the member after it.
+    c = check_src(&a,
+                  "Transform :: struct { x: float; y: float; }\n"
+                  "Holder :: struct { using t: *Transform; }\n"
+                  "Item :: struct { using h: *Holder; }\n"
+                  "main :: () { item: Item; a := item.x; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    x = value_of(&c, "a");
+    CHECK(is_member(&a, x, "x", "float32"));
+    if (x->kind == AST_MEMBER) {
+        Ast *t = ((Ast_Member *)x)->operand;
+        CHECK(is_member(&a, t, "t", "*Transform"));
+        if (t->kind == AST_MEMBER) {
+            Ast *h = ((Ast_Member *)t)->operand;
+            CHECK(is_member(&a, h, "h", "*Holder"));
+            if (h->kind == AST_MEMBER) CHECK(is_name(((Ast_Member *)h)->operand, "item"));
+        }
     }
     token_list_free(c.list);
     c = check_src(&a,
@@ -11709,6 +11767,14 @@ TEST(literals_name_a_structs_own_fields) {
               "Player.{entity = ...}\n"
               "8:20: a literal can't name 'id', reached through 'entity'; name 'entity', as in "
               "Player.{entity = ...}\n");
+    // Two using fields deep, the field to name is the first on the way, not
+    // the one holding the name.
+    CHECK_STR(check_source(&a,
+                           "Base :: struct { tag: int; }\n"
+                           "Mid :: struct { using base: Base; m: int; }\n"
+                           "Deep :: struct { using mid: Mid; tag2: int; }\n"
+                           "main :: () { d := Deep.{tag = 1}; }\n"),
+              "4:25: a literal can't name 'tag', reached through 'mid'; name 'mid', as in Deep.{mid = ...}\n");
     // Through an anonymous member, the field to name is its using field;
     // inside the member's group, there's no type to write before .{.
     CHECK_STR(check_source(&a,

@@ -294,8 +294,11 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e);
 // structs its using fields hold or point at, depth by depth. Returns how
 // many paths the first depth that has one holds, 0, 1 or 2 (two or more:
 // ambiguous); *path gets the first's field indices from t down, *other the
-// second's (left empty otherwise). Lays out each struct it enters and makes
-// each pointer using field's type.
+// second's (left empty otherwise); -1 when a depth without the name
+// searches a struct still under way that holds it in an anonymous member
+// not in its fields yet: a circle, said (check_member_under_way). Lays out
+// each struct it enters, and makes each pointer using field's type it
+// follows, only once the walk reaches that depth.
 s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other);
 
 // How a message writes the code from `from` up to `to`, as the program

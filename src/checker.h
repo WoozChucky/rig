@@ -1083,8 +1083,8 @@
 //   ... };` is an anonymous member: a field with no name, of a type of its
 //   own, also with no name ("union", "struct" in messages), made by its
 //   outer's layout. Its fields are its outer's to reach: e.key is found in
-//   e's own fields, then in its anonymous members', depth by depth
-//   (type_find_member). A name reachable twice from one top-level
+//   e's fields in order, an anonymous member's searched in its place
+//   (check_find_member). A name reachable twice from one top-level
 //   declaration, in one pair of braces or across them, is "'x' is already
 //   declared at PATH:L:C", at the later, which isn't kept.
 // - A missing member: "'Value' has no member 'z'" ("'Vec2' has no field
