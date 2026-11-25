@@ -1517,6 +1517,8 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "Rect :: struct { w: float; h: float; }\n"
                                 "Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }\n"
                                 "Bytes :: union #tagged { a: [3]u8; }\n"
+                                "Odd :: union #tagged s32 { odd_bytes: [3]u8; odd_half: u16; }\n"
+                                "Flags :: union #tagged { on: void; off: void; }\n"
                                 "main :: () {\n"
                                 "    value: Value;\n"
                                 "    event: Event;\n"
@@ -1540,6 +1542,8 @@ TEST(llvm_debug_types_of_every_kind) {
                                 "    s := \"hi\";\n"
                                 "    shape: Shape;\n"
                                 "    bytes: Bytes;\n"
+                                "    odd: Odd;\n"
+                                "    flags: Flags;\n"
                                 "}\n");
     for (int t = 0; t < 2; t++) {
         String text = llvm_text(&a, m, (Target)t);
@@ -1709,6 +1713,44 @@ TEST(llvm_debug_types_of_every_kind) {
         String bytes_union = defined_node(node_line(&a, text, attached(&a, bytes_members, "baseType:")));
         CHECK(string_eq(attached(&a, line_with(text, "!DIDerivedType(tag: DW_TAG_member, name: \"a\""), "scope:"),
                         bytes_union));
+        // An s32 tag: an enumeration of 32 bits over s32, whose values are
+        // signed (the text doesn't show their width, 64 for cdb, as an s32
+        // enum's: debug_enum). The union is its largest member's 3 bytes
+        // rounded up to the 2 of u16's alignment, at 4, after the tag.
+        String odd_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Odd\"");
+        CHECK(contains(odd_line, "size: 64,"));
+        String odd = defined_node(odd_line);
+        CHECK(odd.count > 0);
+        String odd_tag = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                       "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                                       "scope: " STR_FMT ",",
+                                                                       STR_ARG(odd))));
+        String odd_tag_type = node_line(&a, text, attached(&a, odd_tag, "baseType:"));
+        CHECK(contains(odd_tag_type, "!DICompositeType(tag: DW_TAG_enumeration_type, "));
+        CHECK(contains(odd_tag_type, "size: 32,"));
+        CHECK(contains(node_line(&a, text, attached(&a, odd_tag_type, "baseType:")), "!DIBasicType(name: \"s32\""));
+        CHECK(contains(text, "!DIEnumerator(name: \"odd_bytes\", value: 0)"));
+        CHECK(contains(text, "!DIEnumerator(name: \"odd_half\", value: 1)"));
+        String odd_members = line_with(text, string_cstr(&a, string_printf(&a,
+                                                                           "!DIDerivedType(tag: DW_TAG_member, "
+                                                                           "scope: " STR_FMT ",",
+                                                                           STR_ARG(odd))));
+        CHECK(contains(odd_members, "size: 32, offset: 32)"));
+        CHECK(contains(node_line(&a, text, attached(&a, odd_members, "baseType:")), "size: 32,"));
+        // Members that all hold nothing: the tag alone, and no union.
+        String flags_line = line_with(text, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Flags\"");
+        CHECK(contains(flags_line, "size: 8,"));
+        String flags = defined_node(flags_line);
+        CHECK(flags.count > 0);
+        CHECK(contains(text, string_cstr(&a, string_printf(&a,
+                                                           "!DIDerivedType(tag: DW_TAG_member, name: \"tag\", "
+                                                           "scope: " STR_FMT ",",
+                                                           STR_ARG(flags)))));
+        CHECK(!contains(text, string_cstr(&a, string_printf(&a,
+                                                            "!DIDerivedType(tag: DW_TAG_member, scope: " STR_FMT ",",
+                                                            STR_ARG(flags)))));
+        CHECK(contains(node_line(&a, text, attached(&a, flags_line, "elements:")), "!{!"));
+        CHECK(!contains(node_line(&a, text, attached(&a, flags_line, "elements:")), ", !"));
     }
     arena_free(&a);
 }
@@ -1813,6 +1855,35 @@ TEST(llvm_debug_union_stand_ins_are_unions) {
         CHECK(contains(stand_in, "!DICompositeType(tag: DW_TAG_union_type, scope: "));
         CHECK(!contains(stand_in, "name:"));
         CHECK(contains(stand_in, "line: 1000,"));
+    }
+    arena_free(&a);
+}
+
+TEST(llvm_debug_tagged_union_stand_ins) {
+    // A tagged union is two levels above its members' types: its struct and
+    // the union of its members (tagged_members). T0 to T1100 each hold the
+    // one before, and v's T1100 is made from the top, each T two levels
+    // below the one holding it: T<1100 - (MAX_DEPTH - 2) / 2>, the first
+    // with no room below it for its union and a member, is the one
+    // declaration, so T1100 has MAX_DEPTH - 1 levels, and no T holds a
+    // declaration of a T made in full.
+    Arena a = arena_make();
+    const s64 last = MAX_DEPTH + 100;
+    const s64 cut = last - (MAX_DEPTH - 2) / 2;
+    const char *program = joined(
+        &a, "T0 :: union #tagged { x: int; }\n", chain_of(&a, "T%lld :: union #tagged { t: T%lld; }\n", 1, last, -1),
+        string_cstr(&a, string_printf(&a, "main :: () { v : T%lld; }\n", (long long)last)));
+    CHECK(check_source(&a, program).count == 0);
+    Ir_Module *m = lower_source(&a, program);
+    for (int t = 0; t < 2; t++) {
+        String text = llvm_text(&a, m, (Target)t);
+        CHECK(contains(struct_line(&a, text, string_cstr(&a, string_printf(&a, "T%lld", (long long)last))),
+                       ", elements: !"));
+        CHECK(contains(struct_line(&a, text, string_cstr(&a, string_printf(&a, "T%lld", (long long)(cut + 1)))),
+                       ", elements: !"));
+        CHECK(contains(struct_line(&a, text, string_cstr(&a, string_printf(&a, "T%lld", (long long)cut))),
+                       ", flags: DIFlagFwdDecl)"));
+        CHECK(count_of(text, "DIFlagFwdDecl") == 1);
     }
     arena_free(&a);
 }

@@ -1,0 +1,1 @@
+tests/run/tagged_union_wide_no_case.rig:16:5: runtime error: no case for value -2139062144 of 'Wide4'

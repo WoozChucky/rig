@@ -3929,7 +3929,7 @@ Besides Rig's runtime, which every program links (section 10.6), a program conta
 - `__rig_panic`, which ends the program with a runtime error: it calls `fflush(NULL)`, writes the message with `write` (`_write` on Windows) to file descriptor 2, and calls `exit(101)`;
 - `__rig_bounds_failed`, which writes a failed bounds check's message, with its two numbers, and calls `__rig_panic`;
 - `__rig_string_equal`, which compares two strings' counts and then their bytes, for `==` and `!=`, and a switch on a string (section 6.14);
-- `__rig_no_case`, which writes the message of a `#complete` switch that meets a value no case has (section 6.14), the value in decimal, and calls `__rig_panic`.
+- `__rig_no_case`, which writes the message of a `#complete` switch, or a tagged union's switch, without `case;` that meets a value no case has (sections 6.14, 3.20), the value in decimal, and calls `__rig_panic`.
 
 Besides those, generated code calls the C library's `memmove`, `memset` and `memcpy` (to copy and zero memory) and, on Windows, Rig's runtime's `__chkstk`. A program's own procedures may have any of these names: Rig's procedures are internal to the program, and the compiler's calls still reach the C library's functions and the runtime's.
 

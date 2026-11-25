@@ -89,13 +89,17 @@ main :: () {
     }
     print("after\n");
 
-    // continue and break in a case act on the loop.
-    for shapes {
+    // continue and break in a case act on the loop: the rect's continue
+    // skips the rest of its iteration, the circle's case gets to it, and
+    // the empty's break stops before the last circle.
+    mixed := Shape.[.{rect = .{1, 1}}, .{circle = .{2}}, .empty, .{circle = .{3}}];
+    for mixed {
         if it == {
             case .rect;   continue;
             case .empty;  break;
             case .circle; print("circle {}\n", it.r);
         }
+        print("next\n");
     }
     print("done\n");
 

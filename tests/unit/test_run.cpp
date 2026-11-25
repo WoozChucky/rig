@@ -664,7 +664,8 @@ TEST(a_run_bakes_a_tagged_union_as_its_tag_and_member) {
     // member's value, baked as any value of its type is: a pointer that
     // isn't null is refused, as a struct's field is. A tag no member has,
     // as C may write one, fails the run, at the #run: nothing says which
-    // member's bytes to bake.
+    // member's bytes to bake. A tag is read whole: Wide4's s32 257, whose
+    // low byte alone would be none's tag, 1.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
@@ -681,10 +682,14 @@ TEST(a_run_bakes_a_tagged_union_as_its_tag_and_member) {
                                  "W :: #run make_wrong();\n"
                                  "P :: #run make_pointing();\n"
                                  "N :: #run make_none();\n"
+                                 "Wide4 :: union #tagged s32 { a: u8; none: void; }\n"
+                                 "make_high :: () -> Wide4 { w: Wide4; t := cast(*u16) *w; t.* = 257; return w; }\n"
+                                 "H :: #run make_high();\n"
                                  "main :: () { }\n",
                                  &tree),
               "11:6: #run failed: its result holds a tagged union whose tag names no member\n"
-              "12:6: #run's result holds a pointer, which can't be baked, for now\n");
+              "12:6: #run's result holds a pointer, which can't be baked, for now\n"
+              "16:6: #run failed: its result holds a tagged union whose tag names no member\n");
     const char *names[] = {"C", "E", "N"};
     s32 tags[] = {0, 1, 1};
     s64 values[] = {1, 0, 0};
@@ -704,6 +709,7 @@ TEST(a_run_bakes_a_tagged_union_as_its_tag_and_member) {
     }
     CHECK(!top_level_named(tree, "W")->type);
     CHECK(!top_level_named(tree, "P")->type);
+    CHECK(!top_level_named(tree, "H")->type);
     arena_free(&a);
 }
 

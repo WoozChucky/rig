@@ -13,6 +13,7 @@ in
 left
 after
 circle 2.0
+next
 done
 rect 1.0 2.0
 none

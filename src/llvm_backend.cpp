@@ -912,10 +912,11 @@ static LLVMMetadataRef part_debug_type(Backend *b, Type *part, s32 depth, s32 *l
 // resizable array, which no line declares, is in the main file at line 0).
 // A union is made the same way as a union type (composite_tag, spec 3.19),
 // and an anonymous member's struct or union has no name, as C's has none,
-// at its keyword's line (its declaration, Type.decl). A struct can hold a
-// pointer to itself (Node's next: *Node), or a view or a resizable array of
-// itself (Tree's children: []Tree), so making a member's type can lead back
-// to the struct before it's made. So it's made in three steps:
+// at its keyword's line (its declaration, Type.decl); a tagged union's
+// members are the two tagged_members makes. A struct can hold a pointer to
+// itself (Node's next: *Node), or a view or a resizable array of itself
+// (Tree's children: []Tree), so making a member's type can lead back to
+// the struct before it's made. So it's made in three steps:
 //   1. a temporary node, a replaceable composite, stands for it: remembered
 //      as t's debug type (of one level: a part that leads back to it adds
 //      none, then and after, see DEBUG_TYPE_LEVELS), it's what a pointer
@@ -1002,8 +1003,10 @@ static s64 struct_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LL
 // The union is a level of its own, below the struct: its members' types
 // are made two levels down, and a stand-in when they'd leave the union
 // DEBUG_TYPE_LEVELS levels or more (as part_debug_type does a level up),
-// so the struct has no more than that. The enumeration and its base type
-// are two levels, never cut.
+// so the struct has no more than that; and for the union's level,
+// debug_type_at makes a tagged union its stand-in a level higher than
+// another type. The enumeration and its base type are two levels, never
+// cut.
 static s64 tagged_members(Backend *b, Type *t, s32 depth, LLVMMetadataRef in, LLVMMetadataRef file,
                           LLVMMetadataRef *members, s32 *levels) {
     RIG_ASSERT(t->fields.count == t->decl->fields.count && t->fields.count > 0);
@@ -1196,6 +1199,9 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 //   a union, a union type of its members, all at offset 0. An anonymous
 //   member is a member with no name, of its own struct or union type with
 //   no name, which a debugger shows as C's (spec 3.19).
+// - A tagged union is the C struct it's laid out as: `tag`, an enumeration
+//   with no name of its members, and a union with no name of the members
+//   that hold something (tagged_members, spec 3.20, 10.7).
 // - An enum is an enumeration type of its members (debug_enum).
 // - [N]T is an array of N T's.
 // - []T, string and [..]T are the structs they're laid out as, named as
@@ -1210,11 +1216,13 @@ static LLVMMetadataRef debug_signature(Backend *b, Type **params, s64 param_coun
 // count it keeps is more than DEBUG_TYPE_LEVELS, wherever the type is made
 // (though a chain through cycles can be longer than its count says: see
 // DEBUG_TYPE_LEVELS). A type made DEBUG_TYPE_LEVELS - 1 levels down is its
-// stand-in (a declaration, or a pointer to no type), as is a part whose own
-// count is DEBUG_TYPE_LEVELS already (part_debug_type): made first on its
-// own, a long chain of types is cut where it reaches the limit, and a type
-// that holds the chain's head is cut at the head. A cut is for good: the
-// type remembered is the one with the stand-in. So with
+// stand-in (a declaration, or a pointer to no type), a tagged union one
+// level sooner, since its members' types are two levels below it (their
+// union is one: tagged_members), as is a part whose own count is
+// DEBUG_TYPE_LEVELS already (part_debug_type): made first on its own, a
+// long chain of types is cut where it reaches the limit, and a type that
+// holds the chain's head is cut at the head. A cut is for good: the type
+// remembered is the one with the stand-in. So with
 // S1 :: struct { s: S0; } ... S50000 :: struct { s: S49999; },
 // a variable v of S50000 made first has v.s ... down to S49002, 998 fields
 // down, whose s is a declared S49001, which gdb shows in full only if
@@ -1241,7 +1249,8 @@ static Debug_Type debug_type_at(Backend *b, Type *t, s32 depth) {
     case TYPE_ENUM: return debug_enum(b, t);
     default: break;
     }
-    if (depth >= DEBUG_TYPE_LEVELS - 1) return stand_in_debug_type(b, t);
+    bool tagged = t->kind == TYPE_STRUCT && t->is_tagged;
+    if (depth >= DEBUG_TYPE_LEVELS - (tagged ? 2 : 1)) return stand_in_debug_type(b, t);
     s32 levels = 1;
     switch (t->kind) {
     case TYPE_POINTER: {

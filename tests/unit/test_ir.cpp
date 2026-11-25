@@ -7598,5 +7598,21 @@ TEST(a_tagged_switch_reads_its_tag_once) {
     String member = string_printf(&a, "= ptradd %%0, " STR_FMT "  ", STR_ARG(four));
     CHECK(contains(g, string_cstr(&a, member)));
     CHECK(!contains(g, "__rig_no_case"));
+    // it's slot gets that address at the `if`, 8:5, before the switch: all
+    // of the `if` line's code is one piece, the dispatch's block, where cdb
+    // can break, and it holds the member before its case runs. The case
+    // reads it back, at its first statement, 8:29, in its scope.
+    String address_of_it = value_given(line_with(g, string_cstr(&a, member)));
+    String store = line_with(g, string_cstr(&a, string_printf(&a, "store ptr " STR_FMT ", %%", STR_ARG(address_of_it))));
+    CHECK(store.count > 0);
+    CHECK(contains(store, "  ; 8:5 s0"));
+    s64 switch_at = index_of(g, "switch i8 ");
+    CHECK(index_of(g, string_cstr(&a, member)) < switch_at);
+    CHECK(index_of(g, string_cstr(&a, store)) < switch_at);
+    String slot = value_given(line_with(g, "= local ptr  "));
+    CHECK(slot.count > 0);
+    String read = line_with(g, string_cstr(&a, string_printf(&a, "= load ptr " STR_FMT "  ", STR_ARG(slot))));
+    CHECK(contains(read, "  ; 8:29 s1"));
+    CHECK(index_of(g, string_cstr(&a, read)) > switch_at);
     arena_free(&a);
 }

@@ -23,7 +23,10 @@
 // - Every local variable (Ast_Var) is a stack slot, an IR_LOCAL, in its
 //   procedure, stored to where it's declared: its value, or zero (spec 6.4:
 //   variables start zeroed), or nothing at all for ---. Reading it is an
-//   IR_LOAD, assigning it an IR_STORE.
+//   IR_LOAD, assigning it an IR_STORE. A tagged union's case's it (spec
+//   3.20) is the one exception: it is the member's address in the
+//   switched union, not a slot holding a value of its own; its slot holds
+//   that address, for a debugger (lower_tagged_case).
 // - Parameters. A scalar parameter arrives as a value, %0 to %(count-1)
 //   (after the hidden ones for struct results and the context's, below).
 //   Parameters are read-only, so the value could be used as it is; but a
@@ -371,8 +374,9 @@
 #include "types.h"
 
 // Where a procedure's variable or parameter lives: a variable's or a scalar
-// parameter's slot (the address an IR_LOCAL gave), or the pointer an
-// aggregate parameter is.
+// parameter's slot (the address an IR_LOCAL gave), the pointer an
+// aggregate parameter is, or, for a tagged union's case's it, the member's
+// address in the union.
 struct Local {
     Ast *decl;  // the Ast_Var or Ast_Param
     s32 value;
@@ -3129,37 +3133,40 @@ static s32 emit_no_case(Lowering *l, Ast_Switch *s, Type *t, s32 value) {
     return fail;
 }
 
-// The statements of case k of a switch on a tagged union of type t (spec
-// 3.20), at `at`, whose address is %address, when the case declares it: a
-// block and a scope of their own, starting at the `case`, as
-// lower_scoped_block makes a case's, with it declared first. it is the
-// member the case names in the union itself, at the address plus the
-// members' offset: its Local is that address, so reading it, writing it
-// or taking *it reads or writes the union, with no copy (the checker made
-// it read-only where the union is no place). A debugger shows it as a *M,
-// a variable of its own in a slot of its own holding the address, as it
-// shows an aggregate parameter (spec 10.7): a variable's record needs
-// storage of its own. Those instructions are at the switch's `if`, `at`,
-// with the dispatch, in the case's scope: stepping from the `if` goes
-// straight to the case's first statement, never to a `case` line (spec
-// 10.7's line table), and `it` is shown there already.
+// The statements of case k of a switch on a tagged union (spec 3.20), when
+// the case declares it: a block and a scope of their own, starting at the
+// `case`, as lower_scoped_block makes a case's, with it declared first. it
+// is the member the case names in the union itself, at the union's address
+// plus the members' offset: its Local is that address, so reading it,
+// writing it or taking *it reads or writes the union, with no copy (the
+// checker made it read-only where the union is no place). A debugger shows
+// it as a *M, a variable of its own in a slot of its own, %slot, holding
+// the address, as it shows an aggregate parameter (spec 10.7): a
+// variable's record needs storage of its own. lower_switch stored the
+// address in the slot at the switch's `if`, with the dispatch, before it,
+// so all of the `if` line's code is in one piece, where cdb can break
+// (runner.cpp). The case reads it back from the slot, at its first
+// statement (at its '}' when it has none), in its scope: the case's first
+// instruction is then that line's, inside the case's scope, where it is
+// shown, so a breakpoint there shows it. (Using the dispatch's own value
+// instead, the code generator would reload it from the stack first, with
+// no line of its own, before the case's scope starts.) Stepping from the
+// `if` goes straight to the first statement, never to a `case` line (spec
+// 10.7's line table).
 //
-//     %4 = const i64 4
-//     %5 = ptradd %address, %4   (circle, at 4)
-//     %6 = local ptr             (it, a *Circle, for a debugger)
-//     store ptr %5, %6
-static void lower_tagged_case(Lowering *l, Ast_Case *k, Position at, Type *t, s32 address, Ast_Proc *source) {
+//     %7 = load ptr %slot        (it, a *Circle)
+static void lower_tagged_case(Lowering *l, Ast_Case *k, s32 slot, Ast_Proc *source) {
     s32 outer = l->scope;
     s64 mark = l->defers.count;
-    place(l, at, new_scope(l, k->block->pos));
-    s32 member = emit_field_address(l, address, t->fields[k->member].offset);
-    s32 slot = emit(l, IR_LOCAL, IR_PTR)->result;
-    emit_store(l, IR_PTR, member, slot);
+    Ast_Block *block = k->block;
+    l->scope = new_scope(l, block->pos);
+    place(l, block->statements.count ? statement_position(block->statements[0]) : block->end, l->scope);
+    s32 member = emit_load(l, IR_PTR, slot);
     Ast_Var *it = k->it;
     array_add(&l->locals, {it, member});
     array_add(&l->proc->vars,
               Ir_Var{it->name, type_pointer_to(it->type), it->pos, l->scope, IR_VAR_SLOT, slot, 0, 0, false});
-    lower_block(l, k->block, source);
+    lower_block(l, block, source);
     leave_block(l, mark, source);
     l->scope = outer;
 }
@@ -3185,7 +3192,8 @@ static void lower_tagged_case(Lowering *l, Ast_Case *k, Position at, Type *t, s3
 //   offset 0, is dispatched on as an integer is, each case's value the
 //   index of the member it names (Ast_Case.member). A case's it is the
 //   member at that same address (lower_tagged_case): x is worked out once,
-//   and never copied.
+//   and never copied. The members' address, and each it's slot holding it,
+//   are set there too, before the dispatch.
 //
 //     %x = ...
 //     switch i64 %x, b3 [1: b1, 2: b2]
@@ -3222,6 +3230,21 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
     // union's tag.
     Type *t = tagged ? switched->tag_type : switched;
     s32 value = tagged ? emit_load(l, ir_type_of(t), address) : address;
+    // A tagged union's members' address, the same for every member, stored
+    // for each case that declares it in a slot of its own, its it's
+    // (lower_tagged_case): here, at the `if`, before the dispatch, so every
+    // case finds it set. -1 for a case without it.
+    Array<s32> slots = {};
+    s32 members = -1;
+    for (s64 i = 0; tagged && i < s->cases.count; i++) {
+        s32 slot = -1;
+        if (s->cases[i]->it) {
+            if (members < 0) members = emit_field_address(l, address, switched->fields[0].offset);
+            slot = emit(l, IR_LOCAL, IR_PTR)->result;
+            emit_store(l, IR_PTR, members, slot);
+        }
+        array_add(&slots, slot);
+    }
     // The field of the dispatch's terminators that names each case's block,
     // for the cases with a value, in source order, and the one that names
     // where every other value goes: filled in as those blocks are made. A
@@ -3295,7 +3318,7 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
         through = -1;
         l->block = block;
         if (k->it) {
-            lower_tagged_case(l, k, s->pos, switched, address, source);
+            lower_tagged_case(l, k, slots[i], source);
         } else {
             lower_scoped_block(l, k->block, source);
         }
@@ -3322,6 +3345,7 @@ static void lower_switch(Lowering *l, Ast_Switch *s, Ast_Proc *source) {
     }
     array_free(&ends);
     array_free(&entries);
+    array_free(&slots);
 }
 
 // The loop's body, with the loop the innermost one for break and continue;
