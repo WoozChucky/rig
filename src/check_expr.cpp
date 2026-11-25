@@ -605,7 +605,7 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e) {
         Ast_Member *m = (Ast_Member *)e;
         if (m->operand->kind != AST_NAME || ast_in_parentheses(m->operand)) return -2;
         Ast_Name *operand = (Ast_Name *)m->operand;
-        Ast *decl = check_lookup(c, operand->name);
+        Ast *decl = check_lookup(c, operand->name, nullptr);
         if (!decl || decl->kind != AST_STRUCT || ((Ast_Struct *)decl)->declared != t) return -2;
         operand->decl = decl;
         m->of_tagged = (Ast_Struct *)decl;
@@ -976,14 +976,20 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
 // "'__runtime_error' can't be a value: it has no code of its own, only
 // calls". In a default value, a parameter is "a default value can't use the
 // parameter 'times'". Nor is a built-in procedure a value: "'array_add'
-// can't be a value: it's built into the language".
+// can't be a value: it's built into the language". A field of a using
+// parameter's struct (spec 3.21) is the field, through the parameter
+// (check_using_name).
+static Type *check_using_name(Checker *c, Ast_Name *name);
+
 static Type *check_name(Checker *c, Ast_Name *name) {
-    Ast *decl = check_lookup(c, name->name);
+    bool through_using;
+    Ast *decl = check_lookup(c, name->name, &through_using);
     name->decl = decl;
     if (!decl) {
         report_undeclared(c, name, false);
         return nullptr;
     }
+    if (through_using) return check_using_name(c, name);
     switch (decl->kind) {
     case AST_VAR: return decl->type;
     case AST_PARAM:
@@ -1242,7 +1248,7 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     Type *t = nullptr;
     if (callee->kind == AST_NAME) {
         Ast_Name *name = (Ast_Name *)callee;
-        Ast *decl = check_lookup(c, name->name);
+        Ast *decl = check_lookup(c, name->name, nullptr);
         if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM) {
             name->decl = decl;
             if (decl) {
@@ -2167,7 +2173,7 @@ static bool names_a_member(Checker *c, Ast *e) {
     if (e->kind != AST_MEMBER) return false;
     Ast *operand = ((Ast_Member *)e)->operand;
     if (operand->kind != AST_NAME || ast_in_parentheses(operand)) return false;
-    Ast *decl = check_lookup(c, ((Ast_Name *)operand)->name);
+    Ast *decl = check_lookup(c, ((Ast_Name *)operand)->name, nullptr);
     return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_tagged;
 }
 
@@ -2176,7 +2182,7 @@ static bool names_a_member(Checker *c, Ast *e) {
 // a name T has no member of, or a T with no layout (said), is no such
 // member.
 static bool names_a_void_member(Checker *c, Ast_Member *e) {
-    Ast_Struct *s = (Ast_Struct *)check_lookup(c, ((Ast_Name *)e->operand)->name);
+    Ast_Struct *s = (Ast_Struct *)check_lookup(c, ((Ast_Name *)e->operand)->name, nullptr);
     Type *t = s->declared;
     if (!t || !check_layout(c, t)) return false;
     for (s64 i = 0; i < t->fields.count; i++) {
@@ -2219,8 +2225,9 @@ bool report_member_on_pointer(Checker *c, Ast *e, Type *to, Ast_Binary *test, As
     if (!names_a_member(c, e)) return false;
     // Shape.NAME names a member only of Shape: Other.circle is no hint's.
     Ast_Member *named = e->kind == AST_MEMBER ? (Ast_Member *)e : nullptr;
-    if (named && ((Ast_Struct *)check_lookup(c, ((Ast_Name *)named->operand)->name))->declared != to->pointee) {
-        return false;
+    if (named) {
+        Ast_Struct *s = (Ast_Struct *)check_lookup(c, ((Ast_Name *)named->operand)->name, nullptr);
+        if (s->declared != to->pointee) return false;
     }
     String name = named ? string_printf(c->arena, STR_FMT "." STR_FMT,
                                         STR_ARG(((Ast_Name *)named->operand)->name), STR_ARG(named->name))
@@ -2633,9 +2640,21 @@ const char *loop_variable_kind(Ast_Var *var) {
 // place in memory (expr_is_place: a variable, but not a loop's iterator or
 // index); otherwise false, after saying what it is instead, for an
 // assignment (for_writing) or an address.
+//
+// A using parameter's field (Ast_Name.through, spec 3.21) is one when the
+// chain it means is: through a pointer, the parameter's or a field's on
+// the way. Otherwise it's part of a value parameter, read-only as the
+// parameter is (spec 7.2): "can't assign to 'id': it's a field of the
+// parameter 'e'".
 static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
     if (expr_is_place(name)) return true;
     Ast *decl = name->decl;
+    if (name->through) {
+        diag_error(c->diag, name->pos, "can't %s '" STR_FMT "': it's a field of the parameter '" STR_FMT "'",
+                   for_writing ? "assign to" : "take the address of", STR_ARG(name->name),
+                   STR_ARG(((Ast_Param *)decl)->name));
+        return false;
+    }
     const char *what = nullptr;
     switch (decl->kind) {
     case AST_VAR: {
@@ -2689,9 +2708,11 @@ bool expr_is_place(Ast *e) {
     switch (e->kind) {
     case AST_NAME: {
         // A variable, but not a loop's iterator or index (name_is_place
-        // says why).
-        Ast *decl = ((Ast_Name *)e)->decl;
-        return decl->kind == AST_VAR && !((Ast_Var *)decl)->is_iterator;
+        // says why); a using parameter's field when the chain it means is
+        // one (spec 3.21).
+        Ast_Name *name = (Ast_Name *)e;
+        if (name->through) return expr_is_place(name->through);
+        return name->decl->kind == AST_VAR && !((Ast_Var *)name->decl)->is_iterator;
     }
     case AST_DEREF: return true;
     case AST_CONTEXT: return true;  // the current context, wherever it lies (spec 7.10)
@@ -2788,11 +2809,21 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // said of the name itself, not a mistake found in the procedure's
         // value, such as "'printf' can't be a value" for one taking C's '..'.
         Ast_Name *name = (Ast_Name *)e;
-        Ast *decl = check_lookup(c, name->name);
+        bool through_using;
+        Ast *decl = check_lookup(c, name->name, &through_using);
         name->decl = decl;
         if (!decl) {
             report_undeclared(c, name, false);
             return false;
+        }
+        // A using parameter's field (spec 3.21): the chain it means, worked
+        // out (or refused in a default value) as for its value, then a
+        // place or not as the chain is.
+        if (through_using) {
+            Type *t = check_using_name(c, name);
+            if (!t || !name_is_place(c, name, for_writing)) return false;
+            name->type = t;
+            return true;
         }
         // In a default value a parameter is refused as check_name refuses
         // its value: it doesn't exist where the default is worked out, so
@@ -3249,6 +3280,97 @@ static String member_path_text(Checker *c, Type *t, Array<s32> path, String root
     return text;
 }
 
+// The struct whose fields a using parameter's body names (spec 3.21): the
+// parameter's own, or the one it points at (check_signature made sure it's
+// one or the other).
+static Type *using_struct(Ast_Param *param) {
+    return type_is_pointer(param->type) ? param->type->pointee : param->type;
+}
+
+// The roots are the structs laid out, in parameter order, and which
+// parameter each is.
+s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array<s32> *other, s32 *other_root) {
+    Array<Type *> roots = {};
+    Array<s32> params = {};
+    for (s64 i = 0; i < c->using_params.count; i++) {
+        Type *s = using_struct(c->using_params[i]);
+        if (!check_layout(c, s)) continue;
+        array_add(&roots, s);
+        array_add(&params, (s32)i);
+    }
+    s32 first = 0, second = 0;
+    s32 found = find_through_using(c, roots.data, (s32)roots.count, name, path, &first, other, &second);
+    if (found >= 1) *root = params[first];
+    if (found == 2) *other_root = params[second];
+    array_free(&roots);
+    array_free(&params);
+    return found;
+}
+
+// A name check_lookup found among the fields of the procedure's using
+// parameters (spec 3.21), as check_find_using finds it: position in move's
+// body is e.position. name->through gets the chain it means, made as
+// check_member makes one through using fields: an Ast_Name naming the
+// parameter, then a member for each field on the way, named as the field
+// (no name for an anonymous member), each at the name written, so a null
+// pointer followed on the way, the parameter's or a field's, is said there
+// (spec 8.4). name->decl is the parameter, and the field's type is
+// returned. Lowering, places and #run's walk follow the chain (checker.h's
+// using section).
+//
+// Two at the first depth that has one, across the parameters or in one,
+// are "'x' is ambiguous: 'a.x' or 'b.x'", at the name, each path written
+// from its parameter's name; a circle found on the way was said
+// (check_member_under_way). Either leaves the name with no declaration,
+// as an unknown one, so nothing more is said of it. In a default value
+// the field is refused as its parameter is (check_defaults): "a default
+// value can't use 'id', a field of the parameter 'e'". Null after any.
+static Type *check_using_name(Checker *c, Ast_Name *name) {
+    Array<s32> path = {}, other = {};
+    s32 root = 0, other_root = 0;
+    s32 found = check_find_using(c, name->name, &path, &root, &other, &other_root);
+    Type *t = nullptr;
+    name->decl = nullptr;
+    if (found == 2) {
+        Ast_Param *a = c->using_params[root], *b = c->using_params[other_root];
+        diag_error(c->diag, name->pos, "'" STR_FMT "' is ambiguous: '" STR_FMT "' or '" STR_FMT "'",
+                   STR_ARG(name->name), STR_ARG(member_path_text(c, using_struct(a), path, a->name)),
+                   STR_ARG(member_path_text(c, using_struct(b), other, b->name)));
+    } else if (found == 1) {
+        Ast_Param *param = c->using_params[root];
+        name->decl = param;
+        if (c->default_of) {
+            diag_error(c->diag, name->pos,
+                       "a default value can't use '" STR_FMT "', a field of the parameter '" STR_FMT "'",
+                       STR_ARG(name->name), STR_ARG(param->name));
+        } else {
+            Ast_Name *base = ast_new<Ast_Name>(c->arena, AST_NAME, name->pos);
+            base->name = param->name;
+            base->decl = param;
+            base->type = param->type;
+            Ast *chain = base;
+            Type *s = using_struct(param);
+            for (s64 k = 0; k < path.count; k++) {
+                // The last field's type may be a late one's, not made yet.
+                if (k + 1 == path.count) check_late_field(c, s, path[k]);
+                Type_Field *field = &s->fields[path[k]];
+                Ast_Member *m = ast_new<Ast_Member>(c->arena, AST_MEMBER, name->pos);
+                m->operand = chain;
+                m->name = field->name;
+                m->index = path[k];
+                m->type = field->type;
+                chain = m;
+                if (k + 1 < path.count) s = type_is_pointer(field->type) ? field->type->pointee : field->type;
+            }
+            name->through = chain;
+            t = chain->type;
+        }
+    }
+    array_free(&path);
+    array_free(&other);
+    return t;
+}
+
 // e.x: the field x of struct e, or of the struct e points at (p.x is
 // p.*.x: one pointer, so a **Node needs .* first). Reported at the field's
 // name: "'Vec2' has no field 'z'", or on anything else "'.x' needs a struct
@@ -3310,7 +3432,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
     if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
         Ast_Name *name = (Ast_Name *)operand;
-        Ast *decl = check_lookup(c, name->name);
+        Ast *decl = check_lookup(c, name->name, nullptr);
         if (decl && decl->kind == AST_ENUM) {
             name->decl = decl;
             Ast_Enum *e = (Ast_Enum *)decl;

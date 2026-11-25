@@ -148,6 +148,8 @@ struct Ast_Param : Ast {
     bool default_needs_context;  // its default value uses context, calls a procedure that takes it, or
                                  // leaves out a default that needs it (checker.cpp's check_defaults): a
                                  // #c_call body outside a push_context can't leave it out (spec 7.6)
+    bool is_using;  // using e: *Entity (spec 3.21): the body names e's fields directly; cleared by the
+                    // checker when its type is one using doesn't take (check_signature)
 };
 
 struct Ast_Proc;
@@ -535,6 +537,8 @@ struct Ast_Name : Ast {
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
                 // or an Ast_Struct or an Ast_Enum, whose name is a type, not a value (reported),
                 // or an Ast_Builtin, which only a call's callee may name (spec 3.17)
+    Ast *through;  // a using parameter's field (spec 3.21): the chain it means, e.position, whose innermost
+                   // operand is an Ast_Name naming the parameter; decl is the parameter. Null otherwise
 };
 
 struct Ast_String : Ast {

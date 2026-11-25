@@ -298,13 +298,14 @@ static void pop_scope(Checker *c) {
 
 // What leave_scopes sets aside, and return_to_scopes returns to.
 struct Outer_Scopes {
-    Array<Table<Ast *>> scopes;  // Checker.scopes
-    bool lost_a_local;           // Checker.lost_a_local
-    Ast_Proc *default_of;        // Checker.default_of
-    s32 filled_depth;            // Checker.filled_depth
-    bool needs_context;          // Checker.needs_context
-    bool in_code;                // Checker.in_code
-    bool contextless;            // Checker.contextless
+    Array<Table<Ast *>> scopes;       // Checker.scopes
+    Array<Ast_Param *> using_params;  // Checker.using_params
+    bool lost_a_local;                // Checker.lost_a_local
+    Ast_Proc *default_of;             // Checker.default_of
+    s32 filled_depth;                 // Checker.filled_depth
+    bool needs_context;               // Checker.needs_context
+    bool in_code;                     // Checker.in_code
+    bool contextless;                 // Checker.contextless
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -312,7 +313,9 @@ struct Outer_Scopes {
 // wherever that is: its names are the top level's, whatever body needed it.
 // A body checked on demand has its own scopes too (check_body). So the
 // scopes open where it's needed are set aside, returned here, and the
-// checker goes on with none. So is lost_a_local, which is about those
+// checker goes on with none; and so are the using parameters whose fields
+// the body names (spec 3.21), which are the body's as its parameters are,
+// never the declaration's. So is lost_a_local, which is about those
 // scopes: a failed #if in the body that needed it may hide a local's name,
 // never a top-level one, so the declaration's unknown names are reported.
 // So are default_of, filled_depth and needs_context, which are about the
@@ -327,9 +330,10 @@ struct Outer_Scopes {
 // signature's default values run in each caller that leaves them out, with
 // the caller's (check_call_context says when a #c_call body can't).
 static Outer_Scopes leave_scopes(Checker *c) {
-    Outer_Scopes outer = {c->scopes,        c->lost_a_local, c->default_of, c->filled_depth,
-                          c->needs_context, c->in_code,      c->contextless};
+    Outer_Scopes outer = {c->scopes,        c->using_params, c->lost_a_local, c->default_of,
+                          c->filled_depth,  c->needs_context, c->in_code,     c->contextless};
     c->scopes = {};
+    c->using_params = {};
     c->lost_a_local = false;
     c->default_of = nullptr;
     c->filled_depth = 0;
@@ -340,12 +344,14 @@ static Outer_Scopes leave_scopes(Checker *c) {
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
-// closed, and to their lost_a_local, default_of, filled_depth,
-// needs_context, in_code and contextless.
+// closed, and to their using parameters, lost_a_local, default_of,
+// filled_depth, needs_context, in_code and contextless.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
+    array_free(&c->using_params);
     c->scopes = outer.scopes;
+    c->using_params = outer.using_params;
     c->lost_a_local = outer.lost_a_local;
     c->default_of = outer.default_of;
     c->filled_depth = outer.filled_depth;
@@ -368,10 +374,29 @@ static Ast *find_name(Checker *c, String name) {
     return found ? *found : nullptr;
 }
 
-Ast *check_lookup(Checker *c, String name) {
+// Between the scopes and the top level, the fields the procedure's using
+// parameters reach (spec 3.21, 4.7): locals, a loop's it, a case's it and
+// the parameters themselves hide them, and they hide the globals,
+// constants, procedures and enums of their names. Types are found by
+// find_name, which never looks there: a field is no type. A name two
+// parameters' fields reach at one depth, or the walk finding a circle, is
+// still theirs: check_using_name says so.
+Ast *check_lookup(Checker *c, String name, bool *through_using) {
+    if (through_using) *through_using = false;
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
+    }
+    if (c->using_params.count) {
+        Array<s32> path = {}, other = {};
+        s32 root = 0, other_root = 0;
+        s32 reached = check_find_using(c, name, &path, &root, &other, &other_root);
+        array_free(&path);
+        array_free(&other);
+        if (reached) {
+            if (through_using) *through_using = true;
+            return c->using_params[root];
+        }
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
@@ -2727,8 +2752,23 @@ static bool reaches_end(Ast_Block *block) {
     return goes_past(block->statements[block->statements.count - 1]);
 }
 
+// Into c->using_params, in order, the using parameters of proc (spec 3.21),
+// whose fields its body, or its default values, name directly: each whose
+// type is known and one using takes (check_signature cleared is_using
+// otherwise, and said why; an unknown type's error was said too). Freed by
+// return_to_scopes, or by check_defaults, which has no scopes of its own to
+// return to.
+static void add_using_params(Checker *c, Ast_Proc *proc) {
+    for (s64 i = 0; i < proc->params.count; i++) {
+        Ast_Param *param = proc->params[i];
+        if (param->is_using && param->type) array_add(&c->using_params, param);
+    }
+}
+
 // A procedure's body. Its parameters are in the body's own scope, so a
-// local can't have a parameter's name.
+// local can't have a parameter's name. Its using parameters' fields
+// (add_using_params) are named after them, before the top level's names
+// (check_lookup).
 //
 // Checked in check()'s pass over the bodies, or earlier, where a #run
 // reaches it (check_reached_body): inside another body, or inside a
@@ -2766,6 +2806,7 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     c->contextless = proc->is_c_call && !is_main;
     push_scope(c);
     for (s64 i = 0; i < proc->params.count; i++) declare(c, proc->params[i]->name, proc->params[i]);
+    add_using_params(c, proc);
     check_block(c, proc->body);
     pop_scope(c);
     // main's results are reported by check() already: main returns nothing.
@@ -3007,7 +3048,10 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // c->default_of makes check_name, and check_addressable for its address,
 // refuse each: "a default value can't use the parameter 'times'", at the
 // name. A global times can't stand in for the parameter, which is what the
-// default would seem to mean.
+// default would seem to mean. So are the fields of its using parameters
+// (spec 3.21), which hide the top level's names as in the body too
+// (add_using_params): "a default value can't use 'id', a field of the
+// parameter 'e'" (check_using_name).
 //
 // Each converts to its parameter's type as a typed variable's value does
 // (check_var_value): an untyped constant takes the type ("300 doesn't fit
@@ -3098,6 +3142,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     push_scope(c);
     Table<Ast *> *scope = &c->scopes[c->scopes.count - 1];
     for (s64 i = 0; i < params.count; i++) table_put(scope, params[i]->name, (Ast *)params[i]);
+    add_using_params(c, proc);
     c->default_of = proc;
     s32 depth = 0;
     bool too_deep = false;
@@ -3129,6 +3174,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     c->default_of = nullptr;
     c->filled_depth = 0;
     c->needs_context = false;
+    array_free(&c->using_params);
     pop_scope(c);
     proc->defaults_depth = too_deep ? 0 : depth;
 }
@@ -3161,6 +3207,13 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
 // (an array's count) starts a level below its own levels (Ast_Type.levels,
 // open_declaration).
 //
+// A using parameter's type is one a using field takes (spec 3.21,
+// using_takes): a struct or a union, or one pointer to one, never a tagged
+// union's. Refused, at the type, it's an ordinary parameter
+// (Ast_Param.is_using cleared), so its body says nothing more of it. Any
+// procedure may have one, a foreign one too: it changes only what the
+// body's names mean.
+//
 // Then the parameters' default values (check_defaults), once every type is
 // known, each converting to its parameter's: still under way, so one that
 // needs this signature is a circle.
@@ -3181,9 +3234,11 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
         if (!param->is_variadic) {
             param->type = resolve_type(c, param->type_expr);
             if (c_side) check_c_part(c, param->type, param->type_expr->pos, who, false);
+            if (param->is_using) param->is_using = using_takes(c, param->type_expr, param->type);
             continue;
         }
         param->type = resolve_variadic(c, param->type_expr);
+        if (param->is_using) param->is_using = using_takes(c, param->type_expr, param->type);
         refused = c_side || proc->is_compiler;
         if (!param->type) continue;  // T's own mistake, reported
         if (proc->is_foreign) {

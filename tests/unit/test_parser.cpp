@@ -4523,3 +4523,32 @@ TEST(using_mistakes) {
     CHECK_STR(errors, "1:6: expected a type, found 'using'\n");
     arena_free(&a);
 }
+
+TEST(parses_using_parameters) {
+    // 'using' before a parameter's name, a value's or a pointer's; the dump
+    // writes it first. A '(' followed by 'using' after '::' begins a
+    // parameter list, so each is a procedure, not a constant.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "move :: (using e: *Entity, dx: float) { }\n"
+                        "show :: (using e: Entity) { }\n",
+                        &errors),
+              "(proc move (params (using e (ptr Entity)) (dx float)) (block))\n"
+              "(proc show (params (using e Entity)) (block))\n");
+    CHECK_STR(errors, "");
+    // The parameter is at its name, as any parameter, and says it's a
+    // using one; the other isn't.
+    Token_List *list = src("move :: (using e: *Entity, dx: float) { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(file->procs.count, 1);
+    if (file->procs.count == 1 && file->procs[0]->params.count == 2) {
+        Ast_Param *e = file->procs[0]->params[0];
+        CHECK(e->is_using);
+        CHECK_STR(e->name, "e");
+        CHECK_EQ(e->pos.col, 16);
+        CHECK(!file->procs[0]->params[1]->is_using);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}

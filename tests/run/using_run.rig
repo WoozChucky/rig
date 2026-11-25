@@ -1,0 +1,51 @@
+// using parameters while compiling (issue #225, spec 3.21, 7.8): a #run
+// calls procedures whose bodies name their using parameters' fields, as
+// the program does when it runs. A constant is baked from a Player such
+// procedures made, a #run in a body converts a *Player into a using
+// *Entity parameter, and a top-level #run prints what it moved.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+move :: (using e: *Entity, dx: float) {
+    position.x += dx;
+    id += 1;
+}
+
+nested :: (using p: *Player) {
+    health -= 1;
+    position.y = 9;
+}
+
+describe :: (using e: *Entity) -> int {
+    return id * 10 + cast(int) position.x;
+}
+
+build :: () -> Player {
+    p := Player.{name = "ann", health = 5};
+    move(*p, 2.5);
+    nested(*p);
+    return p;
+}
+
+described :: () -> int {
+    p: Player;
+    move(*p, 3);
+    return describe(*p);
+}
+
+B :: #run build();
+
+#run {
+    p: Player;
+    move(*p, 1.5);
+    print("{} {}\n", p.position, p.id);
+}
+
+main :: () {
+    print("{} {} {} {}\n", B.position.x, B.position.y, B.health, B.id);
+    d := #run described();
+    print("{}\n", d);
+}

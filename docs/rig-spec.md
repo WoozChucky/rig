@@ -151,7 +151,7 @@ null          push_context  return        struct        true          union
 using         while
 ```
 
-`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as its own struct's (section 3.21). Anywhere else it is a syntax error. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as its own struct's; before a parameter's name, it lets the procedure's body name the fields of the parameter's struct directly (section 3.21). Anywhere else it is a syntax error. `union` declares union types and starts anonymous members (section 3.19), and with `#tagged` declares tagged union types (section 3.20). `enum` and `enum_flags` declare enum types (section 3.18). `defer` is a keyword in use: it runs a statement when its block is left (section 6.12). So are `context`, which names the current context (section 7.10), `push_context`, which runs a block with another context (section 6.13), and `case`, which starts each case of a switch (section 6.14).
 
 ### 2.7 Directives
 
@@ -1406,7 +1406,7 @@ example.rig:6:5: error: this switch doesn't handle 'Shape.empty'; add its case o
 
 ### 3.21 using
 
-`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as the outer struct's own, as an anonymous member's are (section 3.19), and the field is still there, a field as any other.
+`using` before a field's name takes in the fields of the struct the field holds, or points at: they are reached as the outer struct's own, as an anonymous member's are (section 3.19), and the field is still there, a field as any other. Before a parameter's name, it lets the procedure's body name the fields of the struct the parameter is, or points at, directly (**On a parameter**, below).
 
 ```ebnf
 FieldDecl = [ "using" ] identifier ":" Type ";"
@@ -1546,6 +1546,57 @@ Only a pointer converts, and only through value fields: a `using` field that is 
 
 **Constants, type information and printing.** A field of constant data reached through a `using` field folds as any field of it does (section 5.9): for `K :: Player.{entity = .{id = 5}};`, `K.id` is the constant 5. A `using` field is described as any field is (section 3.16), a member named `entity` of type `Entity`, and Basic's `print` writes it as one: `{name = "ann", entity = {id = 7, position = {x = 1.5, y = 0.0}}, health = 3}`.
 
+**On a parameter.** `using` before a parameter's name in a procedure's declaration lets its body name the fields of the struct the parameter is, or points at, directly: in `move :: (using e: *Entity, dx: float)`, `position` is `e.position` and `id` is `e.id`. The grammar is section 7.1's `Param = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ]`. The parameter's type is one a `using` field takes, or it is refused with the same messages, at the type, and is then an ordinary parameter. Any procedure may have one, a foreign one too, since it changes only what the body's names mean; a procedure type has none (`expected a type, found 'using'`). The parameter is still there, `e` itself, passed as any other (section 7.2): a `*Player` goes into `using e: *Entity` as into any `*Entity`, moved to its `entity` field (above). No new variable is made: each name is the parameter's field, reached when the statement naming it runs.
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+
+move :: (using e: *Entity, dx: float) {
+    position.x += dx;   // e.position.x
+    id += 1;            // e.id
+}
+
+hurt :: (using p: *Player, damage: int) {
+    health -= damage;   // p.health
+    position.y = 0;     // p.entity.position.y
+}
+
+main :: () {
+    p := Player.{health = 10};
+    move(*p, 1.5);
+    hurt(*p, 3);
+    print("{} {} {}\n", p.position.x, p.id, p.health);
+}
+```
+
+```text
+1.5 1 7
+```
+
+**Lookup in the body.** A name is looked for in the blocks around it, then among the fields of the procedure's `using` parameters, then at the top level (section 4.7). So a local, a loop's `it` or `it_index`, a switch case's `it` and the parameters themselves hide such a field, and a field hides a global, a constant, a procedure or an enum of its name; a type's name is never a field's. The fields are found as `e.x` finds them, depth by depth, from the structs of all the `using` parameters together at depth 0, in parameter order: a field of `p.entity` is found one `using` field away, and with `(using a: *A, using b: *B)` both holding `x`, `x` is `'x' is ambiguous: 'a.x' or 'b.x'`, at the name, each path written from its parameter's name. A field that holds a procedure value is called through it: `on(n)` for a field `on: (int) -> int`.
+
+**Read-only.** A field named so is a part of its parameter. Through a pointer, the parameter's or a pointer `using` field's on the way, it is a place, and writing it writes where the pointer points; a null pointer stops the program at the name written, `runtime error: null pointer dereference` (section 8.4). A value parameter's own fields are read-only, as the parameter is (section 7.2): `can't assign to 'id': it's a field of the parameter 'e'`, and `can't take the address of 'id': it's a field of the parameter 'e'`, at the name. In the procedure's default values its `using` parameters' fields are in scope, as its parameters are, and refused as they are, since none exists where a default is worked out (`a default value can't use 'id', a field of the parameter 'e'`); nor can an expression `#run` in the body use one (`#run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling`, section 7.8).
+
+```rig error
+Entity :: struct { id: int; }
+
+reset :: (using e: Entity) {
+    id = 0;
+}
+
+main :: () { }
+```
+
+```text
+example.rig:4:5: error: can't assign to 'id': it's a field of the parameter 'e'
+        id = 0;
+        ^
+```
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
@@ -1570,7 +1621,7 @@ A declaration of a name binds it to a constant, a variable, a procedure, a struc
 
 Procedures, structs, unions and enums are declared only at the top level: inside a body, `helper :: () { ... }` is `procedures can only be declared at the top level, for now`, `Vec2 :: struct { ... }` is `structs can only be declared at the top level, for now`, `Value :: union { ... }` is `unions can only be declared at the top level, for now`, and `Mode :: enum { ... }` is `enums can only be declared at the top level, for now`. Constants and variables are declared at the top level (as global constants and global variables) or inside a body (as local ones).
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=` begins a procedure's parameter list (a parameter written `n := 0` is an error there, section 7.2); any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
+After `::`, a `(` followed by `)`, by `..`, by `using` (a `using` parameter's, section 3.21), or by an identifier and `:` or `:=` begins a procedure's parameter list (a parameter written `n := 0` is an error there, section 7.2); any other `(` begins a constant's value, so `N :: (1 + 2);` is a constant. After a single `:`, a `(` begins a procedure type (section 3.15), the variable's: `op : (int) -> int = negate;`.
 
 ### 4.2 Constants
 
@@ -1724,9 +1775,10 @@ A **block** is a sequence of statements in braces (section 6.1). A procedure's b
 - A name declared in a block, a local variable or a local constant, is visible from the end of its declaration to the end of the block, including in blocks nested inside it.
 - A procedure's parameters are declared in its body's block. They are in scope in its default values too, hiding the top level's names of theirs there as in the body, but can't be used (section 7.2).
 - A `for` loop declares its iterator (`it` or the name given) and `it_index` in its body's block (section 6.8).
+- The fields of a procedure's `using` parameters' structs are names in its body and its default values, after its blocks and before the top level, and can't be used in its default values either (section 3.21).
 - A name declared at the top level is visible everywhere, in every file of the program, unless hidden.
 
-A name is looked up from the innermost block outwards, and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
+A name is looked up from the innermost block outwards, then among the fields of the procedure's `using` parameters (section 3.21), and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -2734,10 +2786,10 @@ ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#fore
 Signature = "(" [ Params ] ")" [ "->" Results ] .
 Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
-Param     = identifier ":" [ ".." ] Type [ "=" Expression ] .
+Param     = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 ```
 
-A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, which may be followed by `=` and the parameter's default value, passed by a call that leaves the parameter out (section 7.2), and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. One parameter may be written `name: ..T`, which takes the rest of a call's arguments as a view, `[]T`, and the parameters after it, if any, have default values (section 7.2). A foreign procedure's list may instead end with C's bare `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
+A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, which may be followed by `=` and the parameter's default value, passed by a call that leaves the parameter out (section 7.2), and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. One parameter may be written `name: ..T`, which takes the rest of a call's arguments as a view, `[]T`, and the parameters after it, if any, have default values (section 7.2). A parameter written `using e: *Entity` lets the body name the fields of the struct it is, or points at, directly (section 3.21). A foreign procedure's list may instead end with C's bare `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
 
 ```rig
 divmod :: (a: int, b: int) -> int, int {
@@ -2755,7 +2807,7 @@ Procedures may be declared in any order, and may call themselves and each other.
 
 Each argument's value is converted to its parameter's type and passed **by value**: the procedure receives its own copy, and nothing it does changes the caller's value. A struct or an array is copied whole; a view or a string is copied as its count and pointer, so its elements are shared with the caller; a resizable array is copied as a struct is, its 40 bytes, and its elements are shared too (section 3.17).
 
-Parameters are **read-only**: a parameter cannot be assigned to (`can't assign to 'a': it's a parameter`), nor can the fields or elements of a struct or array parameter, nor a view or string parameter's `.count` and `.data`, nor a resizable array parameter's four members, and a parameter has no address. To change a value, copy it into a variable first. Memory reached through a parameter is not read-only: the elements of a view or a resizable array and what a pointer points at can be changed, which is how a procedure changes its caller's data. A procedure that grows its caller's resizable array takes a pointer to it, `*[..]T`, as the built-in procedures do (section 3.17).
+Parameters are **read-only**: a parameter cannot be assigned to (`can't assign to 'a': it's a parameter`), nor can the fields or elements of a struct or array parameter, nor a view or string parameter's `.count` and `.data`, nor a resizable array parameter's four members, and a parameter has no address. To change a value, copy it into a variable first. Memory reached through a parameter is not read-only: the elements of a view or a resizable array and what a pointer points at can be changed, which is how a procedure changes its caller's data. A procedure that grows its caller's resizable array takes a pointer to it, `*[..]T`, as the built-in procedures do (section 3.17). The same goes for the fields a `using` parameter's body names directly (section 3.21): a value parameter's are read-only (`can't assign to 'id': it's a field of the parameter 'e'`), and a pointer parameter's are what it points at.
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -3936,6 +3988,10 @@ The sections defining each construct give its messages. Some of those met most o
 | `'x' is ambiguous: 'a.x' or 'b.x'` | 3.21, 5.12 |
 | `a literal can't name 'position', reached through 'entity'; name 'entity', as in Player.{entity = ...}` | 3.21, 5.17 |
 | `'*Twice' converts to '*Entity' two ways, through 'a' and through 'b'; take the address of the one meant` | 3.13, 3.14, 3.21 |
+| `can't assign to 'id': it's a field of the parameter 'e'` | 3.21, 7.2 |
+| `can't take the address of 'id': it's a field of the parameter 'e'` | 3.21, 7.2 |
+| `a default value can't use 'id', a field of the parameter 'e'` | 3.21, 7.2 |
+| `#run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling` | 3.21, 7.8 |
 
 ### 9.4 Limits
 
@@ -4330,7 +4386,7 @@ ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#
 Signature     = "(" [ Params ] ")" [ "->" Results ] .
 Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
-Param         = identifier ":" [ ".." ] Type [ "=" Expression ] .
+Param         = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 
 StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
 FieldDecl     = [ "using" ] identifier ":" Type ";"
@@ -4356,7 +4412,7 @@ ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, by `using`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
@@ -4438,7 +4494,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `enum` | enum type | 3.18 |
 | `enum_flags` | enum type of flags | 3.18 |
 | `union` | union type; an anonymous member, `union { ... };`; with `#tagged`, tagged union type | 3.19, 3.20, 4.5 |
-| `using` | a field whose struct's fields are reached as its own struct's | 3.21, 2.6 |
+| `using` | a field whose struct's fields are reached as its own struct's, or a parameter whose struct's fields its body names directly | 3.21, 2.6, 7.2 |
 | `false`, `true` | bool values | 2.11, 3.4 |
 | `for` | loop over a range or a sequence | 6.7, 6.8 |
 | `if` | conditional; with `x == {`, a switch | 6.5, 6.14 |

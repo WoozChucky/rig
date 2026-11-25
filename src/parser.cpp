@@ -732,18 +732,20 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
 }
 
 // Whether a procedure's parameter list starts `ahead` tokens on: '(' ')',
-// '(' IDENT ':', '(' IDENT ':=' or '(' '..'. Any other '(' after '::'
-// begins a constant's value in parentheses (N :: (1 + 2);). A spread starts
-// with '..' too, but a constant's value can't be one (only a call's
-// argument can), so (..) is a signature, if a wrong one: parse_procedure
-// says what's wrong with it, rather than refusing a spread. No expression
-// has a ':=' either, so (n := 0) is a signature too, whose parameter
-// parse_param says is missing its type.
+// '(' IDENT ':', '(' IDENT ':=', '(' '..' or '(' 'using'. Any other '('
+// after '::' begins a constant's value in parentheses (N :: (1 + 2);). A
+// spread starts with '..' too, but a constant's value can't be one (only a
+// call's argument can), so (..) is a signature, if a wrong one:
+// parse_procedure says what's wrong with it, rather than refusing a
+// spread. No expression has a ':=' either, so (n := 0) is a signature too,
+// whose parameter parse_param says is missing its type; nor does one start
+// with 'using', which only a field or a parameter takes (spec 3.21), so
+// (using e: *Entity) is a signature.
 static bool procedure_follows(Parser *p, s64 ahead) {
     Token_Kind next = peek(p, ahead + 1)->kind;
     Token_Kind after = peek(p, ahead + 2)->kind;
     return peek(p, ahead)->kind == TOKEN_LPAREN &&
-           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT ||
+           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT || next == TOKEN_USING ||
             (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)));
 }
 
@@ -1801,7 +1803,11 @@ static Ast_Type *parse_whole_type(Parser *p) {
     return type;
 }
 
-// param = IDENT ':' ['..'] type ['=' expression]
+// param = ['using'] IDENT ':' ['..'] type ['=' expression]
+//
+// 'using' before the name marks it (Ast_Param.is_using): the body names
+// the fields of the struct it is, or points at, directly (spec 3.21),
+// which the checker says it may be.
 //
 // A '..' before the type makes the parameter a '..T' one (spec 7.2), which
 // takes the call's other arguments: its type as written is T, and the
@@ -1819,6 +1825,8 @@ static Ast_Type *parse_whole_type(Parser *p) {
 // left to its value, is "a parameter needs its type, as in n: int = 0", at
 // the ':=', for now.
 static Ast_Param *parse_param(Parser *p) {
+    bool is_using = peek(p)->kind == TOKEN_USING;
+    if (is_using) advance(p);
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     if (peek(p)->kind == TOKEN_COLON_EQUAL) {
@@ -1828,6 +1836,7 @@ static Ast_Param *parse_param(Parser *p) {
     if (!expect(p, TOKEN_COLON)) return nullptr;
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
+    param->is_using = is_using;
     if (peek(p)->kind == TOKEN_DOT_DOT) {
         param->is_variadic = true;
         param->dots = advance(p)->pos;
@@ -1896,7 +1905,8 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // Each element of the parameter list is a parameter or, last, C's bare '..'
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign
 // libc;). The loop looks at an element's first token to tell them apart: an
-// identifier begins a parameter, whatever its type turns out to be (a
+// identifier, or a using parameter's 'using' (spec 3.21), begins a
+// parameter, whatever its type turns out to be (a
 // procedure's type, when #foreign parameters get them, is still IDENT ':'
 // and a type), and '..' is the end. A '..T' parameter (`rest: ..int`, spec
 // 7.2) takes every argument after the fixed ones, the parameters before

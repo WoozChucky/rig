@@ -1946,8 +1946,10 @@ static s32 lower_index_address(Lowering *l, Ast_Index *ix) {
 // The address of a place in memory (the checker's check_addressable): what
 // *e gives, and where an assignment to e stores. A variable's is its slot,
 // or its global's addr; p.*'s is p's value, once checked not to be null, at
-// the '.'; a field's, its struct's plus the field's offset; context's, the
-// address the procedure's slot holds (load_context). A place's
+// the '.'; a field's, its struct's plus the field's offset; a using
+// parameter's field's, that of the chain of members it means
+// (Ast_Name.through); context's, the address the procedure's slot holds
+// (load_context). A place's
 // operands, and its checks, are worked out here, before any value an
 // assignment stores (spec 6.5's order).
 static s32 lower_address(Lowering *l, Ast *e) {
@@ -1961,7 +1963,9 @@ static s32 lower_address(Lowering *l, Ast *e) {
     if (e->kind == AST_INDEX) return lower_index_address(l, (Ast_Index *)e);
     if (e->kind == AST_CONTEXT) return load_context(l);  // the current context's own address
     RIG_ASSERT(e->kind == AST_NAME);  // a variable: the checker allowed nothing else
-    return address_of(l, ((Ast_Name *)e)->decl);
+    Ast_Name *name = (Ast_Name *)e;
+    if (name->through) return lower_address(l, name->through);  // a using parameter's field (spec 3.21)
+    return address_of(l, name->decl);
 }
 
 // A value of a struct literal that holds the checker's groups
@@ -2108,8 +2112,12 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         // a constant) is the address of its value: a string's, a struct's,
         // an array's or a baked view's read-only global, as any aggregate's
         // value is its bytes' address, or, a pointer, the string literal's
-        // bytes it points at.
-        Ast *decl = ((Ast_Name *)e)->decl;
+        // bytes it points at. A using parameter's field (spec 3.21) is the
+        // chain of members the checker made for it (Ast_Name.through),
+        // e.position, read as one written so is.
+        Ast_Name *name = (Ast_Name *)e;
+        if (name->through) return lower_expr(l, name->through);
+        Ast *decl = name->decl;
         if (decl->kind == AST_PARAM) {
             s32 value = local_of(l, decl)->value;
             return type_is_aggregate(decl->type) ? value : emit_get(l, decl->type, value);

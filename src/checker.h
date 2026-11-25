@@ -1199,11 +1199,33 @@
 //   (check_base_conversion). cast(*B) is the same conversion; any other
 //   pointer cast keeps the address. Nothing else converts through a using
 //   field: not by value, not back, not inside another type.
+// - `move :: (using e: *Entity, dx: float)` lets the body name e's
+//   struct's fields directly: position is e.position. The parameter's type
+//   is checked as a using field's (checker.cpp's check_signature); a
+//   refused one is an ordinary parameter. A name is looked up in the
+//   scopes, then among the fields the using parameters reach
+//   (Checker.using_params, check_find_using: the same walk, from every
+//   using parameter's struct at depth 0, in parameter order), then at the
+//   top level (check_lookup): locals, a loop's or a case's it and the
+//   parameters hide such a field, which hides globals, constants,
+//   procedures and enums; types are never looked up there. Two at one
+//   depth are "'x' is ambiguous: 'a.x' or 'b.x'". A value parameter's
+//   fields are read-only ("can't assign to 'id': it's a field of the
+//   parameter 'e'", and the address's), through a pointer they're places;
+//   in a default value they're refused ("a default value can't use 'id', a
+//   field of the parameter 'e'"), and in a #run in the body ("#run can't
+//   use 'id': it's a field of the parameter 'e', which doesn't exist while
+//   compiling").
 // - What lowering may rely on: no Ast_Member reaches through a using
 //   field. The checker built the chain, as for anonymous members, a member
 //   for each field on the way, named as the field: p.position is
 //   p.entity.position, and s.x is s.transform.x, a member whose operand is
 //   a pointer, followed and null-checked at the name written as any is.
+//   A using parameter's field is an Ast_Name whose through is that chain,
+//   from an Ast_Name naming the parameter (check_expr.cpp's
+//   check_using_name), its decl the parameter: lowering reads and
+//   addresses the chain in the name's place (lower_expr, lower_address).
+//   No variable is made for it, nor a debug variable.
 //   A value whose type is a pointer meeting another pointer type, where it
 //   converts (lower_value, lower_multi_assign) or in a cast, is moved to
 //   the using field type_find_base finds when there's one

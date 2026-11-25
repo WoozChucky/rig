@@ -27,7 +27,10 @@ struct Checker {
                                  // worked out where it's needed setting the outer ones aside
                                  // (checker.cpp's check_body, leave_scopes)
     Ast_Proc *proc;              // the procedure whose body is being checked
-    Array<Ast *> loops;          // the loops around the statement being checked, innermost
+    Array<Ast_Param *> using_params;  // the using parameters (spec 3.21) of the procedure whose body or
+                                      // default values are being checked, in order, each of a type using
+                                      // takes; set aside with the scopes (checker.cpp's leave_scopes)
+    Array<Ast *> loops;         // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
     Ast_Defer *deferring;        // the innermost defer whose statement is being checked (spec 6.12);
                                  // null outside deferred code. A body checked on demand sets it
@@ -86,11 +89,16 @@ struct Checker {
 // checker.cpp
 
 // The declaration `name` means where the checker is: the innermost block's
-// that declares it, else the top level's (a procedure, a global or a
-// constant); null when there's none. A global or constant found at the top
-// level is checked first if it hasn't been yet (resolve_global), so its
-// type and value are known, whatever the order of the declarations.
-Ast *check_lookup(Checker *c, String name);
+// that declares it, else a field of a using parameter's struct
+// (Checker.using_params, spec 3.21): the parameter is returned, and
+// *through_using set, for the caller to work out the field
+// (check_expr.cpp's check_using_name); else the top level's (a procedure,
+// a global or a constant); null when there's none. A global or constant
+// found at the top level is checked first if it hasn't been yet
+// (resolve_global), so its type and value are known, whatever the order of
+// the declarations. through_using may be null, for a caller that only
+// asks whether the name is a type's, an enum's or a procedure's.
+Ast *check_lookup(Checker *c, String name, bool *through_using);
 
 // The type a written type means, or null after reporting an unknown name,
 // or void anywhere but behind a pointer ("'void' is only a pointer's
@@ -314,6 +322,16 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e);
 // each struct it enters, and makes each pointer using field's type it
 // follows, only once the walk reaches that depth.
 s32 check_find_member(Checker *c, Type *t, String name, Array<s32> *path, Array<s32> *other);
+
+// Where `name` is among the fields the using parameters reach
+// (Checker.using_params, spec 3.21): check_find_member's walk, started at
+// every using parameter's struct (a pointer parameter's pointee) together,
+// at depth 0, in parameter order. Returns what check_find_member does;
+// *path gets the first path's field indices from its parameter's struct
+// down, and *root that parameter's index in using_params, *other and
+// *other_root the second's. A parameter whose struct's layout failed is
+// passed over.
+s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array<s32> *other, s32 *other_root);
 
 // How a message writes the code from `from` up to `to`, as the program
 // wrote it, inner white space and all (`shapes[ 0 ]` stays so): without

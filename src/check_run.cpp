@@ -131,7 +131,9 @@ static const char *local_kind(Ast *decl) {
 // The operand of an expression #run runs while compiling, before any call
 // of the procedure it's in: that procedure's locals, parameters and loops'
 // iterators don't exist yet. Each name of one in it is "#run can't use 'x':
-// it's a local, which doesn't exist while compiling", at the name. Its local
+// it's a local, which doesn't exist while compiling", at the name; a using
+// parameter's field (spec 3.21) "#run can't use 'id': it's a field of the
+// parameter 'e', which doesn't exist while compiling". Its local
 // constants are known while compiling, and are fine. A #run inside it had
 // its own operand checked so. In a default value (Checker.default_of), a
 // parameter was refused already, by check_name or check_addressable, and
@@ -153,8 +155,16 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
             none = false;
             continue;
         }
-        diag_error(c->diag, name->pos, "#run can't use '" STR_FMT "': it's %s, which doesn't exist while compiling",
-                   STR_ARG(name->name), what);
+        if (name->through) {
+            // A using parameter's field (spec 3.21): part of the parameter.
+            diag_error(c->diag, name->pos,
+                       "#run can't use '" STR_FMT "': it's a field of the parameter '" STR_FMT
+                       "', which doesn't exist while compiling",
+                       STR_ARG(name->name), STR_ARG(((Ast_Param *)name->decl)->name));
+        } else {
+            diag_error(c->diag, name->pos, "#run can't use '" STR_FMT "': it's %s, which doesn't exist while compiling",
+                       STR_ARG(name->name), what);
+        }
         none = false;
     }
     array_free(&pending);
@@ -198,10 +208,12 @@ static bool walk_proc(Reach *r, Ast_Proc *proc) {
 // through two pointers) is laid out, as is the struct a pointer it moves
 // points at (p + 1): lowering needs their sizes. A name reaches its
 // declaration: a procedure, a global or a constant (a local variable or a
-// parameter is in the body being walked). A call of a procedure reaches the
-// procedure, but never main, where the program starts: "main is where the
-// program starts; #run can't call it", at the #run. A #run is walked
-// through its value: one with none failed, or reached errors, said already.
+// parameter is in the body being walked); a using parameter's field, the
+// chain of members it means (Ast_Name.through). A call of a procedure
+// reaches the procedure, but never main, where the program starts: "main
+// is where the program starts; #run can't call it", at the #run. A #run is
+// walked through its value: one with none failed, or reached errors, said
+// already.
 // type_info(T) needs T's description, and a value converted to Any its
 // type's (Ast.to_any): lowering the #run's code writes those descriptions
 // (lower.cpp's describe_type), from every type they reach, so what they
@@ -221,9 +233,15 @@ static bool walk_expression(Reach *r, Ast *e) {
     }
     switch (e->kind) {
     case AST_NAME: {
-        Ast *decl = ((Ast_Name *)e)->decl;
-        if (!decl) return false;
-        if (!local_kind(decl)) reach_decl(r, decl);
+        Ast_Name *name = (Ast_Name *)e;
+        if (!name->decl) return false;
+        // A using parameter's field (spec 3.21) is the chain it means, its
+        // types reached as a written e.position's are.
+        if (name->through) {
+            array_add(&r->nodes, name->through);
+            return true;
+        }
+        if (!local_kind(name->decl)) reach_decl(r, name->decl);
         return true;
     }
     case AST_CALL: {

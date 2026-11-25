@@ -11985,3 +11985,135 @@ TEST(a_conversion_lays_out_a_struct_with_using_fields_first) {
     }
     arena_free(&a);
 }
+
+// The local `name` of the procedure `proc`, which must have it.
+static Ast *local_of_proc(Checked *c, const char *proc, const char *name) {
+    Ast *found = find_local(((Ast_Proc *)global_named(c, proc))->body, name);
+    RIG_ASSERT(found);
+    return found;
+}
+
+// How messages name the type of procedure `proc`'s local `name`; "?" when
+// the checker found none.
+static String type_in(Arena *a, Checked *c, const char *proc, const char *name) {
+    Type *t = local_of_proc(c, proc, name)->type;
+    return t ? type_name(a, t) : str("?");
+}
+
+TEST(using_parameters_name_their_fields) {
+    // In move's body, position is e.position: the name keeps the chain it
+    // means (Ast_Name.through), a member named as the field whose operand
+    // names the parameter; decl is the parameter. A field one using field
+    // further in is reached too.
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "move :: (using e: *Entity, dx: float) { position.x += dx; id += 1; }\n"
+                          "nested :: (using p: *Player) { health -= 1; position.y = 9; }\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    Ast_Proc *move = (Ast_Proc *)global_named(&c, "move");
+    Ast_Assign *first = (Ast_Assign *)move->body->statements[0];
+    Ast_Member *x = (Ast_Member *)first->targets[0];
+    CHECK(is_member(&a, x, "x", "float32"));
+    if (x->kind == AST_MEMBER && is_name(x->operand, "position")) {
+        Ast_Name *position = (Ast_Name *)x->operand;
+        CHECK(position->decl == move->params[0]);
+        CHECK_STR(type_name(&a, position->type), "Vec2");
+        Ast *through = position->through;
+        CHECK(through && is_member(&a, through, "position", "Vec2"));
+        if (through && through->kind == AST_MEMBER) {
+            Ast *e = ((Ast_Member *)through)->operand;
+            CHECK(is_name(e, "e"));
+            if (e->kind == AST_NAME) {
+                CHECK(((Ast_Name *)e)->decl == move->params[0]);
+                CHECK_STR(type_name(&a, e->type), "*Entity");
+            }
+        }
+    }
+    Ast_Assign *second = (Ast_Assign *)move->body->statements[1];
+    CHECK(is_name(second->targets[0], "id"));
+    if (second->targets[0]->kind == AST_NAME) {
+        Ast_Name *id = (Ast_Name *)second->targets[0];
+        CHECK(id->decl == move->params[0]);
+        CHECK_STR(type_name(&a, id->type), "int");
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(using_parameter_names_come_between_locals_and_globals) {
+    // Locals, the other parameters, a for's it and a tagged switch's case's
+    // it hide a using parameter's field; the field hides a global, a
+    // procedure and an enum. Two at the first depth, across parameters, are
+    // ambiguous. (A view of items: a resizable array needs Preload.)
+    Arena a = arena_make();
+    Checked c = check_src(&a, USING_PLAYER
+                          "id := \"global\";\n"
+                          "Mode :: enum { A; }\n"
+                          "Circle :: struct { r: float; }\n"
+                          "Shape :: union #tagged { circle: Circle; }\n"
+                          "Bag :: struct { items: []int; Mode: int; it: string; }\n"
+                          "f :: (using e: *Entity, health: int) {\n"
+                          "    a := id;\n"
+                          "    {\n"
+                          "        id := 1.5;\n"
+                          "        b := id;\n"
+                          "    }\n"
+                          "    hp := health;\n"
+                          "}\n"
+                          "g :: (using e: *Entity, id: string) { c := id; }\n"
+                          "h :: (using b: *Bag, s: Shape) {\n"
+                          "    m := Mode;\n"
+                          "    for 0..2 { d := it; }\n"
+                          "    n := it;\n"
+                          "    if s == { case .circle; k := it; }\n"
+                          "}\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_in(&a, &c, "f", "a"), "int");
+    CHECK_STR(type_in(&a, &c, "f", "b"), "float32");
+    CHECK_STR(type_in(&a, &c, "f", "hp"), "int");
+    CHECK_STR(type_in(&a, &c, "g", "c"), "string");
+    CHECK_STR(type_in(&a, &c, "h", "m"), "int");
+    CHECK_STR(type_in(&a, &c, "h", "d"), "int");
+    CHECK_STR(type_in(&a, &c, "h", "n"), "string");
+    CHECK_STR(type_in(&a, &c, "h", "k"), "Circle");
+    token_list_free(c.list);
+    // The field hides the procedure: a Vec2 can't be called. Two fields
+    // named x at depth 0, one in each parameter's struct.
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "position :: () { }\n"
+                           "A :: struct { x: int; }\n"
+                           "A2 :: struct { x: int; }\n"
+                           "k :: (using e: *Entity) { position(); }\n"
+                           "j :: (using a: *A, using b: *A2) -> int { return x; }\n"
+                           "main :: () { }\n"),
+              "7:27: 'position' isn't a procedure, so it can't be called\n"
+              "8:50: 'x' is ambiguous: 'a.x' or 'b.x'\n");
+    arena_free(&a);
+}
+
+TEST(value_using_parameters_are_read_only) {
+    // A value parameter's fields are read-only, reached through using too;
+    // through a pointer, the parameter's or a field's, they're places. In a
+    // default value and in a #run, a field is refused as its parameter is.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, USING_PLAYER
+                           "Transform :: struct { x: float; y: float; }\n"
+                           "Sprite :: struct { using transform: *Transform; frame: int; }\n"
+                           "twice :: (n: int) -> int { return n * 2; }\n"
+                           "f :: (using e: Entity) { id = 1; }\n"
+                           "g :: (using e: Entity) { q := *id; }\n"
+                           "h :: (using s: Sprite) { x = 1; }\n"
+                           "k :: (using e: *Entity) { id = 1; r := *id; }\n"
+                           "d :: (using e: *Entity, n: int = id) { }\n"
+                           "r :: (using e: *Entity) { v := #run twice(id); }\n"
+                           "u :: (using n: int) { }\n"
+                           "main :: () { }\n"),
+              "7:26: can't assign to 'id': it's a field of the parameter 'e'\n"
+              "8:32: can't take the address of 'id': it's a field of the parameter 'e'\n"
+              "11:34: a default value can't use 'id', a field of the parameter 'e'\n"
+              "12:43: #run can't use 'id': it's a field of the parameter 'e', which doesn't exist while compiling\n"
+              "13:16: 'using' needs a struct or a pointer to one, not 'int'\n");
+    arena_free(&a);
+}

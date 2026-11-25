@@ -1,0 +1,93 @@
+// using parameters (issue #225, spec 3.21), compiled and interpreted: a
+// body names the fields of its using parameter's struct directly, read and
+// written through a pointer parameter, read from a value one, a field one
+// using field further in too. A local and another parameter hide such a
+// name, and it hides a global; a field that holds a procedure is called
+// through its value; a value parameter's pointer field still writes where
+// it points; print takes a field by its place. A *Player goes into a
+// using *Entity parameter, moved to its entity field.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { name: string; using entity: Entity; health: int; }
+Bag :: struct { items: [..]int; }
+Handler :: struct { on: (int) -> int; }
+Transform :: struct { x: float; y: float; }
+Sprite :: struct { using transform: *Transform; frame: int; }
+
+health := 1000;
+
+move :: (using e: *Entity, dx: float) {
+    position.x += dx;
+    id += 1;
+}
+
+show :: (using e: Entity) -> float {
+    return position.x + position.y;
+}
+
+nested :: (using p: *Player) {
+    health -= 1;
+    position.y = 9;
+}
+
+hidden :: (using e: *Entity, id: int) -> int {
+    return id;
+}
+
+local :: (using e: *Entity) -> int {
+    id := 100;
+    return id;
+}
+
+sum :: (using b: *Bag) -> int {
+    for * items { it.* += 1; }
+    t := 0;
+    for items { t += it; }
+    return t;
+}
+
+double :: (n: int) -> int { return n * 2; }
+
+fire :: (using h: Handler, n: int) -> int {
+    return on(n);
+}
+
+nudge :: (using s: Sprite) {
+    x += 1;
+}
+
+describe :: (using e: *Entity) {
+    print("{} {}\n", id, position);
+}
+
+main :: () {
+    p: Player;
+    p.health = 3;
+    move(*p, 1.5);
+    print("{} {}\n", p.position.x, p.id);
+    print("{}\n", show(p.entity));
+
+    // A field one using field further in, and the global health hidden.
+    nested(*p);
+    print("{} {} {}\n", p.health, p.position.y, health);
+
+    // The parameter id and the local id hide the field.
+    print("{} {}\n", hidden(*p, 42), local(*p));
+
+    b: Bag;
+    array_add(*b.items, 1);
+    array_add(*b.items, 2);
+    print("{}\n", sum(*b));
+
+    print("{}\n", fire(.{double}, 21));
+
+    t := Transform.{1, 2};
+    s := Sprite.{*t, 0};
+    nudge(s);
+    print("{}\n", t.x);
+
+    // A *Player where a *Entity is taken: the parameter is p.entity.
+    describe(*p);
+}
