@@ -3,18 +3,19 @@
 // through an element, each message showing the switch to write, and a
 // name the union doesn't have, said as that; Shape.empty, which is no
 // place, assigned to, its address taken, and switched on with its it
-// written; a literal
-// in order, with no member, giving two members, or one twice, or a value
-// to a void member, or a member it doesn't have; a member it doesn't have,
-// or one that isn't void, written as a value; == and != with anything but
-// a member's name, and <; a tag test naming a member it doesn't have; a
-// void member's name meeting no type; two of them in an operator meeting
-// the union; and a member read with spaces around its '.', in parentheses,
-// or over two lines, whose switch shows the operand without the spaces, as
-// written, or as s.
+// written; a literal in order, with no member, giving two members, or one
+// twice, or a value to a void member, or a member it doesn't have; a
+// member it doesn't have, or one that isn't void, written as a value; ==
+// and != with anything but a member's name, and <; a tag test naming a
+// member it doesn't have, or another tagged union's member, on either
+// side; a void member's name meeting no type; two of them in an operator
+// meeting the union; and a member read with spaces around its '.', in
+// parentheses, or over two lines, whose switch shows the operand without
+// the spaces, as written, or as s.
 Circle :: struct { r: float; }
 Rect :: struct { w: float; h: float; }
 Shape :: union #tagged { circle: Circle; rect: Rect; empty: void; }
+Other :: union #tagged { circle: Circle; none: void; }
 
 main :: () {
     s: Shape;
@@ -42,6 +43,8 @@ main :: () {
     k := s != 1;
     l := s < t;
     m := s == .nope;
+    m2 := s == Other.none;
+    m3 := Other.none != s;
     n := .empty;
     o : Shape = .empty | .empty;
     x2 := s . circle;

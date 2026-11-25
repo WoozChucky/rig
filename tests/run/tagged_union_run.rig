@@ -4,6 +4,9 @@
 // member is the program's own; a member that holds nothing gives no value.
 // One in a struct's field or an array's element is baked the same way.
 // A switch inside a #run's procedure writes through its it as at run time.
+// A #run's procedure names members with the type too, as in Shape.empty, in
+// a case and in a tag test; and a switch there can be the first to need a
+// pointer member, whose type is made late, so its it has that type.
 // A top-level #run sees the layout too (its output is the .build.out).
 #import "Basic";
 
@@ -31,6 +34,31 @@ doubled :: () -> Shape {
     return s;
 }
 
+// Shape's members named with the type: 2 from the case, 10 and 20 from
+// the tag tests.
+named :: () -> int {
+    s := Shape.empty;
+    n := 0;
+    if s == { case Shape.rect; n = 1; case Shape.empty; n = 2; case; }
+    if s == Shape.empty { n += 10; }
+    if Shape.rect != s { n += 20; }
+    return n;
+}
+
+Chain :: union #tagged { next: *Chain; end: void; }
+
+// The switch is the first to need Chain.next's type: a constant's #run is
+// checked before the late members are made.
+chain_end :: (l: Chain) -> int {
+    if l == {
+        case .next; if it.* == { case .end; return 7; case; return 1; }
+        case .end; return 2;
+    }
+    return 0;
+}
+
+T :: #run named();
+C :: #run chain_end(Chain.end);
 B :: #run make();
 L :: #run label();
 N :: #run nothing();
@@ -59,4 +87,5 @@ main :: () {
     show(X.b);
     print("{}\n", X.k);
     for A { show(it); }
+    print("{} {}\n", T, C);
 }
