@@ -39,7 +39,7 @@
 
 ### Task 1: One walk's bookkeeping for `type_find_base`, `type_find_member` and `find_through_using`
 
-**Files:** Modify `src/types.h` (near `type_find_member`, :303), `src/types.cpp:128-283`, `src/check_expr.cpp:3103-3352`.
+**Files:** Modify `src/types.h` (near `type_find_member`, :303), `src/types.cpp:128-284`, `src/check_expr.cpp:3103-3352`.
 
 **Interfaces (produces, in `types.h`):**
 ```cpp
@@ -129,7 +129,7 @@ static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *thro
             "5:42: 'x' is ambiguous: 'a.x' or 'b.x'\n");
   ```
   In `using_walks_lay_out_only_the_structs_they_enter`, `reaching` gains `{"(using b: *B)", "h(); return 2;"}` and `{"(using b: *B)", "return g.k;"}` (loop bound 4 to 6), each expecting only `1:1: 'A' is defined in terms of itself\n`; extend the comment above to say a callee and a member's operand too. Run on the unchanged code: these pin today's behaviour, so they PASS. If today's output differs, stop and report it: it's a question for the maintainer, not something to change here.
-- [ ] **Step 2: `check_lookup` fills `Using_Name`.** It sets `through->found = 0`, runs `check_find_using` into `through` when given (into locals freed at once when null), and returns `c->using_params[through->root]` whenever found != 0, as today. When found is 0 nothing is left allocated. Rewrite its comments in `check.h` and `checker.cpp` for the new parameter.
+- [ ] **Step 2: `check_lookup` fills `Using_Name`.** It clears `*through` (found and both roots 0, both arrays empty: the walk sets no root on -1, and today's `root` starts at 0, so -1 returns parameter 0), runs `check_find_using` into `through` when given (into locals freed at once when null), and returns `c->using_params[through->root]` whenever found != 0, as today. When found is 0 nothing is left allocated. Rewrite its comments in `check.h` and `checker.cpp` for the new parameter.
 - [ ] **Step 3: Callers pass it on.**
   - `check_name` = `check_lookup` + `check_named`; `check_named` calls `check_using_name(c, name, through)` when `through->found != 0`.
   - `check_addressable`: `Using_Name` in place of the bool, passed to `check_using_name`.
@@ -139,7 +139,7 @@ static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *thro
   - The callers passing null (`tagged_member_named`, `names_a_member`, `names_a_void_member`, `report_member_on_pointer`) stay: they only ask what a name declares, and a miss lays nothing out.
 - [ ] **Step 4: Build and run both suites on Windows.** Expected: all pass, including Step 1's, `using_parameter_names_come_between_locals_and_globals`, `value_using_parameters_are_read_only` (default-value and read-only refusals), `using_parameters_name_their_fields`, and run tests `using_parameters`, `using_run` (a #run's refusal reads `name->through`).
 - [ ] **Step 5: Commit and push; run Linux.** `git commit -m "Walk a using parameter's name once per use"`
-- [ ] **Step 6: Move `Checker.using_params`' comment above the field**, in the style of `Ast_File.operating_system` (`ast.h:826-832`) and `Load_Options.stdin_for` (`load.h`): a `//` paragraph at the field's indent, then `Array<Ast_Param *> using_params;` with no trailing comment. Text unchanged. Build, `unit-tests`, commit: `git commit -m "Put using_params' comment above the field"`; push; run Linux.
+- [ ] **Step 6: Move `Checker.using_params`' comment above the field**, in the style of `Ast_File.operating_system` (`ast.h:826-832`) and `Load_Options.stdin_for` (`load.h`): a `//` paragraph at the field's indent, then `Array<Ast_Param *> using_params;` with no trailing comment. Text unchanged. Build, `unit-tests` and `run-tests`, commit: `git commit -m "Put using_params' comment above the field"`; push; run Linux.
 
 **Done when:** all tests pass on Windows and Linux, debug and release (unit tests, end-to-end tests, debugger tests under cdb and gdb); no expected file changed; the independent review's findings are fixed.
 
