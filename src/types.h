@@ -299,8 +299,8 @@ Type *type_c_promoted(Type *t);
 // searches, or will, and how it was reached, so each place found reads
 // back as a path of field indices from the struct the walk started at.
 struct Field_Step {
-    Type *type;  // the struct; the name walk's is null until it takes the step at its depth, and
-                 // for one it doesn't search
+    Type *type;  // the struct; in the checker's walk, null for one reached through a using
+                 // field until the walk takes it at its depth, and for one it doesn't search
     s64 outer;   // the step it was reached from (holding it or pointing at it), an index into
                  // list; -1 for a root
     s32 field;   // its field there
