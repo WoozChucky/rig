@@ -13055,6 +13055,11 @@ TEST(inference_mistakes) {
                                     k.body);
         CHECK_STR(check_source(&a, with_generic_max(&a, string_cstr(&a, rest))), k.message);
     }
+    // Inference doesn't look into a count, so the untyped 5 doesn't meet
+    // [size_of(T)]int as a pattern.
+    CHECK_STR(check_source(&a, "h :: (b: $T, a: [size_of(T)]int) -> int { return 1; }\n"
+                               "main :: () { x := h(null, 5); }\n"),
+              "2:21: can't work out 'T' for 'h': argument 1 has no type of its own\n");
     arena_free(&a);
 }
 
@@ -13213,6 +13218,12 @@ TEST(generic_refusals) {
               "1:17: 'void' is only a pointer's target, as in *void\n"
               "1:28: 'void' is only a pointer's target, as in *void\n"
               "1:37: 'void' is only a pointer's target, as in *void\n");
+    // A pointer's target is only its direct one: *[]void's void isn't.
+    CHECK_STR(check_source(&a, "e :: (a: $T, b: *[]void, c: **void) { }\nmain :: () { }\n"),
+              "1:20: 'void' is only a pointer's target, as in *void\n");
+    // An array's count is each instance's to check: one the generic never
+    // instantiates says nothing of the type it names.
+    CHECK_STR(check_source(&a, "w :: (a: [size_of(Nope)]$T) { }\nmain :: () { }\n"), "");
     CHECK_STR(check_source(&a,
                            "p :: (a: $T, ..) { }\n"
                            "q :: (a: $T, ..) { }\n"
@@ -13271,6 +13282,8 @@ TEST(generic_declaration_mistakes) {
         {"s :: (a: [size_of(T)]int, b: $T) -> int { return 1; }", "s(1, 2)",
          "1:19: 'T' is used before '$T' declares it\n"},
         {"u :: (a: [size_of(T)]$T) -> int { return 1; }", "u(1)", "1:19: 'T' is used before '$T' declares it\n"},
+        {"s2 :: (a: [size_of(T)]U, b: $T, c: $U) -> int { return 1; }", "s2(1, 2, 3)",
+         "1:20: 'T' is used before '$T' declares it\n1:23: 'U' is used before '$U' declares it\n"},
         {"h :: (T: int, b: $T) -> int { return 1; }", "h(1, 2)", "1:18: 'T' is already declared at test.rig:1:7\n"},
         {"q :: (a: $T, T: int) -> int { return 1; }", "q(1, 2)", "1:14: 'T' is already declared at test.rig:1:10\n"},
         {"r :: (a: $T, a: int) -> int { return 1; }", "r(1, 2)", "1:14: 'a' is already declared at test.rig:1:7\n"},
