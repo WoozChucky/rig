@@ -105,6 +105,7 @@ enum Operator_Group : u8 {
     OPERATORS_COMMA,                // ,
     OPERATORS_COLON,                // : between a name and its type
     OPERATORS_ACCESSOR,             // . before a field
+    OPERATORS_TYPE_PARAMETER,       // $ before a type parameter's name, $T (spec 7.11)
     OPERATOR_GROUP_COUNT
 };
 
@@ -127,6 +128,7 @@ static const char *const OPERATOR_GROUP_SCOPES[OPERATOR_GROUP_COUNT] = {
     "punctuation.separator.comma.rig",
     "punctuation.separator.colon.rig",
     "punctuation.accessor.rig",
+    "storage.modifier.type-parameter.rig",
 };
 
 struct Operator_Scope {
@@ -184,6 +186,7 @@ static const Operator_Scope OPERATOR_SCOPES[] = {
     {",", OPERATORS_COMMA},
     {":", OPERATORS_COLON},
     {".", OPERATORS_ACCESSOR},
+    {"$", OPERATORS_TYPE_PARAMETER},
 };
 
 // ---------------------------------------------------------------------------

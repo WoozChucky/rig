@@ -15,6 +15,7 @@ TEST(token_kind_names_for_messages) {
     CHECK_STR(token_kind_name(TOKEN_COLON_COLON), "'::'");
     CHECK_STR(token_kind_name(TOKEN_TRIPLE_DASH), "'---'");
     CHECK_STR(token_kind_name(TOKEN_SHIFT_RIGHT_EQUAL), "'>>='");
+    CHECK_STR(token_kind_name(TOKEN_DOLLAR), "'$'");
 }
 
 TEST(every_token_kind_has_a_name) {

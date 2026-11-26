@@ -206,9 +206,10 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // top-level #if, so it can't decide another top-level #if"
 // (check_in_a_branch). A broken entry's name may have been anything, so
 // nothing is said about it. A struct found to contain itself has no type:
-// its uses say nothing more. Type, the type of types (spec 5.20), is
-// written nowhere: "'Type' only names types while compiling; a *Type_Info
-// describes one at run time".
+// its uses say nothing more. In an instance of a generic procedure, a type
+// parameter's name is the type it's bound to (spec 7.11, Ast_Alias). Type,
+// the type of types (spec 5.20), is written nowhere: "'Type' only names
+// types while compiling; a *Type_Info describes one at run time".
 //
 // behind_pointer: the type is what a pointer points at, or a view's or a
 // resizable array's elements, which lie elsewhere: a struct named right
@@ -273,6 +274,14 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         return resolve_struct(c, s);
     } else if (decl->kind == AST_ENUM) {
         return ((Ast_Enum *)decl)->declared;
+    } else if (decl->kind == AST_ALIAS) {
+        // An instance's type parameter (spec 7.11): the type it's bound to,
+        // a struct's laid out where the struct's name would be.
+        Type *t = ((Ast_Alias *)decl)->aliased;
+        if (!behind_pointer && t->kind == TYPE_STRUCT && t->decl && t->decl->resolve != RESOLVE_DONE) {
+            return resolve_struct(c, t->decl);
+        }
+        return t;
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
@@ -321,6 +330,7 @@ struct Outer_Scopes {
     bool needs_context;               // Checker.needs_context
     bool in_code;                     // Checker.in_code
     bool contextless;                 // Checker.contextless
+    Ast_Instance *instance;           // Checker.instance
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -343,10 +353,16 @@ struct Outer_Scopes {
 // a constant, a type or a signature worked out inside a body is none of the
 // body's code. The first three run none, so they have no context; a
 // signature's default values run in each caller that leaves them out, with
-// the caller's (check_call_context says when a #c_call body can't).
+// the caller's (check_call_context says when a #c_call body can't). And so
+// is the instance of a generic procedure being checked (spec 7.11), whose
+// bindings are its signature's, defaults' and body's only: a global, a
+// constant or a type worked out from inside one is the program's, and
+// doesn't see its T. resolve_signature and check_body enter the instance
+// they check, if any, once the scopes are set aside.
 static Outer_Scopes leave_scopes(Checker *c) {
     Outer_Scopes outer = {c->scopes,        c->using_params, c->lost_a_local, c->default_of,
-                          c->filled_depth,  c->needs_context, c->in_code,     c->contextless};
+                          c->filled_depth,  c->needs_context, c->in_code,     c->contextless,
+                          c->instance};
     c->scopes = {};
     c->using_params = {};
     c->lost_a_local = false;
@@ -355,12 +371,13 @@ static Outer_Scopes leave_scopes(Checker *c) {
     c->needs_context = false;
     c->in_code = false;
     c->contextless = false;
+    enter_instance(c, nullptr);
     return outer;
 }
 
 // Back to the scopes leave_scopes set aside, every scope opened since
 // closed, and to their using parameters, lost_a_local, default_of,
-// filled_depth, needs_context, in_code and contextless.
+// filled_depth, needs_context, in_code, contextless and instance.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
@@ -373,17 +390,23 @@ static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     c->needs_context = outer.needs_context;
     c->in_code = outer.in_code;
     c->contextless = outer.contextless;
+    enter_instance(c, outer.instance);
 }
 
 static void resolve_global(Checker *c, Ast *decl);
 
 // The declaration `name` means where the checker is, the innermost block's
-// first, else the top level's; null when there's none. Only looked up:
-// nothing is checked.
+// first, else the binding of the instance being checked (spec 7.11), else
+// the top level's; null when there's none. Only looked up: nothing is
+// checked.
 static Ast *find_name(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
+    }
+    if (c->instance) {
+        Ast *binding = instance_binding(c->instance, name);
+        if (binding) return binding;
     }
     Ast **found = table_get(&c->top_level, name);
     return found ? *found : nullptr;
@@ -402,7 +425,8 @@ static Ast *find_name(Checker *c, String name) {
 // stays the first parameter, and check_using_name leaves the name
 // undeclared. The walk runs once: its result goes to the caller in
 // *through, for check_using_name to read, or, for a caller that passes
-// none, is freed here.
+// none, is freed here. After those fields, before the top level, are the
+// bindings of the instance being checked (spec 7.11), as for find_name.
 Ast *check_lookup(Checker *c, String name, Using_Name *through) {
     Using_Name own;
     Using_Name *walk = through ? through : &own;
@@ -420,6 +444,10 @@ Ast *check_lookup(Checker *c, String name, Using_Name *through) {
             array_free(&walk->other);
         }
         if (walk->found) return c->using_params[walk->root];
+    }
+    if (c->instance) {
+        Ast *binding = instance_binding(c->instance, name);
+        if (binding) return binding;
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
@@ -1780,6 +1808,14 @@ static Type *made_again(Type *t) {
     return inner;
 }
 
+// Procedure proc's signature made again (made_again): its parameters'
+// types, its results' and its procedure type.
+static void made_again_signature(Ast_Proc *proc) {
+    for (s64 j = 0; j < proc->params.count; j++) proc->params[j]->type = made_again(proc->params[j]->type);
+    for (s64 j = 0; j < proc->results.count; j++) proc->results[j]->type = made_again(proc->results[j]->type);
+    proc->type = made_again(proc->type);
+}
+
 // The types of struct s's late fields, once every struct is laid out: made
 // now (make_late_field), or, for one a literal or a field access needed
 // during the layouts, made again (made_again), in case a struct it named
@@ -2828,8 +2864,16 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     bool is_main = string_eq(proc->name, str("main"));
     c->in_code = true;
     c->contextless = proc->is_c_call && !is_main;
+    // An instance's body sees its bindings (spec 7.11), declared in its
+    // scope as the parameters are, so a local can't take T's name there
+    // either, though an inner block's may hide it.
+    enter_instance(c, proc->instance);
     push_scope(c);
     for (s64 i = 0; i < proc->params.count; i++) declare(c, proc->params[i]->name, proc->params[i]);
+    if (proc->instance) {
+        Array<Ast *> &bindings = proc->instance->bindings;
+        for (s64 i = 0; i < bindings.count; i++) declare(c, ((Ast_Alias *)bindings[i])->name, bindings[i]);
+    }
     add_using_params(c, proc);
     check_block(c, proc->body);
     pop_scope(c);
@@ -3322,7 +3366,10 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 // call needing it has no type and says nothing more. Whether its check
 // reported an error is kept (Ast_Proc.had_errors), as a global's is
 // (resolve_global), and so are the scopes it may be needed in, by a body
-// checked on demand: set aside.
+// checked on demand: set aside. An instance of a generic procedure (spec
+// 7.11) is checked with its bindings in sight, its T the type it's bound
+// to; a generic itself has a check of its own (check_generic.cpp's
+// check_generic_signature), which writes nothing into its nodes.
 static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
     if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {
@@ -3343,10 +3390,15 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     }
     if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
     Outer_Scopes scopes = leave_scopes(c);  // its types' names are the top level's
+    enter_instance(c, proc->instance);      // and an instance's bindings
     proc->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc);
     s64 errors = c->diag->error_count;
-    check_signature(c, proc, outer);
+    if (proc->is_generic) {
+        check_generic_signature(c, proc);
+    } else {
+        check_signature(c, proc, outer);
+    }
     proc->had_errors |= c->diag->error_count != errors;
     c->resolving.count--;
     bool in_circle = proc->resolve == RESOLVE_CYCLE;
@@ -3818,24 +3870,37 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
         if (decl->kind == AST_VAR || decl->kind == AST_CONST) decl->type = made_again(decl->type);
         if (decl->kind != AST_PROC) continue;
         Ast_Proc *proc = (Ast_Proc *)decl;
-        if (proc->is_broken) continue;
-        for (s64 j = 0; j < proc->params.count; j++) proc->params[j]->type = made_again(proc->params[j]->type);
-        for (s64 j = 0; j < proc->results.count; j++) proc->results[j]->type = made_again(proc->results[j]->type);
-        proc->type = made_again(proc->type);
+        if (proc->is_broken || proc->is_generic) continue;
+        made_again_signature(proc);
     }
     array_free(&declarations);
+    // And so are the instances of generic procedures made so far (spec
+    // 7.11): a global's value or a type's count may have called one.
+    for (s64 i = 0; i < file->instances.count; i++) made_again_signature(file->instances[i]->proc);
 
     // Then the bodies, each that isn't done yet: a #run that reached one
     // checked it there (check_reached_body), so it isn't checked twice. A
-    // broken entry has none: the parser gave up on it.
+    // broken entry has none: the parser gave up on it. A generic procedure's
+    // body is checked only as its instances' (spec 7.11).
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
-        if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) check_body(&c, proc);
+        if (proc->body && proc->body_resolve == RESOLVE_NOT_YET && !proc->is_generic) check_body(&c, proc);
     }
     // Then the top-level #runs, in source order: checked, and what each
     // reaches walked, but never run here (check_top_level_run): they run
     // for their effect once the whole program checks (spec 7.8).
     for (s64 i = 0; i < file->runs.count; i++) check_top_level_run(&c, file->runs[i]);
+    // Then the instances' bodies, in the order the instances were made, each
+    // that isn't done yet: a body checked here may make more instances, which
+    // join the end of the list, and are checked in their turn. This is an
+    // instance's own turn, at level 0, as a declaration's is in the pass
+    // above: a signature its call found nested too deeply (said there) is
+    // checked here first.
+    for (s64 i = 0; i < file->instances.count; i++) {
+        Ast_Proc *proc = file->instances[i]->proc;
+        resolve_signature(&c, proc);
+        if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) check_body(&c, proc);
+    }
 
     // A broken main, a broken declaration whose name was lost, a file a
     // #load failed to load, or a top-level #if whose condition failed

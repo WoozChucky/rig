@@ -529,9 +529,9 @@
             "captures": "@OPERATOR_CAPTURES@"
         },
         "invalid": {
-            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments.",
+            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments. A '$' is Rig's, before a type parameter's name (spec 7.11), which #operators colours.",
             "name": "invalid.illegal.character.rig",
-            "match": "[@$?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
+            "match": "[@?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
         }
     }
 }

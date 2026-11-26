@@ -525,7 +525,7 @@
         },
         "operators": {
             "comment": "The lexer's punctuation but the brackets, longest first, each its own capture group with its scope (tests/unit/test_grammar.cpp's OPERATOR_SCOPES): the first alternative that matches is then the longest, as the lexer reads them, so <<= is one operator, not << and =. --- (a variable left uninitialised on purpose) is here too.",
-            "match": "(<<=)|(>>=)|(---)|(::)|(:=)|(->)|(\\.\\.)|(<=)|(>=)|(==)|(!=)|(&&)|(\\|\\|)|(<<)|(>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(,)|(;)|(:)|(=)|(\\.)|(\\+)|(-)|(\\*)|(/)|(%)|(&)|(\\|)|(\\^)|(~)|(!)|(<)|(>)",
+            "match": "(<<=)|(>>=)|(---)|(::)|(:=)|(->)|(\\.\\.)|(<=)|(>=)|(==)|(!=)|(&&)|(\\|\\|)|(<<)|(>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(,)|(;)|(:)|(=)|(\\.)|(\\+)|(-)|(\\*)|(/)|(%)|(&)|(\\|)|(\\^)|(~)|(!)|(<)|(>)|(\\$)",
             "captures": {
                 "1": {
                     "name": "keyword.operator.assignment.compound.rig"
@@ -646,13 +646,16 @@
                 },
                 "40": {
                     "name": "keyword.operator.comparison.rig"
+                },
+                "41": {
+                    "name": "storage.modifier.type-parameter.rig"
                 }
             }
         },
         "invalid": {
-            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments.",
+            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments. A '$' is Rig's, before a type parameter's name (spec 7.11), which #operators colours.",
             "name": "invalid.illegal.character.rig",
-            "match": "[@$?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
+            "match": "[@?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
         }
     }
 }

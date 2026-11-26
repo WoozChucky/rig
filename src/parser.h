@@ -35,6 +35,8 @@
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)
+//               | '$' IDENT                                        a type parameter's declaration, only
+//                                                                  in a param's type (spec 7.11)
 //   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
@@ -248,6 +250,19 @@
 // down, as size_of's is. A name and *X parse as a name and an address, as
 // ever: whether they name a type is the checker's to say. No literal
 // follows a type value, `[]int.{1}` being "expected a field's name".
+//
+// A generic procedure (spec 7.11), Jai's, declares a type parameter with
+// '$' before a name in a parameter's type, its first use: `max :: (a: $T,
+// b: T) -> T`, `first :: (items: []$T) -> T`, at any depth in the type, a
+// procedure type's parameters included, `f: ($T) -> T`, but not in an
+// array's count. The name is an Ast_Type of AST_TYPE_NAME marked
+// `declares`, at the '$', and the procedure is generic (Ast_Proc.is_generic).
+// A '$' in any other type, a result's, a field's, a variable's, a cast's,
+// size_of's, a type value's or a procedure type outside a parameter, is
+// "'$' declares a type parameter only in a procedure's parameter, as in max
+// :: (a: $T, b: T) -> T", at the '$', and the declaration is given up. A
+// '$' where an expression starts is no expression: "expected an expression,
+// found '$'".
 //
 // A spread, ..e (spec 5.10), passes a view's or an array's elements as a
 // call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -

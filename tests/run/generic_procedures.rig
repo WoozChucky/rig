@@ -1,0 +1,78 @@
+// Generic procedures (issue #226, spec 7.11): a $T in a parameter's type
+// declares T, which each call infers from its arguments, the first typed
+// one fixing it, an untyped constant taking the type another fixes, or its
+// default. Each set of types makes one instance, shared by every call, the
+// program's own, a #run's and another instance's, each checked and
+// compiled on its own: max(T = int), max(T = float32). A pattern reads
+// through types, []$T taking an array's, a view's or a resizable array's
+// elements, *$T a pointer's target, ($T) -> T a procedure's parameter. In
+// an instance, T is the type it's bound to: a variable's type, size_of(T),
+// type_info(T), T.A and T == string, so #if picks code per instance and
+// the branch not taken is never checked. The same compiled, interpreted
+// and in #runs, a top-level one and a constant's.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+Mode :: enum { A; B; }
+
+max :: (a: $T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+first :: (items: []$T) -> T { return items[0]; }
+
+deref :: (p: *$T) -> T { return p.*; }
+
+apply :: (f: ($T) -> T, x: T) -> T { return f(x); }
+
+twice :: (n: int) -> int { return n * 2; }
+
+describe :: (v: $T) -> string {
+    #if T == string {
+        return "a string";
+    } else #if T == Vec2 {
+        return "a Vec2";
+    } else {
+        return "something else";
+    }
+}
+
+info :: (v: $T) -> int, bool {
+    copy: T = v;
+    return size_of(T), type_info(T).tag == .STRUCT;
+}
+
+count_down :: (n: $T) -> T {
+    if n == 0 { return n; }
+    return count_down(n - 1);
+}
+
+outer :: (x: $T) -> T { return max(x, x); }
+
+reset :: (m: *$T) { m.* = T.A; }
+
+G :: #run max(10, 20);
+
+#run { print("{}\n", max(1, 2)); }
+
+main :: () {
+    print("{} {} {}\n", max(3, 7), max(2.5, 1.5), max(cast(u8) 9, 4));
+    names: [..]string;
+    array_add(*names, "ann");
+    array_add(*names, "bob");
+    print("{} {}\n", first(int.[4, 5, 6]), first(names));
+    v := Vec2.{1, 2};
+    print("{}\n", deref(*v));
+    print("{}\n", apply(twice, 21));
+    print("{} {} {}\n", describe("s"), describe(v), describe(3));
+    size, is_struct := info(v);
+    print("{} {}\n", size, is_struct);
+    print("{}\n", count_down(5));
+    print("{}\n", outer(4));
+    m := Mode.B;
+    reset(*m);
+    print("{}\n", m);
+    print("{}\n", G);
+}

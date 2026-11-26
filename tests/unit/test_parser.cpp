@@ -4592,3 +4592,60 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "1:9: expected '{', found directive\n");
     arena_free(&a);
 }
+
+// Issue #226: generic procedures (spec 7.11).
+
+TEST(parses_type_parameters) {
+    // $T in a parameter's type declares T, at any depth in it, a procedure
+    // type's parameters included: a type name marked so, dumped $T, which
+    // makes the procedure generic. Its other uses are plain names.
+    Arena a = arena_make();
+    Token_List *list = src("max :: (a: $T, b: T) -> T { return a; }\n"
+                           "first :: (items: []$T, f: ($T) -> T) { }\n"
+                           "main :: () { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file),
+              "(proc max (params (a $T) (b T)) (returns T) (block (return (name a))))\n"
+              "(proc first (params (items (view $T)) (f (proc-type (params $T) (returns T)))) (block))\n"
+              "(proc main (params) (block))\n");
+    CHECK(file->procs[0]->is_generic);
+    CHECK(file->procs[1]->is_generic);
+    CHECK(!file->procs[2]->is_generic);
+    // The declaring name is at its '$'.
+    Ast_Type *declares = file->procs[0]->params[0]->type_expr;
+    CHECK(declares->declares);
+    CHECK_EQ(declares->pos.col, 12);
+    CHECK(!file->procs[0]->params[1]->type_expr->declares);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(dollar_mistakes) {
+    // Only a procedure declaration's parameter's type declares a type
+    // parameter: a '$' in any other type is refused at it, and a '$' where
+    // an expression starts is none.
+    Arena a = arena_make();
+    String errors;
+    const char *refused =
+        "'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T";
+    struct Case {
+        const char *text;
+        s32 col;
+    };
+    const Case cases[] = {
+        {"f :: () -> $T { }\n", 12},
+        {"S :: struct { x: $T; }\n", 18},
+        {"main :: () { x: $T; }\n", 17},
+        {"main :: () { n := size_of($T); }\n", 27},
+        {"p : ($T) -> int;\n", 6},
+        {"g :: (a: [size_of($T)]int) { }\n", 19},
+    };
+    for (const Case &k : cases) {
+        parse_src(&a, k.text, &errors);
+        CHECK_STR(errors, string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, refused)));
+    }
+    parse_src(&a, "main :: () { x := $T; }\n", &errors);
+    CHECK_STR(errors, "1:19: expected an expression, found '$'\n");
+    arena_free(&a);
+}

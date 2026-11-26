@@ -1175,6 +1175,24 @@ check('the grammar colours #type and the type after it', () => {
     assertScopes('#if A == #type (int) -> int || N == 3 {}', { N: null });
 });
 
+// Generic procedures (issue #226, spec 7.11): the '$' that declares a type
+// parameter has a scope of its own, and the name after it is a type's, as
+// every use of it is, in a procedure type's parameters too.
+check('the grammar colours a type parameter', () => {
+    assertScopes('max :: (a: $T, b: T) -> T {', {
+        max: 'entity.name.function.rig',
+        $: 'storage.modifier.type-parameter.rig',
+        T: [TYPE, TYPE, TYPE],
+        a: null,
+        b: null,
+    });
+    assertScopes('first :: (items: []$T, f: ($T) -> T) -> T {', {
+        first: 'entity.name.function.rig',
+        $: ['storage.modifier.type-parameter.rig', 'storage.modifier.type-parameter.rig'],
+        T: [TYPE, TYPE, TYPE, TYPE],
+    });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and
@@ -1212,6 +1230,8 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     const typeNames = new Set();
     for (const source of [...sources.values(), ...modules]) {
         for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|union|enum|enum_flags)\b/g)) typeNames.add(m[1]);
+        // And a generic procedure's type parameters, $T (spec 7.11).
+        for (const m of source.matchAll(/\$([A-Za-z_]\w*)/g)) typeNames.add(m[1]);
     }
     assert.ok(typeNames.has('Vec2') && typeNames.has('Node') && typeNames.has('Mode'));
 

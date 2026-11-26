@@ -3823,6 +3823,13 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
         Ir_Module *m = lower_program(&a, path, &tree);
         if (!m) continue;
         lowered++;
+        // The program's procedures as lowering numbers them: the tree's but
+        // the generic ones, then the instances of those (spec 7.11).
+        Array<Ast_Proc *> sources = {};
+        for (s64 k = 0; k < tree->procs.count; k++) {
+            if (!tree->procs[k]->is_generic) array_add(&sources, tree->procs[k]);
+        }
+        for (s64 k = 0; k < tree->instances.count; k++) array_add(&sources, tree->instances[k]->proc);
         for (s64 k = 0; k < m->procs.count; k++) {
             Ir_Proc *p = m->procs[k];
             bool from_source = p->source_name.count > 0;
@@ -3830,20 +3837,20 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                                  string_eq(p->name, str("__rig_string_equal")) ||
                                  string_eq(p->name, str("__rig_no_case"));
             if (!p->is_foreign && !p->is_compiler) CHECK(from_source != compiler_made);
-            // A procedure of the program's is m->procs[k] for
-            // tree->procs[k], whichever file it's in: its lines run from its
-            // name's to its body's '}', in that file. Its position is the
-            // tree's procedure's, so the file every instruction and variable
-            // is checked against below is the one it was parsed from.
+            // A procedure of the program's is m->procs[k] for sources[k],
+            // whichever file it's in: its lines run from its name's to its
+            // body's '}', in that file. Its position is the tree's
+            // procedure's, so the file every instruction and variable is
+            // checked against below is the one it was parsed from.
             if (from_source) {
-                CHECK_EQ(p->pos.file, tree->procs[k]->pos.file);
-                CHECK_EQ(p->pos.line, tree->procs[k]->pos.line);
+                CHECK_EQ(p->pos.file, sources[k]->pos.file);
+                CHECK_EQ(p->pos.line, sources[k]->pos.line);
                 // File 1 is Preload's, in every program: past it, the
                 // files the program itself loads.
                 if (p->pos.file > 1) in_loaded_files++;
             }
             s32 first_line = p->pos.line;
-            s32 last_line = from_source ? tree->procs[k]->body->end.line : 0;
+            s32 last_line = from_source ? sources[k]->body->end.line : 0;
             // The entry block's first instructions, with no position: a slot
             // and a store per scalar parameter, the context's included; then,
             // in main, which starts with the default context, the call of
@@ -3902,6 +3909,7 @@ TEST(every_instruction_of_every_run_test_has_a_line) {
                 CHECK(p->scopes[s].parent >= 0 && p->scopes[s].parent < s);
             }
         }
+        array_free(&sources);
     }
     // Every end-to-end program builds, so every one is lowered here; some
     // (load_files, load_runtime_error) have procedures in loaded files.
@@ -7749,5 +7757,70 @@ TEST(a_comparison_of_types_is_a_constant) {
               "  %0 = const i1 0\n"
               "  ret %0\n"
               "}\n");
+    arena_free(&a);
+}
+
+// Issue #226: generic procedures (spec 7.11).
+
+// The procedure of module m whose symbol is `name`, or null.
+static Ir_Proc *ir_proc_named(Ir_Module *m, const char *name) {
+    for (s64 i = 0; i < m->procs.count; i++) {
+        if (string_eq(m->procs[i]->name, str(name))) return m->procs[i];
+    }
+    return nullptr;
+}
+
+TEST(instances_are_procedures_of_their_own) {
+    // A generic procedure has no code: each instance is a procedure of its
+    // own, its symbol max$T$int, called by it, its name for a debugger and
+    // the interpreter's frames max(T = int).
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "max :: (a: $T, b: T) -> T { if a > b { return a; } return b; }\n"
+                                "main :: () { a := max(1, 2); b := max(1.5, 2.5); }\n");
+    String ir = ir_print(&a, m);
+    CHECK(contains(ir, "proc @max$T$int("));
+    CHECK(contains(ir, "proc @max$T$float32("));
+    CHECK(contains(ir, "call @max$T$int("));
+    CHECK(contains(ir, "call @max$T$float32("));
+    CHECK(!contains(ir, "proc @max("));
+    Ir_Proc *ints = ir_proc_named(m, "max$T$int");
+    Ir_Proc *floats = ir_proc_named(m, "max$T$float32");
+    CHECK(ints && floats);
+    if (ints && floats) {
+        CHECK_STR(ints->source_name, "max(T = int)");
+        CHECK_STR(floats->source_name, "max(T = float32)");
+    }
+    arena_free(&a);
+}
+
+TEST(instance_symbols_are_unique) {
+    // f(T = *[]int) and f(T = []*int) make the same symbol of their names,
+    // f$T$$$$int: the second instance's has its number among f's after it,
+    // so the module has two procedures, and LLVM defines both by their own
+    // names, which its text quotes (it renames a second function of one
+    // name, f$T$$$$int.1, rather than failing, so each is looked for).
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "f :: (a: $T) { }\n"
+                                "main :: () {\n"
+                                "    v: []int;\n"
+                                "    p: *[]int = *v;\n"
+                                "    w: []*int;\n"
+                                "    f(p);\n"
+                                "    f(w);\n"
+                                "}\n");
+    Ir_Proc *first = ir_proc_named(m, "f$T$$$$int");
+    Ir_Proc *second = ir_proc_named(m, "f$T$$$$int$2");
+    CHECK(first && second);
+    if (first && second) {
+        CHECK_STR(first->source_name, "f(T = *[]int)");
+        CHECK_STR(second->source_name, "f(T = []*int)");
+    }
+    String text = {}, error = {};
+    CHECK(llvm_ir_text(&a, m, target_host(), &text, &error));
+    CHECK(contains(text, "define internal void @\"f$T$$$$int\"("));
+    CHECK(contains(text, "define internal void @\"f$T$$$$int$2\"("));
+    CHECK(!contains(text, "@\"f$T$$$$int.1\"("));
     arena_free(&a);
 }

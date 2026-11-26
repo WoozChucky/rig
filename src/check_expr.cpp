@@ -595,6 +595,19 @@ static Ast_Literal *void_member_value(Checker *c, Type *t, String name, Position
     return literal;
 }
 
+// The declaration a name found as `decl` stands for where an enum's or a
+// tagged union's members are named through it (Mode.FREE, Shape.empty): an
+// instance's type parameter bound to an enum or a named struct (spec 7.11)
+// stands for that type's declaration, so T.FREE is Mode.FREE in
+// reset(T = Mode); anything else for itself.
+static Ast *through_alias(Ast *decl) {
+    if (!decl || decl->kind != AST_ALIAS) return decl;
+    Type *t = ((Ast_Alias *)decl)->aliased;
+    if (t->kind == TYPE_ENUM) return t->enum_decl;
+    if (t->kind == TYPE_STRUCT && t->decl && t->decl->name.count) return t->decl;
+    return decl;
+}
+
 s32 tagged_member_named(Checker *c, Type *t, Ast *e) {
     String name;
     Position at;
@@ -605,7 +618,7 @@ s32 tagged_member_named(Checker *c, Type *t, Ast *e) {
         Ast_Member *m = (Ast_Member *)e;
         if (m->operand->kind != AST_NAME || ast_in_parentheses(m->operand)) return -2;
         Ast_Name *operand = (Ast_Name *)m->operand;
-        Ast *decl = check_lookup(c, operand->name, nullptr);
+        Ast *decl = through_alias(check_lookup(c, operand->name, nullptr));
         if (!decl || decl->kind != AST_STRUCT || ((Ast_Struct *)decl)->declared != t) return -2;
         operand->decl = decl;
         m->of_tagged = (Ast_Struct *)decl;
@@ -978,9 +991,10 @@ static Type *check_using_name(Checker *c, Ast_Name *name, Using_Name *through);
 // "'__runtime_error' can't be a value: it has no code of its own, only
 // calls". In a default value, a parameter is "a default value can't use the
 // parameter 'times'". Nor is a built-in procedure a value: "'array_add'
-// can't be a value: it's built into the language". A field of a using
-// parameter's struct (spec 3.21) is the field, through the parameter
-// (check_using_name).
+// can't be a value: it's built into the language". Nor a generic one (spec
+// 7.11), which has no procedure type: "'max' is generic; call it, or wrap
+// one instance in a procedure". A field of a using parameter's struct (spec
+// 3.21) is the field, through the parameter (check_using_name).
 //
 // The name is looked up first, by check_name or by a caller that looks it
 // up to see what it declares (check_callee, check_member): decl and
@@ -1016,6 +1030,13 @@ static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *thro
         // Nor is there about a signature in a circle, said already.
         Ast_Proc *proc = (Ast_Proc *)decl;
         if (proc->is_broken || !check_proc_signature(c, proc)) return nullptr;
+        // A generic procedure (spec 7.11) is none of its instances until a
+        // call says which, so it has no procedure type to be a value of.
+        if (proc->is_generic) {
+            diag_error(c->diag, name->pos, "'" STR_FMT "' is generic; call it, or wrap one instance in a procedure",
+                       STR_ARG(proc->name));
+            return nullptr;
+        }
         // main is C's main, returning C's int to the program's start-up
         // code and, with Preload, taking C's argc and argv (lower.cpp, spec
         // 7.4), none of which its type, (), says: a call through a value of
@@ -1057,8 +1078,11 @@ static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *thro
         }
         return proc->type;  // null when a part of its signature was an error, reported
     }
+    // An instance's type parameter (spec 7.11) is a type as a struct's name
+    // is: "'T' is a type, not a value".
     case AST_STRUCT:
-    case AST_ENUM: report_type_as_value(c, name); return nullptr;
+    case AST_ENUM:
+    case AST_ALIAS: report_type_as_value(c, name); return nullptr;
     // A built-in procedure (spec 3.17) has no procedure type, each call
     // being typed by its array, nor any code to point at: only a call names
     // it.
@@ -1242,7 +1266,8 @@ static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, s64 
 // call->builtin or call->callee_type; false when it's unknown or no
 // procedure (reported):
 // - a procedure's name, or a constant's that names one (OP :: add;): a call
-//   of the procedure itself, call->proc;
+//   of the procedure itself, call->proc; a generic one (spec 7.11) is
+//   replaced there by the instance the call makes (check_generic_call);
 // - a built-in procedure's name (spec 3.17): call->builtin, its signature
 //   still to make from its arguments (check_builtin_call);
 // - a value of a procedure type, a variable's or a parameter's (which hide
@@ -1250,9 +1275,9 @@ static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, s64 
 //   call through the value, call->callee_type, checked as a call of the
 //   procedure it holds would be;
 // - anything else: "'x' isn't a procedure, so it can't be called" for a
-//   name (a struct's or a built-in type's too), "a value of type 'int'
-//   isn't a procedure, so it can't be called" for any other value, at the
-//   callee.
+//   name (a struct's, a built-in type's or a type parameter's too, spec
+//   7.11), "a value of type 'int' isn't a procedure, so it can't be called"
+//   for any other value, at the callee.
 static bool check_callee(Checker *c, Ast_Call *call) {
     Ast *callee = call->callee;
     Type *t = nullptr;
@@ -1264,7 +1289,7 @@ static bool check_callee(Checker *c, Ast_Call *call) {
         // free.
         Using_Name through;
         Ast *decl = check_lookup(c, name->name, &through);
-        if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM) {
+        if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM || decl->kind == AST_ALIAS) {
             name->decl = decl;
             if (decl) {
                 diag_error(c->diag, name->pos, "'" STR_FMT "' isn't a procedure, so it can't be called",
@@ -1470,6 +1495,64 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
     return entry->returns_item ? element : &type_void;
 }
 
+// "'f' takes 2 arguments, but 1 was given", at the callee of a call to
+// `name` whose count doesn't fit its n parameters (check_call): "takes 1 to
+// 3" ("1 or 2") when `required` of them must be given, "at least" its
+// `fixed` ones when it takes `more` ('..T' or C's '..'), each counting the
+// arguments as check_call does: `given`, or `before` a spread for "at
+// least".
+static void report_argument_count(Checker *c, Ast_Call *call, String name, s64 required, s64 n, s64 fixed, bool more,
+                                  s64 given, s64 before) {
+    if (required < n) {
+        diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %lld %s %lld arguments, but %lld %s given",
+                   STR_ARG(name), (long long)required, n - required == 1 ? "or" : "to", (long long)n, (long long)given,
+                   given == 1 ? "was" : "were");
+    } else {
+        diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
+                   STR_ARG(name), more ? "at least " : "", (long long)fixed, fixed == 1 ? "" : "s", (long long)before,
+                   before == 1 ? "was" : "were");
+    }
+}
+
+// A call of a generic procedure (spec 7.11), call->proc the generic: its
+// arguments checked, each as check_call checks one, then counted against
+// the generic's parameters as check_call counts them (the same messages),
+// then the instance they make (check_generic.cpp's check_instance) taking
+// the generic's place in call->proc, for check_call to go on with as with
+// any call: each argument converts to its parameter's type in the instance,
+// so once T is fixed, `max(x_s32, y_int)` is "argument 2 of 'max' has type
+// 'int', which can't be converted to 's32'". False, the call having no
+// type, after a count that doesn't fit or an inference that fails (said),
+// or when the generic's signature isn't known (a circle, said) or had
+// errors, said already: it makes no instance.
+static bool check_generic_call(Checker *c, Ast_Call *call) {
+    Ast_Proc *generic = call->proc;
+    for (s64 i = 0; i < call->args.count; i++) {
+        Ast *arg = call->args[i];
+        if (arg->kind == AST_SPREAD) {
+            check_spread_argument(c, (Ast_Spread *)arg);
+        } else {
+            check_value(c, arg);
+        }
+    }
+    if (!check_proc_signature(c, generic) || generic->had_errors) return false;
+    s64 n = generic->params.count, given = call->args.count;
+    s64 dots = variadic_index(generic);
+    bool more = dots >= 0;
+    s64 fixed = more ? dots : n;
+    bool spreads = more && given && call->args[given - 1]->kind == AST_SPREAD;
+    s64 before = spreads ? given - 1 : given;
+    s64 required = more ? n : required_arguments(generic);
+    if (more ? before < fixed : (given < required || given > n)) {
+        report_argument_count(c, call, generic->name, required, n, fixed, more, given, before);
+        return false;
+    }
+    Ast_Proc *instance = check_instance(c, generic, call->args, call->callee, call->start);
+    if (!instance) return false;
+    call->proc = instance;
+    return true;
+}
+
 // A call: the callee (check_callee), then the arguments, whose own mistakes
 // are reported even when the callee is wrong, after its: in source order (a
 // spread argument's operand by check_spread_argument). A built-in's call is
@@ -1504,15 +1587,24 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
 // after its '..' parameter, takes only its default value", at the first of
 // them, and the arguments after the spread, checked as any expression is,
 // are given to no parameter. The call's type is its first result's, void
-// when there's none.
+// when there's none. A call of a generic procedure (spec 7.11) checks its
+// arguments itself, and finds the instance they make, which it then calls
+// (check_generic_call).
 static Type *check_call(Checker *c, Ast_Call *call) {
     bool known = check_callee(c, call);
-    for (s64 i = 0; i < call->args.count; i++) {
-        Ast *arg = call->args[i];
-        if (arg->kind == AST_SPREAD) {
-            check_spread_argument(c, (Ast_Spread *)arg);
-        } else {
-            check_value(c, arg);
+    if (known && call->proc && call->proc->is_generic) {
+        if (!check_generic_call(c, call)) {
+            call->proc = nullptr;
+            return nullptr;
+        }
+    } else {
+        for (s64 i = 0; i < call->args.count; i++) {
+            Ast *arg = call->args[i];
+            if (arg->kind == AST_SPREAD) {
+                check_spread_argument(c, (Ast_Spread *)arg);
+            } else {
+                check_value(c, arg);
+            }
         }
     }
     if (!known) return nullptr;
@@ -1563,15 +1655,7 @@ static Type *check_call(Checker *c, Ast_Call *call) {
     // 5.10); a call through a value, whose type keeps none, gives them all.
     s64 required = proc && !more ? required_arguments(proc) : n;
     if (more ? before < fixed : (given < required || given > n)) {
-        if (required < n) {
-            diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %lld %s %lld arguments, but %lld %s given",
-                       STR_ARG(name), (long long)required, n - required == 1 ? "or" : "to", (long long)n,
-                       (long long)given, given == 1 ? "was" : "were");
-        } else {
-            diag_error(c->diag, call->callee->start, "'" STR_FMT "' takes %s%lld argument%s, but %lld %s given",
-                       STR_ARG(name), more ? "at least " : "", (long long)fixed, fixed == 1 ? "" : "s",
-                       (long long)before, before == 1 ? "was" : "were");
-        }
+        report_argument_count(c, call, name, required, n, fixed, more, given, before);
         if (spreads) call->args[given - 1]->type = nullptr;  // not taken: nothing more to say of it
     } else if (spreads && before > fixed) {
         Ast *spread = call->args[given - 1];
@@ -2190,7 +2274,7 @@ static bool names_a_member(Checker *c, Ast *e) {
     if (e->kind != AST_MEMBER) return false;
     Ast *operand = ((Ast_Member *)e)->operand;
     if (operand->kind != AST_NAME || ast_in_parentheses(operand)) return false;
-    Ast *decl = check_lookup(c, ((Ast_Name *)operand)->name, nullptr);
+    Ast *decl = through_alias(check_lookup(c, ((Ast_Name *)operand)->name, nullptr));
     return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_tagged;
 }
 
@@ -2296,12 +2380,12 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // Types where a value goes (spec 5.20). A type written as a value, []int or
 // #type (int) -> int, is an Ast_Type_Value; a name and *X are a name and an
 // address as written, and whether they name a type is the name's lookup's
-// to say: a struct's or an enum's, or none while the name is a built-in
-// type's, so a local `int := 5;` hides the type int, as it hides any
-// top-level name (spec 4.7). A type in parentheses is no type, as nowhere
-// else is one: (int) is a value. Only the places that take a type check
-// one as such (check_type_value), for now == and != between two types
-// (check_binary). A type value is never a value at run time: it has type
+// to say: a struct's, an enum's or an instance's type parameter's (spec
+// 7.11), or none while the name is a built-in type's, so a local `int :=
+// 5;` hides the type int, as it hides any top-level name (spec 4.7). A type
+// in parentheses is no type, as nowhere else is one: (int) is a value. Only
+// the places that take a type check one as such (check_type_value), for
+// now == and != between two types (check_binary). A type value is never a value at run time: it has type
 // Type, never a constant (Ast.is_constant stays false, so nothing folds or
 // lowers it), the type it denotes kept in Ast.constant's bits for
 // type_value.
@@ -2319,7 +2403,7 @@ bool expr_names_type(Checker *c, Ast *e) {
     String name = ((Ast_Name *)e)->name;
     Ast *decl = check_lookup(c, name, nullptr);
     if (!decl) return type_from_name(name) != nullptr;
-    return decl->kind == AST_STRUCT || decl->kind == AST_ENUM;
+    return decl->kind == AST_STRUCT || decl->kind == AST_ENUM || decl->kind == AST_ALIAS;
 }
 
 // The type e, which expr_names_type holds for, would be written as where a
@@ -2804,7 +2888,8 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         break;
     case AST_BUILTIN: what = "a procedure"; break;  // built into the language (spec 3.17)
     case AST_STRUCT:
-    case AST_ENUM: report_type_as_value(c, name); return false;
+    case AST_ENUM:
+    case AST_ALIAS: report_type_as_value(c, name); return false;  // a type parameter's too (spec 7.11)
     default: RIG_ASSERT(!"not a declaration");
     }
     diag_error(c->diag, name->pos, for_writing ? "can't assign to '" STR_FMT "': it's %s"
@@ -3597,7 +3682,7 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         // An enum's or a tagged union's name wasn't found among the using
         // parameters' fields, so has no paths to free.
         Using_Name through;
-        Ast *decl = check_lookup(c, name->name, &through);
+        Ast *decl = through_alias(check_lookup(c, name->name, &through));
         if (decl && decl->kind == AST_ENUM) {
             name->decl = decl;
             Ast_Enum *e = (Ast_Enum *)decl;

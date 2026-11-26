@@ -525,7 +525,8 @@ struct Ir_Source {
 
 struct Ir_Module {
     Array<Ir_Global> globals;
-    Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
+    Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), the
+                             // instances of generic procedures after them (spec 7.11), then
                              // __rig_bounds_failed when a bounds check calls it,
                              // __rig_string_equal when == on strings or a switch on a string
                              // does and __rig_no_case when a #complete switch without `case;`,

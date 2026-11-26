@@ -1277,6 +1277,62 @@
 //   constant. A #run's walk takes a node of type Type as a leaf
 //   (check_run.cpp's walk_expression).
 //
+// Generic procedures (issue #226, spec 7.11).
+// - A procedure whose parameters' types declare a type parameter, $T
+//   (Ast_Proc.is_generic), is checked as none of its instances: its own
+//   signature check (check_generic.cpp's check_generic_signature) takes
+//   its type parameters as types still to be known, resolves its other
+//   type names once, so "unknown type 'Nope'" is said at the generic and
+//   not per instance, and writes nothing into its nodes, which each
+//   instance copies unchecked. It refuses a default value on a parameter
+//   whose type declares one ("a parameter that declares '$U' can't have a
+//   default value, for now", at the '='), and #foreign, #c_call and
+//   #compiler ("'f' is generic, so it can't be #foreign", at the
+//   directive; a #compiler one outside the modules is said to be that
+//   first). It has no procedure type: its name as a value is "'max' is
+//   generic; call it, or wrap one instance in a procedure", at the name.
+//   Its body is checked only as each instance's, never on its own.
+// - A call of one (check_expr.cpp's check_generic_call) checks its
+//   arguments as any call's, counts them as any call does (the same
+//   messages), and infers the type parameters from them
+//   (check_generic.cpp's check_instance): each from the arguments whose
+//   parameter's type names it, in order, the first typed one fixing it, a
+//   pattern read through pointers, arrays' views' and resizable arrays'
+//   elements and procedure types' parts ("argument 1 of 'first' has type
+//   'int', which doesn't fit '[]$T'" where it can't match); untyped
+//   numbers alone give the default type of the type they meet at; an
+//   argument with no type of its own alone is "can't work out 'T' for
+//   'max': argument 1 has no type of its own"; none at all is "...: no
+//   argument gives it", at the callee. An argument whose own check failed
+//   leaves a type parameter it might have fixed unknown, silently. A
+//   generic whose signature check failed makes no instance: its calls say
+//   nothing more.
+// - Each distinct set of bindings (a type by its Type *) makes one
+//   instance, program-wide: the generic's tree copied (ast_clone), its
+//   bindings Ast_Aliases, named max(T = int), its symbol max$T$int (with
+//   $N after it when an earlier instance of the generic has that symbol),
+//   kept in the generic's cache (Ast_Proc.instances) and the program's list
+//   (Ast_File.instances). Its signature is checked where the call needs it,
+//   as any signature is (resolve_signature); its body after every other
+//   body and top-level #run, in the order the instances were made, or
+//   where a #run reaches it first. The call then calls the instance, and
+//   is checked as a call of it: each argument converts to its parameter's
+//   type in the instance, with the usual messages.
+// - Checker.instance is the instance whose signature, defaults or body is
+//   being checked: its bindings are found after the scopes and the using
+//   parameters' fields, before the top level (find_name, check_lookup),
+//   and its body declares them in its scope, as its parameters. It's set
+//   aside with the scopes (leave_scopes), so a global, a constant or a type
+//   worked out from inside an instance doesn't see its T. A binding is a
+//   type wherever a type is written (resolve_written), a type value
+//   (expr_names_type), "'T' is a type, not a value" as a value, "'T' isn't
+//   a procedure, so it can't be called" as a callee, and T.A, T.empty or
+//   T.{...} when it's an enum's, a tagged union's or a struct's
+//   (through_alias).
+// - What lowering may rely on: no generic procedure is lowered, and no
+//   call's proc is one; each instance is a procedure, keyed by its symbol
+//   (lower.cpp's proc_symbol), after the program's own procedures.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

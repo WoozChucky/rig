@@ -122,7 +122,7 @@ The text of a program is divided into tokens: identifiers, keywords, directives,
 
 There is one exception: a `*` right after a `.` token is always a token of its own. So `p.*=5` is `p`, `.`, `*`, `=`, `5`, an assignment through `p`, and `p.*==q` is `p.* == q`, a comparison.
 
-A character that begins no token is an error: `unexpected character '@'` for a printable ASCII character, or `unexpected byte 0x01` for a control byte.
+A character that begins no token is an error: `unexpected character '@'` for a printable ASCII character, or `unexpected byte 0x01` for a control byte. `$` begins one, a token of its own, which declares a generic procedure's type parameter, `$T` (section 7.11).
 
 ### 2.5 Identifiers
 
@@ -234,7 +234,7 @@ A string literal's type and representation are described in section 3.8.
 ==   !=   <    <=   >    >=   &&   ||
 =    +=   -=   *=   /=   %=   &=   |=   ^=   <<=  >>=
 :    ::   :=   ->   ..   ---  .
-(    )    [    ]    {    }    ,    ;
+(    )    [    ]    {    }    ,    ;    $
 ```
 
 Appendix B lists each one with the section that defines it.
@@ -386,6 +386,8 @@ Every value and every expression in Rig has a type, known while compiling. The t
 ```ebnf
 Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | "[" ".." "]" Type | ProcType | identifier .
 ```
+
+A parameter's type may also declare a generic procedure's type parameter, `$T`, which is then a type name in the procedure (section 7.11).
 
 A type name is a built-in type's name, a struct's, a union's or an enum's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct, a union or an enum cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written (where a value goes, the variable hides the type, section 5.20).
 
@@ -636,7 +638,7 @@ A procedure type goes wherever a type goes: a variable's, a constant's, a parame
 
 **Identity.** Two procedure types are the same type when their parameter types are the same, in order, their result types are the same, in order, both are marked `#c_call` or neither is, and both take a `..T` last or neither does. So `(int, ..int) -> int` is not `(int, []int) -> int`, though its last parameter is a `[]int` in the procedure's body, and neither converts to the other. Messages write a procedure type in that form, with no names: `(int, int) -> int`, `(int) -> (int, int)`, `(*void, *void) -> s32 #c_call`, `(int, ..int) -> int`, `()`.
 
-**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A procedure with default values (section 7.2) is a value of its signature's type too, which keeps none of them: with `repeat :: (s: *u8, times: int = 2) { ... }`, `f := repeat;` gives `f` the type `(*u8, int)`, and `f("ho")` is `'f' takes 2 arguments, but 1 was given`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2), and a constant's data may hold procedure values as fields or elements, as `OPS` does below. A global variable may hold one (section 4.3). A variadic Rig procedure is a value too, of a type that says its `..T`, and a call through it gathers and spreads its `..` arguments as a direct call does (section 5.10). One with parameters after its `..T` one is not, since a call through a value could never fill them: `'log' can't be a value: its parameters after '..' take only their default values, which a procedure type doesn't keep`. A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with C's bare `..`, cannot be a value, since no procedure type can say C's `..`: `'printf' can't be a value: it takes C's '..', which no procedure type can say`. Nor can `main` (section 7.4), which C calls as a function taking `argc` and `argv` and returning an `int`, none of which its type says: `'main' can't be a value: it's where the program starts`.
+**Values.** A procedure value is the address of a procedure's code: 8 bytes, aligned to 8, as a pointer is (section 3.11). A procedure's name used other than in a call is its value, whose type is its signature's: with `add :: (a: int, b: int) -> int { ... }`, `f := add;` gives `f` the type `(int, int) -> int`. A procedure with default values (section 7.2) is a value of its signature's type too, which keeps none of them: with `repeat :: (s: *u8, times: int = 2) { ... }`, `f := repeat;` gives `f` the type `(*u8, int)`, and `f("ho")` is `'f' takes 2 arguments, but 1 was given`. A constant may name a procedure, `OP :: add;`, and then stands for it wherever it is used, calls included (section 4.2), and a constant's data may hold procedure values as fields or elements, as `OPS` does below. A global variable may hold one (section 4.3). A variadic Rig procedure is a value too, of a type that says its `..T`, and a call through it gathers and spreads its `..` arguments as a direct call does (section 5.10). One with parameters after its `..T` one is not, since a call through a value could never fill them: `'log' can't be a value: its parameters after '..' take only their default values, which a procedure type doesn't keep`. A foreign procedure's value has a `#c_call` type (section 7.6), and a variadic foreign procedure, declared with C's bare `..`, cannot be a value, since no procedure type can say C's `..`: `'printf' can't be a value: it takes C's '..', which no procedure type can say`. Nor can `main` (section 7.4), which C calls as a function taking `argc` and `argv` and returning an `int`, none of which its type says: `'main' can't be a value: it's where the program starts`. Nor has a generic procedure a procedure type, being none of its instances until a call says which (section 7.11): `'max' is generic; call it, or wrap one instance in a procedure`.
 
 A procedure value may be **null**, naming no procedure: `null` converts to every procedure type, and a procedure-typed variable or field that is zeroed is null (section 4.3). Calling a null procedure value is a runtime error (section 8.4).
 
@@ -1778,11 +1780,12 @@ A **block** is a sequence of statements in braces (section 6.1). A procedure's b
 
 - A name declared in a block, a local variable or a local constant, is visible from the end of its declaration to the end of the block, including in blocks nested inside it.
 - A procedure's parameters are declared in its body's block. They are in scope in its default values too, hiding the top level's names of theirs there as in the body, but can't be used (section 7.2).
+- An instance of a generic procedure's type parameters, `T` bound to `int` in `max(T = int)`, are declared in its body's block too, as its parameters are, and are names in its signature and default values, after the blocks and the `using` parameters' fields and before the top level (section 7.11).
 - A `for` loop declares its iterator (`it` or the name given) and `it_index` in its body's block (section 6.8).
 - The fields of a procedure's `using` parameters' structs are names in its body and its default values, after its blocks and before the top level, and can't be used in its default values either (section 3.21).
 - A name declared at the top level is visible everywhere, in every file of the program, unless hidden.
 
-A name is looked up from the innermost block outwards, then among the fields of the procedure's `using` parameters (section 3.21), and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
+A name is looked up from the innermost block outwards, then among the fields of the procedure's `using` parameters (section 3.21), then among an instance's type parameters (section 7.11), and then at the top level. A block may declare a name that an enclosing block, or the top level, already declares; the new declaration **hides** the outer one until the end of the block. The same block may not declare a name twice: `'x' is already declared at PATH:L:C`. Since parameters are in the body's block, a local cannot take a parameter's name. A name that is declared nowhere is `unknown identifier 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error, or, for a name used after it in the same body, a body `#if`'s condition has (section 4.9).
 
 ```rig
 puts :: (s: *u8) -> s32 #foreign libc;
@@ -2855,6 +2858,8 @@ Params    = Param { "," Param } [ "," ".." ] .
 Param     = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 ```
 
+A parameter's `Type` may declare a type parameter, `"$" identifier`, which makes the procedure generic (section 7.11); no other type may.
+
 A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, which may be followed by `=` and the parameter's default value, passed by a call that leaves the parameter out (section 7.2), and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. One parameter may be written `name: ..T`, which takes the rest of a call's arguments as a view, `[]T`, and the parameters after it, if any, have default values (section 7.2). A parameter written `using e: *Entity` lets the body name the fields of the struct it is, or points at, directly (section 3.21). A foreign procedure's list may instead end with C's bare `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
 
 ```rig
@@ -3703,6 +3708,73 @@ hello, Ada
 
 **Left for later:** fields a program adds to the context (Jai's `#add_context`), a logger and an assertion handler in it, threads and a context for each, and a `push_allocator` that needs no block.
 
+### 7.11 Generic procedures
+
+```ebnf
+Type = ... | "$" identifier .   (only in a Param's Type)
+```
+
+A **generic procedure**, Jai's, is written once and compiled once for each set of types its calls need. A `$` before a name in a parameter's type declares a **type parameter**, a name the type stands for, at its first use: `max :: (a: $T, b: T) -> T` takes two values of any one type `T` and returns one. The `$T` may be anywhere in a parameter's type, at any depth: `items: []$T`, `p: *$T`, `f: ($T) -> T`. Every other use of the name, in the parameters' types, the results' and the body, is the type. Only a procedure declaration's parameter's type may declare one, never its array count (`[N]$T`'s `N`): in any other type, a result's, a field's, a variable's, a cast's, `size_of`'s, a type written where a value goes (section 5.20) or a procedure type outside a parameter, the `$` is `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T`, at it, and a `$` where an expression starts is `expected an expression, found '$'`.
+
+**Inference.** Each call works out its type parameters from its arguments, after checking them as any call's (section 5.10) and counting them against the parameters, with the same messages (`'max' takes 2 arguments, but 1 was given`). Each type parameter is bound from the arguments whose parameter's type names it, in parameter order, the first typed one fixing it. A name alone, `$T` or `T`, is the argument's type; the rest of a parameter's type is read through, as far as it holds the name: a pointer's target, `*$T` taking `Vec2` from a `*Vec2`; an array's, a view's or a resizable array's elements, `[]$T` taking `int` from a `[3]int`, a `[]int` or a `[..]int`, all of which convert to a `[]int` (sections 3.7, 3.17); a procedure type's parameters and results, `($T) -> T` taking `int` from a `(int) -> int`. A part that can't match is `argument 1 of 'first' has type 'int', which doesn't fit '[]$T'`, at the argument, the parameter's type written as the program wrote it. An untyped constant (section 3.12) takes the type another argument fixes: `max(1, x)`, with `x` a `u8`, is `max` for `u8`. When every argument at a type parameter's places is an untyped number, the type they meet at, a float if any is one, gives it its default type, `int` or `float32`: `max(1, 2)` is `max` for `int`, `max(1, 2.5)` for `float32`. An argument with no type of its own, `null`, `.{...}`, `.[...]` or `.FREE`, takes the type another fixes (`pick(v, .{1, 2})`), and when none does it's `can't work out 'T' for 'max': argument 1 has no type of its own`, at the first such argument. Once the type parameters are known, the call is checked as a call of that instance (below): each argument converts to its parameter's type as any argument does (section 3.13), so `max(x_s32, y_int)` is `argument 2 of 'max' has type 'int', which can't be converted to 's32'`, while `max(y_int, x_s32)` is `max` for `int`, the `s32` widening.
+
+**Instances.** Each distinct set of types makes one **instance** of the generic procedure: its signature and body with each type parameter bound, checked and compiled on their own, as any procedure is. Every call with that set calls the same instance, wherever it is, in any file, in a `#run` or in another instance's body: the program has one `max` for `int`, and one for `s64`, a different type, while `float` and `float32` are one type, so one instance (section 3.1). An instance's signature is checked where its first call needs it, its body after every other body and top-level `#run`, or where a `#run` reaches it first (section 7.8). Its type parameters are in its parameters' scope (section 4.7): a local may not take `T`'s name in the body's block, as it may not a parameter's. An instance is named by its procedure and its bindings, `max(T = int)`, in the debugger (section 10.7) and in a failed `#run`'s frames (section 10.8); its symbol, the name the object file gives it, is that name with its spaces and last `)` left out and every other character that isn't a letter, a digit or `_` made `$`, `max$T$int`, which no name a program writes can be, and, when an earlier instance of the same procedure has that symbol already, `$` and the instance's number among them after it (`f$T$$$$int` for `f(T = *[]int)`, then `f$T$$$$int$2` for `f(T = []*int)`). Messages about a call name the procedure as it's written, `'max'`.
+
+**The type parameters in an instance.** In an instance, a type parameter is the type it's bound to wherever a type goes: a variable's, a cast's, a literal's, `size_of(T)` and `type_info(T)` (sections 5.16, 5.19), and as a type where a value goes, so `T == int` is a constant `bool` of that instance (section 5.20), which `#if` decides on: the branch it doesn't take is never checked for that instance, so `#if T == string` may pick code that only a `string` takes. Bound to an enum, its name reaches the members, `T.A`; to a struct, `T.{...}` is a literal of it (section 5.17). It is no value, as no type is (section 5.20): `'T' is a type, not a value`, and no procedure, `'T' isn't a procedure, so it can't be called`.
+
+**The generic procedure itself** is no procedure until a call says which instance it is: it has no procedure type, so its name is no value, `'max' is generic; call it, or wrap one instance in a procedure`, at the name, and it is compiled only as its instances. Its signature's other names are resolved once, at the procedure (`unknown type 'Nope'`), and a generic procedure whose signature has a mistake makes no instance: its calls say nothing more. A parameter whose type declares a type parameter takes no default value, for now: `a parameter that declares '$T' can't have a default value, for now`, at the `=`. C knows nothing of Rig's types, and a `#compiler` procedure is one the compiler does for the types it's written with, so a generic procedure is never foreign, `#c_call` or `#compiler`: `'f' is generic, so it can't be #foreign` (`#c_call`, `#compiler`), at the directive.
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+max :: (a: $T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+first :: (items: []$T) -> T { return items[0]; }
+
+describe :: (v: $T) -> string {
+    #if T == string {
+        return "a string";
+    } else {
+        return "something else";
+    }
+}
+
+main :: () {
+    print("{} {} {}\n", max(3, 7), max(2.5, 1.5), max(cast(u8) 9, 4));
+    print("{}\n", first(int.[4, 5, 6]));
+    print("{} {}\n", describe("s"), describe(Vec2.{}));
+}
+```
+
+```text
+7 2.5 9
+4
+a string something else
+```
+
+```rig error
+max :: (a: $T, b: T) -> T { if a > b { return a; } return b; }
+
+main :: () {
+    m := max;
+    x := max(null, null);
+}
+```
+
+```text
+example.rig:4:10: error: 'max' is generic; call it, or wrap one instance in a procedure
+        m := max;
+             ^
+example.rig:5:14: error: can't work out 'T' for 'max': argument 1 has no type of its own
+        x := max(null, null);
+                 ^
+```
+
 ## 8. Runtime checks
 
 Some operations are checked while the program runs. A check that fails is a **runtime error**: it stops the program.
@@ -3924,6 +3996,12 @@ The sections defining each construct give its messages. Some of those met most o
 | `'[]int' is a type, not a value` | 5.20 |
 | `'==' compares a type only with a type, as in T == int` | 5.6, 5.20 |
 | `'Type' only names types while compiling; a *Type_Info describes one at run time` | 3.1 |
+| `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T` | 7.11 |
+| `can't work out 'T' for 'max': argument 1 has no type of its own` | 7.11 |
+| `argument 1 of 'first' has type 'int', which doesn't fit '[]$T'` | 7.11 |
+| `'max' is generic; call it, or wrap one instance in a procedure` | 7.11, 3.15 |
+| `'f' is generic, so it can't be #foreign` | 7.11 |
+| `a parameter that declares '$T' can't have a default value, for now` | 7.11 |
 | `can't assign to 'a': it's a parameter` | 6.4 |
 | `'f' must return a value on every path, and this one reaches its end` | 6.11 |
 | `'A' is defined in terms of itself` | 4.8 |
@@ -4331,7 +4409,7 @@ The debug information holds:
 
 - **A file entry for each source file** of the program, the main file, Preload's `module.rig` and every file they load or import (sections 2.13, 2.14), named by its absolute path (made from the path diagnostics name it by, section 9.1, and the directory the compiler ran in, which on Linux is named as the shell names it, `$PWD`, when that is the directory: reached through a symlink, it keeps the symlink's name, as the editor that sets a breakpoint knows it), with that directory and the MD5 checksum of the file's bytes, so a debugger finds each file and can tell when it has changed. On Windows a file on a network share (a UNC path, `\\server\share\dir\x.rig`) is named `/\server\share\dir\x.rig`: LLVM's CodeView writer keeps a name that starts with `/` as it is, where it would put the share after the directory's drive, and Windows reads `/\` as the `\\` that starts a UNC path, so a debugger finds the file on the share and takes a breakpoint on it by the share's name, the file's name alone or a drive path to it. Each procedure, struct and global variable below is in the file that declares it, so a breakpoint on a line of a loaded file is found there, and a backtrace names each frame's own file.
 - **A compile unit** for the program, whose file is the main file's entry, as a C compiler's unit is the `.c` file it was given, not the headers that file includes. The unit's language is C (C99), whose expression syntax a debugger then uses (`a.count`, `a[i]`; Rig's `p.*` is C's `*p`), and its producer is `rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)`: the compiler's version and commit as `rig version` gives them (section 10.1), without the date, `-dirty` after the hash when it was dirty and `unknown` without one, and X.Y.Z the version of the LLVM the compiler is built with.
-- **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. The internal procedures of section 10.5 have none, and neither have Preload's `__runtime_init` and `__save_command_line` (also section 10.5), so a debugger steps over them. `main`'s hidden `argc` and `argv` (section 10.4) are described nowhere, neither in its subprogram's type nor as its variables, so `break main`, `main ()` in a backtrace and `ptype main` are what they would be without them: `main` takes nothing.
+- **A subprogram for each procedure with a body**, by its Rig name, with its line and the line its body starts on, so `break main` or `break sort` stops at the procedure and a backtrace names each frame. Each instance of a generic procedure (section 7.11) has its own, named as the instance is, `max(T = int)`, its function's symbol being the instance's, `max$T$int`; the generic procedure itself has none, having no code. The internal procedures of section 10.5 have none, and neither have Preload's `__runtime_init` and `__save_command_line` (also section 10.5), so a debugger steps over them. `main`'s hidden `argc` and `argv` (section 10.4) are described nowhere, neither in its subprogram's type nor as its variables, so `break main`, `main ()` in a backtrace and `ptype main` are what they would be without them: `main` takes nothing.
 - **Lexical blocks** following the program's scopes (section 4.7): each `if`, `else`, `push_context` and standalone block, each loop's body, which starts at its `for` or `while`, and each case of a switch, which starts at its `case` (section 6.14); and one inside its block for each declaration of a local or a constant that hides a name a debugger shows (a global, a parameter, an outer local, a constant, a procedure), from the declaration to the end of the block (rustc starts one at every `let`), but a constant's after code that can't go on in its block, as after a `return`, `break` or `continue`, or after a block or an `if` that always ends in one (**Constants** below). An `#if` makes none, since it makes no scope (section 4.9): the taken branch's locals are in the block around it. Each copy of a deferred statement (section 6.12, and the line table below) is a block of its own, at the deferred statement, inside the block where the `defer` was reached, so what each copy declares is a variable of its own (and a name a block it leaves hides is, inside the copy, the one the deferred code reads); on Windows the blocks such a copy leaves can lose theirs (below).
 - **A line table**, mapping machine code to source positions. Each instruction is at the first token of the statement it comes from; a loop's test and step are at its `for` or `while`, an `if`'s test at its `if` and the jump out of each of its blocks at that block's `}` (an `else if` chain is left from the block that ran straight to the code after the chain, so a debugger doesn't stop at the `}` of an arm that didn't run), a switch's value, the comparisons that pick its case (a string switch's too), the setting of each `it` its cases declare (a tagged union's switch) and its no-case failure at its `if`, the jump out of each case at the switch's `}` and a `#through`'s jump at the `#through`, which usually has no instruction, the next case being laid out right after it (so stepping from the `if` stops in the case that runs, never at a `case` line, and from a case's last statement at the switch's `}` or straight at the code after it, never at another case's line), a failing runtime check at the check's own position (the one its message names), and the return at the end of a body at its `}`. A parameter's default value that a call leaves out (section 7.2) is the caller's code, so all of its instructions, a failing check's included, are at the statement holding the call, as the call's own are, whatever file the default is written in, and so are those of the defaults its own calls leave out: stepping never stops at a default's own line, and only a failing check's message names the default's own place (section 8.1). An `#if` adds no code of its own: the taken branch's statements are at their own lines, so a line holding only an `#if` and its `{`, or only a branch's `}`, has none, and neither does the branch not taken (section 4.9). A deferred statement is compiled at each way out of its block, a copy for each (section 6.12), each copy's instructions at their own statements' positions, and the `defer` adds no code of its own, so its line has code only where the copies are. After the copies, the instruction that leaves is where it would be with no `defer`: a `return`'s, `break`'s or `continue`'s at its keyword, the jump out of an `if`'s block at that block's `}`, a loop body's jump to its test or step at the loop's keyword, and the return at the end of a body at its `}`. So stepping out of a block stops at the deferred lines, in the order they run, then at the place that leaves when it has code of its own there (a `return`'s, `break`'s or `continue`'s line, an `if` block's `}`, the loop's keyword, the body's `}`), and goes on. Only a `return` whose values take code to work out (a variable read, a call, an aggregate copied) stops at its line before the deferred lines too: a `return;`, a `return` of a constant, a `break` or a `continue` has none before them. A jump to the code laid out right after it has no instruction, with a `defer` or without, so a `break` at the end of a `while` body can go from the deferred lines straight on after the loop. A standalone block has no jump at its `}`, so after its deferred lines a debugger goes on to the statement after it. On Linux each entry has a line and a column; on Windows only a line, as clang writes CodeView, so a line is one entry however many columns its code spans.
 
@@ -4387,7 +4465,7 @@ What C writes at compile time goes to the compiler's own standard output and err
 - When the call that fails is the one a failing bounds check makes of the compiler's own procedure, the position is the check's `[` instead.
 - Every other frame's position is the call it was waiting on, at its statement's first token, where the line table puts it (section 10.7).
 
-The procedures the compiler adds (section 10.5) are left out. A run that fails before its first frame is pushed has no frames: one of a program that can't run at all, one of a foreign procedure itself, which has no Rig frame, or one whose first procedure's frame is larger than the stack. The frames are given as text for the interpreter's caller to report, one per line, indented by four spaces, `in NAME (PATH:LINE:COL)`:
+The procedures the compiler adds (section 10.5) are left out. A run that fails before its first frame is pushed has no frames: one of a program that can't run at all, one of a foreign procedure itself, which has no Rig frame, or one whose first procedure's frame is larger than the stack. The frames are given as text for the interpreter's caller to report, one per line, indented by four spaces, `in NAME (PATH:LINE:COL)`, NAME an instance of a generic procedure's name for one of its frames, `in max(T = int) (tables.rig:3:5)` (section 7.11):
 
 ```text
     in make_table (tables.rig:40:17)
@@ -4477,13 +4555,14 @@ Type          = "*" Type
               | "[" "]" Type
               | "[" ".." "]" Type
               | ProcType
-              | identifier .
+              | identifier
+              | "$" identifier .            (only in a Param's Type: section 7.11)
 ProcType      = "(" [ ProcParam { "," ProcParam } ] ")" [ "->" ProcResults ] [ "#c_call" ] .
 ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, by `using`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, by `using`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). A `"$" identifier` `Type`, a type parameter's declaration, is part of a `Param`'s `Type` only, at any depth in it but an array's count, a `ProcType`'s `ProcParam`s and results inside it included: in any other `Type` it is `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T`, at the `$` (section 7.11). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
@@ -4622,3 +4701,4 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `---` | uninitialised variable | 4.3 |
 | `,` | separator; `cast,trunc` | 3.14, 5.10 |
 | `;` | end of a statement or declaration | 6 |
+| `$` | a generic procedure's type parameter, `$T`, declared in a parameter's type | 7.11 |

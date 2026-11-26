@@ -911,16 +911,24 @@ static s32 address_of(Lowering *l, Ast *decl) {
     return addr->result;
 }
 
+// The symbol of procedure `proc`, its Ir_Proc's name and its key in
+// proc_index: an instance of a generic procedure's (spec 7.11, 10.7),
+// max$T$int, unique in the program; any other's name, which the checker
+// allowed no other top-level declaration of, in any file.
+static String proc_symbol(Ast_Proc *proc) {
+    return proc->instance ? proc->instance->symbol : proc->name;
+}
+
 // The index in module->procs of procedure `proc`, a Rig or foreign one of
-// the program, from any of its files: its name's (the checker allowed no
-// other top-level declaration of it, in any file). ir_lower numbered every
+// the program, from any of its files, an instance of a generic one too: its
+// symbol's (proc_symbol). ir_lower numbered every
 // procedure first; on demand, one nothing named before is declared now,
 // its body lowered later (declare_proc). A foreign one named here is one
 // the program uses (used_foreign): a const.N for a debugger alone names
 // only one the program uses already (constant_bytes), so it adds none.
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {
     if (proc->is_foreign) table_put(&l->used_foreign, proc->name, true);
-    s32 *index = table_get(&l->proc_index, proc->name);
+    s32 *index = table_get(&l->proc_index, proc_symbol(proc));
     if (index) return *index;
     RIG_ASSERT(l->on_demand);
     return declare_proc(l, proc);
@@ -4893,15 +4901,19 @@ static s32 lower_global(Lowering *l, Ast_Var *var) {
 }
 
 // Procedure `source` declared: an Ir_Proc with its parameters and results,
-// appended to the module and entered in proc_index by its name; its index.
+// appended to the module and entered in proc_index by its symbol
+// (proc_symbol, its Ir_Proc's name); its index. A debugger and the
+// interpreter's frames know it by its source_name: its name, or an
+// instance's, max(T = int) (spec 7.11, 10.7). A generic procedure is never
+// declared: only its instances are procedures.
 // Its body is lowered after (lower_body): on demand, it joins `waiting`,
 // which ir_lower_run empties.
 static s32 declare_proc(Lowering *l, Ast_Proc *source) {
     // A broken entry comes with an error (the parser's, or the lexer's for
     // a TOKEN_ERROR the parser stopped at): rig build stops before lowering
     // a program with errors, and a #run reaching one doesn't run.
-    RIG_ASSERT(!source->is_broken);
-    Ir_Proc *p = ir_new_proc(l->module, l->arena, source->name);
+    RIG_ASSERT(!source->is_broken && !source->is_generic);
+    Ir_Proc *p = ir_new_proc(l->module, l->arena, proc_symbol(source));
     p->is_foreign = source->is_foreign;
     // A #compiler procedure (spec 7.9) is declared alone, as a foreign one
     // is: it has no body here, since the compiler does it.
@@ -4952,7 +4964,7 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
         array_add(&p->results, {IR_I32, IR_EXT_NONE});
     }
     if (has_body) {
-        p->source_name = source->name;
+        p->source_name = source->instance ? source->instance->name : source->name;
         p->pos = source->pos;
         p->body = source->body->pos;
         for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
@@ -4964,7 +4976,7 @@ static s32 declare_proc(Lowering *l, Ast_Proc *source) {
         p->no_debug_info = source == l->runtime_init || source == l->save_command_line;
     }
     s32 index = (s32)(l->module->procs.count - 1);
-    table_put(&l->proc_index, source->name, index);
+    table_put(&l->proc_index, proc_symbol(source), index);
     set_source(l, index, source);
     if (l->on_demand && has_body) array_add(&l->waiting, index);
     return index;
@@ -5175,7 +5187,14 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     // source order (add_constant), before any body, so a body's declaration
     // that hides one starts a scope (hides_a_name). The procedures are
     // numbered first (proc_index), so a relocation can name one.
-    for (s64 i = 0; i < f->procs.count; i++) table_put(&l.proc_index, f->procs[i]->name, (s32)i);
+    // A generic procedure has none (spec 7.11): its instances do, after
+    // the program's own procedures, in the order the checker made them.
+    Array<Ast_Proc *> procs = {};
+    for (s64 i = 0; i < f->procs.count; i++) {
+        if (!f->procs[i]->is_generic) array_add(&procs, f->procs[i]);
+    }
+    for (s64 i = 0; i < f->instances.count; i++) array_add(&procs, f->instances[i]->proc);
+    for (s64 i = 0; i < procs.count; i++) table_put(&l.proc_index, proc_symbol(procs[i]), (s32)i);
     for (s64 i = 0; i < f->globals.count; i++) {
         if (f->globals[i]->kind == AST_VAR) lower_global(&l, (Ast_Var *)f->globals[i]);
     }
@@ -5186,16 +5205,17 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
 
     // Every procedure first, so a call can name one declared later, each
     // at the index it was numbered with.
-    for (s64 i = 0; i < f->procs.count; i++) {
-        s32 index = declare_proc(&l, f->procs[i]);
+    for (s64 i = 0; i < procs.count; i++) {
+        s32 index = declare_proc(&l, procs[i]);
         RIG_ASSERT(index == i);
     }
 
     // Then the bodies: a foreign procedure's is C's, and a #compiler one's
     // the compiler's own.
-    for (s64 i = 0; i < f->procs.count; i++) {
-        if (!f->procs[i]->is_foreign && !f->procs[i]->is_compiler) lower_body(&l, f->procs[i], (s32)i, false);
+    for (s64 i = 0; i < procs.count; i++) {
+        if (!procs[i]->is_foreign && !procs[i]->is_compiler) lower_body(&l, procs[i], (s32)i, false);
     }
+    array_free(&procs);
 
     // Every data constant's const.N, for a debugger, now that the bodies'
     // uses have made theirs: the rest are made here, read by no code.

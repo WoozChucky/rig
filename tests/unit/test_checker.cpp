@@ -12483,3 +12483,485 @@ TEST(types_are_no_values_elsewhere) {
               "7:16: 'void' is only a pointer's target, as in *void\n");
     arena_free(&a);
 }
+
+// Issue #226: generic procedures (spec 7.11).
+
+// Every node of the tree at n, in order, into *nodes, and the buffer of
+// every Array the tree holds that has one into *buffers: a walk of each
+// field ast_clone copies.
+static void tree_parts(Ast *n, Array<Ast *> *nodes, Array<const void *> *buffers);
+
+template<typename T>
+static void tree_list(Array<T *> list, Array<Ast *> *nodes, Array<const void *> *buffers) {
+    if (list.data) array_add(buffers, (const void *)list.data);
+    for (s64 i = 0; i < list.count; i++) tree_parts(list[i], nodes, buffers);
+}
+
+static void tree_parts(Ast *n, Array<Ast *> *nodes, Array<const void *> *buffers) {
+    if (!n) return;
+    array_add(nodes, n);
+    switch (n->kind) {
+    case AST_PROC: {
+        Ast_Proc *p = (Ast_Proc *)n;
+        tree_list(p->params, nodes, buffers);
+        tree_list(p->results, nodes, buffers);
+        tree_parts(p->body, nodes, buffers);
+        break;
+    }
+    case AST_PARAM:
+        tree_parts(((Ast_Param *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Param *)n)->default_value, nodes, buffers);
+        break;
+    case AST_TYPE_NAME:
+    case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
+    case AST_TYPE_PROC: {
+        Ast_Type *t = (Ast_Type *)n;
+        tree_parts(t->pointee, nodes, buffers);
+        tree_parts(t->count, nodes, buffers);
+        tree_parts(t->element, nodes, buffers);
+        tree_list(t->params, nodes, buffers);
+        tree_list(t->results, nodes, buffers);
+        break;
+    }
+    case AST_BLOCK: tree_list(((Ast_Block *)n)->statements, nodes, buffers); break;
+    case AST_CALL:
+        tree_parts(((Ast_Call *)n)->callee, nodes, buffers);
+        tree_list(((Ast_Call *)n)->args, nodes, buffers);
+        break;
+    case AST_VAR:
+        tree_parts(((Ast_Var *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Var *)n)->value, nodes, buffers);
+        break;
+    case AST_CONST: tree_parts(((Ast_Const *)n)->value, nodes, buffers); break;
+    case AST_ASSIGN:
+        tree_list(((Ast_Assign *)n)->targets, nodes, buffers);
+        tree_parts(((Ast_Assign *)n)->value, nodes, buffers);
+        break;
+    case AST_RETURN: tree_list(((Ast_Return *)n)->values, nodes, buffers); break;
+    case AST_UNARY: tree_parts(((Ast_Unary *)n)->operand, nodes, buffers); break;
+    case AST_SPREAD: tree_parts(((Ast_Spread *)n)->operand, nodes, buffers); break;
+    case AST_DEREF: tree_parts(((Ast_Deref *)n)->operand, nodes, buffers); break;
+    case AST_BINARY:
+        tree_parts(((Ast_Binary *)n)->left, nodes, buffers);
+        tree_parts(((Ast_Binary *)n)->right, nodes, buffers);
+        break;
+    case AST_IF:
+        tree_parts(((Ast_If *)n)->condition, nodes, buffers);
+        tree_parts(((Ast_If *)n)->then_block, nodes, buffers);
+        tree_parts(((Ast_If *)n)->else_part, nodes, buffers);
+        break;
+    case AST_IF_DIRECTIVE:
+        tree_parts(((Ast_If_Directive *)n)->condition, nodes, buffers);
+        tree_parts(((Ast_If_Directive *)n)->then_block, nodes, buffers);
+        tree_parts(((Ast_If_Directive *)n)->else_part, nodes, buffers);
+        break;
+    case AST_WHILE:
+        tree_parts(((Ast_While *)n)->condition, nodes, buffers);
+        tree_parts(((Ast_While *)n)->body, nodes, buffers);
+        break;
+    case AST_FOR: {
+        Ast_For *f = (Ast_For *)n;
+        tree_parts(f->iterator, nodes, buffers);
+        tree_parts(f->index, nodes, buffers);
+        tree_parts(f->first, nodes, buffers);
+        tree_parts(f->last, nodes, buffers);
+        tree_parts(f->sequence, nodes, buffers);
+        tree_parts(f->body, nodes, buffers);
+        break;
+    }
+    case AST_CAST:
+        tree_parts(((Ast_Cast *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Cast *)n)->value, nodes, buffers);
+        break;
+    case AST_MULTI_VAR:
+        tree_list(((Ast_Multi_Var *)n)->vars, nodes, buffers);
+        tree_parts(((Ast_Multi_Var *)n)->value, nodes, buffers);
+        break;
+    case AST_SIZE_OF: tree_parts(((Ast_Size_Of *)n)->type_expr, nodes, buffers); break;
+    case AST_TYPE_INFO: tree_parts(((Ast_Type_Info *)n)->type_expr, nodes, buffers); break;
+    case AST_TYPE_VALUE: tree_parts(((Ast_Type_Value *)n)->type_expr, nodes, buffers); break;
+    case AST_MEMBER: tree_parts(((Ast_Member *)n)->operand, nodes, buffers); break;
+    case AST_LITERAL: {
+        Ast_Literal *l = (Ast_Literal *)n;
+        tree_parts(l->type_expr, nodes, buffers);
+        if (l->names.data) array_add(buffers, (const void *)l->names.data);
+        if (l->name_positions.data) array_add(buffers, (const void *)l->name_positions.data);
+        tree_list(l->values, nodes, buffers);
+        break;
+    }
+    case AST_INDEX:
+        tree_parts(((Ast_Index *)n)->operand, nodes, buffers);
+        tree_parts(((Ast_Index *)n)->index, nodes, buffers);
+        break;
+    case AST_RUN: tree_parts(((Ast_Run *)n)->operand, nodes, buffers); break;
+    case AST_DEFER: tree_parts(((Ast_Defer *)n)->statement, nodes, buffers); break;
+    case AST_PUSH_CONTEXT:
+        tree_parts(((Ast_Push_Context *)n)->context, nodes, buffers);
+        tree_parts(((Ast_Push_Context *)n)->block, nodes, buffers);
+        break;
+    case AST_SWITCH:
+        tree_parts(((Ast_Switch *)n)->value, nodes, buffers);
+        tree_list(((Ast_Switch *)n)->cases, nodes, buffers);
+        break;
+    case AST_CASE:
+        tree_parts(((Ast_Case *)n)->value, nodes, buffers);
+        tree_parts(((Ast_Case *)n)->block, nodes, buffers);
+        break;
+    default: break;  // a leaf
+    }
+}
+
+TEST(clones_are_deep_and_unchecked) {
+    // An instance is a copy of its generic's tree, as the parser made it:
+    // every node and every Array new, nothing the checker writes copied,
+    // its body's block pointing at the copy. A procedure holding every
+    // statement and every expression is copied before the program is
+    // checked: the copy dumps as the original does, shares no node and no
+    // Array's buffer with it, and checking the program, the original among
+    // it, leaves the copy unchecked.
+    Arena a = arena_make();
+    const char *text =
+        "Vec2 :: struct { x: float; y: float; }\n"
+        "Mode :: enum { A; B; }\n"
+        "Shape :: union #tagged { circle: float; empty: void; }\n"
+        "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+        "sum :: (values: ..int) -> int { t := 0; for values { t += it; } return t; }\n"
+        "SEVEN :: 7;\n"
+        "everything :: (n: int, s: Shape, loc: Source_Code_Location = #caller_location) -> int {\n"
+        "    x: int = 1;\n"
+        "    y: int = ---;\n"
+        "    K :: 3;\n"
+        "    q, r := divmod(n, 2);\n"
+        "    x = 2;\n"
+        "    x += 1;\n"
+        "    q, r = divmod(x, 3);\n"
+        "    { z := x; }\n"
+        "    if x > 1 { x = 1; } else if x < 0 { x = 0; } else { x = 2; }\n"
+        "    if x == {\n"
+        "        case 1; x = 2; #through;\n"
+        "        case 2; x = 3;\n"
+        "        case; x = 4;\n"
+        "    }\n"
+        "    if s == {\n"
+        "        case .circle; radius := it;\n"
+        "        case .empty;\n"
+        "    }\n"
+        "    while x < 10 { x += 1; if x == 5 { break; } continue; }\n"
+        "    a := int.[1, 2, 3];\n"
+        "    for * a { it.* += 1; }\n"
+        "    for i: 0..2 { x += i; }\n"
+        "    defer x = 0;\n"
+        "    push_context context { x += 1; }\n"
+        "    #if OS == .WINDOWS { w := 1; } else { w := 2; }\n"
+        "    v := Vec2.{x = 1, y = 2.5};\n"
+        "    u: Vec2 = .{1, 2};\n"
+        "    b: [2]int = .[1, 2];\n"
+        "    p := *v;\n"
+        "    m: Mode = .A;\n"
+        "    e := Mode.B;\n"
+        "    f := -x + ~x * (x << 1);\n"
+        "    g := !true && false;\n"
+        "    h := cast(u8) x;\n"
+        "    k := cast,trunc(u8) x;\n"
+        "    l := p.*.x;\n"
+        "    o := size_of(Vec2);\n"
+        "    t := type_info(Vec2);\n"
+        "    c := \"text\";\n"
+        "    nothing: *int = null;\n"
+        "    same := []int == [..]int;\n"
+        "    total := sum(..a);\n"
+        "    ran := #run sum(1, 2);\n"
+        "    return a[0] + q + r + K + total + ran + SEVEN;\n"
+        "}\n"
+        "main :: () { everything(1, Shape.empty); }\n";
+    Diagnostics d = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"), str(text));
+    CHECK_STR(file->load_failure, "");
+    Ast_Proc *original = (Ast_Proc *)top_level_named(file, "everything");
+    Ast_Proc *copy = (Ast_Proc *)ast_clone(&a, original);
+    CHECK_STR(ast_dump_node(&a, copy), string_cstr(&a, ast_dump_node(&a, original)));
+    CHECK(copy->body->proc == copy);
+    CHECK(original->body->proc == original);
+    Array<Ast *> original_nodes = {}, copy_nodes = {};
+    Array<const void *> original_buffers = {}, copy_buffers = {};
+    tree_parts(original, &original_nodes, &original_buffers);
+    tree_parts(copy, &copy_nodes, &copy_buffers);
+    CHECK_EQ(copy_nodes.count, original_nodes.count);
+    CHECK_EQ(copy_buffers.count, original_buffers.count);
+    CHECK(original_nodes.count > 200);
+    for (s64 i = 0; i < copy_nodes.count && i < original_nodes.count; i++) {
+        CHECK_EQ(copy_nodes[i]->kind, original_nodes[i]->kind);
+        for (s64 k = 0; k < original_nodes.count; k++) CHECK(copy_nodes[i] != original_nodes[k]);
+    }
+    for (s64 i = 0; i < copy_buffers.count; i++) {
+        for (s64 k = 0; k < original_buffers.count; k++) CHECK(copy_buffers[i] != original_buffers[k]);
+    }
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(original->type != nullptr);
+    CHECK(((Ast_Var *)original->body->statements[0])->type == &type_int);
+    for (s64 i = 0; i < copy_nodes.count; i++) CHECK(copy_nodes[i]->type == nullptr);
+    CHECK(copy->resolve == RESOLVE_NOT_YET && copy->body_resolve == RESOLVE_NOT_YET);
+    array_free(&original_nodes);
+    array_free(&copy_nodes);
+    array_free(&original_buffers);
+    array_free(&copy_buffers);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+// The source every test of instances starts with.
+static const char *GENERIC_MAX = "Vec2 :: struct { x: float; y: float; }\n"
+                                 "max :: (a: $T, b: T) -> T { if a > b { return a; } return b; }\n";
+
+// GENERIC_MAX, then `rest`, in the arena.
+static const char *with_generic_max(Arena *a, const char *rest) {
+    return string_cstr(a, string_printf(a, "%s%s", GENERIC_MAX, rest));
+}
+
+TEST(instances_are_one_per_set_of_types) {
+    // Each set of types a call infers makes one instance, which every call
+    // with that set shares: int and s64 are two types, float and float32
+    // one. Each instance is named by its bindings, and the call's
+    // procedure is it.
+    Arena a = arena_make();
+    const char *calls = "main :: () {\n"
+                        "    i := max(1, 2);\n"
+                        "    j := max(i, 3);\n"
+                        "    f := max(1.5, 2.5);\n"
+                        "    k := max(cast(s32) 1, 2);\n"
+                        "    l := max(cast(s64) 1, 2);\n"
+                        "    g := max(cast(float) 1, 2);\n"
+                        "}\n";
+    Checked c = check_src(&a, with_generic_max(&a, calls));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *names[] = {"i", "j", "f", "k", "l", "g"};
+    const char *types[] = {"int", "int", "float32", "s32", "s64", "float32"};
+    for (s64 k = 0; k < 6; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Proc *max = (Ast_Proc *)global_named(&c, "max");
+    CHECK_EQ(max->instances.count, 4);
+    if (max->instances.count == 4) {
+        CHECK_STR(max->instances[0]->name, "max(T = int)");
+        CHECK_STR(max->instances[1]->name, "max(T = float32)");
+        CHECK_STR(max->instances[2]->name, "max(T = s32)");
+        CHECK_STR(max->instances[3]->name, "max(T = s64)");
+        CHECK_STR(max->instances[0]->symbol, "max$T$int");
+    }
+    Ast_Call *i = (Ast_Call *)((Ast_Var *)local_named(&c, "i"))->value;
+    Ast_Call *j = (Ast_Call *)((Ast_Var *)local_named(&c, "j"))->value;
+    CHECK(i->proc == j->proc);
+    CHECK(i->proc && i->proc->instance && i->proc->instance->generic == max);
+    CHECK(i->proc && !i->proc->is_generic);
+    CHECK_EQ(c.file->instances.count, 4);
+    token_list_free(c.list);
+
+    // A global's #run, another procedure's call and another instance's
+    // body share them too: they add none of max's, the only new instance
+    // being outer's own.
+    String more = string_printf(&a,
+                                "G :: #run max(1, 2);\n"
+                                "outer :: (x: $T) -> T { return max(x, x); }\n"
+                                "other :: () -> int { return max(5, 6) + outer(7); }\n"
+                                "%s",
+                                calls);
+    c = check_src(&a, with_generic_max(&a, string_cstr(&a, more)));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "max"))->instances.count, 4);
+    CHECK_EQ(c.file->instances.count, 5);
+    Ast_Proc *outer = (Ast_Proc *)global_named(&c, "outer");
+    CHECK_EQ(outer->instances.count, 1);
+    if (outer->instances.count == 1) {
+        Ast_Instance *inst = outer->instances[0];
+        CHECK_STR(inst->name, "outer(T = int)");
+        CHECK(!inst->made_in);
+        CHECK_EQ(inst->depth, 1);
+    }
+    CHECK_EQ(global_named(&c, "G")->constant, 2);
+    token_list_free(c.list);
+
+    // An instance first made in another instance's body records it, one
+    // level deeper.
+    c = check_src(&a,
+                  "wrap :: (x: $T) -> T { return twice(x); }\n"
+                  "twice :: (y: $U) -> U { return y + y; }\n"
+                  "main :: () { a := wrap(1); }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(c.file->instances.count, 2);
+    if (c.file->instances.count == 2) {
+        Ast_Instance *wrap = c.file->instances[0];
+        Ast_Instance *twice = c.file->instances[1];
+        CHECK_STR(twice->name, "twice(U = int)");
+        CHECK(twice->made_in == wrap);
+        CHECK_EQ(twice->depth, 2);
+        CHECK_EQ(twice->called_at.line, 1);
+        CHECK_EQ(twice->called_at.col, 31);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(untyped_arguments_take_the_type_another_fixes) {
+    // The first typed argument fixes T, an untyped constant then taking it;
+    // with none typed, they meet at a type whose default T is (an untyped
+    // float if either is one). A literal with no type of its own takes T
+    // where another argument fixes it.
+    Arena a = arena_make();
+    Checked c = check_src(&a, with_generic_max(&a,
+                                               "pick :: (a: $T, b: T) -> T { return a; }\n"
+                                               "main :: () {\n"
+                                               "    x: u8;\n"
+                                               "    y: float64;\n"
+                                               "    v: Vec2;\n"
+                                               "    a := max(1, x);\n"
+                                               "    b := max(x, 1);\n"
+                                               "    c := max(1, 2.5);\n"
+                                               "    d := max(2.5, y);\n"
+                                               "    e := pick(v, .{1, 2});\n"
+                                               "}\n"));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *names[] = {"a", "b", "c", "d", "e"};
+    const char *types[] = {"u8", "u8", "float32", "float64", "Vec2"};
+    for (s64 k = 0; k < 5; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(inference_reads_through_types) {
+    // A pattern binds T where it stands in it: []$T the elements of an
+    // array, a view or a resizable array, *$T a pointer's target, ($T) -> T
+    // a procedure's parameter.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: float; y: float; }\n"
+                                 "first :: (items: []$T) -> T { return items[0]; }\n"
+                                 "deref :: (p: *$T) -> T { return p.*; }\n"
+                                 "apply :: (f: ($T) -> T, x: T) -> T { return f(x); }\n"
+                                 "twice :: (n: int) -> int { return n * 2; }\n"
+                                 "main :: () {\n"
+                                 "    a: [3]int;\n"
+                                 "    r: [..]float;\n"
+                                 "    s: []u8;\n"
+                                 "    v: Vec2;\n"
+                                 "    fa := first(a);\n"
+                                 "    fr := first(r);\n"
+                                 "    fs := first(s);\n"
+                                 "    dv := deref(*v);\n"
+                                 "    ap := apply(twice, 4);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    const char *names[] = {"fa", "fr", "fs", "dv", "ap"};
+    const char *types[] = {"int", "float32", "u8", "Vec2", "int"};
+    for (s64 k = 0; k < 5; k++) {
+        Type *t = find_local(body, names[k])->type;
+        CHECK_STR(t ? type_name(&a, t) : str("?"), types[k]);
+    }
+    arena_free(&a);
+}
+
+TEST(inference_mistakes) {
+    // What can't be inferred, at the argument; an argument that doesn't
+    // convert to the T another fixed, as any argument; a count that's
+    // wrong, as any call's; a generic's name as a value.
+    Arena a = arena_make();
+    struct Case {
+        const char *body;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"x := max(null, null);", "4:23: can't work out 'T' for 'max': argument 1 has no type of its own\n"},
+        {"x := max(1, null);", "4:26: can't work out 'T' for 'max': argument 2 has no type of its own\n"},
+        {"x := first(5);", "4:25: argument 1 of 'first' has type 'int', which doesn't fit '[]$T'\n"},
+        {"n: int; x := max(cast(s32) 1, n);",
+         "4:44: argument 2 of 'max' has type 'int', which can't be converted to 's32'\n"},
+        {"x := max(1);", "4:19: 'max' takes 2 arguments, but 1 was given\n"},
+        {"m := max;", "4:19: 'max' is generic; call it, or wrap one instance in a procedure\n"},
+        {"x := max(nope, 1);", "4:23: unknown identifier 'nope'\n"},
+    };
+    for (const Case &k : cases) {
+        String rest = string_printf(&a,
+                                    "first :: (items: []$T) -> T { return items[0]; }\n"
+                                    "main :: () { %s }\n",
+                                    k.body);
+        CHECK_STR(check_source(&a, with_generic_max(&a, string_cstr(&a, rest))), k.message);
+    }
+    arena_free(&a);
+}
+
+TEST(type_parameters_work_in_an_instance) {
+    // In an instance, T is the type it's bound to: a variable's type,
+    // size_of's, type_info's, a comparison's, an enum's or a struct's name
+    // before a member or a literal. #if T == ... picks the code per
+    // instance: the branch not taken is never checked, so v + 1 is checked
+    // only where T isn't Vec2, and is a mistake for a bool.
+    Arena a = arena_make();
+    const char *generics = "Vec2 :: struct { x: float; y: float; }\n"
+                           "Mode :: enum { A; B; }\n"
+                           "info :: (v: $T) -> int, bool, bool {\n"
+                           "    x: T;\n"
+                           "    n := size_of(T);\n"
+                           "    ti := type_info(T);\n"
+                           "    return n, T == int, T != string;\n"
+                           "}\n"
+                           "reset :: (m: *$T) { m.* = T.A; }\n"
+                           "zero :: (v: $T) -> T { return T.{}; }\n"
+                           "only_ints :: (v: $T) -> int { #if T == int { return v; } else { return 0; } }\n"
+                           "bad_for_vec :: (v: $T) -> T { #if T == Vec2 { return v; } else { return v + 1; } }\n";
+    CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a,
+                                                                  "%s"
+                                                                  "main :: () {\n"
+                                                                  "    v: Vec2;\n"
+                                                                  "    m: Mode;\n"
+                                                                  "    a, b, c := info(1);\n"
+                                                                  "    d, e, f := info(m);\n"
+                                                                  "    g, h, i := info(v);\n"
+                                                                  "    reset(*m);\n"
+                                                                  "    z := zero(v);\n"
+                                                                  "    o := only_ints(1);\n"
+                                                                  "    p := only_ints(v);\n"
+                                                                  "    q := bad_for_vec(v);\n"
+                                                                  "    r := bad_for_vec(2);\n"
+                                                                  "}\n",
+                                                                  generics))),
+              "");
+    CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a, "%smain :: () { b := bad_for_vec(true); }\n",
+                                                                  generics))),
+              "12:75: '+' needs numbers, not 'bool'\n");
+    // T is no value, and no procedure.
+    CHECK_STR(check_source(&a,
+                           "f :: (v: $T) { x := T; T(); y := *T; }\n"
+                           "main :: () { f(1); }\n"),
+              "1:21: 'T' is a type, not a value\n"
+              "1:24: 'T' isn't a procedure, so it can't be called\n"
+              "1:35: 'T' is a type, not a value\n");
+    arena_free(&a);
+}
+
+TEST(generic_refusals) {
+    // C has none of Rig's generics, and a #compiler procedure is one the
+    // compiler does for the types written: each is refused at its
+    // directive. A parameter whose type declares a type parameter takes no
+    // default value, for now.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (a: $T) #foreign libc;\nmain :: () { }\n"),
+              "1:14: 'f' is generic, so it can't be #foreign\n");
+    CHECK_STR(check_source(&a, "g :: (a: $T) #c_call { }\nmain :: () { }\n"),
+              "1:14: 'g' is generic, so it can't be #c_call\n");
+    CHECK_STR(check_source(&a, "h :: (a: $T, b: $U = 1) { }\nmain :: () { }\n"),
+              "1:20: a parameter that declares '$U' can't have a default value, for now\n");
+    CHECK_STR(check_source(&a, "k :: (a: $T) #compiler;\nmain :: () { }\n"),
+              "1:14: #compiler is only for the modules that ship with rig\n"
+              "1:14: 'k' is generic, so it can't be #compiler\n");
+    // A generic whose signature has a mistake makes no instance: its calls
+    // say nothing more.
+    CHECK_STR(check_source(&a,
+                           "m :: (a: $T, b: Nope) { }\n"
+                           "main :: () { m(1, 2); m(true, 3); }\n"),
+              "1:17: unknown type 'Nope'\n");
+    arena_free(&a);
+}
