@@ -265,8 +265,10 @@ struct Ast_Proc : Ast {
 
 // A name for a type: an instance's type parameter, T bound to int in
 // max(T = int) (spec 7.11), found between the scopes and the top level
-// while the instance is checked (check_generic.cpp's instance_binding).
-// pos is the $T it binds. Made by the checker, written nowhere.
+// while the instance is checked (check_generic.cpp's instance_binding),
+// pos the $T it binds; or a type alias, `V :: Vec2;` (spec 3.22), the
+// constant's own (Ast_Const.alias), found wherever the constant is, pos its
+// name. Made by the checker, written nowhere.
 struct Ast_Alias : Ast {
     String name;
     Type *aliased;  // null when it has no type once every struct is laid out (checker.cpp's
@@ -340,6 +342,8 @@ struct Ast_Const : Ast {
     Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
+    Ast_Alias *alias;     // its value names a type (spec 3.22): the alias the checker made of it, at its
+                          // name, which every lookup finds in its place; null for any other constant
 };
 
 struct Ast_Struct;

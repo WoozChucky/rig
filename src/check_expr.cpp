@@ -597,10 +597,10 @@ static Ast_Literal *void_member_value(Checker *c, Type *t, String name, Position
 
 // The declaration a name found as `decl` stands for where an enum's or a
 // tagged union's members are named through it (Mode.FREE, Shape.empty): an
-// instance's type parameter bound to an enum or a named struct (spec 7.11)
-// stands for that type's declaration, so T.FREE is Mode.FREE in
-// reset(T = Mode); anything else for itself, a binding that lost its type
-// (made again, checker.cpp's made_again) too.
+// instance's type parameter bound to an enum or a named struct (spec 7.11),
+// or a type alias of one (spec 3.22), stands for that type's declaration, so
+// T.FREE is Mode.FREE in reset(T = Mode); anything else for itself, a
+// binding that lost its type (made again, checker.cpp's made_again) too.
 static Ast *through_alias(Ast *decl) {
     if (!decl || decl->kind != AST_ALIAS) return decl;
     Type *t = ((Ast_Alias *)decl)->aliased;
@@ -1080,8 +1080,8 @@ static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *thro
         }
         return proc->type;  // null when a part of its signature was an error, reported
     }
-    // An instance's type parameter (spec 7.11) is a type as a struct's name
-    // is: "'T' is a type, not a value".
+    // An instance's type parameter (spec 7.11) and a type alias (spec 3.22)
+    // are types as a struct's name is: "'T' is a type, not a value".
     case AST_STRUCT:
     case AST_ENUM:
     case AST_ALIAS: report_type_as_value(c, name); return nullptr;
@@ -2442,13 +2442,15 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // Types where a value goes (spec 5.20). A type written as a value, []int or
 // #type (int) -> int, is an Ast_Type_Value; a name and *X are a name and an
 // address as written, and whether they name a type is the name's lookup's
-// to say: a struct's, an enum's or an instance's type parameter's (spec
-// 7.11), or none while the name is a built-in type's, so a local `int :=
-// 5;` hides the type int, as it hides any top-level name (spec 4.7). A type
-// in parentheses is no type, as nowhere else is one: (int) is a value. Only
-// the places that take a type check one as such (check_type_value), for
-// now == and != between two types (check_binary), and a $T: Type
-// parameter's argument (check_generic_call). A type value is never a value
+// to say: a struct's, an enum's, an instance's type parameter's (spec
+// 7.11) or a type alias's (spec 3.22), or none while the name is a
+// built-in type's, so a local `int := 5;` hides the type int, as it hides
+// any top-level name (spec 4.7). A type in parentheses is no type, as
+// nowhere else is one: (int) is a value. Only the places that take a type
+// check one as such (check_type_value), for now == and != between two
+// types (check_binary), a $T: Type parameter's argument
+// (check_generic_call), and a constant's value, which makes it an alias
+// (checker.cpp's check_const_value). A type value is never a value
 // at run time: it has type Type, never a constant (Ast.is_constant stays
 // false, so nothing folds or lowers it), the type it denotes kept in
 // Ast.constant's bits for type_value.
@@ -2953,7 +2955,7 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
     case AST_BUILTIN: what = "a procedure"; break;  // built into the language (spec 3.17)
     case AST_STRUCT:
     case AST_ENUM:
-    case AST_ALIAS: report_type_as_value(c, name); return false;  // a type parameter's too (spec 7.11)
+    case AST_ALIAS: report_type_as_value(c, name); return false;  // a type parameter's, an alias's too
     default: RIG_ASSERT(!"not a declaration");
     }
     diag_error(c->diag, name->pos, for_writing ? "can't assign to '" STR_FMT "': it's %s"
@@ -3102,6 +3104,10 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
             report_parameter_in_default(c, name);
             return false;
         }
+        // A constant with no type had its own mistake said, or is in the
+        // circle being said (`S :: *S;`, resolve_global): as any value of
+        // no type, it says nothing more.
+        if (decl->kind == AST_CONST && !decl->type) return false;
         if (!name_is_place(c, name, for_writing)) return false;
         name->type = decl->type;
         return decl->type != nullptr;

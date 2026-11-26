@@ -1,0 +1,52 @@
+// Type aliases (issue #227, spec 3.22): a constant whose value names a
+// type is that type under a second name, wherever a type is written: a
+// struct's (V), a pointer's (P, an alias's pointer), a procedure type's
+// written as a signature with no body (Cb), a built-in type's (My_Int,
+// equal to int), an array's declared in a body (Local), one in a generic's
+// body, each instance's (Two, [2]T), and one used before its declaration,
+// in a struct's field (Holder's Later). The type information is the type's
+// own, so V's description names Vec2. The same compiled, interpreted and
+// in a top-level #run.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+V :: Vec2;
+P :: *V;
+Cb :: (n: int) -> int;
+My_Int :: int;
+
+Holder :: struct { at: Later; }
+Later :: Defined_After;
+Defined_After :: struct { v: My_Int; }
+
+twice :: (n: int) -> int { return n * 2; }
+
+first_two :: (xs: []$T) -> [2]T {
+    Two :: [2]T;
+    r: Two;
+    r[0] = xs[0];
+    r[1] = xs[1];
+    return r;
+}
+
+#run {
+    x: P;
+    print("{}\n", x == null);
+}
+
+main :: () {
+    v: V = .{1, 2};
+    print("{}\n", v);
+    f: Cb = twice;
+    print("{}\n", f(21));
+    n: My_Int = 7;
+    print("{} {}\n", n, My_Int == int);
+    Local :: [3]My_Int;
+    arr: Local = .[1, 2, 3];
+    print("{}\n", arr);
+    print("{}\n", (cast(*Type_Info_Struct) type_info(V)).name);
+    print("{}\n", first_two(int.[4, 5, 6]));
+    h: Holder;
+    print("{}\n", h);
+}

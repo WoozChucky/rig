@@ -24,12 +24,13 @@
 //   structs, unions and enums are visible everywhere, in any order. They
 //   share one set of names: a global can't take a procedure's ("'x' is
 //   already declared at PATH:L:C").
-// - A struct's name is a type, and so is a union's or an enum's: used as a
-//   value, it's "'Vec2' is a type, not a value". A name declared as
-//   anything else, written where a type goes, is "'foo' is not a type"; a
-//   name declared nowhere, "unknown type 'foo'". A built-in type's name
-//   always means the built-in type, so a struct, a union or an enum can't
-//   take one: "'u8' is a built-in type", at its name.
+// - A struct's name is a type, and so is a union's, an enum's or a type
+//   alias's (below): used as a value, it's "'Vec2' is a type, not a value".
+//   A name declared as anything else, written where a type goes, is "'foo'
+//   is not a type"; a name declared nowhere, "unknown type 'foo'". A
+//   built-in type's name always means the built-in type, so a struct, a
+//   union, an enum or an alias can't take one: "'u8' is a built-in type",
+//   at its name.
 // - An enum and a constant are predeclared (spec 2.5), visible everywhere:
 //   Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }, the systems a
 //   program can be built for, and OS, the one it is (Ast_File.system, else
@@ -1246,8 +1247,8 @@
 //   one: `[N]T`, `[]T` and `[..]T` (a '[' starts no expression) and
 //   `#type T` are an Ast_Type_Value; a name and `*X` are a name and an
 //   address as written, which name a type when the name's lookup finds a
-//   struct, an enum or an instance's type parameter (an Ast_Alias), or
-//   nothing while the name is a built-in type's
+//   struct, an enum, an instance's type parameter or a type alias (an
+//   Ast_Alias either), or nothing while the name is a built-in type's
 //   (check_expr.cpp's expr_names_type): a local `int := 5;` hides the type
 //   int there, `int == 5` comparing the local. A type in parentheses is
 //   none, as for a literal's type: `(int) == int` is "'int' is a type, not
@@ -1429,6 +1430,40 @@
 //   call's proc is one; each instance is a procedure, keyed by its symbol
 //   (lower.cpp's proc_symbol), after the program's own procedures; no
 //   call holds an argument for a baked parameter.
+//
+// Type aliases (issue #227, spec 3.22).
+// - `Name :: e;` is a constant to the parser, which can't tell `X :: Y;`
+//   apart; a signature that reaches its ';' with no body and no directive
+//   but #c_call, `Cb :: (n: int) -> int;`, is one too, its value an
+//   Ast_Type_Value of the procedure type (parser.cpp's
+//   proc_type_alias_follows). A constant whose value names a type
+//   (check_expr.cpp's expr_names_type: a type's name, an alias's included,
+//   `*X`, or an Ast_Type_Value) is an alias: its value is checked as a type
+//   value (check_type_value, so a struct named there needs no layout), and
+//   the constant keeps an Ast_Alias at its name (Ast_Const.alias), its type
+//   Type (type_type), never is_constant nor is_data
+//   (checker.cpp's check_const_value).
+// - Every lookup that finds such a constant, in a scope or at the top level,
+//   gives its Ast_Alias in its place (find_name, check_lookup), so an alias
+//   is what an instance's type parameter is wherever a name is resolved: a
+//   written type (resolve_written, a struct's laid out where its name's
+//   would be), a type value, "'V' is a type, not a value" as a value, "'V'
+//   isn't a procedure, so it can't be called" as a callee, V.{...}, M.FREE
+//   (through_alias). It is the same type, not a new one: `V == Vec2` is
+//   true, and messages name the type, "'Vec2' has no field 'z'". find_name
+//   works a top-level constant out first (resolve_global), as check_lookup
+//   does, so an alias can be used before its declaration, in a struct's
+//   field or a global's type; a local one is declared in order, as any local
+//   constant. A circle is a constant's, "'A' is defined in terms of itself"
+//   (`A :: B; B :: A;`, `S :: *S;`), its alias dropped.
+// - Refused: an alias of a built-in type's name, which resolve_written
+//   would never find, "'u8' is a built-in type", at its name, at the top
+//   level and in a body; `X :: Type;`, as any type value of Type; a value
+//   naming nothing is checked as a value, "unknown identifier 'Missing'".
+// - What lowering may rely on: an alias has no code. Lowering records none
+//   for a debugger (lower.cpp's is_shown_constant, lower_statement), adds no
+//   debug type for one, and a #run's walk takes one as nothing to reach
+//   (check_run.cpp's walk_node).
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

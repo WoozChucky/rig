@@ -14106,3 +14106,133 @@ TEST(generic_default_places_are_said_once) {
     }
     arena_free(&a);
 }
+
+// Issue #227: type aliases (spec 3.22).
+
+TEST(aliases_are_the_types_they_name) {
+    // A constant whose value names a type is an alias: the same type under
+    // a second name, wherever a type is written or a type value goes, an
+    // alias's too (P :: *V;), a procedure type's written as a signature. At
+    // the top level one may be used before its declaration, in a struct's
+    // field and in a global's type; in a body in order, a local one hiding
+    // the top level's of its name. One in a generic's body is each
+    // instance's, naming its T. The constant keeps the alias, of type Type.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: float; y: float; }\n"
+                                 "V :: Vec2;\n"
+                                 "P :: *V;\n"
+                                 "Ints :: []int;\n"
+                                 "Cb :: (n: int) -> int;\n"
+                                 "My_Int :: int;\n"
+                                 "Holder :: struct { at: Later; }\n"
+                                 "Later :: Defined_After;\n"
+                                 "Defined_After :: struct { v: My_Int; }\n"
+                                 "g: P;\n"
+                                 "twice :: (n: int) -> int { return n * 2; }\n"
+                                 "first_two :: (xs: []$T) -> [2]T {\n"
+                                 "    Two :: [2]T;\n"
+                                 "    r: Two;\n"
+                                 "    r[0] = xs[0];\n"
+                                 "    r[1] = xs[1];\n"
+                                 "    return r;\n"
+                                 "}\n"
+                                 "main :: () {\n"
+                                 "    a: V = .{1, 2};\n"
+                                 "    p: P = *a;\n"
+                                 "    xs: Ints;\n"
+                                 "    f: Cb = twice;\n"
+                                 "    n: My_Int = 3;\n"
+                                 "    Local :: [2]V;\n"
+                                 "    arr: Local;\n"
+                                 "    same := V == Vec2;\n"
+                                 "    also := My_Int == int;\n"
+                                 "    differ := My_Int == s64;\n"
+                                 "    s :: size_of(Local);\n"
+                                 "    V :: int;\n"
+                                 "    hidden: V = 4;\n"
+                                 "    t := first_two(int.[4, 5, 6]);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Type *vec2 = ((Ast_Struct *)top_level_named(tree, "Vec2"))->declared;
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    CHECK(find_local(body, "a")->type == vec2);
+    Type *p = find_local(body, "p")->type;
+    CHECK(p && p->kind == TYPE_POINTER && p->pointee == vec2);
+    CHECK_STR(type_name(&a, find_local(body, "xs")->type), "[]int");
+    CHECK_STR(type_name(&a, find_local(body, "f")->type), "(int) -> int");
+    CHECK(find_local(body, "n")->type == &type_int);
+    CHECK_STR(type_name(&a, find_local(body, "arr")->type), "[2]Vec2");
+    const char *compared[] = {"same", "also", "differ"};
+    for (s64 k = 0; k < 3; k++) {
+        Ast_Var *var = (Ast_Var *)find_local(body, compared[k]);
+        CHECK(var->type == &type_bool);
+        CHECK(var->value->is_constant);
+        CHECK_EQ(var->value->constant, k < 2 ? 1 : 0);
+    }
+    Ast_Const *s = (Ast_Const *)find_local(body, "s");
+    CHECK(s->is_constant);
+    CHECK_EQ(s->constant, 16);
+    CHECK(find_local(body, "hidden")->type == &type_int);
+    CHECK_STR(type_name(&a, find_local(body, "t")->type), "[2]int");
+    Type *g = top_level_named(tree, "g")->type;
+    CHECK(g && g->kind == TYPE_POINTER && g->pointee == vec2);
+    Type *holder = ((Ast_Struct *)top_level_named(tree, "Holder"))->declared;
+    CHECK(holder->fields[0].type == ((Ast_Struct *)top_level_named(tree, "Defined_After"))->declared);
+    // The constant keeps its alias, at its name, of type Type; a local one
+    // too.
+    Ast_Const *v = (Ast_Const *)top_level_named(tree, "V");
+    CHECK(v->alias);
+    if (v->alias) {
+        CHECK(v->alias->aliased == vec2);
+        CHECK_EQ(v->alias->kind, AST_ALIAS);
+        CHECK(same_place(v->alias->pos, v->pos));
+    }
+    CHECK(v->type == &type_type);
+    CHECK(!v->is_constant);
+    Ast_Const *local = (Ast_Const *)find_local(body, "Local");
+    CHECK(local->alias);
+    if (local->alias) CHECK_STR(type_name(&a, local->alias->aliased), "[2]Vec2");
+    // A constant of any other value has none.
+    CHECK(!((Ast_Const *)find_local(body, "s"))->alias);
+    arena_free(&a);
+}
+
+TEST(alias_type_names) {
+    // An alias is the same type, so messages name the type as ever.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "V :: Vec2;\n"
+                           "main :: () { x := V.{z = 1}; }\n"),
+              "3:22: 'Vec2' has no field 'z'\n");
+    arena_free(&a);
+}
+
+TEST(alias_mistakes) {
+    // An alias is no value and no procedure; a circle is a constant's; Type
+    // is written nowhere; a built-in type's name could never name an alias,
+    // at the top level or in a body; a value naming nothing is no type.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"Vec2 :: struct { x: float; }\nV :: Vec2;\nmain :: () { x := V; }\n",
+         "3:19: 'V' is a type, not a value\n"},
+        {"Vec2 :: struct { x: float; }\nV :: Vec2;\nmain :: () { y := V(1); }\n",
+         "3:19: 'V' isn't a procedure, so it can't be called\n"},
+        {"A :: B;\nB :: A;\nmain :: () { }\n", "1:1: 'A' is defined in terms of itself\n"},
+        {"S :: *S;\nmain :: () { }\n", "1:1: 'S' is defined in terms of itself\n"},
+        {"T_Alias :: Type;\nmain :: () { }\n",
+         "1:12: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
+        {"u8 :: s32;\nmain :: () { }\n", "1:1: 'u8' is a built-in type\n"},
+        {"main :: () { u8 :: s32; }\n", "1:14: 'u8' is a built-in type\n"},
+        {"Nope :: Missing;\nmain :: () { }\n", "1:9: unknown identifier 'Missing'\n"},
+    };
+    for (const Case &k : cases) CHECK_STR(check_source(&a, k.text), k.message);
+    arena_free(&a);
+}

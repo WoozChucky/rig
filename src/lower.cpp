@@ -688,8 +688,9 @@ static Type *debug_constant_type(Type *t) {
 // Whether a debugger shows constant `c` (ir.h's "Constants"): a number, a
 // bool, null or data, but not one naming a procedure, which a debugger
 // knows by the procedure's own name (unless it hides a name a debugger
-// shows: lower_statement).
-static bool is_shown_constant(Ast_Const *c) { return !c->proc && (c->is_constant || c->is_data); }
+// shows: lower_statement), nor an alias (spec 3.22), which is a type, no
+// value, and adds no debug type of its own: the type is its own.
+static bool is_shown_constant(Ast_Const *c) { return !c->alias && !c->proc && (c->is_constant || c->is_data); }
 
 // Records constant `c` for a debugger (ir.h's "Constants"), declared in
 // `scope` of the procedure being lowered, or at the top level when scope is
@@ -3822,9 +3823,11 @@ static void lower_statement(Lowering *l, Ast *s, Ast_Proc *source) {
     // show the name it hides. Once the block's code can't go on (its IR
     // block has ended, as after a return, a break or a continue, or a block
     // or an if that always ends in one), nothing follows that has code, so
-    // it would never be shown: it's neither recorded nor given a scope.
+    // it would never be shown: it's neither recorded nor given a scope. An
+    // alias (spec 3.22) names a type, no value: nothing is recorded for it.
     case AST_CONST: {
         Ast_Const *constant = (Ast_Const *)s;
+        if (constant->alias) break;
         if (!hides_a_name(l, constant->name)) {
             if (is_shown_constant(constant)) add_constant(l, constant, l->block_scope);
         } else if (!has_ended(l, l->block)) {

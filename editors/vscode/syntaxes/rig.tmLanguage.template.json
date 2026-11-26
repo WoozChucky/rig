@@ -157,6 +157,18 @@
         "declarations": {
             "patterns": [
                 {
+                    "comment": "name :: ( ... ; is a procedure type's alias (spec 3.22) when the parenthesis begins a signature (it holds nothing or starts with a parameter, as below, or its ')' is followed by '->') and the line ends at a ';' with no '{' and no directive but #c_call before it: a one-line approximation of the parser's proc_type_alias_follows. Its name is a type's. Before the procedure rule, which would take it.",
+                    "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\((?:\\s*\\)|\\s*(?:using\\s+)?\\$?[A-Za-z_][A-Za-z0-9_]*\\s*:(?!:)|[^;{#]*\\)\\s*->)[^;{#]*(?:#c_call\\b[^;{#]*)?;\\s*(?://.*)?$)",
+                    "captures": {
+                        "1": {
+                            "name": "entity.name.type.rig"
+                        },
+                        "2": {
+                            "name": "keyword.operator.declaration.rig"
+                        }
+                    }
+                },
+                {
                     "comment": "name :: ( ... is a procedure when the parenthesis holds nothing, starts with a parameter (IDENT ':' or IDENT ':=', a using one's 'using' or a baked one's '$' before them, the parser's procedure_follows), or ends the line: a one-line approximation of the parser's parameters_follow, which looks past the ')'. Otherwise a parenthesised constant.",
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\(\\s*(?:\\)|$|(?:using\\s+)?\\$?[A-Za-z_][A-Za-z0-9_]*\\s*:(?!:)))",
                     "captures": {

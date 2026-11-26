@@ -795,6 +795,62 @@ static bool procedure_follows(Parser *p, s64 ahead) {
             (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)));
 }
 
+// Whether the '(' `ahead` tokens on, after IDENT '::', begins a procedure
+// type's alias (spec 3.22), `Cb :: (code: int, name: string) -> bool;`,
+// rather than a procedure or a constant's value in parentheses: the '('
+// begins a signature (procedure_follows, or its ')' is followed by '->', as
+// `(int) -> int`'s is), and after that ')', outside parentheses and
+// brackets, a ';' comes before any '{', any directive but #c_call, the
+// next declaration (an identifier starting a line, then '::') or the end,
+// as variable_follows reads a variable's procedure type. So a procedure
+// whose body is missing keeps being one, said where its '{' should be:
+// `f :: () #caller_location;`, `f :: ()\n#run g();` and `f :: () -> int\n
+// g :: () {}` are "expected '{'". A '(' never closed is no alias either.
+static bool proc_type_alias_follows(Parser *p, s64 ahead) {
+    s64 open = p->next + ahead;
+    if (p->tokens[open].kind != TOKEN_LPAREN) return false;
+    // The ')' that closes it.
+    s64 close = -1;
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;  // open >= 2: a name and '::' came before
+        if (i > open && starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) {
+            return false;
+        }
+        if (t->kind == TOKEN_LPAREN) depth++;
+        if (t->kind == TOKEN_RPAREN && --depth == 0) {
+            close = i;
+            break;
+        }
+    }
+    // A token follows the ')': the last one is TOKEN_EOF.
+    if (close < 0 || (!procedure_follows(p, ahead) && p->tokens[close + 1].kind != TOKEN_ARROW)) return false;
+    depth = 0;
+    for (s64 i = close + 1; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;
+        if (starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) return false;
+        switch (t->kind) {
+        case TOKEN_LPAREN:
+        case TOKEN_LBRACKET: depth++; break;
+        case TOKEN_RPAREN:
+        case TOKEN_RBRACKET: depth--; break;
+        case TOKEN_LBRACE:
+            if (depth <= 0) return false;
+            break;
+        case TOKEN_DIRECTIVE:
+            if (depth <= 0 && !is_directive(t, "c_call")) return false;
+            break;
+        case TOKEN_SEMICOLON:
+            if (depth <= 0) return true;
+            break;
+        default: break;
+        }
+    }
+    return false;
+}
+
 // Whether the token `ahead` of the next one starts a type's declaration
 // after its '::': 'struct', 'union', 'enum' or 'enum_flags' (spec 3.18,
 // 3.19).
@@ -810,6 +866,8 @@ static bool type_declaration_follows(Parser *p, s64 ahead) {
 // struct's, a union's or an enum's braces), a body that was never closed.
 // A constant (`N :: 5;`) isn't, in column 1 or not: it's a local constant,
 // a statement of the body, and indentation means nothing to the language.
+// Nor is a procedure type's alias (`Cb :: (a: int) -> int;`,
+// proc_type_alias_follows), which is a constant too.
 // Procedures, structs, unions and enums are declared only at the top
 // level, so none can be a statement; nor can #run { ... }, which only the
 // top level has (a #run in a body takes an expression, and a block isn't
@@ -824,7 +882,7 @@ static bool starts_declaration(Parser *p) {
     if (is_directive(t, "run")) return t->pos.col == 1 && peek(p, 1)->kind == TOKEN_LBRACE;
     if (is_directive(t, "if")) return t->pos.col == 1 && branch_declares_top_level(p);
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
-           (procedure_follows(p, 2) || type_declaration_follows(p, 2));
+           ((procedure_follows(p, 2) && !proc_type_alias_follows(p, 2)) || type_declaration_follows(p, 2));
 }
 
 // Whether a branch of the #if chain at the next token declares a procedure
@@ -836,7 +894,8 @@ static bool starts_declaration(Parser *p) {
 // indentation says (an #if written after a body whose '}' was forgotten).
 // A branch of an #if right inside a branch counts too (`#if OS == .. {
 // #if DEBUG { f :: () {} } }`), at any depth: its braces are a branch's
-// as well. A block in a branch isn't one, nor is anything in it.
+// as well. A block in a branch isn't one, nor is anything in it, nor a
+// procedure type's alias, a constant (proc_type_alias_follows).
 // The chain ends at a '}' that closes a branch with no else after it, or
 // at the end of the file. A brace in a condition (`#if X == .{1} {`) can
 // end the look early, and the #if is then a statement, as without such a
@@ -863,7 +922,8 @@ static bool branch_declares_top_level(Parser *p) {
         } else if (at_branch_level && is_directive(t, "if")) {
             opens_branch = true;
         } else if (at_branch_level && t->kind == TOKEN_IDENT && peek(p, ahead + 1)->kind == TOKEN_COLON_COLON &&
-                   (procedure_follows(p, ahead + 2) || type_declaration_follows(p, ahead + 2))) {
+                   ((procedure_follows(p, ahead + 2) && !proc_type_alias_follows(p, ahead + 2)) ||
+                    type_declaration_follows(p, ahead + 2))) {
             return true;
         } else if (at_branch_level && is_directive(t, "run") && peek(p, ahead + 1)->kind == TOKEN_LBRACE) {
             return true;
@@ -873,12 +933,16 @@ static bool branch_declares_top_level(Parser *p) {
 }
 
 // The value of the constant `name` after its '::': expression ';'. The
-// caller read IDENT '::' and made sure no procedure follows.
+// caller read IDENT '::' and made sure no procedure follows. A procedure
+// type's alias (proc_type_alias_follows, spec 3.22) is a constant whose
+// value is that procedure type, written where a value goes as `#type` would
+// write it: an Ast_Type_Value at its '(', read by parse_proc_type, its
+// names dropped, its '=' and '$' refused there.
 static Ast *parse_constant(Parser *p, Token *name) {
     Ast_Const *constant = ast_new<Ast_Const>(p->arena, AST_CONST, name->pos);
     constant->name = name->text;
     take_deepest(p);
-    constant->value = parse_expression(p, 1);
+    constant->value = proc_type_alias_follows(p, 0) ? parse_type_value(p, peek(p)) : parse_expression(p, 1);
     constant->levels = take_deepest(p);
     if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
     return constant;
@@ -933,8 +997,9 @@ static Ast *parse_local_declaration(Parser *p) {
     Token *colons = advance(p);
     if (colons->kind != TOKEN_COLON_COLON) return parse_variable(p, name, colons);
     // `helper :: () {`: parentheses that are a signature's, not a
-    // constant's value in parentheses (N :: (2 + 3) * 4;).
-    if (peek(p)->kind == TOKEN_LPAREN && parameters_follow(p, p->next)) {
+    // constant's value in parentheses (N :: (2 + 3) * 4;), nor a procedure
+    // type's alias (Cb :: (a: int) -> int;), which is a constant.
+    if (peek(p)->kind == TOKEN_LPAREN && !proc_type_alias_follows(p, 0) && parameters_follow(p, p->next)) {
         diag_error(p->diag, name->pos, "procedures can only be declared at the top level, for now");
         return nullptr;
     }
@@ -2540,6 +2605,7 @@ static Ast *parse_run(Parser *p) {
 //           | IDENT '::' struct
 //           | IDENT '::' enum                                 enum or enum_flags
 //           | IDENT '::' expression ';'                       a constant
+//           | IDENT '::' proc_type ';'                        a procedure type's alias
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
 //           | load                                            #load or #import
@@ -2548,9 +2614,12 @@ static Ast *parse_run(Parser *p) {
 //
 // After '::', a procedure's parameters start with '(' ')', '(' IDENT ':',
 // '(' IDENT ':=' or '(' '..'. Any other '(' begins a constant's value in
-// parentheses: N :: (1 + 2); is a constant. A global variable is written as
-// a local one; whether its value is known while compiling is the checker's
-// to say.
+// parentheses: N :: (1 + 2); is a constant. A signature that reaches its
+// ';' before any '{' or directive but #c_call is a procedure type's alias
+// (proc_type_alias_follows, spec 3.22), `Cb :: (n: int) -> int;`: a
+// constant whose value is that type, as it is in a body. A global variable
+// is written as a local one; whether its value is known while compiling is
+// the checker's to say.
 //
 // ':' or ':=' followed by a signature (`greet : () {`, `greet := () {`) is
 // a procedure's declaration with its '::' mistyped, so it's reported as
@@ -2608,7 +2677,7 @@ static Ast *parse_declaration(Parser *p) {
         return var;
     }
     if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
-    if (procedure_follows(p, 0)) return parse_procedure(p, name);
+    if (procedure_follows(p, 0) && !proc_type_alias_follows(p, 0)) return parse_procedure(p, name);
     if (peek(p)->kind == TOKEN_STRUCT || peek(p)->kind == TOKEN_UNION) return parse_struct(p, name);
     if (peek(p)->kind == TOKEN_ENUM || peek(p)->kind == TOKEN_ENUM_FLAGS) return parse_enum(p, name);
     return parse_constant(p, name);

@@ -14,6 +14,7 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
+//               | IDENT '::' proc_type ';'                          a procedure type's alias (spec 3.22)
 //               | '#load' STRING ';'                                another file of the program
 //               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
@@ -49,6 +50,7 @@
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
+//               | IDENT '::' proc_type ';'
 //   multi_var   = IDENT ',' IDENT {',' IDENT} ':=' expression ';'
 //   assignment  = expression ('=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>=')
 //                 expression ';'
@@ -284,7 +286,13 @@
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':', '(' IDENT ':=', '(' '..', '(' 'using' or '(' '$'
 // (a baked parameter, spec 7.11); any other '(' begins a constant's value,
-// so `N :: (1 + 2);` is a constant. A name followed by ':' or ':=' and then
+// so `N :: (1 + 2);` is a constant. In a body as at the top level, a
+// signature that reaches its ';' before any '{' or directive but #c_call
+// (`Cb :: (n: int) -> int;`, parser.cpp's proc_type_alias_follows) is a
+// procedure type's alias, a constant whose value is that procedure type,
+// which the checker makes an alias (spec 3.22); a signature followed by
+// any other directive and then its ';' (`f :: () #caller_location;`) is a
+// procedure whose '{' is missing. A name followed by ':' or ':=' and then
 // a signature with a body or a directive other than #load, #run and #if
 // after it (`greet : () {`) is a procedure with its '::' mistyped:
 // "expected '::', found ':'"; a name, ':' and a procedure type followed by
@@ -446,7 +454,8 @@
 // #if's, right inside one) declares a procedure or a struct, or holds a
 // #run { }: a body can't hold any of them, and each can only start a
 // top-level declaration. A constant in column 1 (`N :: 5;`) is a local
-// constant, as an indented one is. A struct's braces never closed end there
+// constant, as an indented one is, a procedure type's alias (`Cb :: (n:
+// int) -> int;`) too. A struct's braces never closed end there
 // too, and at any #run or #if in column 1. The body is then taken to end
 // before the column-1 declarations (IDENT ':', ':=' or '::', a #load, a
 // #run or an #if) right before that point, at its own level: "expected

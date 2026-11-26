@@ -1206,6 +1206,24 @@ check('the grammar colours a signature that starts with a type parameter', () =>
     });
 });
 
+// Type aliases (issue #227, spec 3.22): a signature that ends at its ';',
+// with no body and no directive but #c_call, is a procedure type's alias,
+// its name a type's; with a body, or #foreign, it's a procedure. A
+// parenthesised constant stays a constant.
+check('the grammar colours a procedure type\'s alias as a type', () => {
+    assertScopes('Cb :: (code: int, name: string) -> bool;', {
+        Cb: TYPE,
+        int: PRIMITIVE,
+        string: PRIMITIVE,
+        bool: PRIMITIVE,
+    });
+    assertScopes('Raw :: (int) -> int #c_call;', { Raw: TYPE });
+    assertScopes('    Cb :: () -> int; // a callback', { Cb: TYPE });
+    assertScopes('greet :: (name: string) {', { greet: 'entity.name.function.rig' });
+    assertScopes('g :: (a: int) #foreign libc;', { g: 'entity.name.function.rig' });
+    assertScopes('N :: (1 + 2);', { N: 'variable.other.constant.rig' });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and
@@ -1245,6 +1263,12 @@ check('the grammar colours the types in every program of tests/run and tests/bui
         for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|union|enum|enum_flags)\b/g)) typeNames.add(m[1]);
         // And a generic procedure's type parameters, $T (spec 7.11).
         for (const m of source.matchAll(/\$([A-Za-z_]\w*)/g)) typeNames.add(m[1]);
+        // And a type alias's name (spec 3.22), NAME :: TYPE;: a constant
+        // whose value is a name, after any '*' and '[...]', as `v: V`
+        // colours its V as a type; or a procedure type written as a
+        // signature with no body and no directive but #c_call.
+        for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:\*\s*|\[[^\][]*\]\s*)*[A-Za-z_]\w*\s*;/g)) typeNames.add(m[1]);
+        for (const m of source.matchAll(/^\s*([A-Za-z_]\w*)\s*::\s*\([^;{#]*\)[^;{#]*(?:#c_call\b[^;{#]*)?;/gm)) typeNames.add(m[1]);
     }
     assert.ok(typeNames.has('Vec2') && typeNames.has('Node') && typeNames.has('Mode'));
 

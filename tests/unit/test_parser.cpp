@@ -4764,3 +4764,52 @@ TEST(parses_baked_parameters) {
     token_list_free(list);
     arena_free(&a);
 }
+
+// Issue #227: type aliases (spec 3.22).
+
+TEST(parses_type_aliases) {
+    // Name :: Expression; stays a constant, which the checker makes an alias
+    // when its value names a type. After '::', a '(' whose signature reaches
+    // its ';' before any '{' or directive but #c_call is a procedure type's
+    // alias: a constant whose value is that procedure type, (type
+    // (proc-type ...)), at the top level and in a body.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "Ints :: []int;\n"
+                        "Cb :: (code: int, name: string) -> bool;\n"
+                        "Raw :: (int) -> int #c_call;\n"
+                        "My_Int :: int;\n"
+                        "f :: (a: int) -> int { return a; }\n"
+                        "g :: (a: int) #foreign libc;\n"
+                        "main :: () { L :: (a: int) -> int; }\n",
+                        &errors),
+              "(const Ints (type (view int)))\n"
+              "(const Cb (type (proc-type (params int string) (returns bool))))\n"
+              "(const Raw (type (proc-type (params int) (returns int) (c_call))))\n"
+              "(const My_Int (name int))\n"
+              "(proc f (params (a int)) (returns int) (block (return (name a))))\n"
+              "(proc g (params (a int)) (foreign libc))\n"
+              "(proc main (params) (block (const L (type (proc-type (params int) (returns int))))))\n");
+    CHECK_STR(errors, "");
+    // In column 1 inside a body, a procedure type's alias is the body's
+    // constant, not a top-level procedure ending a body never closed.
+    CHECK_STR(parse_src(&a, "main :: () {\nCb :: (a: int) -> int;\n}\n", &errors),
+              "(proc main (params) (block (const Cb (type (proc-type (params int) (returns int))))))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(alias_syntax_mistakes) {
+    // A procedure type's alias is read as a procedure type, with its
+    // messages: no default values, and no '$', which only a procedure's
+    // parameter has.
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "Bad :: (a: int = 1) -> int;\n", &errors);
+    CHECK_STR(errors, "1:16: a procedure type can't have default values\n");
+    parse_src(&a, "Gen :: (a: $T) -> T;\n", &errors);
+    CHECK_STR(errors, "1:12: '$' declares a type parameter only in a procedure's parameter, as in "
+                      "max :: (a: $T, b: T) -> T\n");
+    arena_free(&a);
+}

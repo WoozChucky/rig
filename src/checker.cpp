@@ -207,7 +207,8 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // (check_in_a_branch). A broken entry's name may have been anything, so
 // nothing is said about it. A struct found to contain itself has no type:
 // its uses say nothing more. In an instance of a generic procedure, a type
-// parameter's name is the type it's bound to (spec 7.11, Ast_Alias). Type,
+// parameter's name is the type it's bound to (spec 7.11, Ast_Alias), and a
+// type alias's name is the type it names, wherever (spec 3.22). Type,
 // the type of types (spec 5.20), is written nowhere it resolves (a $T:
 // Type parameter's type never is, check_generic.cpp's takes_a_type):
 // "'Type' only names types while compiling; a *Type_Info describes one at
@@ -277,9 +278,10 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     } else if (decl->kind == AST_ENUM) {
         return ((Ast_Enum *)decl)->declared;
     } else if (decl->kind == AST_ALIAS) {
-        // An instance's type parameter (spec 7.11): the type it's bound to,
-        // a struct's laid out where the struct's name would be. One that
-        // lost its type (made again, made_again) is null, said.
+        // An instance's type parameter (spec 7.11), or a type alias (spec
+        // 3.22): the type it's bound to, a struct's laid out where the
+        // struct's name would be. One that lost its type (made again,
+        // made_again) is null, said.
         Type *bound = ((Ast_Alias *)decl)->aliased;
         if (bound && !behind_pointer && bound->kind == TYPE_STRUCT && bound->decl &&
             bound->decl->resolve != RESOLVE_DONE) {
@@ -399,21 +401,34 @@ static void return_to_scopes(Checker *c, Outer_Scopes outer) {
 
 static void resolve_global(Checker *c, Ast *decl);
 
+// What a lookup that found `decl` gives: a constant that is an alias (spec
+// 3.22) gives its Ast_Alias, the type it names, in its place, as an
+// instance's type parameter is found; any other declaration itself.
+static Ast *alias_in_place(Ast *decl) {
+    if (decl && decl->kind == AST_CONST && ((Ast_Const *)decl)->alias) return ((Ast_Const *)decl)->alias;
+    return decl;
+}
+
 // The declaration `name` means where the checker is, the innermost block's
 // first, else the binding of the instance being checked (spec 7.11), else
-// the top level's; null when there's none. Only looked up: nothing is
-// checked.
+// the top level's; null when there's none. Only looked up, but for a
+// top-level constant, worked out first (resolve_global), as check_lookup
+// does: whether it's an alias, which is found in its place
+// (alias_in_place), is known only then, so an alias can be used before its
+// declaration, in a struct's field or a global's type too.
 static Ast *find_name(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
-        if (found) return *found;
+        if (found) return alias_in_place(*found);
     }
     if (c->instance) {
         Ast *binding = instance_binding(c->instance, name);
         if (binding) return binding;
     }
     Ast **found = table_get(&c->top_level, name);
-    return found ? *found : nullptr;
+    if (!found) return nullptr;
+    if ((*found)->kind == AST_CONST) resolve_global(c, *found);
+    return alias_in_place(*found);
 }
 
 // Between the scopes and the top level, the fields the procedure's using
@@ -430,14 +445,16 @@ static Ast *find_name(Checker *c, String name) {
 // undeclared. The walk runs once: its result goes to the caller in
 // *through, for check_using_name to read, or, for a caller that passes
 // none, is freed here. After those fields, before the top level, are the
-// bindings of the instance being checked (spec 7.11), as for find_name.
+// bindings of the instance being checked (spec 7.11), as for find_name. A
+// constant that is an alias (spec 3.22), local or top-level, is found as
+// its Ast_Alias, as find_name finds it (alias_in_place).
 Ast *check_lookup(Checker *c, String name, Using_Name *through) {
     Using_Name own;
     Using_Name *walk = through ? through : &own;
     *walk = {};
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
-        if (found) return *found;
+        if (found) return alias_in_place(*found);
     }
     if (c->using_params.count) {
         walk->found = check_find_using(c, name, &walk->path, &walk->root, &walk->other, &walk->other_root);
@@ -456,7 +473,7 @@ Ast *check_lookup(Checker *c, String name, Using_Name *through) {
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
     if ((*found)->kind == AST_VAR || (*found)->kind == AST_CONST) resolve_global(c, *found);
-    return *found;
+    return alias_in_place(*found);
 }
 
 // Declares `name` in the innermost block, from here to its end. The same
@@ -839,8 +856,37 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
 // bytes (GREETING :: cast(*u8) "hi";). The constant is marked is_data, and
 // keeps the node holding its value (constant_data, or the pointer's
 // literal), never is_constant: Ast.constant holds one scalar.
+//
+// A value that names a type (expr_names_type: a type's name, an alias's
+// included, *X, or a type written where a value goes, `[]int`, `#type T`,
+// a procedure type's alias's signature) makes the constant an alias (spec
+// 3.22): the same type under a second name, checked as a type value
+// (check_type_value, so a struct named there needs no layout), kept in an
+// Ast_Alias at the constant's name (Ast_Const.alias), which every lookup
+// finds in the constant's place (find_name, check_lookup), so it is a type
+// wherever #226's instance bindings are. The constant's type is Type, and
+// it has no value at run time: nothing lowers it. A built-in type's name
+// always means the built-in type (resolve_written looks there first), so
+// an alias of that name could never be named: "'u8' is a built-in type",
+// at its name, and it is none. A name declared nowhere names no type: it's
+// checked as a value, "unknown identifier 'Missing'".
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Ast *value = constant->value;
+    if (expr_names_type(c, value)) {
+        Type *aliased = check_type_value(c, value);
+        if (aliased && type_from_name(constant->name)) {
+            diag_error(c->diag, constant->pos, "'" STR_FMT "' is a built-in type", STR_ARG(constant->name));
+            aliased = nullptr;
+        }
+        if (aliased) {
+            Ast_Alias *alias = ast_new<Ast_Alias>(c->arena, AST_ALIAS, constant->pos);
+            alias->name = constant->name;
+            alias->aliased = aliased;
+            constant->alias = alias;
+        }
+        constant->type = aliased ? &type_type : nullptr;
+        return;
+    }
     Type *t = check_value(c, value);
     if (t && type_waits_for_one(t)) {
         check_default_type(c, value);
@@ -1054,6 +1100,7 @@ static void resolve_global(Checker *c, Ast *decl) {
         if (!is_var) {
             ((Ast_Const *)decl)->is_data = false;
             ((Ast_Const *)decl)->data = nullptr;
+            ((Ast_Const *)decl)->alias = nullptr;
         }
     }
     *state = RESOLVE_DONE;
