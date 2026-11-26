@@ -325,12 +325,14 @@ static Ast *parse_type_info(Parser *p) {
 }
 
 // A type written where a value goes (spec 5.20), its Ast_Type_Value at
-// `at`, its '[' or its '#type': the type that follows, read a level down as
+// `at`, its '[', its '#type' or a procedure type's alias's '('
+// (parse_constant, spec 3.22): the type that follows, read a level down as
 // size_of's is (parse_type_below), so it's a leaf of the expression around
-// it. The caller is past the '#type', or still at the '[', which begins
-// the type. A literal never follows one: in []int.{1} the '.' after a type
-// value, which is no name (only an Ast_Name is a literal's type), is
-// parse_postfix's "expected a field's name".
+// it, or the whole of an alias's value. The caller is past the '#type', or
+// still at the '[' or the '(', which begins the type. A literal never
+// follows one: in []int.{1} the '.' after a type value, which is no name
+// (only an Ast_Name is a literal's type), is parse_postfix's "expected a
+// field's name".
 static Ast *parse_type_value(Parser *p, Token *at) {
     Ast_Type_Value *value = ast_new<Ast_Type_Value>(p->arena, AST_TYPE_VALUE, at->pos);
     value->type_expr = parse_type_below(p);

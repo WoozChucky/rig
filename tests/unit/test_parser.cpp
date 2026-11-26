@@ -4797,6 +4797,12 @@ TEST(parses_type_aliases) {
     CHECK_STR(parse_src(&a, "main :: () {\nCb :: (a: int) -> int;\n}\n", &errors),
               "(proc main (params) (block (const Cb (type (proc-type (params int) (returns int))))))\n");
     CHECK_STR(errors, "");
+    // Nor is one in a column-1 #if's branch inside a body: the #if is the
+    // body's statement, its branch holding the constant.
+    CHECK_STR(parse_src(&a, "main :: () {\n    x := 1;\n#if true { Cb :: (a: int) -> int; }\n}\n", &errors),
+              "(proc main (params) (block (var x _ (int 1)) (#if (bool true) (block (const Cb (type (proc-type "
+              "(params int) (returns int))))))))\n");
+    CHECK_STR(errors, "");
     arena_free(&a);
 }
 
@@ -4811,5 +4817,15 @@ TEST(alias_syntax_mistakes) {
     parse_src(&a, "Gen :: (a: $T) -> T;\n", &errors);
     CHECK_STR(errors, "1:12: '$' declares a type parameter only in a procedure's parameter, as in "
                       "max :: (a: $T, b: T) -> T\n");
+    // The look for the ';' stops at the next declaration, an identifier
+    // starting a line, then '::': a procedure whose body is missing keeps
+    // being one, said where its '{' should be, whatever ends the next
+    // declaration; a '(' never closed before it is no alias either.
+    parse_src(&a, "f :: () -> int\nN :: 5;\nmain :: () {}\n", &errors);
+    CHECK_STR(errors, "2:1: expected '{', found identifier 'N'\n");
+    parse_src(&a, "f :: () -> int\ng :: () {}\n", &errors);
+    CHECK_STR(errors, "2:1: expected '{', found identifier 'g'\n");
+    parse_src(&a, "f :: (a: int\nN :: 5;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'N'\n");
     arena_free(&a);
 }

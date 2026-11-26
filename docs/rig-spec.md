@@ -1639,7 +1639,7 @@ An alias is the type it names wherever a type is written and wherever a type val
 
 An alias is declared at the top level or in a body, and is in scope as any constant is (section 4.7). At the top level, declarations come in any order (section 4.8), so an alias may be used before its declaration, in a struct's field and a global's type too. In a body it's declared from its declaration on, hiding a name outside it, a top-level alias's too. In a generic procedure's body an alias may name the instance's type and constant parameters, `Two :: [2]T;`, each instance having its own (section 7.11).
 
-An alias is a type, not a value: `x := V;` is `'V' is a type, not a value`, and `V(1)` is `'V' isn't a procedure, so it can't be called`. A built-in type's name always means the built-in type (section 3.1), so an alias of one could never be named: `u8 :: s32;` is `'u8' is a built-in type`, at the name, at the top level and in a body. `Type` names types only while compiling (section 5.20), so `T :: Type;` is `'Type' only names types while compiling; a *Type_Info describes one at run time`. A name that names nothing is read as a value, as in any type value: `Nope :: Missing;` is `unknown identifier 'Missing'`. Aliases that name each other (`A :: B; B :: A;`), or a pointer to the alias itself (`S :: *S;`), are a circle: `'A' is defined in terms of itself`, at the first, once (section 4.8).
+An alias is a type, not a value: `x := V;` is `'V' is a type, not a value`, and `V(1)` is `'V' isn't a procedure, so it can't be called`. A built-in type's name always means the built-in type (section 3.1), so an alias of one could never be named: `u8 :: s32;` is `'u8' is a built-in type`, at the name, at the top level and in a body. `Type` names types only while compiling (section 5.20), so `T :: Type;` is `'Type' only names types while compiling; a *Type_Info describes one at run time`. A name that names nothing is read as a value, as in any type value: `Nope :: Missing;` is `unknown identifier 'Missing'`. Aliases that name each other (`A :: B; B :: A;`), or a pointer to the alias itself (`S :: *S;`), are a circle: `'A' is defined in terms of itself`, at the first, once (section 4.8). An alias whose value has a mistake (`V :: []Nope;`), or that is in a circle, names no type, and its uses say nothing more: its mistake is said once. A constant whose value can't name a type, `C :: size_of(S);`, written where a type goes, is `'C' is not a type`.
 
 An alias has no code and no storage, and adds nothing to the debug information: a debugger shows a value of its type by the type's own name, and doesn't show the alias as a constant (section 10.7).
 
@@ -2915,7 +2915,7 @@ Signature = "(" [ Params ] ")" [ "->" Results ] .
 Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
 Param     = [ "using" ] [ "$" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
-AliasDecl = identifier "::" Signature [ "#c_call" ] ";" .
+AliasDecl = identifier "::" ProcType ";" .
 ```
 
 After `::`, a `Signature` that reaches its `;` before any `{` or directive but `#c_call` declares no procedure but a procedure type's alias (section 3.22), at the top level and in a body: `Cb :: (code: int, name: string) -> bool;` is the type `(int, string) -> bool` under the name `Cb`, read as a procedure type is (section 3.15), so its parameters' names are dropped, a default value is `a procedure type can't have default values` and a `$` is refused as in any type that isn't a parameter's. A signature followed by any other directive and then its `;`, `f :: () #caller_location;`, stays a procedure's, whose body is missing: `expected '{', found directive`. A `ConstDecl` whose value names a type (section 4.2) is an alias too.
@@ -4737,7 +4737,7 @@ EnumDecl      = identifier "::" ( "enum" | "enum_flags" ) [ identifier ] "{" { M
 MemberDecl    = identifier [ "::" Expression ] ";" .
 
 ConstDecl     = identifier "::" Expression ";" .
-AliasDecl     = identifier "::" Signature [ "#c_call" ] ";" .
+AliasDecl     = identifier "::" ProcType ";" .
 VarDecl       = identifier ":" Type [ "=" ( Expression | "---" ) ] ";"
               | identifier ":=" Expression ";" .
 MultiVarDecl  = identifier "," identifier { "," identifier } ":=" Expression ";" .

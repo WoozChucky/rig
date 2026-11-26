@@ -1,24 +1,27 @@
-tests/errors/type_aliases.rig:9:1: error: 'A' is defined in terms of itself
+tests/errors/type_aliases.rig:11:1: error: 'A' is defined in terms of itself
     A :: B;
     ^
-tests/errors/type_aliases.rig:11:1: error: 'S' is defined in terms of itself
+tests/errors/type_aliases.rig:13:1: error: 'S' is defined in terms of itself
     S :: *S;
     ^
-tests/errors/type_aliases.rig:12:12: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+tests/errors/type_aliases.rig:14:12: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
     T_Alias :: Type;
                ^
-tests/errors/type_aliases.rig:13:1: error: 'u8' is a built-in type
+tests/errors/type_aliases.rig:15:1: error: 'u8' is a built-in type
     u8 :: s32;
     ^
-tests/errors/type_aliases.rig:14:9: error: unknown identifier 'Missing'
+tests/errors/type_aliases.rig:16:9: error: unknown identifier 'Missing'
     Nope :: Missing;
             ^
-tests/errors/type_aliases.rig:17:10: error: 'V' is a type, not a value
+tests/errors/type_aliases.rig:17:9: error: an array's count can't be negative (-1)
+    Bad :: [-1]int;
+            ^
+tests/errors/type_aliases.rig:21:10: error: 'V' is a type, not a value
         x := V;
              ^
-tests/errors/type_aliases.rig:18:10: error: 'V' isn't a procedure, so it can't be called
+tests/errors/type_aliases.rig:22:10: error: 'V' isn't a procedure, so it can't be called
         y := V(1);
              ^
-tests/errors/type_aliases.rig:19:5: error: 'u8' is a built-in type
+tests/errors/type_aliases.rig:23:5: error: 'u8' is a built-in type
         u8 :: s32;
         ^

@@ -208,7 +208,8 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // nothing is said about it. A struct found to contain itself has no type:
 // its uses say nothing more. In an instance of a generic procedure, a type
 // parameter's name is the type it's bound to (spec 7.11, Ast_Alias), and a
-// type alias's name is the type it names, wherever (spec 3.22). Type,
+// type alias's name is the type it names, wherever (spec 3.22); one that
+// failed, its mistake said, says nothing more where it's used. Type,
 // the type of types (spec 5.20), is written nowhere it resolves (a $T:
 // Type parameter's type never is, check_generic.cpp's takes_a_type):
 // "'Type' only names types while compiling; a *Type_Info describes one at
@@ -288,6 +289,11 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
             return resolve_struct(c, bound->decl);
         }
         return bound;
+    } else if (decl->kind == AST_CONST && !decl->type && written_as_type(((Ast_Const *)decl)->value)) {
+        // A constant whose value is written as a type may be, but which has
+        // no type, had its own mistake said (`V :: []Nope;`), or is in the
+        // circle being said (`S :: *S;`, resolve_global): its uses say
+        // nothing more.
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
@@ -411,11 +417,14 @@ static Ast *alias_in_place(Ast *decl) {
 
 // The declaration `name` means where the checker is, the innermost block's
 // first, else the binding of the instance being checked (spec 7.11), else
-// the top level's; null when there's none. Only looked up, but for a
-// top-level constant, worked out first (resolve_global), as check_lookup
-// does: whether it's an alias, which is found in its place
-// (alias_in_place), is known only then, so an alias can be used before its
-// declaration, in a struct's field or a global's type too.
+// the top level's; null when there's none. Only looked up, but a top-level
+// constant whose value is written as a type may be (written_as_type) is
+// worked out first (resolve_global), as check_lookup does: whether it's
+// an alias, which is found in its place (alias_in_place), is known only
+// then, so an alias can be used before its declaration, in a struct's
+// field or a global's type too. Any other
+// constant is never an alias, so its value isn't worked out here: `S ::
+// struct { a: C; } C :: size_of(S);` is "'C' is not a type", no circle.
 static Ast *find_name(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
@@ -427,7 +436,7 @@ static Ast *find_name(Checker *c, String name) {
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
-    if ((*found)->kind == AST_CONST) resolve_global(c, *found);
+    if ((*found)->kind == AST_CONST && written_as_type(((Ast_Const *)*found)->value)) resolve_global(c, *found);
     return alias_in_place(*found);
 }
 
@@ -3964,7 +3973,17 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     }
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
-        if (decl->kind == AST_VAR || decl->kind == AST_CONST) decl->type = made_again(decl->type);
+        Ast_Alias *alias = decl->kind == AST_CONST ? ((Ast_Const *)decl)->alias : nullptr;
+        if (alias) {
+            // An alias's type is Type, but the type it names is made again:
+            // null when a struct in it has no type now, its uses then
+            // saying nothing more (resolve_written), and the constant of no
+            // type, as one whose check failed (check_const_value).
+            alias->aliased = made_again(alias->aliased);
+            if (!alias->aliased) decl->type = nullptr;
+        } else if (decl->kind == AST_VAR || decl->kind == AST_CONST) {
+            decl->type = made_again(decl->type);
+        }
         if (decl->kind != AST_PROC) continue;
         Ast_Proc *proc = (Ast_Proc *)decl;
         if (proc->is_broken || proc->is_generic) continue;

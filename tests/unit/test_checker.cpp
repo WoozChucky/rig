@@ -14114,13 +14114,17 @@ TEST(aliases_are_the_types_they_name) {
     // a second name, wherever a type is written or a type value goes, an
     // alias's too (P :: *V;), a procedure type's written as a signature. At
     // the top level one may be used before its declaration, in a struct's
-    // field and in a global's type; in a body in order, a local one hiding
-    // the top level's of its name. One in a generic's body is each
+    // field, in a global's type and in an array's count there; in a body in
+    // order, a local one hiding the top level's of its name. An enum's
+    // members are named through one (M.B). One in a generic's body is each
     // instance's, naming its T. The constant keeps the alias, of type Type.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  "Vec2 :: struct { x: float; y: float; }\n"
+                                 "g: P;\n"
+                                 "buf: [size_of(V)]u8;\n"
+                                 "Buf :: struct { b: [size_of(V)]u8; }\n"
                                  "V :: Vec2;\n"
                                  "P :: *V;\n"
                                  "Ints :: []int;\n"
@@ -14129,7 +14133,8 @@ TEST(aliases_are_the_types_they_name) {
                                  "Holder :: struct { at: Later; }\n"
                                  "Later :: Defined_After;\n"
                                  "Defined_After :: struct { v: My_Int; }\n"
-                                 "g: P;\n"
+                                 "Mode :: enum { A; B; }\n"
+                                 "M :: Mode;\n"
                                  "twice :: (n: int) -> int { return n * 2; }\n"
                                  "first_two :: (xs: []$T) -> [2]T {\n"
                                  "    Two :: [2]T;\n"
@@ -14153,6 +14158,8 @@ TEST(aliases_are_the_types_they_name) {
                                  "    V :: int;\n"
                                  "    hidden: V = 4;\n"
                                  "    t := first_two(int.[4, 5, 6]);\n"
+                                 "    u := first_two(float.[1.5, 2.5]);\n"
+                                 "    m := M.B;\n"
                                  "}\n",
                                  &tree),
               "");
@@ -14177,8 +14184,13 @@ TEST(aliases_are_the_types_they_name) {
     CHECK_EQ(s->constant, 16);
     CHECK(find_local(body, "hidden")->type == &type_int);
     CHECK_STR(type_name(&a, find_local(body, "t")->type), "[2]int");
+    CHECK_STR(type_name(&a, find_local(body, "u")->type), "[2]float32");
+    CHECK(find_local(body, "m")->type == ((Ast_Enum *)top_level_named(tree, "Mode"))->declared);
     Type *g = top_level_named(tree, "g")->type;
     CHECK(g && g->kind == TYPE_POINTER && g->pointee == vec2);
+    Type *buf = top_level_named(tree, "buf")->type;
+    CHECK(buf && buf->kind == TYPE_ARRAY && buf->count == 8);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Buf"))->declared->size, 8);
     Type *holder = ((Ast_Struct *)top_level_named(tree, "Holder"))->declared;
     CHECK(holder->fields[0].type == ((Ast_Struct *)top_level_named(tree, "Defined_After"))->declared);
     // The constant keeps its alias, at its name, of type Type; a local one
@@ -14232,7 +14244,33 @@ TEST(alias_mistakes) {
         {"u8 :: s32;\nmain :: () { }\n", "1:1: 'u8' is a built-in type\n"},
         {"main :: () { u8 :: s32; }\n", "1:14: 'u8' is a built-in type\n"},
         {"Nope :: Missing;\nmain :: () { }\n", "1:9: unknown identifier 'Missing'\n"},
+        // An alias whose own check failed, or that is in a circle, has its
+        // mistake said once: its uses say nothing more, as a type or as a
+        // value, at the top level or in a body.
+        {"A :: B;\nB :: A;\ng: A;\nmain :: () { a: A; }\n", "1:1: 'A' is defined in terms of itself\n"},
+        {"S :: *S;\nmain :: () { p: S; t := size_of(S); }\n", "1:1: 'S' is defined in terms of itself\n"},
+        {"V :: []Nope;\nmain :: () { g: V; x := V.{}; }\n", "1:8: unknown type 'Nope'\n"},
+        {"Bad :: [-1]int;\nmain :: () { x: Bad; }\n", "1:9: an array's count can't be negative (-1)\n"},
+        {"main :: () { X :: Type; y: X; }\n",
+         "1:19: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
+        {"main :: () { L :: [2]Nope; m: L; }\n", "1:22: unknown type 'Nope'\n"},
+        {"V :: [2]Node;\nNode :: struct { n: Node; }\ng: V;\nmain :: () { }\n",
+         "2:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"},
+        // An alias of a struct found to contain itself once every struct is
+        // laid out has no type then (made again): its uses say nothing
+        // more, as the struct's own don't.
+        {"P :: *Node;\nNode :: struct { n: Node; }\nmain :: () { a: P = 5; b: *Node = 5; }\n",
+         "2:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"},
+        // A constant whose value can't name a type is no type where one is
+        // written, its value not worked out there: the struct it needs is
+        // in no circle.
+        {"S :: struct { a: C; }\nC :: size_of(S);\nmain :: () { }\n", "1:18: 'C' is not a type\n"},
     };
     for (const Case &k : cases) CHECK_STR(check_source(&a, k.text), k.message);
+    // A chain of aliases too deep is said once, at the one too many: the
+    // use of its first says nothing more.
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { x: A0; }\n", chain_of(&a, "A%lld :: A%lld;\n", 0, 1000, 1),
+                                      "A1001 :: int;\n")),
+              needed_too_deeply(&a, 1003, "A1001"));
     arena_free(&a);
 }

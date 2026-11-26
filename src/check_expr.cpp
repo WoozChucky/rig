@@ -2455,16 +2455,19 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // false, so nothing folds or lowers it), the type it denotes kept in
 // Ast.constant's bits for type_value.
 
-bool expr_names_type(Checker *c, Ast *e) {
+bool written_as_type(Ast *e) {
     // A type is never in parentheses, as a literal's isn't ((Vec2).{1}):
     // (int) is a value, refused as one.
     if (ast_in_parentheses(e)) return false;
+    if (e->kind == AST_TYPE_VALUE || e->kind == AST_NAME) return true;
+    return e->kind == AST_UNARY && ((Ast_Unary *)e)->op == TOKEN_STAR && written_as_type(((Ast_Unary *)e)->operand);
+}
+
+bool expr_names_type(Checker *c, Ast *e) {
+    if (!written_as_type(e)) return false;
+    // *X names a type when X does.
+    while (e->kind == AST_UNARY) e = ((Ast_Unary *)e)->operand;
     if (e->kind == AST_TYPE_VALUE) return true;
-    if (e->kind == AST_UNARY) {
-        Ast_Unary *u = (Ast_Unary *)e;
-        return u->op == TOKEN_STAR && expr_names_type(c, u->operand);
-    }
-    if (e->kind != AST_NAME) return false;
     String name = ((Ast_Name *)e)->name;
     Ast *decl = check_lookup(c, name, nullptr);
     if (!decl) return type_from_name(name) != nullptr;

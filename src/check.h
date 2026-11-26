@@ -453,6 +453,12 @@ Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const 
 // any lookup of it does: check_lookup).
 bool expr_names_type(Checker *c, Ast *e);
 
+// Whether e is written as a type may be where a value goes, whatever its
+// name stands for: an Ast_Type_Value, a name, or *X of such an X, never in
+// parentheses; expr_names_type's shape, looking nothing up. A constant
+// whose value isn't is never an alias (spec 3.22, checker.cpp's find_name).
+bool written_as_type(Ast *e);
+
 // The type e, which expr_names_type holds for, denotes, resolved as a
 // written type is, with its messages ("unknown type 'Foo'", "'Type' only
 // names types while compiling; ..."), but needing no layout

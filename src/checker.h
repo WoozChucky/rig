@@ -1451,11 +1451,18 @@
 //   isn't a procedure, so it can't be called" as a callee, V.{...}, M.FREE
 //   (through_alias). It is the same type, not a new one: `V == Vec2` is
 //   true, and messages name the type, "'Vec2' has no field 'z'". find_name
-//   works a top-level constant out first (resolve_global), as check_lookup
-//   does, so an alias can be used before its declaration, in a struct's
-//   field or a global's type; a local one is declared in order, as any local
-//   constant. A circle is a constant's, "'A' is defined in terms of itself"
-//   (`A :: B; B :: A;`, `S :: *S;`), its alias dropped.
+//   works a top-level constant whose value is written as a type may be
+//   (check_expr.cpp's written_as_type) out first (resolve_global), as
+//   check_lookup does, so an alias can be used before its declaration, in a
+//   struct's field or a global's type; any other is "'C' is not a type"
+//   there, its value not worked out. A local one is declared in order, as
+//   any local constant. A circle is a constant's, "'A' is defined in terms
+//   of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias dropped.
+// - An alias whose check failed, or that is in a circle, has no type, its
+//   mistake said once: its uses say nothing more (resolve_written,
+//   check_addressable). Nor do those of one naming a struct found in a
+//   circle or too big once every struct is laid out: what it names is made
+//   again then (check's made_again), null.
 // - Refused: an alias of a built-in type's name, which resolve_written
 //   would never find, "'u8' is a built-in type", at its name, at the top
 //   level and in a body; `X :: Type;`, as any type value of Type; a value
