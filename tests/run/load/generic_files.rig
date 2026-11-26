@@ -1,0 +1,11 @@
+// Loaded by tests/run/generic_files.rig: from_loaded's call of larger is
+// the main file's instance's for ints, and sum_from_loaded's of pair_sum,
+// which the main file declares, makes that generic's instance.
+larger :: (a: $T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+from_loaded :: () -> int { return larger(3, 4); }
+
+sum_from_loaded :: () -> int { return pair_sum(5, 6); }

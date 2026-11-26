@@ -1,0 +1,5 @@
+// Loaded by tests/errors/generic_files.rig: negate's error is said in
+// this file, and from_loaded's call shares the main file's instance.
+negate :: (v: $T) -> T { return -v; }
+
+from_loaded :: () -> bool { return negate(false); }

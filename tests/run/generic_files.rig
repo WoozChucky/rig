@@ -1,0 +1,15 @@
+// A generic procedure across files (issue #226, spec 7.11): larger, which
+// a #loaded file declares, is called from this file and from that one,
+// whose calls with ints are one instance, the program's, larger(T = int);
+// this file's call with floats makes another. pair_sum, which this file
+// declares, is called from the loaded one. (tests/errors/generic_files
+// shows the instance said once for both files' calls.)
+#import "Basic";
+#load "load/generic_files.rig";
+
+pair_sum :: (a: $T, b: T) -> T { return a + b; }
+
+main :: () {
+    print("{} {} {}\n", larger(2, 1), from_loaded(), larger(1.5, 2.5));
+    print("{}\n", sum_from_loaded());
+}
