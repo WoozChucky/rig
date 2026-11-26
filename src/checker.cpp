@@ -208,8 +208,10 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // nothing is said about it. A struct found to contain itself has no type:
 // its uses say nothing more. In an instance of a generic procedure, a type
 // parameter's name is the type it's bound to (spec 7.11, Ast_Alias). Type,
-// the type of types (spec 5.20), is written nowhere: "'Type' only names
-// types while compiling; a *Type_Info describes one at run time".
+// the type of types (spec 5.20), is written nowhere it resolves (a $T:
+// Type parameter's type never is, check_generic.cpp's takes_a_type):
+// "'Type' only names types while compiling; a *Type_Info describes one at
+// run time".
 //
 // behind_pointer: the type is what a pointer points at, or a view's or a
 // resizable array's elements, which lie elsewhere: a struct named right
@@ -3388,7 +3390,8 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 // to, and whether that reported an error is the instance's
 // (Ast_Instance.had_errors), as its body's later errors aren't; a generic
 // itself has a check of its own (check_generic.cpp's
-// check_generic_signature), which writes nothing into its nodes.
+// check_generic_signature), which writes nothing into its nodes but a $N's
+// type (Ast_Param.is_baked).
 static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
     if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {

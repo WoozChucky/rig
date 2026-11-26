@@ -172,11 +172,37 @@ static bool dollar_declared(Array<Signature_Name> *names, String name) {
     return false;
 }
 
-// The names an array's count `e`, in a generic's parameter, uses: a
-// constant parameter's written before the $ that declares it is "'N' is
-// used before '$N' declares it", at the use, as a type parameter's is
-// (check_signature_names). The rest of the count is each instance's to
-// check.
+static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names);
+
+// The array counts in written type `written`, itself in an array's count
+// (a size_of's type, a literal's), each walked by check_count_names.
+static void check_count_type_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
+                                   Array<Signature_Name> *names) {
+    if (!written) return;
+    switch (written->kind) {
+    case AST_TYPE_NAME: return;
+    case AST_TYPE_POINTER: check_count_type_names(c, written->pointee, declared, names); return;
+    case AST_TYPE_ARRAY:
+        check_count_names(c, written->count, declared, names);
+        check_count_type_names(c, written->element, declared, names);
+        return;
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE: check_count_type_names(c, written->element, declared, names); return;
+    case AST_TYPE_PROC:
+        for (s64 i = 0; i < written->params.count; i++) check_count_type_names(c, written->params[i], declared, names);
+        for (s64 i = 0; i < written->results.count; i++) {
+            check_count_type_names(c, written->results[i], declared, names);
+        }
+        return;
+    default: RIG_ASSERT(!"not a written type"); return;
+    }
+}
+
+// The names an array's count `e`, in a generic's parameter, uses, the
+// counts of the types written in it too: a constant parameter's written
+// before the $ that declares it is "'N' is used before '$N' declares it",
+// at the use, as a type parameter's is (check_signature_names). The rest
+// of the count is each instance's to check.
 static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names) {
     if (!e) return;
     switch (e->kind) {
@@ -195,9 +221,23 @@ static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declare
         return;
     }
     case AST_UNARY: check_count_names(c, ((Ast_Unary *)e)->operand, declared, names); return;
+    case AST_SPREAD: check_count_names(c, ((Ast_Spread *)e)->operand, declared, names); return;
+    case AST_DEREF: check_count_names(c, ((Ast_Deref *)e)->operand, declared, names); return;
     case AST_RUN: check_count_names(c, ((Ast_Run *)e)->operand, declared, names); return;
     case AST_MEMBER: check_count_names(c, ((Ast_Member *)e)->operand, declared, names); return;
-    case AST_CAST: check_count_names(c, ((Ast_Cast *)e)->value, declared, names); return;
+    case AST_CAST:
+        check_count_type_names(c, ((Ast_Cast *)e)->type_expr, declared, names);
+        check_count_names(c, ((Ast_Cast *)e)->value, declared, names);
+        return;
+    case AST_SIZE_OF: check_count_type_names(c, ((Ast_Size_Of *)e)->type_expr, declared, names); return;
+    case AST_TYPE_INFO: check_count_type_names(c, ((Ast_Type_Info *)e)->type_expr, declared, names); return;
+    case AST_TYPE_VALUE: check_count_type_names(c, ((Ast_Type_Value *)e)->type_expr, declared, names); return;
+    case AST_LITERAL: {
+        Ast_Literal *literal = (Ast_Literal *)e;
+        check_count_type_names(c, literal->type_expr, declared, names);
+        for (s64 i = 0; i < literal->values.count; i++) check_count_names(c, literal->values[i], declared, names);
+        return;
+    }
     case AST_BINARY:
         check_count_names(c, ((Ast_Binary *)e)->left, declared, names);
         check_count_names(c, ((Ast_Binary *)e)->right, declared, names);
@@ -206,7 +246,7 @@ static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declare
         check_count_names(c, ((Ast_Index *)e)->operand, declared, names);
         check_count_names(c, ((Ast_Index *)e)->index, declared, names);
         return;
-    default: return;  // a literal, or one with a type in it (size_of's), not looked into
+    default: return;  // a literal number, string or bool, null, context, a .NAME: no name
     }
 }
 
@@ -281,6 +321,28 @@ static bool constant_parameter_type(Type *t) {
            t->kind == TYPE_STRING;
 }
 
+// Whether the type of generic's index-th parameter, a baked one, $M: T, is
+// the name of a type parameter no $ before it declares: "'T' is used before
+// '$T' declares it", said already (check_signature_names), as it is of no
+// built-in type's name.
+static bool used_before_its_dollar(Ast_Proc *generic, s64 index, Array<Generic_Binding> declared) {
+    Ast_Type *written = generic->params[index]->type_expr;
+    if (written->kind != AST_TYPE_NAME || written->declares || !is_type_parameter(declared, written->name) ||
+        type_from_name(written->name)) {
+        return false;
+    }
+    Array<Generic_Binding> before = {};
+    for (s64 i = 0; i < index; i++) {
+        Ast_Param *param = generic->params[i];
+        if (param->is_baked) add_generic_parameter(&before, param->name, param->dollar, false, nullptr);
+        collect_type_parameters(param->type_expr, &before);
+    }
+    bool used_before = true;
+    for (s64 i = 0; i < before.count; i++) used_before &= !string_eq(before[i].name, written->name);
+    array_free(&before);
+    return used_before;
+}
+
 // A baked parameter of a generic (spec 7.11), $T: Type or $N: X, which each
 // call gives a type or a constant its instance is made for, and which is no
 // parameter of that instance:
@@ -306,7 +368,9 @@ static bool constant_parameter_type(Type *t) {
 // - using is refused, as for any parameter of a type it can't reach into
 //   (checker.cpp's using_takes): "'using' needs a struct or a pointer to one,
 //   not 'int'" ('Type' for a $T: Type).
-// Once one is refused, nothing more is said of it.
+// Once one is refused, nothing more is said of it: a type of a type
+// parameter's name used before its $, said so (check_signature_names), is
+// that one mistake.
 static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Array<Generic_Binding> declared) {
     Ast_Param *param = generic->params[index];
     if (param->is_variadic) {
@@ -337,10 +401,18 @@ static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Arra
     Ast_Type *written = param->type_expr;
     Type *t = &type_type;
     if (!takes_a_type(param)) {
+        if (used_before_its_dollar(generic, index, declared)) return;  // that mistake, said
         bool named = written->kind == AST_TYPE_NAME && !is_type_parameter(declared, written->name) &&
                      !is_constant_parameter(declared, written->name);
         t = named ? resolve_written(c, written, true) : nullptr;
-        if (named && !t) return;  // its own mistake, said
+        if (named && !t) {
+            // Its own mistake, said, or said before (a struct that holds
+            // itself), or not at all (a name a lost file may declare,
+            // Checker.lost_a_file): with no type for its argument to
+            // convert to, no call can make an instance.
+            generic->had_errors = true;
+            return;
+        }
         if (!t || !constant_parameter_type(t)) {
             diag_error(c->diag, written->pos,
                        "a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, "

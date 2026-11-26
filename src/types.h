@@ -463,15 +463,16 @@ extern Type type_untyped_member;
 // goes, while compiling only. Its name is a built-in type's, in
 // NAMED_TYPES, so no struct, union or enum takes it (a variable, a
 // constant, a parameter or a procedure may, hiding it where a value goes)
-// and the editor colours it, but
-// it's never a type written: a variable, a field, a cast or size_of of it
-// is "'Type' only names types while compiling; a *Type_Info describes one
-// at run time" (checker.cpp's resolve_written). Only the places that take
-// a type value give one this type, keeping the type it denotes beside it
-// (check_expr.cpp's check_type_value), for now == and != between two
-// types. Nothing of it exists at run time, so it's never laid out; its
-// size and alignment are a pointer's, which is what the checker holds of
-// one.
+// and the editor colours it, but it's never a type written but a baked
+// $T: Type parameter's (check_generic.cpp's takes_a_type): a variable, a
+// field, a cast or size_of of it is "'Type' only names types while
+// compiling; a *Type_Info describes one at run time" (checker.cpp's
+// resolve_written). Only the places that take a type value give one this
+// type, keeping the type it denotes beside it (check_expr.cpp's
+// check_type_value), for now == and != between two types, and a $T: Type
+// parameter's argument. Nothing of it exists at run time, so it's never
+// laid out; its size and alignment are a pointer's, which is what the
+// checker holds of one.
 extern Type type_type;
 
 // Whether t is the type of an untyped constant, integer or float.

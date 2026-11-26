@@ -448,8 +448,9 @@ bool expr_names_type(Checker *c, Ast *e);
 // written type is, with its messages ("unknown type 'Foo'", "'Type' only
 // names types while compiling; ..."), but needing no layout
 // (resolve_type_value); e->type then Type (type_type), and the type kept
-// for type_value. Null after a mistake, said. For a place
-// that takes a type value: for now == and != between types.
+// for type_value. Null after a mistake, said. For a place that takes a
+// type value: for now == and != between types, and a $T: Type parameter's
+// argument (check_generic_call).
 Type *check_type_value(Checker *c, Ast *e);
 
 // The type a checked type value denotes (Ast.constant's bits; Ast.is_constant

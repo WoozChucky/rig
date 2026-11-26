@@ -2435,10 +2435,11 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // 5;` hides the type int, as it hides any top-level name (spec 4.7). A type
 // in parentheses is no type, as nowhere else is one: (int) is a value. Only
 // the places that take a type check one as such (check_type_value), for
-// now == and != between two types (check_binary). A type value is never a value at run time: it has type
-// Type, never a constant (Ast.is_constant stays false, so nothing folds or
-// lowers it), the type it denotes kept in Ast.constant's bits for
-// type_value.
+// now == and != between two types (check_binary), and a $T: Type
+// parameter's argument (check_generic_call). A type value is never a value
+// at run time: it has type Type, never a constant (Ast.is_constant stays
+// false, so nothing folds or lowers it), the type it denotes kept in
+// Ast.constant's bits for type_value.
 
 bool expr_names_type(Checker *c, Ast *e) {
     // A type is never in parentheses, as a literal's isn't ((Vec2).{1}):

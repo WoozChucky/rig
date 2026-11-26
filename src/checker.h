@@ -1259,19 +1259,23 @@
 //   name, so no struct, union or enum takes it ("'Type' is a built-in
 //   type"), while a variable, a constant, a parameter or a procedure may,
 //   hiding it where a value goes, as `int := 5;` hides int. It's written
-//   nowhere: a variable, a parameter, a field, a cast, size_of,
-//   type_info and a type value of it are "'Type' only names types while
-//   compiling; a *Type_Info describes one at run time", at the type
+//   nowhere but as a baked $T: Type parameter's type (check_generic.cpp's
+//   takes_a_type): a variable, any other parameter, a field, a cast,
+//   size_of, type_info and a type value of it are "'Type' only names types
+//   while compiling; a *Type_Info describes one at run time", at the type
 //   (checker.cpp's resolve_written).
-// - Only == and != take type values for now (check_type_comparison): with
-//   either operand naming a type, both must ("'==' compares a type only
-//   with a type, as in T == int", at the operator), and the result is a
-//   constant bool, 1 for == when they're the same type (one Type *), for
-//   != when they aren't: `int == s64` is false, `float == float32` true,
-//   so `#if` decides on one and a constant may be one. Anywhere else a
-//   type is "'Vec2' is a type, not a value" as ever, at a name (`*Vec2` at
-//   Vec2), and "'[]int' is a type, not a value" at an Ast_Type_Value's
-//   start, its type named as messages name types.
+// - Only == and != and a $T: Type parameter's argument take type values
+//   for now. For == and != (check_type_comparison), with either operand
+//   naming a type, both must ("'==' compares a type only with a type, as
+//   in T == int", at the operator), and the result is a constant bool, 1
+//   for == when they're the same type (one Type *), for != when they
+//   aren't: `int == s64` is false, `float == float32` true, so `#if`
+//   decides on one and a constant may be one. A $T: Type's argument is
+//   checked as a type value when it names a type (check_expr.cpp's
+//   check_generic_call). Anywhere else a type is "'Vec2' is a type, not a
+//   value" as ever, at a name (`*Vec2` at Vec2), and "'[]int' is a type,
+//   not a value" at an Ast_Type_Value's start, its type named as messages
+//   name types.
 // - What lowering may rely on: no node of type Type is lowered. A type
 //   value has type Type and is never a constant (Ast.is_constant false),
 //   the type it denotes in Ast.constant's bits (type_value); a comparison
@@ -1282,12 +1286,13 @@
 // Generic procedures (issue #226, spec 7.11).
 // - A procedure whose parameters' types declare a type parameter, $T, or
 //   that bakes a parameter, $T: Type or $N: int (Ast_Proc.is_generic), is
-//   checked as none of its instances: its own
-//   signature check (check_generic.cpp's check_generic_signature) takes
-//   its type parameters as types still to be known, resolves its other
-//   type names once, so "unknown type 'Nope'" is said at the generic and
-//   not per instance, and writes nothing into its nodes, which each
-//   instance copies unchecked. It refuses a default value on a parameter
+//   checked as none of its instances: its own signature check
+//   (check_generic.cpp's check_generic_signature) takes its type
+//   parameters as types still to be known, resolves its other type names
+//   once, so "unknown type 'Nope'" is said at the generic and not per
+//   instance, and writes nothing into its nodes but a $N's type
+//   (Ast_Param.is_baked), which no instance copies: each copies them
+//   unchecked. It refuses a default value on a parameter
 //   whose type declares one ("a parameter that declares '$U' can't have a
 //   default value, for now", at the '='), and #foreign, #c_call and
 //   #compiler ("'f' is generic, so it can't be #foreign", at the

@@ -13655,7 +13655,8 @@ TEST(baked_parameters_bind_types_and_constants) {
     // from the call, which has no code for it. One instance per set of
     // values: ring(3, int) twice makes one, and a string is compared by its
     // bytes, so "hi" from two literals and from a constant is one, "ho"
-    // another. A parameter's type may name N after it: take's *[N]$T.
+    // another. A parameter's type may name N after it: take's *[N]$T. A
+    // $T: Type takes any type written as a value, *Position and []int too.
     Arena a = arena_make();
     Checked c = check_src(&a, string_cstr(&a, string_printf(&a,
                                                             "%s"
@@ -13675,13 +13676,15 @@ TEST(baked_parameters_bind_types_and_constants) {
                                                             "    n := get_then(*w, Position, 4);\n"
                                                             "    a: [3]int;\n"
                                                             "    t := take(3, *a);\n"
+                                                            "    p := ring(2, *Position);\n"
+                                                            "    v := ring(2, []int);\n"
                                                             "}\n",
                                                             GENERIC_BAKED)));
     CHECK_STR(messages(&a, &c.list->diag), "");
-    const char *names[] = {"g", "r", "r2", "f", "s", "s2", "s3", "s4", "n", "t"};
-    const char *types[] = {"*Position", "[3]int", "[3]int", "int", "string",
-                           "string",    "string", "string", "int", "int"};
-    for (s64 k = 0; k < 10; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    const char *names[] = {"g", "r", "r2", "f", "s", "s2", "s3", "s4", "n", "t", "p", "v"};
+    const char *types[] = {"*Position", "[3]int", "[3]int", "int", "string",        "string",
+                           "string",    "string", "int",    "int", "[2]*Position", "[2][]int"};
+    for (s64 k = 0; k < 12; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
     Ast_Proc *say = (Ast_Proc *)global_named(&c, "say");
     CHECK_EQ(say->instances.count, 2);
     if (say->instances.count == 2) {
@@ -13689,11 +13692,13 @@ TEST(baked_parameters_bind_types_and_constants) {
         CHECK_STR(say->instances[1]->name, "say(S = \"ho\")");
     }
     Ast_Proc *ring = (Ast_Proc *)global_named(&c, "ring");
-    CHECK_EQ(ring->instances.count, 1);
-    if (ring->instances.count == 1) {
+    CHECK_EQ(ring->instances.count, 3);
+    if (ring->instances.count == 3) {
         CHECK_STR(ring->instances[0]->name, "ring(N = 3, T = int)");
         CHECK_STR(ring->instances[0]->symbol, "ring$N$3$T$int");
         CHECK_EQ(ring->instances[0]->proc->params.count, 0);
+        CHECK_STR(ring->instances[1]->name, "ring(N = 2, T = *Position)");
+        CHECK_STR(ring->instances[2]->name, "ring(N = 2, T = []int)");
     }
     const char *calls[] = {"r", "r2"};
     for (const char *call : calls) {
@@ -13728,7 +13733,8 @@ TEST(baked_parameters_bind_types_and_constants) {
     // negative or an unsigned integer, a bool, a float the shortest that
     // reads back as it (a whole one written out, with a .0, below 10^15; a
     // NaN or an infinity as a division that makes one), an enum's value with
-    // no member as a cast, a string with its escapes.
+    // no member as a cast, a string with its escapes. One value written two
+    // ways is one instance: fl(2) is fl(2.0)'s, si(cast(s8) -3) si(-3)'s.
     c = check_src(&a,
                   "Mode :: enum { A; B; }\n"
                   "si :: ($N: s8) { }\n"
@@ -13756,6 +13762,8 @@ TEST(baked_parameters_bind_types_and_constants) {
                   "    db(0.0 / 0.0);\n"
                   "    db(1.0 / 0.0);\n"
                   "    fl(-1.0 / 0.0);\n"
+                  "    fl(2);\n"
+                  "    si(cast(s8) -3);\n"
                   "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
     const char *values[] = {"si(N = -3)",
@@ -13818,6 +13826,19 @@ TEST(baked_parameter_mistakes) {
          "10:13: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
          "'World'\n"},
         {"bad :: ($V: Nope) { }", "10:13: unknown type 'Nope'\n"},
+        // A type parameter or a constant one is no constant's type.
+        {"bad :: (a: $T, $V: T) { }",
+         "10:20: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'T'\n"},
+        {"bad :: ($N: int, $V: N) { }",
+         "10:22: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'N'\n"},
+        // One whose $ comes after it is that one mistake, said once.
+        {"e :: ($M: T, a: $T) { }", "10:11: 'T' is used before '$T' declares it\n"},
+        // A struct that holds itself makes no instance: the call says
+        // nothing more.
+        {"main :: () { x := f(3); }\nS :: struct { s: S; }\nf :: ($N: S) -> int { return 1; }",
+         "11:1: 'S' contains itself; it can hold a pointer to itself, *S\n"},
         {"many :: ($T: ..Type) { }",
          "10:14: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
          "..$T\n"},
@@ -13840,6 +13861,9 @@ TEST(baked_parameter_mistakes) {
          "10:24: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
         {"early :: (a: T, $T: Type) { }", "10:14: 'T' is used before '$T' declares it\n"},
         {"early :: (a: *[N + 1]int, $N: int) { }", "10:16: 'N' is used before '$N' declares it\n"},
+        // So is one in a literal, or in a type in the count.
+        {"e1 :: (a: *[int.[N, 1][0]]int, $N: int) { }", "10:18: 'N' is used before '$N' declares it\n"},
+        {"e2 :: (a: *[size_of([N]int)]int, $N: int) { }", "10:22: 'N' is used before '$N' declares it\n"},
         {"count :: ($N: int, a: N) { }", "10:23: 'N' is not a type\n"},
         // A second $N is the one mistake, said once.
         {"count :: ($N: int, a: $N) { }",
@@ -13858,5 +13882,15 @@ TEST(baked_parameter_mistakes) {
         String text = string_printf(&a, "%s%s\n%s", GENERIC_BAKED, k.text, main ? "" : "main :: () { }\n");
         CHECK_STR(check_source(&a, string_cstr(&a, text)), k.message);
     }
+    // After a #load failed (lost_a_file), a $N's type declared nowhere may
+    // be the lost file's: nothing is said, and no call makes an instance.
+    Token_List *list = src("f :: ($N: Foo) -> int { return 1; }\n"
+                           "main :: () { x := f(3); }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    file->lost_a_file = true;
+    check(file, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "f"))->instances.count, 0);
+    token_list_free(list);
     arena_free(&a);
 }

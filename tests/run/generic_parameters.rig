@@ -6,9 +6,12 @@
 // argument is no argument of the instance, and the others keep their order
 // and run once each: get_then's next() between w and nothing else, and
 // fill's make() after a dropped N and T. A constant may be an enum's member
-// or a string, compared by its bytes. A parameter's type may name N: take's
-// *[N]$T. The same compiled, interpreted and in #runs, a constant's and a
-// top-level one.
+// or a string, compared by its bytes, a float32 or a bool too: fl's F is
+// its float32 value, yes's B decides an #if per instance. A parameter's
+// type may name N: take's *[N]$T. An instance may give its N on to another
+// generic: outer's ring(N + 1, int). A $T: Type takes any type written as a
+// value: sz's []int and #type (int) -> int. The same compiled, interpreted
+// and in #runs, a constant's and a top-level one.
 #import "Basic";
 
 World :: struct { p: Position; }
@@ -38,6 +41,16 @@ HI :: "hi";
 
 take :: ($N: int, items: *[N]$T) -> T { return items.*[N - 1]; }
 
+fl :: ($F: float32) -> float32 { return F; }
+
+yes :: ($B: bool) -> int {
+    #if B { return 1; } else { return 0; }
+}
+
+outer :: ($N: int) -> int { return ring(N + 1, int).count; }
+
+sz :: ($T: Type) -> int { return size_of(T); }
+
 get_then :: (w: *World, $T: Type, n: int) -> int { return get(w, T).x + n; }
 
 next :: () -> int {
@@ -52,7 +65,10 @@ make :: () -> int {
 
 R :: #run ring(2, int).count;
 
-#run { print("{}\n", fill(2, string, "x")); }
+#run {
+    print("{}\n", fill(2, string, "x"));
+    print("{} {} {} {}\n", fl(0.1), yes(true), yes(false), outer(2));
+}
 
 main :: () {
     world: World;
@@ -72,4 +88,6 @@ main :: () {
     print("{}\n", take(3, *digits));
     print("{}\n", get_then(*world, Position, next()));
     print("{}\n", R);
+    print("{} {} {} {}\n", fl(0.1), yes(true), yes(false), outer(2));
+    print("{} {}\n", sz([]int), sz(#type (int) -> int));
 }
