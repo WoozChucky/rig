@@ -1720,8 +1720,8 @@ static bool starts_a_type(Token_Kind kind) {
 // it. [..] is always a type's, and so is a '[' whose look-ahead meets a ';',
 // the end, a ')' or '}' it didn't open, or a token the lexer refused before
 // its ']', or whose ']' has a token the lexer refused after it: the type's
-// own messages, or the lexer's, say what's wrong there. Scans tokens only, as proc_type_follows
-// does.
+// own messages, or the lexer's, say what's wrong there. Scans tokens only,
+// as proc_type_follows does.
 static bool c_style_literal_follows(Parser *p) {
     if (peek(p, 1)->kind == TOKEN_DOT_DOT) return false;
     s64 depth = 0;

@@ -4610,8 +4610,7 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
     // A ',' nested in the count, in '( )', '[ ]' or '{ }', is no literal's,
     // and a type after the ']' makes it a type, whichever token starts it: a
-    // name, '*', '[', '(' or '$'. [..] and a '[' where a type goes are always
-    // a type's, with their own messages.
+    // name, '*', '[', '(' or '$'.
     body_dump(&a, "x := [f(1, 2)]int == [g(.[1, 2])]u8;", &errors);
     CHECK_STR(errors, "");
     body_dump(&a, "x := [Vec2.{1, 2}.x]int == [.{1, 2}.n]u8;", &errors);
@@ -4648,6 +4647,8 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(lex_and_parse_messages(&a, "x := [] @int;"), "2:13: unexpected character '@'\n");
     CHECK_STR(lex_and_parse_messages(&a, "x := [1 @ 2];"), "2:13: unexpected character '@'\n");
     CHECK_STR(lex_and_parse_messages(&a, "x := [@];"), "2:11: unexpected character '@'\n");
+    // [..], a ']' with '$' after it, and a '[' where a type goes are always
+    // a type's, with the type's own messages.
     body_dump(&a, "x := [..];", &errors);
     CHECK_STR(errors, "2:14: expected a type, found ';'\n");
     body_dump(&a, "x := []$T;", &errors);

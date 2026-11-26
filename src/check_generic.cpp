@@ -6,11 +6,12 @@
 // program-wide: found again, or made, named and their signatures checked,
 // at most MAX_DEPTH deep. The names a generic's parameters declare; the
 // walk over its body for names declared nowhere; and the chain of
-// instances an error inside one is followed by. Each of these that only
-// looks at each name in a written type or an expression goes through them
-// with one walk (walk_names), and says what it does at each name in an
-// action of its own; match_type and add_written_type, which pair a
-// pattern with a type or write one out, walk it themselves.
+// instances an error inside one is followed by. The checks here that only
+// look at each name in a written type or an expression, the signature's,
+// the inference's, the parameters' and the body's, go through that type
+// or expression with one walk (walk_names), each saying what it does at a
+// name in an action of its own; match_type and add_written_type, which
+// pair a pattern with a type or write one out, walk the type themselves.
 
 #include "check.h"
 
@@ -53,10 +54,14 @@ static String name_text(Ast *name) {
 //
 // Every kind has its case, and there's no default, as in ast.cpp's
 // ast_clone: a new kind is a warning (-Wswitch) until this says what to do
-// with it. A statement or a declaration is none of what it walks: a
-// generic's body hands it each expression and written type
-// (names_statement), and declares no procedure, struct, union or enum
-// (parser.cpp's parse_local_declaration refuses them).
+// with it. The kinds that only break never reach it. A statement or a
+// declaration is none of what it walks: a generic's body hands it each
+// expression and written type (names_statement, which takes a switch's
+// cases apart too); the body declares no procedure, struct, union or enum
+// (parser.cpp's parse_local_declaration refuses them), so no parameter or
+// field of one either, and holds no #load or #import (parse_statements
+// skips each, with skip_misplaced_load). AST_BUILTIN and AST_ALIAS are
+// the checker's own declarations, in a scope and in no tree.
 static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, Ast *name, Name_Place place),
                        void *data) {
     if (!node) return;
@@ -357,7 +362,9 @@ static void at_signature_name(void *data, Ast *name, Name_Place place) {
     Checker *c = check->c;
     Array<Signature_Name> *names = check->names;
     if (place.in_count) {
-        // A $T never sits in a count: the parser declares none there.
+        // A $T never sits in a count: the parser declares none there
+        // (parse_type_level). Checking `declares` anyway doesn't lean on
+        // that: one there would be no use of its name.
         if (name->kind == AST_NAME || !((Ast_Type *)name)->declares) {
             check_count_name(c, name_text(name), name->pos, check->declared, names);
         }
