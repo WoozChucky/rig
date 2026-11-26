@@ -1,0 +1,29 @@
+// Mistakes in generic procedures' declarations (issue #226, spec 7.11),
+// one generic each, said once, at the generic: a type parameter declared
+// twice, used before its $, named as a parameter is, named as a built-in
+// type, and an unknown type, whose generic's two calls say nothing more.
+// Then two generics no call instantiates, whose bodies have their names
+// resolved but aren't type-checked: only the name declared nowhere is
+// said, in each.
+twice :: (a: $T, b: $T) { }
+early :: (a: T, b: $T) { }
+taken :: (T: int, b: $T) { }
+built_in :: (a: $int) { }
+missing :: (a: $T, b: Nope) -> T { return a; }
+
+lib :: (a: $T) -> T {
+    x := a.nothing + "s";
+    y: T = .NONE;
+    return nope(x, y);
+}
+
+lib2 :: (a: $T) {
+    z: Missing;
+    #if T == int { w := 1; } else { w := 2; }
+    v := w;
+}
+
+main :: () {
+    m := missing(1, 2);
+    n := missing(true, 3);
+}

@@ -13072,21 +13072,26 @@ TEST(type_parameters_work_in_an_instance) {
               "");
     CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a, "%smain :: () { b := bad_for_vec(true); }\n",
                                                                   generics))),
-              "12:75: '+' needs numbers, not 'bool'\n");
+              "12:75: '+' needs numbers, not 'bool'\n"
+              "    in 'bad_for_vec' with T = bool, called at test.rig:17:19\n");
     // T is no value, and no procedure.
     CHECK_STR(check_source(&a,
                            "f :: (v: $T) { x := T; T(); y := *T; }\n"
                            "main :: () { f(1); }\n"),
               "1:21: 'T' is a type, not a value\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n"
               "1:24: 'T' isn't a procedure, so it can't be called\n"
-              "1:35: 'T' is a type, not a value\n");
+              "    in 'f' with T = int, called at test.rig:2:14\n"
+              "1:35: 'T' is a type, not a value\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n");
     // An instance's bindings are declared in its body's block, as its
     // parameters are: a local there can't take T's name, an inner block's
     // may hide it.
     CHECK_STR(check_source(&a,
                            "f :: (v: $T) { T := 1; { T := 2; } }\n"
                            "main :: () { f(1); }\n"),
-              "1:16: 'T' is already declared at test.rig:1:10\n");
+              "1:16: 'T' is already declared at test.rig:1:10\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n");
     // T.empty, T bound to Shape, is Shape.empty: compared with a *Shape, a
     // test's operand or a switch's, it gets the hint Shape.empty gets.
     CHECK_STR(check_source(&a,
@@ -13095,7 +13100,9 @@ TEST(type_parameters_work_in_an_instance) {
                            "g :: (p: *$T) { if p == { case T.empty; } }\n"
                            "main :: () { s: Shape; b := f(*s); g(*s); }\n"),
               "2:39: 'T.empty' names a member of 'Shape', not '*Shape'; write p.* == T.empty\n"
-              "3:34: 'T.empty' names a member of 'Shape', not '*Shape'; write if p.* == {\n");
+              "    in 'f' with T = Shape, called at test.rig:4:29\n"
+              "3:34: 'T.empty' names a member of 'Shape', not '*Shape'; write if p.* == {\n"
+              "    in 'g' with T = Shape, called at test.rig:4:36\n");
     arena_free(&a);
 }
 
@@ -13188,10 +13195,194 @@ TEST(generic_refusals) {
     Checked c = check_src(&a,
                           "f :: (a: $T, b: T = 1) -> T { return a; }\n"
                           "main :: () { s := f(\"x\"); n: int = s; t := f(\"y\"); m: int = t; f(\"z\", \"w\"); }\n");
-    CHECK_STR(messages(&a, &c.list->diag), "1:21: a value of type 'int' doesn't convert to 'string' implicitly\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "1:21: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "    in 'f' with T = string, called at test.rig:2:19\n");
     CHECK_EQ(((Ast_Proc *)global_named(&c, "f"))->instances.count, 1);
     CHECK_STR(type_of(&a, &c, "s"), "?");
     CHECK_STR(type_of(&a, &c, "t"), "?");
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #226: generic declarations on their own, and errors inside
+// instances (spec 7.11).
+
+TEST(generic_declaration_mistakes) {
+    // A generic's own mistakes are said once, at the generic, whether it's
+    // called or not: a type parameter declared twice, used before its $,
+    // named as a parameter is or as a built-in type, a parameter's name
+    // given twice, an unknown type. A generic with one makes no instance:
+    // its calls get no type and say nothing more.
+    Arena a = arena_make();
+    struct Case {
+        const char *generic;
+        const char *call;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"f :: (a: $T, b: $T) -> int { return 1; }", "f(1, true)",
+         "1:17: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        {"g :: (a: T, b: $T) -> int { return 1; }", "g(1, 2)", "1:10: 'T' is used before '$T' declares it\n"},
+        {"p :: (f: (T) -> $T) -> int { return 1; }", "p(null)", "1:11: 'T' is used before '$T' declares it\n"},
+        {"h :: (T: int, b: $T) -> int { return 1; }", "h(1, 2)", "1:18: 'T' is already declared at test.rig:1:7\n"},
+        {"q :: (a: $T, T: int) -> int { return 1; }", "q(1, 2)", "1:14: 'T' is already declared at test.rig:1:10\n"},
+        {"r :: (a: $T, a: int) -> int { return 1; }", "r(1, 2)", "1:14: 'a' is already declared at test.rig:1:7\n"},
+        {"k :: (a: $int) -> int { return 1; }", "k(1)", "1:10: 'int' is a built-in type\n"},
+        {"m :: (a: $T, b: Nope) -> int { return 1; }", "m(1, 2)", "1:17: unknown type 'Nope'\n"},
+    };
+    for (const Case &k : cases) {
+        String text = string_printf(&a, "%s\nmain :: () { x := %s; y := %s; z: string = x; }\n", k.generic, k.call,
+                                    k.call);
+        Checked c = check_src(&a, string_cstr(&a, text));
+        diag_sort(&c.list->diag);
+        CHECK_STR(messages(&a, &c.list->diag), k.message);
+        CHECK_STR(type_of(&a, &c, "x"), "?");
+        CHECK_STR(type_of(&a, &c, "y"), "?");
+        CHECK_EQ(c.file->instances.count, 0);
+        token_list_free(c.list);
+    }
+    arena_free(&a);
+}
+
+TEST(uninstantiated_bodies_resolve_names_only) {
+    // A generic's body is walked once for its names, whether an instance is
+    // made or not: a name declared nowhere is said, as a value or as a type,
+    // and nothing that depends on T is checked (a member, a .NAME, a
+    // string added to a member). Both branches of an #if are walked, and
+    // what either declares is known after it. A generic with a using
+    // parameter says no unknown identifier: any may be a field.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "lib :: (a: $T) -> T { x := a.nothing + \"s\"; y: T = .NONE; return nope(x, y); }\n"
+                           "main :: () { }\n"),
+              "1:66: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "lib2 :: (a: $T) { z: Missing; #if T == int { w := 1; } else { w := 2; } v := w; }\n"
+                           "main :: () { }\n"),
+              "1:22: unknown type 'Missing'\n");
+    CHECK_STR(check_source(&a,
+                           "lib3 :: (using e: *$T) { q := position; }\n"
+                           "main :: () { }\n"),
+              "");
+    // Every kind of name a body declares is found where it's in scope:
+    // parameters, type parameters, locals, constants, several variables of
+    // one call, a loop's iterators named or not, a tagged switch's it, the
+    // top level's names, the built-in types and procedures. One used out of
+    // its scope, or before it's declared, is unknown, and so is a name in
+    // an array's count.
+    CHECK_STR(check_source(&a,
+                           "Shape :: union #tagged { circle: float; empty: void; }\n"
+                           "G := 1;\n"
+                           "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+                           "all :: (s: $T, v: []T) -> int {\n"
+                           "    K :: 2;\n"
+                           "    q, r := divmod(K, G);\n"
+                           "    for v { q += it_index; }\n"
+                           "    for e: v { r += it_index; }\n"
+                           "    for i: 0..2 { q += i; }\n"
+                           "    if s == { case .circle; f := it; }\n"
+                           "    b: [..]int;\n"
+                           "    array_add(*b, cast(int) size_of(T) + size_of(Shape));\n"
+                           "    m := T == int && s64 != u8;\n"
+                           "    defer q = 0;\n"
+                           "    push_context context { r += 1; }\n"
+                           "    return q + r + all(s, v);\n"
+                           "}\n"
+                           "out_of_scope :: (s: $T) {\n"
+                           "    { inner := 1; }\n"
+                           "    x := inner;\n"
+                           "    y := later;\n"
+                           "    later := 1;\n"
+                           "    for 0..2 { }\n"
+                           "    z := it;\n"
+                           "    w: [N]Unknown;\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "20:10: unknown identifier 'inner'\n"
+              "21:10: unknown identifier 'later'\n"
+              "24:10: unknown identifier 'it'\n"
+              "25:9: unknown identifier 'N'\n"
+              "25:11: unknown type 'Unknown'\n");
+    // A generic whose walk said something makes no instance after it, and
+    // an instance made before it isn't checked: its errors would only say
+    // the walk's again, without the instance's chain.
+    CHECK_STR(check_source(&a,
+                           "main :: () { x := early(1); }\n"
+                           "early :: (a: $T) -> T { return nope + a; }\n"
+                           "late :: (a: $T) -> T { return nope + a; }\n"
+                           "other :: () { y := late(1); }\n"),
+              "2:32: unknown identifier 'nope'\n"
+              "3:31: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(instance_errors_name_their_chain) {
+    // An error inside an instance is followed by its chain, one line per
+    // instance from it out to the one a call outside any instance made:
+    // its bindings and the call that made it. Said once, with the first
+    // call, however many calls share the instance.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "inner :: (v: $T) -> T { return v + 1; }\n"
+                           "outer :: (v: $T) -> T { return inner(v); }\n"
+                           "main :: () {\n"
+                           "    b := outer(true);\n"
+                           "    c := outer(true);\n"
+                           "}\n"),
+              "1:34: '+' needs numbers, not 'bool'\n"
+              "    in 'inner' with T = bool, called at test.rig:2:32\n"
+              "    in 'outer' with T = bool, called at test.rig:4:10\n");
+    // A global worked out from inside an instance, here by a #run that
+    // reaches the instance's body during the declarations, is the
+    // program's: its mistake has no chain.
+    CHECK_STR(check_source(&a,
+                           "A :: #run f(1);\n"
+                           "f :: (v: $T) -> int { return X; }\n"
+                           "X : int = needs_g();\n"
+                           "needs_g :: () -> string { return \"s\"; }\n"
+                           "main :: () { }\n"),
+              "3:11: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    // An error in an instance's signature, a default that doesn't convert
+    // to its T, has its chain too; the call's own mistakes, counted,
+    // inferred or converted, are the caller's and have none.
+    CHECK_STR(check_source(&a,
+                           "f :: (a: $T, b: T = 1) -> T { return a; }\n"
+                           "g :: (a: $T, b: T) -> T { return a; }\n"
+                           "main :: () { s := f(\"x\"); t := g(1); n: int; u := g(n, \"y\"); }\n"),
+              "1:21: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "    in 'f' with T = string, called at test.rig:3:19\n"
+              "3:32: 'g' takes 2 arguments, but 1 was given\n"
+              "3:56: argument 2 of 'g' has type 'string', which can't be converted to 'int'\n");
+    arena_free(&a);
+}
+
+TEST(instances_have_a_depth_limit) {
+    // Each instance's body making the next, deeper, instance, never the
+    // same one, nests at most MAX_DEPTH instances: the one too many is
+    // refused at its call, with the chain of the instances it's in, the
+    // innermost and outermost ten.
+    Arena a = arena_make();
+    String expected = str("1:27: 'grow' is instantiated more than 1000 levels deep, each instance's body making "
+                          "the next\n");
+    // The instance at depth d is T = int behind d - 1 pointers, made at the
+    // call in the body of the one before it, the first by main's.
+    for (s64 d = 1000; d >= 1; d--) {
+        if (d == 990) {
+            expected = string_printf(&a, STR_FMT "    ... 980 more instances\n", STR_ARG(expected));
+            d = 11;
+            continue;
+        }
+        Array<u8> type = {};
+        for (s64 i = 0; i < d - 1; i++) array_add(&type, (u8)'*');
+        for (const char *p = "int"; *p; p++) array_add(&type, (u8)*p);
+        expected = string_printf(&a, STR_FMT "    in 'grow' with T = %.*s, called at test.rig:%s\n", STR_ARG(expected),
+                                 (int)type.count, (const char *)type.data, d == 1 ? "2:14" : "1:27");
+        array_free(&type);
+    }
+    CHECK_STR(check_source(&a,
+                           "grow :: (v: $T) { x := v; grow(*x); }\n"
+                           "main :: () { grow(1); }\n"),
+              string_cstr(&a, expected));
     arena_free(&a);
 }

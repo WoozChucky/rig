@@ -2842,6 +2842,20 @@ static void add_using_params(Checker *c, Ast_Proc *proc) {
 // Whether its check reported an error is kept (Ast_Proc.had_errors): a
 // #run that reaches it doesn't run.
 static void check_body(Checker *c, Ast_Proc *proc) {
+    // An instance's body is its generic's (spec 7.11), whose names are
+    // walked first, once (check_generic_names), so their mistakes are the
+    // generic's, said with no instance chain. After one, the body isn't
+    // checked: its errors would only say the walk's again. It has errors,
+    // so a #run that reaches it doesn't run.
+    if (proc->instance) {
+        Ast_Proc *generic = proc->instance->generic;
+        if (generic->body_resolve == RESOLVE_NOT_YET) check_generic_names(c, generic);
+        if (generic->had_errors) {
+            proc->had_errors = true;
+            proc->body_resolve = RESOLVE_DONE;
+            return;
+        }
+    }
     Ast_Proc *outer_proc = c->proc;
     Outer_Scopes outer_scopes = leave_scopes(c);  // and lost_a_local
     Array<Ast *> outer_loops = c->loops;
@@ -3898,10 +3912,17 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // Then the bodies, each that isn't done yet: a #run that reached one
     // checked it there (check_reached_body), so it isn't checked twice. A
     // broken entry has none: the parser gave up on it. A generic procedure's
-    // body is checked only as its instances' (spec 7.11).
+    // body is checked only as its instances' (spec 7.11): in its turn its
+    // names are walked (check_generic_names), unless an instance's body
+    // checked earlier had them walked first.
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
-        if (proc->body && proc->body_resolve == RESOLVE_NOT_YET && !proc->is_generic) check_body(&c, proc);
+        if (proc->is_broken || proc->body_resolve != RESOLVE_NOT_YET) continue;
+        if (proc->is_generic) {
+            check_generic_names(&c, proc);
+        } else if (proc->body) {
+            check_body(&c, proc);
+        }
     }
     // Then the top-level #runs, in source order: checked, and what each
     // reaches walked, but never run here (check_top_level_run): they run

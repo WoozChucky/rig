@@ -278,6 +278,9 @@ struct Ast_Instance {
     bool had_errors;           // its signature's check reported an error (checker.cpp's
                                // resolve_signature): every call with its bindings gets no type and
                                // says nothing more (check_generic.cpp's check_instance)
+    String context;            // the chain an error inside it is followed by (check_generic.cpp's
+                               // instance_context), made the first time it's entered (enter_instance);
+                               // empty until then
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)

@@ -168,3 +168,25 @@ TEST(diag_render_prints_lines_after_the_caret) {
     arena_free(&a);
     diag_free(&d);
 }
+
+TEST(context_follows_lines) {
+    // An error recorded inside an instance of a generic procedure takes the
+    // instance chain (Diagnostics.context, spec 7.11), printed after its
+    // caret and after its lines, a failed #run's frames; one recorded once
+    // the context is emptied has none.
+    Diagnostics d = {};
+    s32 file = diag_add_file(&d, str("a.rig"), str("x := 1;\ny := 2;\n"));
+    d.context = str("    in 'f' with T = int, called at a.rig:2:5\n");
+    diag_error(&d, {file, 1, 6}, "boom");
+    diag_add_lines(&d, str("    in g (a.rig:1:1)\n"));
+    d.context = {};
+    diag_error(&d, {file, 2, 1}, "plain");
+    Arena a = arena_make();
+    CHECK_STR(diag_render(&a, &d),
+              "a.rig:1:6: error: boom\n    x := 1;\n         ^\n"
+              "    in g (a.rig:1:1)\n"
+              "    in 'f' with T = int, called at a.rig:2:5\n"
+              "a.rig:2:1: error: plain\n    y := 2;\n    ^\n");
+    arena_free(&a);
+    diag_free(&d);
+}

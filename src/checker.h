@@ -1293,7 +1293,25 @@
 //   directive; a #compiler one outside the modules is said to be that
 //   first). It has no procedure type: its name as a value is "'max' is
 //   generic; call it, or wrap one instance in a procedure", at the name.
-//   Its body is checked only as each instance's, never on its own.
+// - The names its parameters declare are checked there too, in the order
+//   they're written: a second $T is "'T' is declared twice; '$' goes on
+//   its first use only, as in (a: $T, b: T)", at its $; a use before the
+//   $T is "'T' is used before '$T' declares it", at the use; a parameter
+//   or a type parameter of a name another has is "'T' is already declared
+//   at PATH:L:C", at the later one; a $T of a built-in type's name is
+//   "'int' is a built-in type".
+// - Its body is type-checked only as each instance's, never on its own:
+//   on its own its names are walked (check_generic.cpp's
+//   check_generic_names), once, in its turn in check()'s pass over the
+//   bodies or for the first of its instances' bodies checked before that.
+//   A name declared nowhere is "unknown identifier 'x'" ("unknown type
+//   'Foo'" where a type is written), said at the generic with no instance
+//   chain; what depends on T (a member's name, a .NAME, a literal's field
+//   names) isn't looked at; every branch of an #if is walked, and what
+//   any declares is known after it; with a using parameter no name is
+//   unknown, a field of T's maybe. A walk that said something counts as
+//   the generic's errors (had_errors): it makes no instance after, and
+//   the bodies of the instances made before aren't checked.
 // - A call of one (check_expr.cpp's check_generic_call) checks its
 //   arguments as any call's, counts them as any call does (the same
 //   messages), and infers the type parameters from them
@@ -1333,6 +1351,20 @@
 //   a procedure, so it can't be called" as a callee, and T.A, T.empty or
 //   T.{...} when it's an enum's, a tagged union's or a struct's
 //   (through_alias).
+// - Every error recorded while Checker.instance is set is followed by its
+//   chain (Diagnostics.context, which enter_instance sets wherever
+//   Checker.instance changes): "    in 'inner' with T = bool, called at
+//   PATH:L:C" for it, then for the instance whose signature, defaults or
+//   body made it, out to the one made outside any instance; of more than
+//   21, the innermost and outermost ten, "    ... N more instances"
+//   between (instance_context). Set aside with the scopes, so a global, a
+//   constant or a type worked out from inside an instance has none; a
+//   call's own mistakes (its count, the inference, the conversions) are
+//   the caller's, with the caller's chain.
+// - Instances nest at most MAX_DEPTH deep (spec 9.4): the call that would
+//   make one inside an instance MAX_DEPTH deep makes none and has no type,
+//   "'grow' is instantiated more than 1000 levels deep, each instance's
+//   body making the next", at the call, with its chain.
 // - What lowering may rely on: no generic procedure is lowered, and no
 //   call's proc is one; each instance is a procedure, keyed by its symbol
 //   (lower.cpp's proc_symbol), after the program's own procedures.

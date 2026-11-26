@@ -90,7 +90,9 @@ struct Checker {
                                  // is being checked (spec 7.11): its bindings are found after the scopes
                                  // and the using parameters, before the top level (instance_binding);
                                  // null elsewhere. Set aside with the scopes (checker.cpp's leave_scopes),
-                                 // so a declaration worked out inside an instance doesn't see its T
+                                 // so a declaration worked out inside an instance doesn't see its T.
+                                 // Changed only by enter_instance, which gives the errors recorded
+                                 // meanwhile its chain (Diagnostics.context)
 };
 
 // A type parameter of a generic procedure (spec 7.11) while a call of it is
@@ -486,9 +488,34 @@ bool has_failed_run(Ast *e);
 // unchecked (an array's count is each instance's to check, its mistakes
 // said per instance); the refusals of a default value on a parameter that
 // declares a type parameter, of C's '..', of #foreign, #c_call and
-// #compiler. Its type stays null: a generic is no value. Its default values
-// are each instance's, checked with its signature.
+// #compiler; and the mistakes in the names its parameters declare: a $T
+// twice, a type parameter used before its $T, a name two of them declare,
+// a $T of a built-in type's name. Its type stays null: a generic is no
+// value. Its default values are each instance's, checked with its
+// signature.
 void check_generic_signature(Checker *c, Ast_Proc *generic);
+
+// The walk over a generic procedure's body (spec 7.11), which is
+// type-checked only as each instance's: the names it uses that are
+// declared nowhere, said once, at the generic, as the checker says them
+// ("unknown identifier 'x'", "unknown type 'Foo'"), nothing else, and
+// nothing written into its nodes. What depends on T isn't looked at: a
+// member's name, a .NAME, a literal's field names. Both branches of an #if
+// are walked. With a using parameter no unknown identifier is said, a field
+// of T's maybe; nor after a #load or a top-level #if's condition failed
+// (Checker.lost_a_file). Run once, in check()'s pass over the bodies in the
+// generic's turn, or earlier for the first of its instances' bodies
+// checked (Ast_Proc.body_resolve says it's done): a mistake sets the
+// generic's had_errors, so it makes no instance after, and the bodies of
+// those made before aren't checked.
+void check_generic_names(Checker *c, Ast_Proc *generic);
+
+// The lines an error inside instance inst is followed by (spec 7.11,
+// Diagnostic.context): "    in 'max' with T = Vec2, called at
+// main.rig:12:5\n" for it, then for the instance whose body made it, and
+// so on out to the one made outside any instance. Of more than 21, the
+// innermost and outermost ten, "    ... N more instances\n" between them.
+String instance_context(Checker *c, Ast_Instance *inst);
 
 // The instance of generic a call with arguments `args`, checked already,
 // makes (spec 7.11): its type parameters inferred from the arguments (their
@@ -509,6 +536,8 @@ Ast *instance_binding(Ast_Instance *inst, String name);
 // between several, in the order the generic declares them.
 String bindings_text(Arena *a, Array<Ast *> bindings);
 
-// Makes inst the instance being checked (Checker.instance); null leaves
-// every instance, as checker.cpp's leave_scopes does.
+// Makes inst the instance being checked (Checker.instance), and its chain
+// (instance_context, made once, Ast_Instance.context) what every error is
+// followed by from now on (Diagnostics.context); null leaves every
+// instance, and errors have no chain, as checker.cpp's leave_scopes does.
 void enter_instance(Checker *c, Ast_Instance *inst);

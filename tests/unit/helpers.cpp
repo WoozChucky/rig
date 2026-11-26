@@ -127,8 +127,9 @@ static void token_list_free(Token_List *list) {
 
 // The messages reported so far, one per line, with their positions:
 // "2:5: unknown identifier 'x'\n", each followed by its more lines, if it
-// has any (a failed #run's frames, Diagnostic.lines). Easier to compare
-// than renderings.
+// has any (a failed #run's frames, Diagnostic.lines), then by its instance
+// chain, if it has one (an error inside an instance of a generic
+// procedure, Diagnostic.context). Easier to compare than renderings.
 static String messages(Arena *a, Diagnostics *d) {
     String all = string_printf(a, "");
     for (s64 i = 0; i < d->messages.count; i++) {
@@ -136,6 +137,7 @@ static String messages(Arena *a, Diagnostics *d) {
         all = string_printf(a, STR_FMT "%d:%d: " STR_FMT "\n", STR_ARG(all), m->pos.line, m->pos.col,
                             STR_ARG(m->message));
         if (m->lines.count) all = string_printf(a, STR_FMT STR_FMT, STR_ARG(all), STR_ARG(m->lines));
+        if (m->context.count) all = string_printf(a, STR_FMT STR_FMT, STR_ARG(all), STR_ARG(m->context));
     }
     return all;
 }

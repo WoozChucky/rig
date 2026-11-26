@@ -87,8 +87,100 @@ static Ast_Type *first_declared(Ast_Type *written) {
     return first;
 }
 
+// A name a generic's parameters declare, a parameter's or a type
+// parameter's, where it's written: what a later one of that name is told
+// it clashes with (check_signature_names).
+struct Signature_Name {
+    String name;
+    Position pos;
+    bool dollar;  // a type parameter's: its $
+};
+
+// Says "'T' is already declared at PATH:L:C", at pos, of a name declared
+// at `earlier`, as checker.cpp's declare says it of a block's.
+static void report_declared_again(Checker *c, String name, Position pos, Position earlier) {
+    diag_error(c->diag, pos, "'" STR_FMT "' is already declared at " STR_FMT ":%d:%d", STR_ARG(name),
+               STR_ARG(c->diag->files[earlier.file].path), earlier.line, earlier.col);
+}
+
+// The name `name` among `names`, or null.
+static Signature_Name *signature_name(Array<Signature_Name> *names, String name) {
+    for (s64 i = 0; i < names->count; i++) {
+        if (string_eq((*names)[i].name, name)) return &(*names)[i];
+    }
+    return nullptr;
+}
+
+// The names written type `written`, a parameter's of a generic, declares
+// and uses, in the order they're written (depth first, left to right, an
+// array's count apart), against what the parameters and the parts before
+// them declared (*names, which this adds to), and the type parameters the
+// whole signature declares (`declared`), said once, at the generic (spec
+// 7.11):
+// - a $T where an earlier $T declared the name: "'T' is declared twice; '$'
+//   goes on its first use only, as in (a: $T, b: T)", at the second $;
+// - a $T of a parameter's name: "'T' is already declared at PATH:L:C", at
+//   the $, as for two locals of one block;
+// - a $T of a built-in type's name, which could then never be named, as
+//   declare_top_level says of a top-level declaration: "'int' is a built-in
+//   type";
+// - a use of a type parameter written before the $ that declares it: "'T'
+//   is used before '$T' declares it", at the use.
+static void check_signature_names(Checker *c, Ast_Type *written, Array<Ast_Type *> declared,
+                                  Array<Signature_Name> *names) {
+    switch (written->kind) {
+    case AST_TYPE_NAME: {
+        Signature_Name *earlier = signature_name(names, written->name);
+        if (!written->declares) {
+            bool declared_yet = earlier && earlier->dollar;
+            if (is_type_parameter(declared, written->name) && !declared_yet) {
+                diag_error(c->diag, written->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it",
+                           STR_ARG(written->name), STR_ARG(written->name));
+            }
+        } else if (earlier && earlier->dollar) {
+            diag_error(c->diag, written->pos,
+                       "'" STR_FMT "' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)",
+                       STR_ARG(written->name));
+        } else if (earlier) {
+            report_declared_again(c, written->name, written->pos, earlier->pos);
+        } else {
+            if (type_from_name(written->name)) {
+                diag_error(c->diag, written->pos, "'" STR_FMT "' is a built-in type", STR_ARG(written->name));
+            }
+            array_add(names, {written->name, written->pos, true});
+        }
+        return;
+    }
+    case AST_TYPE_POINTER: check_signature_names(c, written->pointee, declared, names); return;
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE: check_signature_names(c, written->element, declared, names); return;
+    case AST_TYPE_PROC:
+        for (s64 i = 0; i < written->params.count; i++) check_signature_names(c, written->params[i], declared, names);
+        for (s64 i = 0; i < written->results.count; i++) check_signature_names(c, written->results[i], declared, names);
+        return;
+    default: RIG_ASSERT(!"not a written type"); return;
+    }
+}
+
 void check_generic_signature(Checker *c, Ast_Proc *generic) {
     Array<Ast_Type *> declared = type_parameters(generic);
+    // The names the parameters declare, in the order they're written: each
+    // parameter's, then its type's. A parameter's name another has is
+    // "'a' is already declared at PATH:L:C", at the later one, as its body
+    // would say it of each instance, once here instead.
+    Array<Signature_Name> names = {};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        Ast_Param *param = generic->params[i];
+        Signature_Name *earlier = signature_name(&names, param->name);
+        if (earlier) {
+            report_declared_again(c, param->name, param->pos, earlier->pos);
+        } else {
+            array_add(&names, {param->name, param->pos, false});
+        }
+        check_signature_names(c, param->type_expr, declared, &names);
+    }
+    array_free(&names);
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
         check_generic_type(c, param->type_expr, declared, false);
@@ -425,8 +517,48 @@ String bindings_text(Arena *a, Array<Ast *> bindings) {
     return result;
 }
 
+// How many of an instance chain's innermost instances are shown, and as many
+// of its outermost: a generic whose instances each make a deeper one has up
+// to MAX_DEPTH of them, a line each, as report_failure (run.cpp) shows a
+// failed #run's frames.
+static const s64 INSTANCES_SHOWN = 10;
+
+// The line of instance inst in a chain: "    in 'max' with T = Vec2,
+// called at main.rig:12:5\n", the call's path as diagnostics name its file.
+static String instance_line(Checker *c, Ast_Instance *inst) {
+    Position at = inst->called_at;
+    return string_printf(c->arena, "    in '" STR_FMT "' with " STR_FMT ", called at " STR_FMT ":%d:%d\n",
+                         STR_ARG(inst->generic->name), STR_ARG(bindings_text(c->arena, inst->bindings)),
+                         STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+}
+
+String instance_context(Checker *c, Ast_Instance *inst) {
+    Array<Ast_Instance *> chain = {};
+    for (Ast_Instance *in = inst; in; in = in->made_in) array_add(&chain, in);
+    Array<u8> text = {};
+    for (s64 i = 0; i < chain.count; i++) {
+        // Of more than 2 * INSTANCES_SHOWN + 1, the innermost and outermost
+        // INSTANCES_SHOWN, and "    ... N more instances" between them: N
+        // is 2 at least, as one left out would take the line that says so.
+        if (chain.count > 2 * INSTANCES_SHOWN + 1 && i == INSTANCES_SHOWN) {
+            s64 left_out = chain.count - 2 * INSTANCES_SHOWN;
+            add_generic_text(&text, string_printf(c->arena, "    ... %lld more instances\n", (long long)left_out));
+            i += left_out - 1;
+            continue;
+        }
+        add_generic_text(&text, instance_line(c, chain[i]));
+    }
+    String result = string_copy(c->arena, {text.data, text.count});
+    array_free(&text);
+    array_free(&chain);
+    return result;
+}
+
 void enter_instance(Checker *c, Ast_Instance *inst) {
     c->instance = inst;
+    // Its chain is the same wherever it's entered: made once.
+    if (inst && !inst->context.count) inst->context = instance_context(c, inst);
+    c->diag->context = inst ? inst->context : String{};
 }
 
 // The instance of generic whose bindings are `bindings`, made already, or
@@ -480,8 +612,21 @@ static String instance_symbol(Arena *a, Ast_Proc *generic, String name) {
 // program's list, and its signature checked now, its bindings in sight
 // (checker.cpp's resolve_signature). Its body waits for check()'s last
 // pass, or a #run that reaches it first.
+//
+// Instances nest at most MAX_DEPTH deep (spec 9.4): a generic whose
+// instances' bodies each call it with a new type, *T say, would make them
+// without end. One to be made in an instance MAX_DEPTH deep is refused at
+// its call, "'grow' is instantiated more than 1000 levels deep, each
+// instance's body making the next", followed by the chain it's in, as any
+// error there is (Diagnostics.context), and none is made: null.
 static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_Binding> bindings,
                                    Position called_at) {
+    if (c->instance && c->instance->depth >= MAX_DEPTH) {
+        diag_error(c->diag, called_at,
+                   "'" STR_FMT "' is instantiated more than %d levels deep, each instance's body making the next",
+                   STR_ARG(generic->name), MAX_DEPTH);
+        return nullptr;
+    }
     Ast_Instance *inst = arena_new<Ast_Instance>(c->arena);
     inst->generic = generic;
     inst->proc = (Ast_Proc *)ast_clone(c->arena, generic);
@@ -523,9 +668,277 @@ Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *
         if (!inst) inst = make_instance(c, generic, bindings, called_at);
         // An instance whose signature had errors, said where it was made,
         // stays cached, so they're said once; the calls with its bindings
-        // get no type, the first one's too, and say nothing more.
-        if (!inst->had_errors) proc = inst->proc;
+        // get no type, the first one's too, and say nothing more. One
+        // refused for its depth (said) is none.
+        if (inst && !inst->had_errors) proc = inst->proc;
     }
     array_free(&bindings);
     return proc;
+}
+
+// The generic's own body (spec 7.11): what it means depends on T, so it's
+// type-checked only as each instance's; but a name it uses that's declared
+// nowhere is a mistake whatever T is, said once, here, even for a generic no
+// call instantiates. The walk writes nothing into the body's nodes, which
+// each instance copies unchecked.
+
+// What the walk over a generic's body knows (check_generic_names): the names
+// declared where it is, innermost last. A block's names are dropped at its
+// end by setting `names.count` back to what it was at its start.
+struct Name_Walk {
+    Checker *c;
+    Array<String> names;  // the parameters, the type parameters, then what the body declared so far
+    bool any_field;       // a using parameter: a name may be any of its fields, which depend on T
+};
+
+static void names_statement(Name_Walk *w, Ast *statement);
+
+// Whether `name` is declared where the walk is: in the body, among the
+// parameters and type parameters, or at the top level; or is a built-in
+// type's, which is a type, or "'int' is a type, not a value" as a value,
+// but never unknown.
+static bool name_known(Name_Walk *w, String name) {
+    for (s64 i = w->names.count - 1; i >= 0; i--) {
+        if (string_eq(w->names[i], name)) return true;
+    }
+    return table_get(&w->c->top_level, name) || type_from_name(name);
+}
+
+// A name used as a value or called: "unknown identifier 'x'" when it's
+// declared nowhere, as check_expr.cpp's report_undeclared says it; never
+// when a using parameter's fields may hold it, or when a #load or a
+// top-level #if's condition failed (Checker.lost_a_file), as there.
+static void names_value(Name_Walk *w, Ast_Name *name) {
+    if (name_known(w, name->name) || w->any_field || w->c->lost_a_file) return;
+    diag_error(w->c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
+}
+
+static void names_expression(Name_Walk *w, Ast *e);
+
+// A written type's names, as resolve_written says them: "unknown type
+// 'Foo'" for one declared nowhere (a field is no type, so a using parameter
+// doesn't keep it silent), and an array's count as an expression.
+static void names_type(Name_Walk *w, Ast_Type *written) {
+    if (!written) return;
+    switch (written->kind) {
+    case AST_TYPE_NAME:
+        if (!name_known(w, written->name) && !w->c->lost_a_file) {
+            diag_error(w->c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
+        }
+        return;
+    case AST_TYPE_POINTER: names_type(w, written->pointee); return;
+    case AST_TYPE_ARRAY:
+        names_expression(w, written->count);
+        names_type(w, written->element);
+        return;
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE: names_type(w, written->element); return;
+    case AST_TYPE_PROC:
+        for (s64 i = 0; i < written->params.count; i++) names_type(w, written->params[i]);
+        for (s64 i = 0; i < written->results.count; i++) names_type(w, written->results[i]);
+        return;
+    default: RIG_ASSERT(!"not a written type"); return;
+    }
+}
+
+// An expression's names. What follows a '.', a .NAME's name and a
+// literal's field names are its type's, so T's: never looked at.
+static void names_expression(Name_Walk *w, Ast *e) {
+    if (!e) return;
+    switch (e->kind) {
+    case AST_NAME: names_value(w, (Ast_Name *)e); return;
+    case AST_CALL: {
+        Ast_Call *call = (Ast_Call *)e;
+        names_expression(w, call->callee);
+        for (s64 i = 0; i < call->args.count; i++) names_expression(w, call->args[i]);
+        return;
+    }
+    case AST_UNARY: names_expression(w, ((Ast_Unary *)e)->operand); return;
+    case AST_SPREAD: names_expression(w, ((Ast_Spread *)e)->operand); return;
+    case AST_DEREF: names_expression(w, ((Ast_Deref *)e)->operand); return;
+    case AST_RUN: names_expression(w, ((Ast_Run *)e)->operand); return;
+    case AST_MEMBER: names_expression(w, ((Ast_Member *)e)->operand); return;
+    case AST_BINARY:
+        names_expression(w, ((Ast_Binary *)e)->left);
+        names_expression(w, ((Ast_Binary *)e)->right);
+        return;
+    case AST_CAST:
+        names_type(w, ((Ast_Cast *)e)->type_expr);
+        names_expression(w, ((Ast_Cast *)e)->value);
+        return;
+    case AST_SIZE_OF: names_type(w, ((Ast_Size_Of *)e)->type_expr); return;
+    case AST_TYPE_INFO: names_type(w, ((Ast_Type_Info *)e)->type_expr); return;
+    case AST_TYPE_VALUE: names_type(w, ((Ast_Type_Value *)e)->type_expr); return;
+    case AST_LITERAL: {
+        Ast_Literal *literal = (Ast_Literal *)e;
+        names_type(w, literal->type_expr);
+        for (s64 i = 0; i < literal->values.count; i++) names_expression(w, literal->values[i]);
+        return;
+    }
+    case AST_INDEX:
+        names_expression(w, ((Ast_Index *)e)->operand);
+        names_expression(w, ((Ast_Index *)e)->index);
+        return;
+    default: return;  // a literal number, string or bool, null, context, a .NAME: no name
+    }
+}
+
+// The statements of `block`, in the scope the caller is in.
+static void names_statements(Name_Walk *w, Ast_Block *block) {
+    for (s64 i = 0; i < block->statements.count; i++) names_statement(w, block->statements[i]);
+}
+
+// A block with a scope of its own: what it declares ends with it.
+static void names_block(Name_Walk *w, Ast_Block *block) {
+    s64 outer = w->names.count;
+    names_statements(w, block);
+    w->names.count = outer;
+}
+
+// A body's #if (spec 6.10): which branch is taken depends on T, so every
+// condition and every branch is walked, each branch's names declared only
+// in it while it's walked; then, as #if makes no scope, what any branch
+// declares is known after the chain (a branch taken declares it there).
+// Along the chain in a loop, as the checker's decide_if.
+static void names_if_directive(Name_Walk *w, Ast_If_Directive *first) {
+    s64 outer = w->names.count;
+    Array<String> declared = {};
+    Ast *part = first;
+    while (part) {
+        Ast_Block *branch;
+        if (part->kind == AST_IF_DIRECTIVE) {
+            Ast_If_Directive *arm = (Ast_If_Directive *)part;
+            names_expression(w, arm->condition);
+            branch = arm->then_block;
+            part = arm->else_part;
+        } else {
+            branch = (Ast_Block *)part;
+            part = nullptr;
+        }
+        names_statements(w, branch);
+        for (s64 i = outer; i < w->names.count; i++) array_add(&declared, w->names[i]);
+        w->names.count = outer;
+    }
+    for (s64 i = 0; i < declared.count; i++) array_add(&w->names, declared[i]);
+    array_free(&declared);
+}
+
+// A statement's names, and what it declares, from after it to the end of
+// its block, as the checker declares each (a variable after its value, so
+// `x := x;` in an inner block reads the outer x).
+static void names_statement(Name_Walk *w, Ast *statement) {
+    switch (statement->kind) {
+    case AST_VAR: {
+        Ast_Var *var = (Ast_Var *)statement;
+        names_type(w, var->type_expr);
+        names_expression(w, var->value);
+        array_add(&w->names, var->name);
+        return;
+    }
+    case AST_CONST: {
+        Ast_Const *constant = (Ast_Const *)statement;
+        names_expression(w, constant->value);
+        array_add(&w->names, constant->name);
+        return;
+    }
+    case AST_MULTI_VAR: {
+        Ast_Multi_Var *multi = (Ast_Multi_Var *)statement;
+        names_expression(w, multi->value);
+        for (s64 i = 0; i < multi->vars.count; i++) array_add(&w->names, multi->vars[i]->name);
+        return;
+    }
+    case AST_ASSIGN: {
+        Ast_Assign *assign = (Ast_Assign *)statement;
+        for (s64 i = 0; i < assign->targets.count; i++) names_expression(w, assign->targets[i]);
+        names_expression(w, assign->value);
+        return;
+    }
+    case AST_RETURN: {
+        Ast_Return *ret = (Ast_Return *)statement;
+        for (s64 i = 0; i < ret->values.count; i++) names_expression(w, ret->values[i]);
+        return;
+    }
+    case AST_BLOCK: names_block(w, (Ast_Block *)statement); return;
+    case AST_IF: {
+        // Along an else-if chain in a loop (parse_if says why), then the
+        // last else's block.
+        Ast *part = statement;
+        while (part && part->kind == AST_IF) {
+            Ast_If *branch = (Ast_If *)part;
+            names_expression(w, branch->condition);
+            names_block(w, branch->then_block);
+            part = branch->else_part;
+        }
+        if (part) names_block(w, (Ast_Block *)part);
+        return;
+    }
+    case AST_IF_DIRECTIVE: names_if_directive(w, (Ast_If_Directive *)statement); return;
+    case AST_WHILE:
+        names_expression(w, ((Ast_While *)statement)->condition);
+        names_block(w, ((Ast_While *)statement)->body);
+        return;
+    case AST_FOR: {
+        // The iterator, it or its own name, and it_index are the body's.
+        Ast_For *loop = (Ast_For *)statement;
+        names_expression(w, loop->first);
+        names_expression(w, loop->last);
+        names_expression(w, loop->sequence);
+        s64 outer = w->names.count;
+        array_add(&w->names, loop->iterator->name);
+        array_add(&w->names, loop->index->name);
+        names_statements(w, loop->body);
+        w->names.count = outer;
+        return;
+    }
+    case AST_DEFER: {
+        s64 outer = w->names.count;
+        names_statement(w, ((Ast_Defer *)statement)->statement);
+        w->names.count = outer;
+        return;
+    }
+    case AST_PUSH_CONTEXT:
+        names_expression(w, ((Ast_Push_Context *)statement)->context);
+        names_block(w, ((Ast_Push_Context *)statement)->block);
+        return;
+    case AST_SWITCH: {
+        // Whether the switch is on a tagged union, whose cases each have an
+        // it, depends on T: every case's block has one here.
+        Ast_Switch *s = (Ast_Switch *)statement;
+        names_expression(w, s->value);
+        for (s64 i = 0; i < s->cases.count; i++) {
+            Ast_Case *k = s->cases[i];
+            names_expression(w, k->value);
+            s64 outer = w->names.count;
+            array_add(&w->names, str("it"));
+            names_statements(w, k->block);
+            w->names.count = outer;
+        }
+        return;
+    }
+    case AST_BREAK:
+    case AST_CONTINUE: return;
+    default: names_expression(w, statement); return;  // an expression, a #run's too
+    }
+}
+
+void check_generic_names(Checker *c, Ast_Proc *generic) {
+    generic->body_resolve = RESOLVE_DONE;
+    if (!generic->body) return;
+    // The generic's own mistakes, in no instance: said with no chain,
+    // whichever instance's body asked for the walk first.
+    String outer_context = c->diag->context;
+    c->diag->context = {};
+    s64 errors = c->diag->error_count;
+    Name_Walk w = {c, {}, false};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        array_add(&w.names, generic->params[i]->name);
+        w.any_field |= generic->params[i]->is_using;
+    }
+    Array<Ast_Type *> declared = type_parameters(generic);
+    for (s64 i = 0; i < declared.count; i++) array_add(&w.names, declared[i]->name);
+    array_free(&declared);
+    names_statements(&w, generic->body);
+    array_free(&w.names);
+    generic->had_errors |= c->diag->error_count != errors;
+    c->diag->context = outer_context;
 }
