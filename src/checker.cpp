@@ -3099,21 +3099,17 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
     }
 }
 
-// A procedure's default values (issue #155, spec 7.2), checked with its
-// signature, once every parameter's type is known, `base` being the
-// signature's level (check_signature's). Where defaults may go, the next
-// two paragraphs but C's '..' and #compiler, is check_default_places', which
-// a generic's signature checks too, once, at the generic
-// (check_generic_signature).
+// Where a procedure's default values (issue #155, spec 7.2) may go, said
+// with its signature (check_defaults) and, once, with a generic's
+// (check_generic_signature). A parameter marked in `settled` (null for
+// none) has its default and its place said already: its default counts as
+// none, and nothing is said of it. The index of the first parameter whose
+// default is to be checked.
 //
 // A call gives the parameters in order, and leaves out the last ones: so
 // once a parameter has a default, every one after it has one, or it's
 // "'separator' needs a default value, since a parameter before it has
-// one", at each one's name that doesn't. A procedure that takes C's '..'
-// and a #compiler one take none for now: "a procedure that takes C's '..'
-// can't have default values, for now" ("a #compiler procedure ..."), once,
-// at the first default's '='. Their defaults then go unchecked, and no gap
-// is said: the procedure can have none anyway.
+// one", at each one's name that doesn't.
 //
 // With a '..T' parameter (issue #197, spec 7.2), the arguments after the
 // fixed ones all go to it, so a call never gives a parameter after it: each
@@ -3126,6 +3122,51 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // already ("a '..' parameter can't have a default value: given no
 // arguments, it is empty", at its '='). Those refused go unchecked; the
 // defaults after it are checked as any default is.
+s64 check_default_places(Checker *c, Ast_Proc *proc, const bool *settled) {
+    Array<Ast_Param *> &params = proc->params;
+    s64 first = 0;
+    while (first < params.count && (!params[first]->default_value || (settled && settled[first]))) first++;
+    s64 dots = variadic_index(proc);
+    if (dots >= 0) {
+        // Only the defaults after the '..T' parameter are checked: the
+        // others are refused.
+        for (s64 i = 0; i <= dots; i++) {
+            if (!params[i]->default_value || (settled && settled[i])) continue;
+            if (i < dots) {
+                diag_error(c->diag, params[i]->equals,
+                           "'" STR_FMT "' can't have a default value, since a '..' parameter comes after it",
+                           STR_ARG(params[i]->name));
+            } else {
+                diag_error(c->diag, params[i]->equals,
+                           "a '..' parameter can't have a default value: given no arguments, it is empty");
+            }
+        }
+        for (s64 i = dots + 1; i < params.count; i++) {
+            if (params[i]->default_value || (settled && settled[i])) continue;
+            diag_error(c->diag, params[i]->pos,
+                       "'" STR_FMT "' needs a default value, since it comes after the '..' parameter",
+                       STR_ARG(params[i]->name));
+        }
+        return dots + 1;
+    }
+    for (s64 i = first + 1; i < params.count; i++) {
+        if (params[i]->default_value || (settled && settled[i])) continue;
+        diag_error(c->diag, params[i]->pos,
+                   "'" STR_FMT "' needs a default value, since a parameter before it has one",
+                   STR_ARG(params[i]->name));
+    }
+    return first;
+}
+
+// A procedure's default values (issue #155, spec 7.2), checked with its
+// signature, once every parameter's type is known, `base` being the
+// signature's level (check_signature's). Where they may go is
+// check_default_places', which a generic's signature checks too, once, at
+// the generic (check_generic_signature). A procedure that takes C's '..'
+// and a #compiler one take none for now: "a procedure that takes C's '..'
+// can't have default values, for now" ("a #compiler procedure ..."), once,
+// at the first default's '='. Their defaults then go unchecked, and no gap
+// is said: the procedure can have none anyway.
 //
 // A default is worked out at each call that leaves it out, in the caller,
 // but means the same at every one: its names are the top level's, as the
@@ -3183,42 +3224,6 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // then converted to its parameter's type as any default is: `loc: int =
 // #caller_location` is "a value of type 'Source_Code_Location' doesn't
 // convert to 'int' implicitly". An Any parameter doesn't take it.
-s64 check_default_places(Checker *c, Ast_Proc *proc, const bool *settled) {
-    Array<Ast_Param *> &params = proc->params;
-    s64 first = 0;
-    while (first < params.count && (!params[first]->default_value || (settled && settled[first]))) first++;
-    s64 dots = variadic_index(proc);
-    if (dots >= 0) {
-        // Only the defaults after the '..T' parameter are checked: the
-        // others are refused.
-        for (s64 i = 0; i <= dots; i++) {
-            if (!params[i]->default_value || (settled && settled[i])) continue;
-            if (i < dots) {
-                diag_error(c->diag, params[i]->equals,
-                           "'" STR_FMT "' can't have a default value, since a '..' parameter comes after it",
-                           STR_ARG(params[i]->name));
-            } else {
-                diag_error(c->diag, params[i]->equals,
-                           "a '..' parameter can't have a default value: given no arguments, it is empty");
-            }
-        }
-        for (s64 i = dots + 1; i < params.count; i++) {
-            if (params[i]->default_value || (settled && settled[i])) continue;
-            diag_error(c->diag, params[i]->pos,
-                       "'" STR_FMT "' needs a default value, since it comes after the '..' parameter",
-                       STR_ARG(params[i]->name));
-        }
-        return dots + 1;
-    }
-    for (s64 i = first + 1; i < params.count; i++) {
-        if (params[i]->default_value || (settled && settled[i])) continue;
-        diag_error(c->diag, params[i]->pos,
-                   "'" STR_FMT "' needs a default value, since a parameter before it has one",
-                   STR_ARG(params[i]->name));
-    }
-    return first;
-}
-
 static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     Array<Ast_Param *> &params = proc->params;
     const char *refused = proc->is_c_variadic ? "a procedure that takes C's '..'"

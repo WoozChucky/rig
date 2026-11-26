@@ -12935,10 +12935,11 @@ TEST(instances_are_one_per_set_of_types) {
 }
 
 TEST(untyped_arguments_take_the_type_another_fixes) {
-    // The first typed argument fixes T, an untyped constant then taking it;
-    // with none typed, they meet at a type whose default T is (an untyped
-    // float if either is one). A literal with no type of its own takes T
-    // where another argument fixes it.
+    // The first typed argument fixes T, an untyped constant then taking it,
+    // and a later typed argument converting to it, an s32 widening to the
+    // int it fixes; with none typed, they meet at a type whose default T is
+    // (an untyped float if either is one). A literal with no type of its own
+    // takes T where another argument fixes it.
     Arena a = arena_make();
     Checked c = check_src(&a, with_generic_max(&a,
                                                "pick :: (a: $T, b: T) -> T { return a; }\n"
@@ -12946,16 +12947,24 @@ TEST(untyped_arguments_take_the_type_another_fixes) {
                                                "    x: u8;\n"
                                                "    y: float64;\n"
                                                "    v: Vec2;\n"
+                                               "    i: int;\n"
+                                               "    s: s32;\n"
+                                               "    h: s16;\n"
                                                "    a := max(1, x);\n"
                                                "    b := max(x, 1);\n"
                                                "    c := max(1, 2.5);\n"
                                                "    d := max(2.5, y);\n"
                                                "    e := pick(v, .{1, 2});\n"
+                                               "    f := max(i, s);\n"
+                                               "    g := pick(h, x);\n"
                                                "}\n"));
     CHECK_STR(messages(&a, &c.list->diag), "");
-    const char *names[] = {"a", "b", "c", "d", "e"};
-    const char *types[] = {"u8", "u8", "float32", "float64", "Vec2"};
-    for (s64 k = 0; k < 5; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    const char *names[] = {"a", "b", "c", "d", "e", "f", "g"};
+    const char *types[] = {"u8", "u8", "float32", "float64", "Vec2", "int", "s16"};
+    for (s64 k = 0; k < 7; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Call *f = (Ast_Call *)((Ast_Var *)local_named(&c, "f"))->value;
+    CHECK(f->proc && f->proc->instance);
+    if (f->proc && f->proc->instance) CHECK_STR(f->proc->instance->name, "max(T = int)");
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -13506,6 +13515,27 @@ TEST(uninstantiated_bodies_resolve_names_only) {
               "2:53: a value of type 'int' doesn't convert to 'bool' implicitly\n"
               "    in 'outer' with T = bool, called at test.rig:1:11\n"
               "3:30: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(using_parameters_reach_through_a_type_parameter) {
+    // In an instance, a using parameter whose type names a type parameter,
+    // *$T, reaches the fields of the struct T is bound to (spec 3.21): its
+    // body reads and writes them by their names. Its bindings are declared
+    // in its body's block, as its parameters are (spec 4.7), so a binding
+    // hides a field of its name, T there being the type.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Entity :: struct { position: int; }\n"
+                           "move :: (using e: *$T, by: int) -> int { position += by; return position; }\n"
+                           "main :: () { e: Entity; n := move(*e, 4); }\n"),
+              "");
+    CHECK_STR(check_source(&a,
+                           "Named :: struct { T: int; }\n"
+                           "shadow :: (using e: *$T) -> int { return T; }\n"
+                           "main :: () { n: Named; x := shadow(*n); }\n"),
+              "2:42: 'T' is a type, not a value\n"
+              "    in 'shadow' with T = Named, called at test.rig:3:29\n");
     arena_free(&a);
 }
 

@@ -8,3 +8,4 @@ bt 1
 print *a
 continue
 rbreak ^pick(
+break pick

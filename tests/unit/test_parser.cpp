@@ -4640,6 +4640,10 @@ TEST(dollar_mistakes) {
         {"main :: () { n := size_of($T); }\n", 27},
         {"p : ($T) -> int;\n", 6},
         {"g :: (a: [size_of($T)]int) { }\n", 19},
+        {"f :: (a: $T, b: int = size_of($T)) { }\n", 31},
+        {"main :: () { x := cast($T) 1; }\n", 24},
+        {"main :: () { x := type_info($T); }\n", 29},
+        {"main :: () { x := #type $T; }\n", 25},
     };
     for (const Case &k : cases) {
         parse_src(&a, k.text, &errors);

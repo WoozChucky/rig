@@ -199,11 +199,13 @@ enum Ast_Resolve : u8 {
 // with parameters after its '..T' (a procedure type keeps no defaults,
 // issue #197), and when a parameter's or a result's type was an error.
 //
-// A generic procedure (spec 7.11), one whose parameters declare a type
-// parameter ($T), is never checked as it's written, nor compiled: each set
-// of types its calls infer makes an instance of it, a copy of its tree
-// (ast_clone) with T bound, which is (Ast_Instance). Its type is null: it's
-// no value.
+// A generic procedure (spec 7.11), one whose parameters' types declare a
+// type parameter ($T) or that bakes a parameter ($T: Type, $N: int), is
+// never type-checked as it's written, nor compiled: its own check covers its
+// signature and the names in its body (check_generic.cpp), and each set of
+// types and constants its calls give makes an instance of it (Ast_Instance),
+// a copy of its tree (ast_clone) with those bound. Its type is null: it's no
+// value.
 struct Ast_Instance;
 
 struct Ast_Proc : Ast {
