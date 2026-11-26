@@ -4555,6 +4555,20 @@ TEST(parses_using_parameters) {
 
 // Issue #226: types where a value goes (spec 5.20).
 
+// The messages of lexing and parsing `body`, as body_dump places it, for a
+// body the lexer refuses part of: src wants text that lexes cleanly.
+static String lex_and_parse_messages(Arena *a, const char *body) {
+    String text = string_printf(a, "f :: () {\n    %s\n}\n", body);
+    Diagnostics d = {};
+    s32 file = diag_add_file(&d, str("test.rig"), text);
+    Array<Token> tokens = lex(&d, file, a);
+    parse(tokens, a, &d);
+    String result = messages(a, &d);
+    array_free(&tokens);
+    diag_free(&d);
+    return result;
+}
+
 TEST(parses_types_where_values_go) {
     // A '[' starting an expression begins a type, [N]T, []T or [..]T, and
     // #type any type, a procedure type's too: each an Ast_Type_Value,
@@ -4602,6 +4616,8 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "");
     body_dump(&a, "x := [Vec2.{1, 2}.x]int == [.{1, 2}.n]u8;", &errors);
     CHECK_STR(errors, "");
+    body_dump(&a, "x := [.[1, 2].count]int == [.[1, 2][0]]u8;", &errors);
+    CHECK_STR(errors, "");
     body_dump(&a, "x := [Vec2.{1}.x, 2];", &errors);
     CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
     body_dump(&a, "x := []*u8 == [2][3]int;", &errors);
@@ -4616,6 +4632,8 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "2:12: expected ']', found end of file\n");
     parse_src(&a, "f :: () {\n    x := [(1", &errors);
     CHECK_STR(errors, "2:13: expected ')', found end of file\n");
+    body_dump(&a, "x := [(1; y := 1), 2;", &errors);
+    CHECK_STR(errors, "2:13: expected ')', found ';'\n");
     body_dump(&a, "x := [3; ];", &errors);
     CHECK_STR(errors, "2:12: expected ']', found ';'\n");
     body_dump(&a, "x := [1; y := 1, 2;", &errors);
@@ -4624,15 +4642,12 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "2:14: expected ']', found ')'\n");
     body_dump(&a, "x := .{[1}, 2};", &errors);
     CHECK_STR(errors, "2:14: expected ']', found '}'\n");
-    // A token the lexer refused after the ']' was its to report, and the
-    // type's message stays silent about it.
-    Diagnostics d = {};
-    s32 refused = diag_add_file(&d, str("test.rig"), str("f :: () {\n    x := [] @int;\n}\n"));
-    Array<Token> tokens = lex(&d, refused, &a);
-    parse(tokens, &a, &d);
-    CHECK_STR(messages(&a, &d), "2:13: unexpected character '@'\n");
-    array_free(&tokens);
-    diag_free(&d);
+    // A token the lexer refused, between the '[' and its ']' or after the
+    // ']', was its to report, and the type's parse says nothing more about
+    // it.
+    CHECK_STR(lex_and_parse_messages(&a, "x := [] @int;"), "2:13: unexpected character '@'\n");
+    CHECK_STR(lex_and_parse_messages(&a, "x := [1 @ 2];"), "2:13: unexpected character '@'\n");
+    CHECK_STR(lex_and_parse_messages(&a, "x := [@];"), "2:11: unexpected character '@'\n");
     body_dump(&a, "x := [..];", &errors);
     CHECK_STR(errors, "2:14: expected a type, found ';'\n");
     body_dump(&a, "x := []$T;", &errors);
