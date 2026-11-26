@@ -6,10 +6,11 @@
 // program-wide: found again, or made, named and their signatures checked,
 // at most MAX_DEPTH deep. The names a generic's parameters declare; the
 // walk over its body for names declared nowhere; and the chain of
-// instances an error inside one is followed by. Each of these that looks
-// at the names in a written type or an expression goes through them with
-// one walk (walk_names), and says what it does at each name in an action
-// of its own.
+// instances an error inside one is followed by. Each of these that only
+// looks at each name in a written type or an expression goes through them
+// with one walk (walk_names), and says what it does at each name in an
+// action of its own; match_type and add_written_type, which pair a
+// pattern with a type or write one out, walk it themselves.
 
 #include "check.h"
 
