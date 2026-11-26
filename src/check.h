@@ -495,8 +495,10 @@ void check_generic_signature(Checker *c, Ast_Proc *generic);
 // messages at an argument, or at `callee` when no argument names one), then
 // the program's one instance for those bindings, found in generic's cache
 // or made (ast_clone) where the call starting at `called_at` needs it, its
-// signature checked then. Its procedure, or null after saying why. Takes no
-// Ast_Call, so any construct that calls a generic may.
+// signature checked then. Its procedure, or null after saying why, or when
+// the instance's signature had errors (Ast_Instance.had_errors, said once,
+// where it was made). Takes no Ast_Call, so any construct that calls a
+// generic may.
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at);
 
 // The binding of instance inst called `name`, an Ast_Alias for a type

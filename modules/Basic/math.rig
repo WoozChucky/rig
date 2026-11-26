@@ -1,6 +1,7 @@
 // Basic's math: the smaller and the larger of two numbers, a number kept
-// within a range, a number's magnitude, π, and C's math functions. Rig has
-// no overloading or generics yet, so each is written once per type and
+// within a range, a number's magnitude, π, and C's math functions. Rig had
+// no overloading or generic procedures when they were written (spec 7.11;
+// issue #230 makes Basic generic), so each is written once per type and
 // named by it: int and u64 for integers, since every other integer type
 // widens to one of them implicitly, and float32 and float64.
 //

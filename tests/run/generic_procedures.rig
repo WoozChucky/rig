@@ -9,9 +9,12 @@
 // an instance, T is the type it's bound to: a variable's type, size_of(T),
 // type_info(T), T.A, T.empty and T == string, so #if picks code per
 // instance and the branch not taken, which may be wrong for its T (bump's
-// v.x for an int, v + 1 for a Vec2), is never checked, compiled or run.
-// The same compiled, interpreted and in #runs, a top-level one and a
-// constant's.
+// v.x for an int, v + 1 for a Vec2), is never checked, compiled or run;
+// T == U, with two type parameters, is decided per instance. The same
+// compiled, interpreted and in #runs, a top-level one and a constant's. A
+// constant's #run may make an instance before a struct its T is bound to
+// is laid out, or before a constant its signature names is worked out:
+// both are done there, T still found after the constant.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -70,7 +73,30 @@ bump :: (v: $T) -> int {
     }
 }
 
+same :: (a: $T, b: $U) -> bool {
+    #if T == U {
+        return true;
+    } else {
+        return false;
+    }
+}
+
 G :: #run max(10, 20);
+
+SIZE :: #run size_and_b(cast(*Later) null);
+
+size_and_b :: (p: *$T) -> int {
+    x: T;
+    return size_of(T) + cast(int) x.b;
+}
+
+Later :: struct { a: int; b: int; }
+
+COUNT :: #run pick(cast(*Later) null, null);
+
+pick :: (p: *$T, n: *[K]T) -> int { return K; }
+
+K :: 3;
 
 #run { print("{}\n", max(1, 2)); }
 
@@ -95,4 +121,6 @@ main :: () {
     print("{} {}\n", clear(*s), s);
     print("{} {}\n", bump(41), bump(Vec2.{7, 2}));
     print("{}\n", G);
+    print("{} {} {}\n", same(1, 2), same(1, cast(s64) 2), same(1.5, cast(float32) 2));
+    print("{} {}\n", SIZE, COUNT);
 }

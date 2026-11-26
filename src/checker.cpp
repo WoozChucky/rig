@@ -276,9 +276,10 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         return ((Ast_Enum *)decl)->declared;
     } else if (decl->kind == AST_ALIAS) {
         // An instance's type parameter (spec 7.11): the type it's bound to,
-        // a struct's laid out where the struct's name would be.
+        // a struct's laid out where the struct's name would be. One that
+        // lost its type (made again, made_again) is null, said.
         Type *t = ((Ast_Alias *)decl)->aliased;
-        if (!behind_pointer && t->kind == TYPE_STRUCT && t->decl && t->decl->resolve != RESOLVE_DONE) {
+        if (t && !behind_pointer && t->kind == TYPE_STRUCT && t->decl && t->decl->resolve != RESOLVE_DONE) {
             return resolve_struct(c, t->decl);
         }
         return t;
@@ -3370,7 +3371,9 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 // (resolve_global), and so are the scopes it may be needed in, by a body
 // checked on demand: set aside. An instance of a generic procedure (spec
 // 7.11) is checked with its bindings in sight, its T the type it's bound
-// to; a generic itself has a check of its own (check_generic.cpp's
+// to, and whether that reported an error is the instance's
+// (Ast_Instance.had_errors), as its body's later errors aren't; a generic
+// itself has a check of its own (check_generic.cpp's
 // check_generic_signature), which writes nothing into its nodes.
 static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
@@ -3402,6 +3405,7 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
         check_signature(c, proc, outer);
     }
     proc->had_errors |= c->diag->error_count != errors;
+    if (proc->instance) proc->instance->had_errors = c->diag->error_count != errors;
     c->resolving.count--;
     bool in_circle = proc->resolve == RESOLVE_CYCLE;
     proc->resolve = RESOLVE_DONE;
@@ -3436,9 +3440,10 @@ static_assert(sizeof PREDECLARED_CONSTANTS / sizeof PREDECLARED_CONSTANTS[0] == 
 static const char *const OPERATING_SYSTEM = "Operating_System";
 static const char *const OPERATING_SYSTEM_MEANING = "the systems a program can be built for";
 
-// The resizable arrays' procedures (spec 3.17), built into the language,
-// since Rig has no generics to write them in: no Rig procedure's parameter
-// takes both a *[..]int and a *[..]Vec2. Each call is typed by its array's
+// The resizable arrays' procedures (spec 3.17), built into the language
+// before Rig had generic procedures (spec 7.11) to write them in, when no
+// Rig procedure's parameter took both a *[..]int and a *[..]Vec2; issue
+// #230 moves them into Preload as generics. Each call is typed by its array's
 // element type (check_expr.cpp's check_builtin_call), and calls the helper
 // of Preload's named here, which does the work, in Rig. The names and the
 // order of array_insert's arguments are Basic v0's, whose untyped Array
@@ -3877,8 +3882,18 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     }
     array_free(&declarations);
     // And so are the instances of generic procedures made so far (spec
-    // 7.11): a global's value or a type's count may have called one.
-    for (s64 i = 0; i < file->instances.count; i++) made_again_signature(file->instances[i]->proc);
+    // 7.11), their bindings with their signatures: a global's value or a
+    // type's count may have called one. A binding that has no type now
+    // (null) leaves every use of T in its body silent, as a parameter's
+    // does.
+    for (s64 i = 0; i < file->instances.count; i++) {
+        Ast_Instance *inst = file->instances[i];
+        for (s64 k = 0; k < inst->bindings.count; k++) {
+            Ast_Alias *binding = (Ast_Alias *)inst->bindings[k];
+            binding->aliased = made_again(binding->aliased);
+        }
+        made_again_signature(inst->proc);
+    }
 
     // Then the bodies, each that isn't done yet: a #run that reached one
     // checked it there (check_reached_body), so it isn't checked twice. A

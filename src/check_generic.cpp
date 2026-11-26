@@ -171,7 +171,7 @@ static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, G
 // it holds one: a pointer's target, an array's, a view's or a resizable
 // array's elements, a procedure type's parameters and results. A view's
 // takes the elements of an array, a view or a resizable array, which all
-// convert to a view of their elements (spec 6.5, 3.17). A part that names
+// convert to a view of their elements (spec 3.7, 3.17). A part that names
 // none, or names only bound ones, isn't looked at: whether the argument
 // converts is the call's to say (check_call). False when a part can't
 // match: t isn't the kind of type the pattern is, where it names one still
@@ -521,7 +521,10 @@ Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *
     if (infer_bindings(c, generic, args, callee, &bindings)) {
         Ast_Instance *inst = find_instance(generic, bindings);
         if (!inst) inst = make_instance(c, generic, bindings, called_at);
-        proc = inst->proc;
+        // An instance whose signature had errors, said where it was made,
+        // stays cached, so they're said once; the calls with its bindings
+        // get no type, the first one's too, and say nothing more.
+        if (!inst->had_errors) proc = inst->proc;
     }
     array_free(&bindings);
     return proc;

@@ -940,10 +940,11 @@
 //   array_remove_ordered(array, index), array_remove_unordered(array,
 //   index), array_reserve(array, count), array_resize(array, count),
 //   array_reset(array) and array_free(array), each array a *[..]T. They're
-//   the language's, not Basic's, because Rig has no generics: a
-//   parameter has one type, so no procedure written in Rig takes both a
-//   *[..]int and a *[..]Vec2; a '..T' gathers values of the one T its
-//   procedure names; and an Any says a value's type only at run time, so
+//   the language's, not Basic's, because they came before generic
+//   procedures (spec 7.11; #230 moves them into Preload): a parameter
+//   had one type, so no procedure written in Rig took both a *[..]int
+//   and a *[..]Vec2; a '..T' gathers values of the one T its procedure
+//   names; and an Any says a value's type only at run time, so
 //   array_add(*numbers, "x") would compile, and 3 added to a [..]u8 would
 //   be an int. So the checker types each call. Each is predeclared
 //   (checker.cpp's BUILTIN_PROCEDURES, declare_predeclared), an Ast_Builtin
@@ -1307,7 +1308,9 @@
 //   argument gives it", at the callee. An argument whose own check failed
 //   leaves a type parameter it might have fixed unknown, silently. A
 //   generic whose signature check failed makes no instance: its calls say
-//   nothing more.
+//   nothing more. An instance whose own signature check failed (a default
+//   that doesn't convert to T) stays cached, its errors said once: every
+//   call with its bindings gets no type and says nothing more.
 // - Each distinct set of bindings (a type by its Type *) makes one
 //   instance, program-wide: the generic's tree copied (ast_clone), its
 //   bindings Ast_Aliases, named max(T = int), its symbol max$T$int (with

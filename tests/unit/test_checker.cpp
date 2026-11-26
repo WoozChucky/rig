@@ -3509,6 +3509,29 @@ TEST(broken_struct_in_a_resizable_array_says_nothing_more) {
     arena_free(&a);
 }
 
+TEST(broken_struct_in_an_instance_says_nothing_more) {
+    // So too for an instance of a generic procedure (spec 7.11) a global's
+    // value makes during the declarations, with T a [..]Bad before Bad's
+    // layout fails. Its body waits for check()'s last pass; made again by
+    // then, its parameter's type and its binding have none, so converting x
+    // or a T says nothing.
+    Arena a = arena_make();
+    const char *bodies[] = {"{ k: int = x; return 0; }", "{ y: T; k: int = y; return 0; }"};
+    for (const char *body : bodies) {
+        String text = string_printf(&a,
+                                    "g : [..]Bad;\n"
+                                    "id :: (x: $T) -> int %s\n"
+                                    "h := id(g);\n"
+                                    "Bad :: struct { n: int; again: Bad; }\n"
+                                    "main :: () { }\n",
+                                    body);
+        CHECK_STR(check_with_preload(&a, string_cstr(&a, text)),
+                  "3:6: a global's value must be known while compiling, for now\n"
+                  "4:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n");
+    }
+    arena_free(&a);
+}
+
 TEST(array_count_rules) {
     // [N]T: N an integer known while compiling, from 0 up; the type at most
     // 2^40 bytes.
@@ -12679,14 +12702,23 @@ TEST(clones_are_deep_and_unchecked) {
     // An instance is a copy of its generic's tree, as the parser made it:
     // every node and every Array new, nothing the checker writes copied,
     // its body's block pointing at the copy. A procedure holding every
-    // statement and every expression is copied before the program is
-    // checked: the copy dumps as the original does, shares no node and no
-    // Array's buffer with it, keeps every place the parser gave each node
-    // (same_places), and checking the program, the original among it,
-    // leaves the copy unchecked.
+    // statement and every expression, and a generic one holding the kinds
+    // of parameter and type it doesn't (using, '..int', $T, a procedure
+    // type with '..' and one #c_call, #no_abc, a #complete switch), are
+    // each copied before the program is checked: the copy dumps as the
+    // original does, shares no node and no Array's buffer with it, keeps
+    // every place the parser gave each node (same_places), and checking the
+    // program, the original among it, leaves the copy unchecked. A for
+    // loop's iterators, which the dump doesn't mark, stay read-only.
     Arena a = arena_make();
     const char *text =
         "Vec2 :: struct { x: float; y: float; }\n"
+        "Pair :: struct { a: int; b: int; }\n"
+        "parts :: (using pair: Pair, v: $T, f: (int, ..int) -> int, g: () #c_call, rest: ..int) -> int #no_abc {\n"
+        "    m: Mode = .A;\n"
+        "    if #complete m == { case .A; case .B; }\n"
+        "    return a + f(1, 2, 3) + rest[0];\n"
+        "}\n"
         "Mode :: enum { A; B; }\n"
         "Shape :: union #tagged { circle: float; empty: void; }\n"
         "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
@@ -12742,36 +12774,51 @@ TEST(clones_are_deep_and_unchecked) {
     Diagnostics d = {};
     Ast_File *file = load_program(&a, &d, str("test.rig"), str(text));
     CHECK_STR(file->load_failure, "");
-    Ast_Proc *original = (Ast_Proc *)top_level_named(file, "everything");
-    Ast_Proc *copy = (Ast_Proc *)ast_clone(&a, original);
-    CHECK_STR(ast_dump_node(&a, copy), string_cstr(&a, ast_dump_node(&a, original)));
-    CHECK(copy->body->proc == copy);
-    CHECK(original->body->proc == original);
-    Array<Ast *> original_nodes = {}, copy_nodes = {};
-    Array<const void *> original_buffers = {}, copy_buffers = {};
-    tree_parts(original, &original_nodes, &original_buffers);
-    tree_parts(copy, &copy_nodes, &copy_buffers);
-    CHECK_EQ(copy_nodes.count, original_nodes.count);
-    CHECK_EQ(copy_buffers.count, original_buffers.count);
-    CHECK(original_nodes.count > 200);
-    for (s64 i = 0; i < copy_nodes.count && i < original_nodes.count; i++) {
-        CHECK_EQ(copy_nodes[i]->kind, original_nodes[i]->kind);
-        if (copy_nodes[i]->kind == original_nodes[i]->kind) CHECK(same_places(copy_nodes[i], original_nodes[i]));
-        for (s64 k = 0; k < original_nodes.count; k++) CHECK(copy_nodes[i] != original_nodes[k]);
+    const char *names[] = {"everything", "parts"};
+    Ast_Proc *originals[2], *copies[2];
+    Array<Ast *> copy_nodes[2] = {};
+    for (s64 n = 0; n < 2; n++) {
+        Ast_Proc *original = (Ast_Proc *)top_level_named(file, names[n]);
+        Ast_Proc *copy = (Ast_Proc *)ast_clone(&a, original);
+        originals[n] = original;
+        copies[n] = copy;
+        CHECK_STR(ast_dump_node(&a, copy), string_cstr(&a, ast_dump_node(&a, original)));
+        CHECK(copy->body->proc == copy);
+        CHECK(original->body->proc == original);
+        Array<Ast *> original_nodes = {};
+        Array<const void *> original_buffers = {}, copy_buffers = {};
+        tree_parts(original, &original_nodes, &original_buffers);
+        tree_parts(copy, &copy_nodes[n], &copy_buffers);
+        CHECK_EQ(copy_nodes[n].count, original_nodes.count);
+        CHECK_EQ(copy_buffers.count, original_buffers.count);
+        CHECK(original_nodes.count > (n == 0 ? 200 : 30));
+        for (s64 i = 0; i < copy_nodes[n].count && i < original_nodes.count; i++) {
+            Ast *node = copy_nodes[n][i];
+            CHECK_EQ(node->kind, original_nodes[i]->kind);
+            if (node->kind == original_nodes[i]->kind) CHECK(same_places(node, original_nodes[i]));
+            for (s64 k = 0; k < original_nodes.count; k++) CHECK(node != original_nodes[k]);
+        }
+        for (s64 i = 0; i < copy_buffers.count; i++) {
+            for (s64 k = 0; k < original_buffers.count; k++) CHECK(copy_buffers[i] != original_buffers[k]);
+        }
+        array_free(&original_nodes);
+        array_free(&original_buffers);
+        array_free(&copy_buffers);
     }
-    for (s64 i = 0; i < copy_buffers.count; i++) {
-        for (s64 k = 0; k < original_buffers.count; k++) CHECK(copy_buffers[i] != original_buffers[k]);
+    const char *iterators[] = {"it", "it_index", "i"};
+    for (const char *name : iterators) {
+        Ast *iterator = find_local(copies[0]->body, name);
+        CHECK(iterator && iterator->kind == AST_VAR && ((Ast_Var *)iterator)->is_iterator);
     }
     check(file, &a, &d);
     CHECK_STR(messages(&a, &d), "");
-    CHECK(original->type != nullptr);
-    CHECK(((Ast_Var *)original->body->statements[0])->type == &type_int);
-    for (s64 i = 0; i < copy_nodes.count; i++) CHECK(copy_nodes[i]->type == nullptr);
-    CHECK(copy->resolve == RESOLVE_NOT_YET && copy->body_resolve == RESOLVE_NOT_YET);
-    array_free(&original_nodes);
-    array_free(&copy_nodes);
-    array_free(&original_buffers);
-    array_free(&copy_buffers);
+    CHECK(originals[0]->type != nullptr);
+    CHECK(((Ast_Var *)originals[0]->body->statements[0])->type == &type_int);
+    for (s64 n = 0; n < 2; n++) {
+        for (s64 i = 0; i < copy_nodes[n].count; i++) CHECK(copy_nodes[n][i]->type == nullptr);
+        CHECK(copies[n]->resolve == RESOLVE_NOT_YET && copies[n]->body_resolve == RESOLVE_NOT_YET);
+        array_free(&copy_nodes[n]);
+    }
     diag_free(&d);
     arena_free(&a);
 }
@@ -12940,11 +12987,18 @@ TEST(inference_mistakes) {
         {"x := max(null, null);", "4:23: can't work out 'T' for 'max': argument 1 has no type of its own\n"},
         {"x := max(1, null);", "4:26: can't work out 'T' for 'max': argument 2 has no type of its own\n"},
         {"x := first(5);", "4:25: argument 1 of 'first' has type 'int', which doesn't fit '[]$T'\n"},
+        {"a3(5);", "4:17: argument 1 of 'a3' has type 'int', which doesn't fit '[N + 0]$T'\n"},
+        {"ap(5, 1);", "4:17: argument 1 of 'ap' has type 'int', which doesn't fit '($T, ..T) -> (T, int)'\n"},
+        {"z: *int; pr(z);", "4:26: argument 1 of 'pr' has type '*int', which doesn't fit '**$T'\n"},
         {"n: int; x := max(cast(s32) 1, n);",
          "4:44: argument 2 of 'max' has type 'int', which can't be converted to 's32'\n"},
         {"x := max(1);", "4:19: 'max' takes 2 arguments, but 1 was given\n"},
         {"m := max;", "4:19: 'max' is generic; call it, or wrap one instance in a procedure\n"},
         {"x := max(nope, 1);", "4:23: unknown identifier 'nope'\n"},
+        // An argument whose own check failed may have been the one to fix
+        // T, so T says nothing more, though the other has no type of its
+        // own.
+        {"x := max(nope, null);", "4:23: unknown identifier 'nope'\n"},
         // A spread no '..T' parameter takes is refused before inference,
         // as any call's, and gives T nothing: T then says nothing more.
         {"a: [3]int; x := max(..a, ..a);",
@@ -12960,7 +13014,11 @@ TEST(inference_mistakes) {
         String rest = string_printf(&a,
                                     "first :: (items: []$T) -> T { return items[0]; }\n"
                                     "main :: () { %s }\n"
-                                    "each :: (rest: ..$T) { }\n",
+                                    "each :: (rest: ..$T) { }\n"
+                                    "N :: 2;\n"
+                                    "a3 :: (a: [N + 0]$T) { }\n"
+                                    "ap :: (f: ($T, ..T) -> (T, int), x: T) { }\n"
+                                    "pr :: (p: **$T) { }\n",
                                     k.body);
         CHECK_STR(check_source(&a, with_generic_max(&a, string_cstr(&a, rest))), k.message);
     }
@@ -13029,6 +13087,15 @@ TEST(type_parameters_work_in_an_instance) {
                            "f :: (v: $T) { T := 1; { T := 2; } }\n"
                            "main :: () { f(1); }\n"),
               "1:16: 'T' is already declared at test.rig:1:10\n");
+    // T.empty, T bound to Shape, is Shape.empty: compared with a *Shape, a
+    // test's operand or a switch's, it gets the hint Shape.empty gets.
+    CHECK_STR(check_source(&a,
+                           "Shape :: union #tagged { circle: float; empty: void; }\n"
+                           "f :: (p: *$T) -> bool { return p == T.empty; }\n"
+                           "g :: (p: *$T) { if p == { case T.empty; } }\n"
+                           "main :: () { s: Shape; b := f(*s); g(*s); }\n"),
+              "2:39: 'T.empty' names a member of 'Shape', not '*Shape'; write p.* == T.empty\n"
+              "3:34: 'T.empty' names a member of 'Shape', not '*Shape'; write if p.* == {\n");
     arena_free(&a);
 }
 
@@ -13114,5 +13181,17 @@ TEST(generic_refusals) {
               "(values: ..int)\n"
               "2:14: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
               "(values: ..int)\n");
+    // An instance whose own signature has a mistake, a default that doesn't
+    // convert to its T, says it once, where it's made, and stays cached:
+    // every call with its bindings, the first too, gets no type and says
+    // nothing more, so using s or t says nothing.
+    Checked c = check_src(&a,
+                          "f :: (a: $T, b: T = 1) -> T { return a; }\n"
+                          "main :: () { s := f(\"x\"); n: int = s; t := f(\"y\"); m: int = t; f(\"z\", \"w\"); }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "1:21: a value of type 'int' doesn't convert to 'string' implicitly\n");
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "f"))->instances.count, 1);
+    CHECK_STR(type_of(&a, &c, "s"), "?");
+    CHECK_STR(type_of(&a, &c, "t"), "?");
+    token_list_free(c.list);
     arena_free(&a);
 }

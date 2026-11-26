@@ -599,10 +599,12 @@ static Ast_Literal *void_member_value(Checker *c, Type *t, String name, Position
 // tagged union's members are named through it (Mode.FREE, Shape.empty): an
 // instance's type parameter bound to an enum or a named struct (spec 7.11)
 // stands for that type's declaration, so T.FREE is Mode.FREE in
-// reset(T = Mode); anything else for itself.
+// reset(T = Mode); anything else for itself, a binding that lost its type
+// (made again, checker.cpp's made_again) too.
 static Ast *through_alias(Ast *decl) {
     if (!decl || decl->kind != AST_ALIAS) return decl;
     Type *t = ((Ast_Alias *)decl)->aliased;
+    if (!t) return decl;
     if (t->kind == TYPE_ENUM) return t->enum_decl;
     if (t->kind == TYPE_STRUCT && t->decl && t->decl->name.count) return t->decl;
     return decl;
@@ -1525,7 +1527,8 @@ static void report_argument_count(Checker *c, Ast_Call *call, String name, s64 r
 // "argument 2 of 'max' has type 'int', which can't be converted to 's32'".
 // False, the call having no type, after a count that doesn't fit or an
 // inference that fails (said), or when the generic's signature isn't known
-// (a circle, said) or had errors, said already: it makes no instance.
+// (a circle, said) or had errors, said already: it makes no instance; and
+// when the instance's own signature had errors (check_instance), said once.
 static bool check_generic_call(Checker *c, Ast_Call *call) {
     Ast_Proc *generic = call->proc;
     for (s64 i = 0; i < call->args.count; i++) {
@@ -2336,9 +2339,10 @@ bool report_member_on_pointer(Checker *c, Ast *e, Type *to, Ast_Binary *test, As
     if (!type_is_pointer(to) || to->pointee->kind != TYPE_STRUCT || !to->pointee->is_tagged) return false;
     if (!names_a_member(c, e)) return false;
     // Shape.NAME names a member only of Shape: Other.circle is no hint's.
+    // An instance's T bound to Shape is Shape there (through_alias).
     Ast_Member *named = e->kind == AST_MEMBER ? (Ast_Member *)e : nullptr;
     if (named) {
-        Ast_Struct *s = (Ast_Struct *)check_lookup(c, ((Ast_Name *)named->operand)->name, nullptr);
+        Ast_Struct *s = (Ast_Struct *)through_alias(check_lookup(c, ((Ast_Name *)named->operand)->name, nullptr));
         if (s->declared != to->pointee) return false;
     }
     String name = named ? string_printf(c->arena, STR_FMT "." STR_FMT,

@@ -1,9 +1,10 @@
 // Basic's sorting and searching: a merge sort and a binary search over
-// elements of any type. Rig has no generics yet, so both take the elements
-// as a pointer to the first, a count and each element's size in bytes, as
-// C's qsort and bsearch do, and a procedure value that compares two
-// elements through pointers to them: less_int and its neighbours here, or
-// one a program writes for its own type.
+// elements of any type. Rig had no generic procedures when they were
+// written (spec 7.11; issue #230 makes Basic generic), so both take the
+// elements as a pointer to the first, a count and each element's size in
+// bytes, as C's qsort and bsearch do, and a procedure value that compares
+// two elements through pointers to them: less_int and its neighbours here,
+// or one a program writes for its own type.
 //
 // The sort is a merge sort because it is stable: elements that compare
 // equal keep the order they had, so a list sorted by name and then by town

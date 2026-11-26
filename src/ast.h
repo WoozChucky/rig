@@ -256,7 +256,8 @@ struct Ast_Proc : Ast {
 // pos is the $T it binds. Made by the checker, written nowhere.
 struct Ast_Alias : Ast {
     String name;
-    Type *aliased;
+    Type *aliased;  // null when it has no type once every struct is laid out (checker.cpp's
+                    // made_again): a struct in it was found in a circle, or too big
 };
 
 // One instance of a generic procedure (spec 7.11): the generic's tree
@@ -274,6 +275,9 @@ struct Ast_Instance {
     Position called_at;        // the start of the call that made it
     Ast_Instance *made_in;     // the instance whose signature, defaults or body holds that call; null
     s32 depth;                 // 1 when made outside any instance, made_in's + 1 otherwise
+    bool had_errors;           // its signature's check reported an error (checker.cpp's
+                               // resolve_signature): every call with its bindings gets no type and
+                               // says nothing more (check_generic.cpp's check_instance)
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -566,7 +570,7 @@ enum Array_Builtin : u8 {
 // A procedure built into the language: predeclared, never declared, written
 // nowhere (0:0). The checker types each call of one from its first
 // argument's element type (checker.h's "Resizable arrays"), since no Rig
-// signature could take every [..]T.
+// signature could take every [..]T before generic procedures (spec 7.11).
 struct Ast_Builtin : Ast {
     String name;
     Array_Builtin builtin;
@@ -577,6 +581,8 @@ struct Ast_Call : Ast {
     Array<Ast *> args;
     Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
                         // constant naming one (OP :: add;), is a call of the procedure itself;
+                        // for a generic procedure (spec 7.11), the instance the call makes
+                        // (check_expr.cpp's check_generic_call), never the generic;
                         // a call passes the default values of the parameters it leaves out:
                         // those its arguments don't reach, or, with a '..T' parameter, every
                         // parameter after that one, at every call (spec 5.10)
