@@ -427,7 +427,8 @@ struct Lowering {
                               // lowering reports: a call in the program of a #compiler procedure but
                               // __runtime_error (lower_call_results)
     Ir_Module *module;
-    Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by name
+    Table<s32> proc_index;    // a Rig or foreign procedure's index in module->procs, by symbol
+                              // (proc_symbol: its name, or an instance's max$T$int)
     Table<s32> global_index;  // a global variable's index in module->globals, by name
     s32 string_count;         // the str.N globals made so far (add_bytes, which says whose bytes each holds)
     // Each string literal node's str.N, by pointer_key: one per literal,

@@ -500,8 +500,8 @@ struct Ir_Proc {
     s32 value_count;           // the values numbered so far
     // For a debugger. A procedure the compiler makes has none of them,
     // but for a run's, run.N (ir_lower_run), which stands for its #run.
-    String source_name;        // its name in the source ("main", "sort"); empty for one the compiler
-                               // makes; "#run" for a run's
+    String source_name;        // its name in the source ("main", "sort"), an instance's max(T = int);
+                               // empty for one the compiler makes; "#run" for a run's
     Position pos;              // its declaration: its name; a run's: the #run
     Position body;             // its body's '{'; a run's: its block's '{', or the #run of an expression
                                // run

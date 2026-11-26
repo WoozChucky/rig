@@ -49,24 +49,30 @@ static bool is_type_parameter(Array<Ast_Type *> declared, String name) {
 }
 
 // A written type of a generic's signature, its type parameters taken as
-// types still to be known: every other name in it resolved as where it's
-// written anywhere (checker.cpp's resolve_written, behind a pointer, so a
-// struct's layout isn't needed), so "unknown type 'Foo'" is said once, here,
-// not once per instance. Nothing is written into the generic's nodes, which
-// every instance copies unchecked: an array's count is an expression,
-// checked by writing its types into it, so it's each instance's to check.
-static void check_generic_type(Checker *c, Ast_Type *written, Array<Ast_Type *> declared) {
+// types still to be known: every other type name in it resolved as where
+// it's written anywhere (checker.cpp's resolve_written, behind a pointer, so
+// a struct's layout isn't needed), and void refused but as a pointer's
+// target (`pointee`), as resolve_type and resolve_element refuse it, so
+// "unknown type 'Foo'" and "'void' is only a pointer's target, as in *void"
+// are said once, here, not once per instance. Nothing is written into the
+// generic's nodes, which every instance copies unchecked: an array's count
+// is an expression, checked by writing its types into it, so it's each
+// instance's to check, its mistakes said once per instance.
+static void check_generic_type(Checker *c, Ast_Type *written, Array<Ast_Type *> declared, bool pointee) {
     switch (written->kind) {
     case AST_TYPE_NAME:
-        if (!is_type_parameter(declared, written->name)) resolve_written(c, written, true);
+        if (is_type_parameter(declared, written->name)) return;
+        if (resolve_written(c, written, true) == &type_void && !pointee) {
+            diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
+        }
         return;
-    case AST_TYPE_POINTER: check_generic_type(c, written->pointee, declared); return;
+    case AST_TYPE_POINTER: check_generic_type(c, written->pointee, declared, true); return;
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: check_generic_type(c, written->element, declared); return;
+    case AST_TYPE_RESIZABLE: check_generic_type(c, written->element, declared, false); return;
     case AST_TYPE_PROC:
-        for (s64 i = 0; i < written->params.count; i++) check_generic_type(c, written->params[i], declared);
-        for (s64 i = 0; i < written->results.count; i++) check_generic_type(c, written->results[i], declared);
+        for (s64 i = 0; i < written->params.count; i++) check_generic_type(c, written->params[i], declared, false);
+        for (s64 i = 0; i < written->results.count; i++) check_generic_type(c, written->results[i], declared, false);
         return;
     default: RIG_ASSERT(!"not a written type"); return;
     }
@@ -85,7 +91,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
     Array<Ast_Type *> declared = type_parameters(generic);
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
-        check_generic_type(c, param->type_expr, declared);
+        check_generic_type(c, param->type_expr, declared, false);
         // A default value that would fix T has no call to give it a type
         // yet, so a parameter whose type declares one takes none, for now
         // (spec 7.11).
@@ -96,7 +102,10 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
                        STR_ARG(declares->name));
         }
     }
-    for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared);
+    for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared, false);
+    // C's '..' is a foreign procedure's, as check_signature says; a foreign
+    // generic is refused below.
+    if (generic->is_c_variadic && !generic->is_foreign) refuse_c_dots(c, generic);
     // C knows nothing of Rig's types, and a #compiler procedure is one the
     // compiler does for the types it's written with: neither is generic.
     if (generic->is_foreign) {
@@ -277,15 +286,26 @@ static Ast_Type *pattern_of_argument(Ast_Proc *generic, s64 i) {
     return i < generic->params.count ? generic->params[i]->type_expr : nullptr;
 }
 
+// Whether argument i of a call of generic is a spread among its '..T'
+// parameter's arguments whose operand, typed, is no array, view or
+// resizable array: it has no elements to give T. (A spread anywhere else
+// was refused, check_expr.cpp's check_generic_call, and has no type.)
+static bool spreads_no_sequence(Ast_Proc *generic, Array<Ast *> args, s64 i) {
+    Type *t = args[i]->type;
+    s64 dots = variadic_index(generic);
+    if (!t || args[i]->kind != AST_SPREAD || dots < 0 || i < dots) return false;
+    return t->kind != TYPE_ARRAY && t->kind != TYPE_VIEW && t->kind != TYPE_RESIZABLE;
+}
+
 // The type argument i of a call of generic gives its pattern: its own, or,
 // for a spread among a '..T' parameter's arguments, its elements', each of
-// which is one of them (null when it spreads no sequence: check_call says
-// so). A spread anywhere else is check_call's to refuse.
+// which is one of them. Null when it has none: its own check failed, or it
+// was refused (said), or it spreads no sequence (spreads_no_sequence).
 static Type *argument_type(Ast_Proc *generic, Array<Ast *> args, s64 i) {
     Type *t = args[i]->type;
     s64 dots = variadic_index(generic);
     if (!t || args[i]->kind != AST_SPREAD || dots < 0 || i < dots) return t;
-    return t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE ? t->element : nullptr;
+    return spreads_no_sequence(generic, args, i) ? nullptr : t->element;
 }
 
 // Binds generic's type parameters (in `bindings`) from args, checked
@@ -302,10 +322,13 @@ static Type *argument_type(Ast_Proc *generic, Array<Ast *> args, s64 i) {
 //   otherwise it's "can't work out 'T' for 'max': argument 1 has no type of
 //   its own", at the first that has none (null, .{...}, .[...], .FREE). One
 //   no argument names at all is "can't work out 'T' for 'max': no argument
-//   gives it", at the callee.
+//   gives it", at the callee. A spread of no sequence among a '..T'
+//   parameter's arguments, at its places, is "'..' spreads a 'int' into
+//   'rest', which needs a '[]$T'", at the '..', as check_call says of one
+//   once T is known.
 // An argument whose own check failed (no type, said) may have been the one
 // to fix a type parameter, so one left unbound with such an argument at
-// its places says nothing more.
+// its places says nothing more; so does a refused spread.
 static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee,
                            Array<Generic_Binding> *bindings) {
     for (s64 i = 0; i < args.count; i++) {
@@ -327,14 +350,20 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
         Generic_Binding *b = &(*bindings)[k];
         if (b->type) continue;
         bool any = false, failed = false, untyped_float = false;
-        Ast *no_type = nullptr;
+        Ast *no_type = nullptr, *no_sequence = nullptr;
+        Ast_Type *no_sequence_pattern = nullptr;
         s64 no_type_index = 0;
         for (s64 i = 0; i < args.count; i++) {
             Ast_Type *pattern = pattern_of_argument(generic, i);
             if (!pattern || !names_unbound(pattern, bindings, b)) continue;
             any = true;
             Type *t = argument_type(generic, args, i);
-            if (!t) {
+            if (!t && spreads_no_sequence(generic, args, i)) {
+                if (!no_sequence) {
+                    no_sequence = args[i];
+                    no_sequence_pattern = pattern;
+                }
+            } else if (!t) {
                 failed = true;
             } else if (!has_type_of_its_own(t)) {
                 if (!no_type) {
@@ -349,6 +378,14 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
         if (!any) {
             diag_error(c->diag, callee->start, "can't work out '" STR_FMT "' for '" STR_FMT "': no argument gives it",
                        STR_ARG(b->name), STR_ARG(generic->name));
+            return false;
+        }
+        if (no_sequence) {
+            diag_error(c->diag, no_sequence->pos,
+                       "'..' spreads a '" STR_FMT "' into '" STR_FMT "', which needs a '[]" STR_FMT "'",
+                       STR_ARG(type_name(c->arena, no_sequence->type)),
+                       STR_ARG(generic->params[variadic_index(generic)]->name),
+                       STR_ARG(written_type_text(c, no_sequence_pattern)));
             return false;
         }
         if (no_type) {
@@ -412,7 +449,9 @@ static Ast_Instance *find_instance(Ast_Proc *generic, Array<Generic_Binding> bin
 // no name Rig writes has: max(T = int) is max$T$int. Two instances of one
 // generic whose names differ only in such bytes, f(T = *[]int) and f(T =
 // []*int), would share one, f$T$$$$int: the later is told apart by its
-// number among its generic's instances, from 1, f$T$$$$int$2.
+// number among its generic's instances, from 1, f$T$$$$int$2. A name may
+// itself end in '$' and digits, so that may be an earlier one's symbol too:
+// then the next number is tried, until one is no other's.
 static String instance_symbol(Arena *a, Ast_Proc *generic, String name) {
     Array<u8> text = {};
     for (s64 i = 0; i < name.count - 1; i++) {
@@ -421,14 +460,17 @@ static String instance_symbol(Arena *a, Ast_Proc *generic, String name) {
         bool kept = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_';
         array_add(&text, kept ? b : (u8)'$');
     }
-    String symbol = string_copy(a, {text.data, text.count});
+    String base = string_copy(a, {text.data, text.count});
     array_free(&text);
-    for (s64 i = 0; i < generic->instances.count; i++) {
-        if (string_eq(generic->instances[i]->symbol, symbol)) {
-            return string_printf(a, STR_FMT "$%lld", STR_ARG(symbol), (long long)(generic->instances.count + 1));
+    String symbol = base;
+    for (s64 number = generic->instances.count + 1;; number++) {
+        bool taken = false;
+        for (s64 i = 0; i < generic->instances.count && !taken; i++) {
+            taken = string_eq(generic->instances[i]->symbol, symbol);
         }
+        if (!taken) return symbol;
+        symbol = string_printf(a, STR_FMT "$%lld", STR_ARG(base), (long long)number);
     }
-    return symbol;
 }
 
 // A new instance of generic for `bindings`, made where the call at

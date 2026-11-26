@@ -1515,16 +1515,17 @@ static void report_argument_count(Checker *c, Ast_Call *call, String name, s64 r
 }
 
 // A call of a generic procedure (spec 7.11), call->proc the generic: its
-// arguments checked, each as check_call checks one, then counted against
-// the generic's parameters as check_call counts them (the same messages),
-// then the instance they make (check_generic.cpp's check_instance) taking
-// the generic's place in call->proc, for check_call to go on with as with
-// any call: each argument converts to its parameter's type in the instance,
-// so once T is fixed, `max(x_s32, y_int)` is "argument 2 of 'max' has type
-// 'int', which can't be converted to 's32'". False, the call having no
-// type, after a count that doesn't fit or an inference that fails (said),
-// or when the generic's signature isn't known (a circle, said) or had
-// errors, said already: it makes no instance.
+// arguments checked, each as check_call checks one, a spread refused where
+// check_call refuses one (refuse_spread), so it gives T nothing, then
+// counted against the generic's parameters as check_call counts them (the
+// same messages), then the instance they make (check_generic.cpp's
+// check_instance) taking the generic's place in call->proc, for check_call
+// to go on with as with any call: each argument converts to its parameter's
+// type in the instance, so once T is fixed, `max(x_s32, y_int)` is
+// "argument 2 of 'max' has type 'int', which can't be converted to 's32'".
+// False, the call having no type, after a count that doesn't fit or an
+// inference that fails (said), or when the generic's signature isn't known
+// (a circle, said) or had errors, said already: it makes no instance.
 static bool check_generic_call(Checker *c, Ast_Call *call) {
     Ast_Proc *generic = call->proc;
     for (s64 i = 0; i < call->args.count; i++) {
@@ -1538,6 +1539,13 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
     if (!check_proc_signature(c, generic) || generic->had_errors) return false;
     s64 n = generic->params.count, given = call->args.count;
     s64 dots = variadic_index(generic);
+    // A spread is kept as the last argument, or among the '..' arguments of
+    // a generic with parameters after its '..T' one, which check_call says
+    // more of; any other is refused here, and not again by check_call.
+    for (s64 i = 0; i < given; i++) {
+        bool kept = dots >= 0 && (i == given - 1 || (i >= dots && dots < n - 1));
+        if (call->args[i]->kind == AST_SPREAD && !kept) refuse_spread(c, call->args[i]);
+    }
     bool more = dots >= 0;
     s64 fixed = more ? dots : n;
     bool spreads = more && given && call->args[given - 1]->kind == AST_SPREAD;
@@ -1592,7 +1600,8 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
 // (check_generic_call).
 static Type *check_call(Checker *c, Ast_Call *call) {
     bool known = check_callee(c, call);
-    if (known && call->proc && call->proc->is_generic) {
+    bool generic = known && call->proc && call->proc->is_generic;
+    if (generic) {
         if (!check_generic_call(c, call)) {
             call->proc = nullptr;
             return nullptr;
@@ -1641,7 +1650,9 @@ static Type *check_call(Checker *c, Ast_Call *call) {
             break;
         }
     }
-    for (s64 i = 0; i < given; i++) {
+    // A generic's call refused its spreads before inference
+    // (check_generic_call), these same ones.
+    for (s64 i = 0; i < given && !generic; i++) {
         Ast *arg = call->args[i];
         if (arg->kind == AST_SPREAD && (!gathers || i != given - 1)) refuse_spread(c, arg);
     }
@@ -2283,7 +2294,7 @@ static bool names_a_member(Checker *c, Ast *e) {
 // a name T has no member of, or a T with no layout (said), is no such
 // member.
 static bool names_a_void_member(Checker *c, Ast_Member *e) {
-    Ast_Struct *s = (Ast_Struct *)check_lookup(c, ((Ast_Name *)e->operand)->name, nullptr);
+    Ast_Struct *s = (Ast_Struct *)through_alias(check_lookup(c, ((Ast_Name *)e->operand)->name, nullptr));
     Type *t = s->declared;
     if (!t || !check_layout(c, t)) return false;
     for (s64 i = 0; i < t->fields.count; i++) {

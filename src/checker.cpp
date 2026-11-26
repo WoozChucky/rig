@@ -3247,6 +3247,12 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
     proc->defaults_depth = too_deep ? 0 : depth;
 }
 
+void refuse_c_dots(Checker *c, Ast_Proc *proc) {
+    diag_error(c->diag, proc->c_dots_pos,
+               "only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
+               "(values: ..int)");
+}
+
 // A procedure's signature: its parameters' types and its results' types,
 // each stored on its node (Ast_Param.type, Ast_Type.type), and its library
 // and C name.
@@ -3329,11 +3335,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
     if (c_side && proc->results.count > 1) {
         diag_error(c->diag, proc->results[1]->pos, "%s can return at most one value", who);
     }
-    if (proc->is_c_variadic && !proc->is_foreign) {
-        diag_error(c->diag, proc->c_dots_pos,
-                   "only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
-                   "(values: ..int)");
-    }
+    if (proc->is_c_variadic && !proc->is_foreign) refuse_c_dots(c, proc);
     if (proc->is_foreign && !string_eq(proc->foreign_library, str("libc"))) {
         diag_error(c->diag, proc->library_pos, "unknown library '" STR_FMT "'; the only one so far is 'libc'",
                    STR_ARG(proc->foreign_library));

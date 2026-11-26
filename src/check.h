@@ -150,6 +150,11 @@ Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 // its size. void is refused as resolve_type refuses it.
 Type *resolve_type_value(Checker *c, Ast_Type *written);
 
+// "only a foreign procedure can take C's '..'; a Rig procedure takes more
+// arguments as '..T', as in (values: ..int)", at the '..' of Rig procedure
+// proc, a generic one's too (check_generic_signature).
+void refuse_c_dots(Checker *c, Ast_Proc *proc);
+
 // Makes sure the type of field `index` of struct t is known: a late field's
 // (one holding a pointer or a view, checker.cpp's lay_out) is made here if
 // it isn't yet, as a literal or a field access in a global's value or an
@@ -475,10 +480,12 @@ bool has_failed_run(Ast *e);
 // A generic procedure's own signature (spec 7.11), in place of
 // check_signature (checker.cpp's resolve_signature): its parameters' and
 // results' types with its type parameters taken as types still to be
-// known, their other names resolved, so a mistake there is said once, not
-// once per instance, and nothing written into its nodes, which each
-// instance copies unchecked; the refusals of a default value on a
-// parameter that declares a type parameter, of #foreign, #c_call and
+// known, their other type names resolved and a void anywhere but behind a
+// pointer refused, so a mistake there is said once, not once per instance,
+// and nothing written into its nodes, which each instance copies
+// unchecked (an array's count is each instance's to check, its mistakes
+// said per instance); the refusals of a default value on a parameter that
+// declares a type parameter, of C's '..', of #foreign, #c_call and
 // #compiler. Its type stays null: a generic is no value. Its default values
 // are each instance's, checked with its signature.
 void check_generic_signature(Checker *c, Ast_Proc *generic);

@@ -14,7 +14,8 @@
 // anything up again. A member without its enum, .FREE, gets its enum's
 // type and the member's value, as a constant does. checker.cpp checks
 // declarations and statements, check_expr.cpp expressions, check_run.cpp
-// #run and what it reaches; check.h is what they share.
+// #run and what it reaches, check_generic.cpp generic procedures'
+// instances; check.h is what they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
