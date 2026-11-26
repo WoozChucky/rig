@@ -27,10 +27,11 @@ struct Checker {
                                  // worked out where it's needed setting the outer ones aside
                                  // (checker.cpp's check_body, leave_scopes)
     Ast_Proc *proc;              // the procedure whose body is being checked
-    Array<Ast_Param *> using_params;  // the using parameters (spec 3.21) of the procedure whose body or
-                                      // default values are being checked, in order, each of a type using
-                                      // takes; set aside with the scopes (checker.cpp's leave_scopes)
-    Array<Ast *> loops;          // the loops around the statement being checked, innermost
+    // The using parameters (spec 3.21) of the procedure whose body or
+    // default values are being checked, in order, each of a type using
+    // takes; set aside with the scopes (checker.cpp's leave_scopes).
+    Array<Ast_Param *> using_params;
+    Array<Ast *> loops;         // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
     Ast_Defer *deferring;        // the innermost defer whose statement is being checked (spec 6.12);
                                  // null outside deferred code. A body checked on demand sets it
