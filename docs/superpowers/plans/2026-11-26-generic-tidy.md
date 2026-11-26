@@ -49,7 +49,7 @@
 
 **Files:** Modify `src/check_generic.cpp` (the header comment at :1-9; `collect_type_parameters` :32; `check_generic_type` :103; `check_count_name`/`check_count_type_names`/`check_count_names` :178-262; `check_signature_names` :284; `names_unbound` :534; `names_type`/`names_expression` :1187-1253; `names_statement` :1298). Test in `tests/unit/test_checker.cpp`.
 
-**Interfaces (all file-level `static` in `check_generic.cpp`, placed before `collect_type_parameters`):**
+**Interfaces (all file-level `static` in `check_generic.cpp`; these three placed before `collect_type_parameters`, each action below where the walk it replaces was, since `at_signature_name` needs `Signature_Name` and `check_count_name`, and `at_body_name` needs `Name_Walk` and `names_value`, all defined further down):**
 ```cpp
 // Where a name walk_names meets is.
 struct Name_Place {
@@ -71,7 +71,7 @@ static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, A
 - `AST_NAME` and `AST_TYPE_NAME` call the action.
 - The type kinds and today's expression cases recurse, as `check_count_names` and `check_count_type_names` do now.
 - `AST_STRING`, `AST_INT`, `AST_FLOAT`, `AST_BOOL`, `AST_NULL`, `AST_CONTEXT`, `AST_CALLER_LOCATION` and `AST_DOT_NAME` return.
-- The statement and declaration kinds `break` to a closing `RIG_ASSERT(!"not an expression or a written type")`, as `ast_clone` does. `names_statement` handles every statement before handing an expression on, and a body holds no declaration (the parser's `parse_local_declaration`), so the assert never fires today.
+- Every other kind (the statements, the declarations and their parts, `AST_PARAM`, `AST_FIELD` and `AST_CASE`, and the checker's own `AST_BUILTIN` and `AST_ALIAS`) `break`s to a closing `RIG_ASSERT(!"not an expression or a written type")`, as `ast_clone` does. `names_statement` handles every statement before handing an expression on, and a body declares no procedure, struct, union or enum (the parser's `parse_local_declaration` refuses them), so the assert never fires today.
 - Entering a count sets `in_count`, which then stays set below it. `pointee` is set only for an `AST_TYPE_POINTER`'s `pointee`.
 
 The actions, one per former walk. Each has the signature `(void *data, Ast *name, Name_Place place)`:
@@ -82,7 +82,7 @@ The actions, one per former walk. Each has the signature `(void *data, Ast *name
 | `check_generic_type` | `at_generic_type_name` | `struct Generic_Type_Check { Checker *c; Array<Generic_Binding> declared; }` | Today's `AST_TYPE_NAME` case with `place.pointee`. Nothing in a count. |
 | `check_signature_names` + `check_count_names` + `check_count_type_names` | `at_signature_name` | `struct Signature_Check { Checker *c; Array<Generic_Binding> declared; Array<Signature_Name> *names; }` | In a count: `check_count_name(c, name_text(name), name->pos, ...)` for an `AST_NAME`, and for an `AST_TYPE_NAME` that doesn't declare. Outside a count: today's `AST_TYPE_NAME` case. |
 | `names_unbound` | `at_unbound_name` | `struct Unbound_Search { Array<Generic_Binding> *bindings; Generic_Binding *only; bool found; }` | Sets `found` for a type name, not in a count, that names an unbound binding (or `only`). |
-| `names_type` + `names_expression` | `at_body_name` | `Name_Walk *` | `AST_NAME`: `names_value`. `AST_TYPE_NAME`: today's "unknown type" case. |
+| `names_type` + `names_expression` | `at_body_name` | `Name_Walk *` | `AST_NAME`: `names_value`. `AST_TYPE_NAME`: today's "unknown type" case. It doesn't read `place`: `(void)place;`, as `compiler_module.cpp`'s `(void)results;`, since `-Wextra` warns of an unused parameter. |
 
 The kept entry points and their signatures:
 - `collect_type_parameters(Ast_Type *, Array<Generic_Binding> *)`, `check_signature_names(Checker *, Ast_Type *, Array<Generic_Binding>, Array<Signature_Name> *)` and `names_unbound(Ast_Type *, Array<Generic_Binding> *, Generic_Binding *) -> bool` keep their signatures. Each becomes a `walk_names` call with `Name_Place{}`.
@@ -105,7 +105,7 @@ The kept entry points and their signatures:
     {"s2 :: (a: [size_of(T)]U, b: $T, c: $U) -> int { return 1; }", "s2(1, 2, 3)",
      "1:20: 'T' is used before '$T' declares it\n1:23: 'U' is used before '$U' declares it\n"},
     ```
-  - In `inference_mistakes`, or a new `CHECK_STR` beside its cases. Inference doesn't look into a count, so the untyped 5 doesn't meet `[size_of(T)]int` as a pattern:
+  - In `inference_mistakes`, a `CHECK_STR` of its own after the cases' loop (it's a whole source, not a body for the table's `with_generic_max` frame). Inference doesn't look into a count, so the untyped 5 doesn't meet `[size_of(T)]int` as a pattern:
     ```cpp
     CHECK_STR(check_source(&a, "h :: (b: $T, a: [size_of(T)]int) -> int { return 1; }\n"
                                "main :: () { x := h(null, 5); }\n"),
@@ -187,7 +187,7 @@ In `parse_primary`'s `TOKEN_LBRACKET` case: if `c_style_literal_follows(p)`, `di
   - 5.17, at the end of **Array literals**: "The `.` is part of an array literal: one written as C writes it, `x := [1, 2, 3];` or `x := [];`, is `an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]`, at the `[` (section 5.20 says which `[` begin a type)."
   - 5.20, third bullet: "`[N]T`, `[]T` and `[..]T`: no expression starts with `[`, so one there begins a type. Where it can't be one, there's a `,` in its brackets, or no type follows its `]` (`[1, 2, 3]`, `[]`, `[1]`), it's taken for an array literal written as C writes one: `an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]`, at the `[` (section 5.17);"
   - A.4: in the last sentence, after "since no expression starts with one", add ", unless it's refused as a C-style array literal (section 5.20)".
-- [ ] **Step 5: Build and run both suites on Windows.** Expected: Step 1's tests pass. So do `parses_array_literals`, `parses_resizable_array_type`, the array-type test at :1617-1622 (`g : [3];`, `g : [];` keep "expected a type, found ';'"), and `run-tests`, with no expected file changed.
+- [ ] **Step 5: Build and run both suites on Windows.** Expected: Step 1's tests pass. So do `parses_array_literals`, `parses_resizable_array_type`, `parses_array_and_view_types` (its cases at :1617-1622: `g : [3];`, `g : [];` keep "expected a type, found ';'"), and `run-tests`, with no expected file changed. Build the docs site, which makes its pages from the spec and checks their anchors: `cd site && npm ci && npm run docs:build`.
 - [ ] **Step 6: Commit, push, run Linux.** `git commit -m "Point a C-style array literal to .[1, 2, 3]"`
 
 **Done when:**
