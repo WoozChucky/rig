@@ -12724,12 +12724,12 @@ TEST(clones_are_deep_and_unchecked) {
     // statement and every expression, and a generic one holding the kinds
     // of parameter and type it doesn't (using, '..int', $T, $N: int, a
     // procedure type with '..' and one #c_call, #no_abc, a #complete
-    // switch), are
-    // each copied before the program is checked: the copy dumps as the
-    // original does, shares no node and no Array's buffer with it, keeps
-    // every place the parser gave each node (same_places), and checking the
-    // program, the original among it, leaves the copy unchecked. A for
-    // loop's iterators, which the dump doesn't mark, stay read-only.
+    // switch), are each copied before the program is checked: the copy
+    // dumps as the original does, shares no node and no Array's buffer with
+    // it, keeps every place the parser gave each node (same_places), and
+    // checking the program, the original among it, leaves the copy
+    // unchecked. A for loop's iterators, which the dump doesn't mark, stay
+    // read-only.
     Arena a = arena_make();
     const char *text =
         "Vec2 :: struct { x: float; y: float; }\n"
@@ -13309,9 +13309,9 @@ TEST(uninstantiated_bodies_resolve_names_only) {
     // A generic's body is walked once for its names, whether an instance is
     // made or not: a name declared nowhere is said, as a value or as a type,
     // and nothing that depends on T is checked (a member, a .NAME, a
-    // string added to a member). Both branches of an #if are walked, and
-    // what either declares is known after it. A generic with a using
-    // parameter says no unknown identifier: any may be a field.
+    // string added to a member). Every branch of an #if is walked, and what
+    // any declares is known after it. A generic with a using parameter says
+    // no unknown identifier: any may be a field.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "lib :: (a: $T) -> T { x := a.nothing + \"s\"; y: T = .NONE; return nope(x, y); }\n"
@@ -13476,8 +13476,8 @@ TEST(uninstantiated_bodies_resolve_names_only) {
               "25:11: unknown type 'Unknown'\n");
     // A generic whose walk said something makes no instance after it, and
     // an instance made before it isn't checked: its errors would only say
-    // the walk's again, without the instance's chain. The call after it
-    // has no type.
+    // the walk's again, with the instance's chain this time. The call after
+    // it has no type.
     Checked c = check_src(&a,
                           "main :: () { x := early(1); }\n"
                           "early :: (a: $T) -> T { return nope + a; }\n"
@@ -13642,7 +13642,8 @@ static String pointer_chain(Arena *a, const char *generic, s64 depth, const char
     String expected = {};
     for (s64 d = depth; d >= 1; d--) {
         if (depth > 21 && d == depth - 10) {
-            expected = string_printf(a, STR_FMT "    ... %lld more instances\n", STR_ARG(expected), (long long)(depth - 20));
+            expected = string_printf(a, STR_FMT "    ... %lld more instances\n", STR_ARG(expected),
+                                     (long long)(depth - 20));
             d = 11;
             continue;
         }
@@ -13727,7 +13728,7 @@ TEST(instances_have_a_depth_limit) {
 
 // The declarations every test of baked parameters starts with: a $T: Type
 // after a value, a constant and a type, a constant of an enum and of a
-// string, and one a number must fit.
+// string, one a number must fit, and a $T: Type between two values.
 static const char *GENERIC_BAKED = "World :: struct { p: Position; }\n"
                                    "Position :: struct { x: int; }\n"
                                    "get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }\n"
@@ -13999,24 +14000,23 @@ TEST(rest_arguments_fix_t_by_the_first_typed_one) {
     // gives T.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
-    CHECK_STR(check_with_preload(&a,
-                                 "sum :: (values: ..$T) -> T { t: T; for values { t += it; } return t; }\n"
-                                 "main :: () {\n"
-                                 "    x: s16;\n"
-                                 "    a: [3]float;\n"
-                                 "    r: [..]int;\n"
-                                 "    s1 := sum(1, 2, x);\n"
-                                 "    s2 := sum(1, 2);\n"
-                                 "    s3 := sum(1.5, 2);\n"
-                                 "    s4 := sum(..a);\n"
-                                 "    s5 := sum(..r);\n"
-                                 "}\n",
-                                 &tree),
-              "");
+    const char *sum = "sum :: (values: ..$T) -> T { t: T; for values { t += it; } return t; }\n";
+    String uses = string_printf(&a,
+                                "%smain :: () {\n"
+                                "    x: s16;\n"
+                                "    a: [3]float;\n"
+                                "    r: [..]int;\n"
+                                "    s1 := sum(1, 2, x);\n"
+                                "    s2 := sum(1, 2);\n"
+                                "    s3 := sum(1.5, 2);\n"
+                                "    s4 := sum(..a);\n"
+                                "    s5 := sum(..r);\n"
+                                "}\n",
+                                sum);
+    CHECK_STR(check_with_preload(&a, string_cstr(&a, uses), &tree), "");
     const char *names[] = {"s1", "s2", "s3", "s4", "s5"};
     const char *types[] = {"s16", "int", "float32", "float32", "int"};
     for (s64 k = 0; k < 5; k++) CHECK_STR(type_of_main_local(&a, tree, names[k]), types[k]);
-    const char *sum = "sum :: (values: ..$T) -> T { t: T; for values { t += it; } return t; }\n";
     CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { s := sum(); }\n", sum))),
               "2:19: can't work out 'T' for 'sum': no argument gives it\n");
     CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { n: int; s := sum(n, \"a\"); }\n",

@@ -4575,6 +4575,13 @@ TEST(parses_types_where_values_go) {
     // No literal follows a type value: only a name is a literal's type.
     body_dump(&a, "e := []int.{1};", &errors);
     CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
+    // So an array literal written as C writes one, not .[1, 2, 3] or
+    // int.[1, 2, 3] (spec 5.17), is a type's start: the count stops at its
+    // first ',', and [] needs its element type.
+    body_dump(&a, "x := [1, 2, 3];", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ','\n");
+    body_dump(&a, "y := [];", &errors);
+    CHECK_STR(errors, "2:12: expected a type, found ';'\n");
     // The node is at its '[' or its '#type'.
     Token_List *list = src("f :: () { x := []int; y := #type *u8; }\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
