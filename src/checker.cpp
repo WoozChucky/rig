@@ -206,7 +206,9 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // top-level #if, so it can't decide another top-level #if"
 // (check_in_a_branch). A broken entry's name may have been anything, so
 // nothing is said about it. A struct found to contain itself has no type:
-// its uses say nothing more.
+// its uses say nothing more. Type, the type of types (spec 5.20), is
+// written nowhere: "'Type' only names types while compiling; a *Type_Info
+// describes one at run time".
 //
 // behind_pointer: the type is what a pointer points at, or a view's or a
 // resizable array's elements, which lie elsewhere: a struct named right
@@ -251,6 +253,13 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
     default: break;
     }
     Type *t = type_from_name(written->name);
+    if (t == &type_type) {
+        // Type is the type of types while compiling (spec 5.20): no
+        // value of it exists at run time, so nothing is written of it.
+        diag_error(c->diag, written->pos,
+                   "'Type' only names types while compiling; a *Type_Info describes one at run time");
+        return nullptr;
+    }
     if (t) return t;
     Ast *decl = find_name(c, written->name);
     if (!decl) {

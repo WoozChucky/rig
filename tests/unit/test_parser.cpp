@@ -4552,3 +4552,43 @@ TEST(parses_using_parameters) {
     token_list_free(list);
     arena_free(&a);
 }
+
+// Issue #226: types where a value goes (spec 5.20).
+
+TEST(parses_types_where_values_go) {
+    // A '[' starting an expression begins a type, [N]T, []T or [..]T, and
+    // #type any type, a procedure type's too: each an Ast_Type_Value,
+    // dumped (type T). A name and *X parse as a name and an address, the
+    // checker saying whether they name a type.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "b := []int == [..]int;", &errors),
+              "(block (var b _ (binary == (type (view int)) (type (resizable int)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "c := [3]Vec2 != #type (int) -> int;", &errors),
+              "(block (var c _ (binary != (type (array (int 3) Vec2)) "
+              "(type (proc-type (params int) (returns int))))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "d := *Vec2 == *Vec2;", &errors),
+              "(block (var d _ (binary == (unary * (name Vec2)) (unary * (name Vec2)))))");
+    CHECK_STR(errors, "");
+    // No literal follows a type value: only a name is a literal's type.
+    body_dump(&a, "e := []int.{1};", &errors);
+    CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
+    // The node is at its '[' or its '#type'.
+    Token_List *list = src("f :: () { x := []int; y := #type *u8; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    Ast *x = ((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    Ast *y = ((Ast_Var *)file->procs[0]->body->statements[1])->value;
+    CHECK_EQ(x->kind, AST_TYPE_VALUE);
+    CHECK_EQ(x->pos.col, 16);
+    CHECK_EQ(y->kind, AST_TYPE_VALUE);
+    CHECK_EQ(y->pos.col, 28);
+    token_list_free(list);
+    // After a signature, where the body goes, #type is no unknown
+    // directive: the '{' is what's missing, as for a #caller_location.
+    parse_src(&a, "f :: () #type int { }\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    arena_free(&a);
+}

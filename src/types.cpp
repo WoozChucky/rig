@@ -53,6 +53,9 @@ Type type_untyped_literal = BUILT_IN(TYPE_UNTYPED_LITERAL, ".{...}", 0, 1, false
 // a fallback too: such a member meeting no enum is reported before any
 // message would name its type.
 Type type_untyped_member = BUILT_IN(TYPE_UNTYPED_MEMBER, ".NAME", 0, 1, false);
+// The type of types, while compiling only (spec 5.20): never laid out, its
+// size and alignment a pointer's, as the checker holds a type.
+Type type_type = BUILT_IN(TYPE_TYPE, "Type", 8, 8, false);
 
 // float, a name only: type_from_name gives float32 for it. It's an entry of
 // its own so NAMED_TYPES, and the editor's grammar made from it, list the
@@ -71,6 +74,7 @@ static Type *const NAMED_TYPES[] = {
     &integer_types[0], &integer_types[1], &integer_types[2], &integer_types[3],  // s8 s16 s32 s64
     &integer_types[4], &integer_types[5], &integer_types[6], &integer_types[7],  // u8 u16 u32 u64
     &type_int,  &type_bool,  &float_name, &type_float32, &type_float64, &type_void, &type_string,
+    &type_type,
 };
 static_assert(sizeof integer_types / sizeof integer_types[0] == 8, "NAMED_TYPES lists integer_types one by one");
 

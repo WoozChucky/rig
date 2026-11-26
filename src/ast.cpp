@@ -394,6 +394,12 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump_type(buffer, ((Ast_Type_Info *)node)->type_expr);
         out(buffer, ")");
         break;
+    case AST_TYPE_VALUE:
+        // (type (view int)) for []int where a value goes, #type T alike.
+        out(buffer, "(type ");
+        dump_type(buffer, ((Ast_Type_Value *)node)->type_expr);
+        out(buffer, ")");
+        break;
     case AST_STRUCT: {
         // (struct Vec2 (x float32) (y float32)), (union Value (i s64)); an
         // anonymous member's has no name: (union (key Key) (mouse Mouse)).

@@ -14,6 +14,9 @@
             "include": "#strings"
         },
         {
+            "include": "#type-value"
+        },
+        {
             "include": "#directives"
         },
         {
@@ -210,6 +213,21 @@
                 }
             ]
         },
+        "type-value": {
+            "comment": "#type T (spec 5.20): a type written where a value goes, #type (int) -> int; #type is a directive as any, T a type (#type), as after a cast's '(', up to what ends a value there: ; = != , ) ] { } or the line's end. A type value written with '[', []int == [..]int, needs no rule: its names are coloured as anywhere.",
+            "begin": "(#type)\\b",
+            "beginCaptures": {
+                "1": {
+                    "name": "keyword.other.directive.rig"
+                }
+            },
+            "end": "(?=[;=,)\\]{}]|!=|$)",
+            "patterns": [
+                {
+                    "include": "#type"
+                }
+            ]
+        },
         "size-of": {
             "comment": "size_of(T) and type_info(T) (spec 5.19): T is a type (#type), up to the ')' or the line's end, as in #cast-type. Both are names, not keywords (spec A.4), so they're coloured as calls, as before they took their types.",
             "begin": "\\b(size_of|type_info)\\s*(\\()",
@@ -318,7 +336,7 @@
         "types": {
             "comment": "The checker's built-in type names (src/types.cpp's NAMED_TYPES), then the ones the language will have but the checker doesn't know yet (tests/unit/test_grammar.cpp's RESERVED_TYPES).",
             "name": "support.type.primitive.rig",
-            "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|void|string)\\b"
+            "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|void|string|Type)\\b"
         },
         "type-name": {
             "comment": "A name where a type is written: a built-in type keeps its scope (#types), any other is a type the program declares.",

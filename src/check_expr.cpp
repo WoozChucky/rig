@@ -2293,6 +2293,99 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
     return &type_bool;
 }
 
+// Types where a value goes (spec 5.20). A type written as a value, []int or
+// #type (int) -> int, is an Ast_Type_Value; a name and *X are a name and an
+// address as written, and whether they name a type is the name's lookup's
+// to say: a struct's or an enum's, or none while the name is a built-in
+// type's, so a local `int := 5;` hides the type int, as it hides any
+// top-level name (spec 4.7). A type in parentheses is no type, as nowhere
+// else is one: (int) is a value. Only the places that take a type check
+// one as such (check_type_value), for now == and != between two types
+// (check_binary). A type value is never a value at run time: it has type
+// Type, never a constant (Ast.is_constant stays false, so nothing folds or
+// lowers it), the type it denotes kept in Ast.constant's bits for
+// type_value.
+
+bool expr_names_type(Checker *c, Ast *e) {
+    // A type is never in parentheses, as a literal's isn't ((Vec2).{1}):
+    // (int) is a value, refused as one.
+    if (ast_in_parentheses(e)) return false;
+    if (e->kind == AST_TYPE_VALUE) return true;
+    if (e->kind == AST_UNARY) {
+        Ast_Unary *u = (Ast_Unary *)e;
+        return u->op == TOKEN_STAR && expr_names_type(c, u->operand);
+    }
+    if (e->kind != AST_NAME) return false;
+    String name = ((Ast_Name *)e)->name;
+    Ast *decl = check_lookup(c, name, nullptr);
+    if (!decl) return type_from_name(name) != nullptr;
+    return decl->kind == AST_STRUCT || decl->kind == AST_ENUM;
+}
+
+// The type e, which expr_names_type holds for, would be written as where a
+// type goes: an Ast_Type_Value's own, or one made here for a name or *X,
+// at the same places, so resolving it says what a written type would.
+static Ast_Type *written_type_of(Checker *c, Ast *e) {
+    if (e->kind == AST_TYPE_VALUE) return ((Ast_Type_Value *)e)->type_expr;
+    if (e->kind == AST_UNARY) {
+        Ast_Type *pointer = ast_new<Ast_Type>(c->arena, AST_TYPE_POINTER, e->pos);
+        pointer->pointee = written_type_of(c, ((Ast_Unary *)e)->operand);
+        return pointer;
+    }
+    Ast_Type *named = ast_new<Ast_Type>(c->arena, AST_TYPE_NAME, e->pos);
+    named->name = ((Ast_Name *)e)->name;
+    return named;
+}
+
+Type *check_type_value(Checker *c, Ast *e) {
+    Type *t = resolve_type(c, written_type_of(c, e));
+    e->type = t ? &type_type : nullptr;
+    e->constant = (u64)(uintptr_t)t;
+    return t;
+}
+
+Type *type_value(Ast *e) {
+    RIG_ASSERT(e->type == &type_type);
+    return (Type *)(uintptr_t)e->constant;
+}
+
+// A type written where a value goes, reached as a value, which it isn't:
+// "'[]int' is a type, not a value", at its start, the type named as
+// messages name types, as a struct's name used as a value is said
+// (report_type_as_value). A mistake in the type itself is said instead.
+// It has no type: only check_type_value gives one.
+static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
+    Type *t = resolve_type(c, value->type_expr);
+    if (t) {
+        diag_error(c->diag, value->start, "'" STR_FMT "' is a type, not a value", STR_ARG(type_name(c->arena, t)));
+    }
+    return nullptr;
+}
+
+// == or != with an operand that names a type (spec 5.20): the other must
+// name one too, and the two are compared while compiling, equal when
+// they're the same type (every type exists once, so when their Type *s
+// are: float and float32 are one, int and s64 two). The result is a
+// constant bool, so `#if T == int` decides and lowering sees only the
+// constant. A type against a value is "'==' compares a type only with a
+// type, as in T == int", at the operator, once the value's own mistakes,
+// if any, are said; a type's are said as a written type's are.
+static Type *check_type_comparison(Checker *c, Ast_Binary *b) {
+    bool left_names = expr_names_type(c, b->left);
+    bool right_names = expr_names_type(c, b->right);
+    Type *left = left_names ? check_type_value(c, b->left) : check_value(c, b->left);
+    Type *right = right_names ? check_type_value(c, b->right) : check_value(c, b->right);
+    if (!left || !right) return nullptr;
+    if (!left_names || !right_names) {
+        diag_error(c->diag, b->pos, "%s compares a type only with a type, as in T == int", token_kind_name(b->op));
+        return nullptr;
+    }
+    b->operand_type = &type_type;
+    b->is_constant = true;
+    b->constant = (left == right) == (b->op == TOKEN_EQUAL_EQUAL);
+    return &type_bool;
+}
+
 // + - * / % & | ^ << >> (spec 6.4), and the comparisons and && || (above).
 // + - * / take two numbers, the others two integers; they meet at a type
 // (check_unify_numbers) that is also the result's. Untyped with untyped
@@ -2327,9 +2420,18 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // may itself be written Shape.empty, beside a .NAME or a Shape.NAME. A
 // member's name beside a pointer to one is "'.circle' needs an enum type,
 // not '*Shape'; write p.* == .circle" (report_member_on_pointer).
+//
+// == and != with an operand that names a type compare types (spec 5.20,
+// check_type_comparison), before anything else is looked at. The other
+// operators take no type: a type operand is said to be one, as a value
+// anywhere is ("'int' is a type, not a value").
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
+    // Types compared (spec 5.20): T == int, []int != [..]int.
+    if (equality && (expr_names_type(c, b->left) || expr_names_type(c, b->right))) {
+        return check_type_comparison(c, b);
+    }
     Type *left = nullptr, *right = nullptr;
     bool left_checked = false, right_checked = false;
     // With a member's name on one side only, the other is checked first:
@@ -3877,6 +3979,7 @@ Type *check_expression(Checker *c, Ast *e) {
     case AST_RUN: t = check_run(c, (Ast_Run *)e); break;
     case AST_SPREAD: t = check_spread(c, (Ast_Spread *)e); break;
     case AST_DOT_NAME: t = &type_untyped_member; break;  // check_convert gives it its enum
+    case AST_TYPE_VALUE: t = refuse_type_value(c, (Ast_Type_Value *)e); break;
     default: RIG_ASSERT(!"not an expression");
     }
     e->type = t;

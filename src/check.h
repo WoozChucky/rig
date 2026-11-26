@@ -402,6 +402,25 @@ bool check_both_numbers(Checker *c, Type *left, Type *right, Position at, const 
 // either is one.
 Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);
 
+// Whether e denotes a type (spec 5.20): an Ast_Type_Value, a name whose
+// lookup finds a struct or an enum, or none while type_from_name knows it
+// (a local `int := 5;` hides the type int), or *X of such an X; never one
+// in parentheses, which is a value, as (Vec2).{1} is no literal. Looks only:
+// nothing is checked or said (a global the lookup finds is worked out, as
+// any lookup of it does: check_lookup).
+bool expr_names_type(Checker *c, Ast *e);
+
+// The type e, which expr_names_type holds for, denotes, resolved as a
+// written type is, with its messages ("unknown type 'Foo'", "'Type' only
+// names types while compiling; ..."); e->type then Type (type_type), and
+// the type kept for type_value. Null after a mistake, said. For a place
+// that takes a type value: for now == and != between types.
+Type *check_type_value(Checker *c, Ast *e);
+
+// The type a checked type value denotes (Ast.constant's bits; Ast.is_constant
+// stays false, so nothing folds or lowers it).
+Type *type_value(Ast *e);
+
 // Whether op is / or %: the operators whose integer divisor mustn't be 0.
 bool is_division(Token_Kind op);
 

@@ -315,10 +315,27 @@ static Ast *parse_type_info(Parser *p) {
     return info;
 }
 
+// A type written where a value goes (spec 5.20), its Ast_Type_Value at
+// `at`, its '[' or its '#type': the type that follows, read a level down as
+// size_of's is (parse_type_below), so it's a leaf of the expression around
+// it. The caller is past the '#type', or still at the '[', which begins
+// the type. A literal never follows one: in []int.{1} the '.' after a type
+// that isn't a name is parse_postfix's "expected a field's name".
+static Ast *parse_type_value(Parser *p, Token *at) {
+    Ast_Type_Value *value = ast_new<Ast_Type_Value>(p->arena, AST_TYPE_VALUE, at->pos);
+    value->type_expr = parse_type_below(p);
+    return value->type_expr ? value : nullptr;
+}
+
 // primary = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
 //         | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //         | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
-//         | '.' IDENT
+//         | '.' IDENT | '[' [expression | '..'] ']' type | '#type' type
+//
+// A '[' or a #type starting an expression is a type written where a value
+// goes (parse_type_value, spec 5.20): []int == [..]int, #type (int) -> int.
+// Which types may be values, and where, is the checker's to say; a type
+// that is a name, or *X, parses as the name and the address it would be.
 //
 // A '.' starting an expression is a literal without its type, .{1, 2} or
 // .[1, 2], which takes the type it meets (parse_literal); or, before a
@@ -387,8 +404,16 @@ static Ast *parse_primary(Parser *p) {
             advance(p);
             return ast_new<Ast>(p->arena, AST_CALLER_LOCATION, t->pos);
         }
+        if (is_directive(t, "type")) {
+            advance(p);
+            return parse_type_value(p, t);
+        }
         error_expected_or_load(p, "an expression");
         return nullptr;
+    case TOKEN_LBRACKET:
+        // No expression starts with a '[', so one here is a type's: [N]T,
+        // []T or [..]T, read from the '[' itself.
+        return parse_type_value(p, t);
     case TOKEN_DOT:
         if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
             Token *dot = advance(p);
@@ -1889,7 +1914,7 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // no '#c_call'", #no_abc "expected '{'". A #load there is "#load can only be
 // at the top level", unless the recovery resumes at it: the '{' is then
 // what's missing (error_expected_or_load). A #run, an #if, a
-// #caller_location, a #complete, a #through or a #tagged there is
+// #caller_location, a #type, a #complete, a #through or a #tagged there is
 // "expected '{'" (on the next line, a #run or an #if is the top-level
 // declaration the recovery resumes at). A string after #foreign's
 // library is the C function's name, when it isn't the procedure's own
@@ -1971,12 +1996,12 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
         // Where the '{' should be: parse_block reports it. A #run or an #if
         // starting the next line is where the recovery resumes, as a #load
-        // is. A #caller_location is a value, as a #run is, a #complete or a
-        // #through is part of a switch, and a #tagged part of a union's
-        // declaration, so none is an unknown directive here either (spec
-        // 2.7).
-        if (is_top_level_directive(t) || is_directive(t, "caller_location") || is_directive(t, "complete") ||
-            is_directive(t, "through") || is_directive(t, "tagged")) {
+        // is. A #caller_location is a value, as a #run is, a #type starts
+        // one, a #complete or a #through is part of a switch, and a #tagged
+        // part of a union's declaration, so none is an unknown directive
+        // here either (spec 2.7).
+        if (is_top_level_directive(t) || is_directive(t, "caller_location") || is_directive(t, "type") ||
+            is_directive(t, "complete") || is_directive(t, "through") || is_directive(t, "tagged")) {
             break;
         }
         bool compiler = is_directive(t, "compiler");

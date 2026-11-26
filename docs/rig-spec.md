@@ -136,7 +136,7 @@ digit      = "0" … "9" .
 
 A name that contains a byte from 0x80 up, such as `função`, is one bad token, reported once at that byte: `non-ASCII characters can only be in strings and comments, for now`.
 
-Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `size_of` (section 5.16), `type_info` (section 5.19), the loop variables `it` and `it_index` (section 6.8), the enum `Operating_System`, the systems a program can be built for, and the constant `OS`, the one it is built for (section 4.9), and the nine procedures built into the language for resizable arrays, `array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset` and `array_free` (section 3.17). How each can be used is described with it.
+Some identifiers are predeclared rather than reserved: the names of the built-in types (section 3), `Type`, the type of types, among them (section 5.20), `size_of` (section 5.16), `type_info` (section 5.19), the loop variables `it` and `it_index` (section 6.8), the enum `Operating_System`, the systems a program can be built for, and the constant `OS`, the one it is built for (section 4.9), and the nine procedures built into the language for resizable arrays, `array_add`, `array_insert`, `array_pop`, `array_remove_ordered`, `array_remove_unordered`, `array_reserve`, `array_resize`, `array_reset` and `array_free` (section 3.17). How each can be used is described with it.
 
 The enum, the constant and the nine procedures are the top level's, visible everywhere, and a top-level declaration can't take one of their names: it is `'OS' is predeclared: it's the system the program is built for`, `'Operating_System' is predeclared: it's the systems a program can be built for` or `'array_add' is predeclared: it's built into the language, for resizable arrays`, at the declaration's name, and the name keeps meaning the enum, the constant or the procedure. The enum's members, `WINDOWS` and `LINUX`, are in no scope, as any enum's (section 3.18): a top-level `WINDOWS` is an ordinary name. A local may hide the enum, the constant or a procedure, as it may any top-level name (section 4.7).
 
@@ -155,7 +155,7 @@ using         while
 
 ### 2.7 Directives
 
-A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has twelve:
+A directive is `#` followed immediately by a name, made of letters, digits and `_` as an identifier is, keywords included (`#if` is a directive). Rig has thirteen:
 
 - `#foreign`, which declares a procedure implemented in C, followed by the library's name and, when the C function's name is not the procedure's own, by that name in a string: `#foreign libc` or `#foreign libc "free"` (section 7.6);
 - `#no_abc`, which turns off bounds checks in one procedure (section 7.7);
@@ -166,11 +166,12 @@ A directive is `#` followed immediately by a name, made of letters, digits and `
 - `#run`, which runs code while compiling (section 7.8);
 - `#if`, which compiles code for one system and not the other, or on any other condition known while compiling (section 4.9);
 - `#caller_location`, a parameter's default value that is the place of each call leaving the parameter out (section 7.2);
+- `#type`, before a type written where a value goes, a procedure type's above all (section 5.20);
 - `#complete`, which makes a switch on an enum name every member's value in its cases (section 6.14);
 - `#through`, the last statement of a switch's case, which goes on into the next case (section 6.14);
 - `#tagged`, after `union` in a declaration, which makes the union a tagged union, followed by its tag's type's name if one is written (section 3.20).
 
-The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. `#caller_location` is an expression, but the only place it may be is a parameter's whole default value, `loc: Source_Code_Location = #caller_location` (section 7.2): anywhere else a value goes, a body, a global's or a constant's value, an argument or part of a larger default, it is `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location`, at its `#`. Where no value goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive`, on the signature's line, as a `#run` there is, or starting the next, where a `#run` would be the next declaration; and at the top level, where a declaration's name should be, `expected identifier, found directive`. `#complete` goes right after a switch's `if`, `if #complete m == {`: after an `if` whose condition isn't followed by `== {` it is `#complete is for a switch, as in if #complete x == { ... }`, at it, and anywhere else a value goes it is `expected an expression, found directive`. `#through;` is only a switch's case's last statement, a case followed by another: anywhere else a statement starts, a block inside a case included, it is `#through can only end a switch's case, as in case 1; a(); #through;`, at it (section 6.14 gives the messages for one inside a case). After a signature, where the body should be, either is `expected '{', found directive`, as a `#run` there is. `#tagged` goes only right after a top-level declaration's `union`, `Shape :: union #tagged {`: after `struct` it is `#tagged is for a union, as in Shape :: union #tagged { ... }`, after an anonymous member's `union` in a struct or a union it is `a tagged union can't be an anonymous member; declare it, as in Shape :: union #tagged { ... }`, each at it (in a tagged union, the `union` itself is `a tagged union's member needs a name, as in circle: Circle;`, at it; section 3.20), anywhere a value goes `expected an expression, found directive`, and after a signature, where the body should be, `expected '{', found directive`, as a `#run` there is. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
+The first four appear after a procedure's signature, and `#c_call` after a procedure type too. `#load` and `#import` are top-level declarations of their own, and anywhere else each is `#load can only be at the top level` (`#import can only be at the top level`), right after a signature on the same line too (on the next line it is the next declaration, section 2.13). `#run` is an expression, `#run e`, anywhere a value goes, or a top-level declaration of its own, `#run e;` or `#run { ... }` (section 7.8). In a body it is an expression only: a statement `#run f();` there is `#run in a body must be a value, as in x := #run f();`. Where neither a value nor a declaration goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive` (one starting the next line is the next declaration, section 9.2). `#if` is a top-level declaration of its own or a statement in a body (section 4.9), and never a value: where one is expected it is `expected an expression, found directive`, and after a signature it is where the body should be, as a `#run` there is, `expected '{', found directive`, one starting the next line being the next declaration. `#caller_location` is an expression, but the only place it may be is a parameter's whole default value, `loc: Source_Code_Location = #caller_location` (section 7.2): anywhere else a value goes, a body, a global's or a constant's value, an argument or part of a larger default, it is `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location`, at its `#`. Where no value goes, it is the error for what was expected there: after a signature, where the body should be, `expected '{', found directive`, on the signature's line, as a `#run` there is, or starting the next, where a `#run` would be the next declaration; and at the top level, where a declaration's name should be, `expected identifier, found directive`. `#type` is an expression, `#type T`, anywhere a value goes, the type `T` written where a value goes (section 5.20); after a signature, where the body should be, it is `expected '{', found directive`, as a `#run` there is. `#complete` goes right after a switch's `if`, `if #complete m == {`: after an `if` whose condition isn't followed by `== {` it is `#complete is for a switch, as in if #complete x == { ... }`, at it, and anywhere else a value goes it is `expected an expression, found directive`. `#through;` is only a switch's case's last statement, a case followed by another: anywhere else a statement starts, a block inside a case included, it is `#through can only end a switch's case, as in case 1; a(); #through;`, at it (section 6.14 gives the messages for one inside a case). After a signature, where the body should be, either is `expected '{', found directive`, as a `#run` there is. `#tagged` goes only right after a top-level declaration's `union`, `Shape :: union #tagged {`: after `struct` it is `#tagged is for a union, as in Shape :: union #tagged { ... }`, after an anonymous member's `union` in a struct or a union it is `a tagged union can't be an anonymous member; declare it, as in Shape :: union #tagged { ... }`, each at it (in a tagged union, the `union` itself is `a tagged union's member needs a name, as in circle: Circle;`, at it; section 3.20), anywhere a value goes `expected an expression, found directive`, and after a signature, where the body should be, `expected '{', found directive`, as a `#run` there is. Any other directive after a signature is `unknown directive '#foo'`. A `#` not followed directly by a letter or `_` is `a directive needs a name right after '#', as in #foreign`.
 
 ### 2.8 Integer literals
 
@@ -380,11 +381,13 @@ Every value and every expression in Rig has a type, known while compiling. The t
 
 `void` is not a type of values: it appears only as what a `*void` points at (section 3.10). Untyped constants have types of their own until they meet one (section 3.12), and so do literals written without their type and members written without their enum.
 
+`Type` is the type of types, of a type written where a value goes, which only a comparison of types takes (section 5.20), while compiling: no value of it exists when the program runs, so no type is written `Type`. A variable's, a parameter's, a field's, a result's, a cast's, `size_of`'s or `type_info`'s type that is, or holds, `Type` is `'Type' only names types while compiling; a *Type_Info describes one at run time`, at the `Type`: a type's description, read at run time, is `type_info`'s (sections 3.16, 5.19).
+
 ```ebnf
 Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | "[" ".." "]" Type | ProcType | identifier .
 ```
 
-A type name is a built-in type's name, a struct's, a union's or an enum's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct, a union or an enum cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written.
+A type name is a built-in type's name, a struct's, a union's or an enum's. A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct, a union or an enum cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written (where a value goes, the variable hides the type, section 5.20).
 
 **Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, the same union declaration or anonymous member (section 3.19), the same enum declaration (two structs, unions or enums declared alike are two types), or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
@@ -1927,7 +1930,7 @@ Each system takes its own branches, and the program prints the same on both: `11
 
 ### 5.1 Operands and places
 
-The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), an enum's member, `Mode.FREE`, or `.FREE` without its enum, which takes the enum it meets (section 3.18), a tagged union's `void` member as a value, `Shape.empty`, or `.empty` where the type is known (section 3.20), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups.
+The simplest expressions are operands: a literal (sections 2.8 to 2.11), the name of a variable, a parameter, a constant or a procedure (whose value is a procedure value, section 3.15), a compound literal (section 5.17), an enum's member, `Mode.FREE`, or `.FREE` without its enum, which takes the enum it meets (section 3.18), a tagged union's `void` member as a value, `Shape.empty`, or `.empty` where the type is known (section 3.20), `size_of(T)` (section 5.16), `type_info(T)` (section 5.19), `context`, the current context (section 7.10), and an expression in parentheses, which only groups. A type is an operand too, where section 5.20 says one may be: `T == int`.
 
 Some expressions denote memory. These are **places**: they can be assigned to (section 6.4) and their address can be taken (section 5.13). The places are:
 
@@ -2024,6 +2027,7 @@ A divisor that is the constant 0 is the compile-time error `division by zero`, a
 - **Strings** are compared with `==` and `!=` only: two strings are equal when their counts are equal and so is each byte. A string meets no other type (`mismatched types 'string' and '*u8' for '=='`) and has no order (`'<' needs numbers, not 'string'`).
 - **Enums** are compared with all six, two values of the same enum type, as numbers of its integer type by its sign; a flags value also with `0` (section 3.18). An enum meets no other type: `mismatched types 'Mode' and 'int' for '=='; cast one of them`. Two enum types don't meet either, and no cast makes one the other: `mismatched types 'Mode' and 'Look' for '=='`. A member without its enum on one side of `==` or `!=` takes the enum of the other side (`m == .FREE`); on both, it has none to take.
 - **Tagged unions** are tested with `==` and `!=` against a member's name only, `s == .empty`, `s != Shape.circle`, either order: whether the union holds that member (section 3.20). With anything else, another tagged union too, it is `'==' compares a tagged union only with a member's name, as in s == .empty`; a tagged union has no order (`'<' needs numbers, not 'Shape'`).
+- **Types** are compared with `==` and `!=` only, when either operand names a type (section 5.20): the other must name one too, and the result is a constant `bool`, true for `==` when the two are the same type (section 3.1). A type and a value are `'==' compares a type only with a type, as in T == int`, at the operator; a type has no order (`<` with a type operand is `'int' is a type, not a value`, as anywhere a value goes).
 
 Nothing else is compared: `'==' needs numbers, bools, pointers, procedure values, strings or enums, not 'Vec2'`.
 
@@ -2054,6 +2058,7 @@ A constant expression is one whose value is known while compiling. The compiler 
 - `size_of(T)` and an array's `.count`;
 - `-`, `~` or `!`, or an arithmetic, bitwise, shift, comparison or logical operator, applied to constant operands (an address, `*x`, is never a constant);
 - a tag test, `s == .empty` or `s != Shape.circle`, whose tagged union is constant data (section 3.20);
+- a comparison of two types, `int == s64` or `[]int != [..]int`, whatever the types (section 5.20);
 - a cast of a constant to a number type, an enum type or `bool`, and a cast of `null` to a pointer type;
 - `#run e` whose value is a number, a `bool` or `null` (section 7.8): a call is never a constant, but a `#run` of one is, since its value is worked out while compiling. One whose value is a procedure value stands for that procedure, as a constant naming it does (section 4.2);
 - a part of constant data (below) that is a number, a `bool` or `null`: a field (`ORIGIN.y`), an element at a constant index (`PRIMES[2]`), a string's byte at a constant index (`NAME[1]`, a `u8`), or a string's `.count` (`NAME.count`, an `int`). A literal's parts fold too: `Vec2.{5, 6}.y` is 6, `"abc"[0]` is 97 and `"abc".count` is 3. A field or element that a literal leaves out is 0, `false` or `null`, and a string it leaves out is the empty string: its `.count` is 0 and its `.data` is `null`.
@@ -2297,6 +2302,66 @@ main :: () {
 ### 5.19 type_info
 
 `type_info(T)` is the address of type `T`'s description (section 3.16), a `*Type_Info`. Its argument is a type, not a value: `type_info(n)`, for a variable `n`, is `'n' is not a type`. `void` is one too: `type_info(void)` describes what a `*void` points at. `type_info` is not a keyword: the name `type_info` followed by `(` is this operator, and anywhere else it is an ordinary name. It is no constant: an address, as a string literal's is, so a constant can't hold one, as it is or cast (`a constant's pointer can only be null or a string literal's address`, section 4.2), but a global's value may be one, the linker writing its address (section 4.3).
+
+### 5.20 Types where a value goes
+
+A type may be written where a value goes, in the places that take one: for now, a comparison of types, `T == int`, a constant that `#if` decides on (section 4.9). A type is written there in one of four forms:
+
+- a type's name, `int`, `Vec2`, written as a name is;
+- `*X`, a pointer type, written as an address is, `X` naming a type;
+- `[N]T`, `[]T` and `[..]T`: no expression starts with `[`, so one there begins a type;
+- `#type T`, any type, Jai's directive, which a procedure type needs: its `(int)` would read as parentheses, so `#type (int) -> int`.
+
+```ebnf
+TypeValue = "[" [ Expression | ".." ] "]" Type | "#type" Type .
+```
+
+Whether a name, or `*X`, names a type is the name's lookup's to say (section 4.7): it does when the name is a struct's, a union's or an enum's, or a built-in type's that no declaration in scope hides. After `int := 5;`, `int == 5` compares the local variable with 5, and `*p == *q`, for pointers `p` and `q`, compares two addresses. A type in parentheses is no type, as a literal's never is (section 5.17): `(int) == int` is `'int' is a type, not a value`. No literal follows a type written so: `[]int.{1}` is `expected a field's name, found '{'`. A type written where a value goes is resolved as one written where a type goes, with its messages (`unknown type 'Nope'`, section 3.1). Its type is `Type`, the type of types, which exists only while compiling (section 3.1).
+
+`==` and `!=` with either operand naming a type compare types (section 5.6). The other operand must name one too, and the result is a constant `bool` (section 5.9), true for `==` when the two are the same type (section 3.1): `int == s64` is false, `float == float32` true, `*Vec2 == *Vec2` true. Being a constant, it may be an `#if`'s condition and a constant's value; nothing of it is left for the program to work out when it runs.
+
+```rig
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+SAME :: int == s64;
+
+main :: () {
+    print("{} {} {}\n", int == int, SAME, float == float32);
+    print("{} {}\n", []Vec2 != [..]Vec2, #type (int) -> int == #type (int) -> int);
+    #if *u8 == *u8 {
+        print("decided while compiling\n");
+    }
+    int := 5;
+    print("{}\n", int == 5);
+}
+```
+
+```text
+true false true
+true true
+decided while compiling
+true
+```
+
+Anywhere else a type is no value. A name used as one is `'Vec2' is a type, not a value`, at the name, `*Vec2` too; any other form is `'[]int' is a type, not a value`, at its start, naming its type as messages name types (`#type (int) -> int` is `'(int) -> int' is a type, not a value`). A type compared with a value is `'==' compares a type only with a type, as in T == int` (`'!='` for `!=`), at the operator, and a type has no order: `int < s64` is `'int' is a type, not a value`.
+
+```rig error
+main :: () {
+    x := []int;
+    y := int == 3;
+}
+```
+
+```text
+example.rig:2:10: error: '[]int' is a type, not a value
+        x := []int;
+             ^
+example.rig:3:14: error: '==' compares a type only with a type, as in T == int
+        y := int == 3;
+                 ^
+```
 
 ## 6. Statements
 
@@ -3856,6 +3921,9 @@ The sections defining each construct give its messages. Some of those met most o
 | `a procedure type can't have default values` | 3.15 |
 | `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location` | 2.7, 7.2 |
 | `'#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'` | 7.2 |
+| `'[]int' is a type, not a value` | 5.20 |
+| `'==' compares a type only with a type, as in T == int` | 5.6, 5.20 |
+| `'Type' only names types while compiling; a *Type_Info describes one at run time` | 3.1 |
 | `can't assign to 'a': it's a parameter` | 6.4 |
 | `'f' must return a value on every path, and this one reaches its end` | 6.11 |
 | `'A' is defined in terms of itself` | 4.8 |
@@ -4474,14 +4542,16 @@ Primary       = identifier
               | "(" Expression ")"
               | "." StructBody
               | "." ArrayBody
-              | "." identifier .
+              | "." identifier
+              | "[" [ Expression | ".." ] "]" Type
+              | "#type" Type .
 
 StructBody    = "{" [ Field { "," Field } [ "," ] ] "}" .
 Field         = [ identifier "=" ] Expression .
 ArrayBody     = "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. An `"=="` followed by `"{"` is never a `BinaryOp`: it ends the `Expression`, however deep, since no `Unary` starts with `"{"`, and only a switch's `IfStmt` reads it (section 6.14). A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named. A `"." identifier` `Primary` is a member without its enum, `.FREE`; after a `Primary`, `"." identifier` is a member access, an enum's member when the `Primary` is the enum's name (sections 3.18, 5.12).
+Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. An `"=="` followed by `"{"` is never a `BinaryOp`: it ends the `Expression`, however deep, since no `Unary` starts with `"{"`, and only a switch's `IfStmt` reads it (section 6.14). A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named. A `"." identifier` `Primary` is a member without its enum, `.FREE`; after a `Primary`, `"." identifier` is a member access, an enum's member when the `Primary` is the enum's name (sections 3.18, 5.12). A `"["` starting a `Primary` begins a type, since no expression starts with one, and so does `#type`: a type written where a value goes, which the checker takes only where section 5.20 says; no `TypedLiteral` follows either, their `Type` not being an identifier.
 
 ## Appendix B: Index of keywords and operators
 
@@ -4518,8 +4588,10 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `#complete` | a switch on an enum naming every member's value | 6.14 |
 | `#through` | the end of a switch's case, going on into the next case | 6.14 |
 | `#tagged` | tagged union | 3.20 |
+| `#type` | a type written where a value goes | 5.20, 2.7 |
 | `size_of` | a type's size | 5.16 |
 | `type_info` | a type's description | 5.19, 3.16 |
+| `Type` | the type of types, while compiling only | 3.1, 5.20 |
 | `it`, `it_index` | a loop's iterator and index; `it`, a tagged union's switch's case's member | 6.7, 6.8, 3.20, 6.14 |
 | `OS` | the system a program is built for, an `Operating_System` | 2.5, 4.9 |
 | `Operating_System` | the predeclared enum of the systems a program can be built for, `WINDOWS` and `LINUX` | 2.5, 4.9, 3.18 |
@@ -4537,7 +4609,7 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `*` (in a type) | pointer type | 3.5 |
 | `.*` | dereference | 5.13 |
 | `.` | member access, an enum's member, compound literal; `.NAME`, a member without its enum | 5.12, 5.17, 3.18 |
-| `[ ]` | indexing, array and view types; `[..]`, resizable array types | 5.11, 3.6, 3.7, 3.17 |
+| `[ ]` | indexing, array and view types; `[..]`, resizable array types; starting an expression, a type where a value goes | 5.11, 3.6, 3.7, 3.17, 5.20 |
 | `( )` | grouping, call, parameter list, procedure type, several results | 5.1, 5.10, 7.1, 3.15 |
 | `{ }` | block, struct fields, enum members, struct literal | 6.1, 4.5, 3.18, 5.17 |
 | `=` | assignment, initialiser, named field, default value | 6.4, 4.3, 5.17, 7.2 |

@@ -73,6 +73,7 @@
 //               | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //               | '.' IDENT                                       (a member without its enum)
+//               | '[' [expression | '..'] ']' type | '#type' type  (a type where a value goes, spec 5.20)
 //   fields      = [field {',' field} [',']]
 //   field       = [IDENT '='] expression
 //   values      = [expression {',' expression} [',']]
@@ -238,6 +239,15 @@
 // call that leaves the parameter out. That is the only place it may be,
 // which the checker says, so the parser takes it wherever an expression
 // starts (`x := #caller_location;` parses).
+//
+// A type may be written where a value goes (spec 5.20), for the places that
+// take one, such as `T == int`: a '[', which starts no expression, begins
+// one, `[]int == [..]int`, and #type, Jai's directive, any type,
+// `#type (int) -> int`, whose (int) would otherwise read as parentheses.
+// Either is an Ast_Type_Value, at its '[' or #type, its type read a level
+// down, as size_of's is. A name and *X parse as a name and an address, as
+// ever: whether they name a type is the checker's to say. No literal
+// follows a type value, `[]int.{1}` being "expected a field's name".
 //
 // A spread, ..e (spec 5.10), passes a view's or an array's elements as a
 // call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -

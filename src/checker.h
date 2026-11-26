@@ -1239,6 +1239,38 @@
 //   is information only: types, layouts, literals, type information and
 //   the debug information are a struct's as ever.
 //
+// Types as values (issue #226, spec 5.20).
+// - A type may be written where a value goes, for the places that take
+//   one: `[N]T`, `[]T` and `[..]T` (a '[' starts no expression) and
+//   `#type T`, any type, are an Ast_Type_Value; a name and `*X` are a name
+//   and an address as written, which name a type when the name's lookup
+//   finds a struct or an enum, or nothing while the name is a built-in
+//   type's (check_expr.cpp's expr_names_type): a local `int := 5;` hides
+//   the type int there, `int == 5` comparing the local. A type in
+//   parentheses is none, as for a literal's type: `(int) == int` is
+//   "'int' is a type, not a value".
+// - Type (type_type, TYPE_TYPE) is the type of types, a built-in type's
+//   name, so no declaration takes it ("'Type' is a built-in type"). It's
+//   written nowhere: a variable, a parameter, a field, a cast, size_of and
+//   type_info of it are "'Type' only names types while compiling; a
+//   *Type_Info describes one at run time", at the type (checker.cpp's
+//   resolve_written).
+// - Only == and != take type values for now (check_type_comparison): with
+//   either operand naming a type, both must ("'==' compares a type only
+//   with a type, as in T == int", at the operator), and the result is a
+//   constant bool, 1 when they're the same type (one Type *): `int == s64`
+//   is false, `float == float32` true, so `#if` decides on one and a
+//   constant may be one. Anywhere else a type is "'Vec2' is a type, not a
+//   value" as ever, at a name (`*Vec2` at Vec2), and "'[]int' is a type,
+//   not a value" at an Ast_Type_Value's start, its type named as messages
+//   name types.
+// - What lowering may rely on: no node of type Type is lowered. A type
+//   value has type Type and is never a constant (Ast.is_constant false),
+//   the type it denotes in Ast.constant's bits (type_value); a comparison
+//   of types is a constant bool, its operand_type Type, lowered as its
+//   constant. A #run's walk takes a node of type Type as a leaf
+//   (check_run.cpp's walk_expression).
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

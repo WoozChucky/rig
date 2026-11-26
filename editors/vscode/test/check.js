@@ -1154,6 +1154,21 @@ check('the grammar colours a switch', () => {
     assertScopes('case .FREE; #through;', { case: 'keyword.control.rig', '#through': 'keyword.other.directive.rig' });
 });
 
+// A type where a value goes (issue #226, spec 5.20): #type is a directive
+// as any, and the type after it is coloured as a cast's is, a procedure
+// type's parameters too; Type, the type of types, is a built-in type's
+// name.
+check('the grammar colours #type and the type after it', () => {
+    assertScopes('f := #type (int) -> int;', {
+        '#type': 'keyword.other.directive.rig',
+        int: [PRIMITIVE, PRIMITIVE],
+        '->': 'keyword.operator.arrow.rig',
+        f: null,
+    });
+    assertScopes('same := #type (Vec2) -> Vec2 == #type (Vec2) -> Vec2;', { Vec2: [TYPE, TYPE, TYPE, TYPE] });
+    assertScopes('x := Type;', { Type: PRIMITIVE });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and

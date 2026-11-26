@@ -7731,3 +7731,23 @@ TEST(a_using_conversion_moves_the_pointer_and_keeps_null) {
     CHECK(!contains(b, "ptradd") && !contains(b, "select"));
     arena_free(&a);
 }
+
+// Issue #226: types as values (spec 5.20).
+
+TEST(a_comparison_of_types_is_a_constant) {
+    // int == s64 is decided while compiling: lowering sees the constant,
+    // never the types, so nothing is compared at run time.
+    Arena a = arena_make();
+    String ir = ir_print(&a, lower_source(&a,
+                                          "f :: () -> bool { return int == s64; }\n"
+                                          "main :: () { }\n"));
+    String f = proc_ir(ir, "f");
+    CHECK(!contains(f, "cmp"));
+    CHECK_STR(f,
+              "proc @f() -> i1 {\n"
+              "b0:\n"
+              "  %0 = const i1 0\n"
+              "  ret %0\n"
+              "}\n");
+    arena_free(&a);
+}

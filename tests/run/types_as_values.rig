@@ -1,0 +1,29 @@
+// Types where a value goes (issue #226, spec 5.20): == and != compare two
+// types while compiling, true when they're the same type. int and s64 are
+// two types, float and float32 one; a type is written as a value by its
+// name, *X, [N]T, []T, [..]T or #type T, a procedure type's above all. The
+// result is a constant bool, so #if decides on one and a constant holds
+// one. A local of a built-in type's name hides the type: int == 5 compares
+// the local. The same compiled, interpreted and in a top-level #run.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+SAME :: int == s64;
+
+#run { print("{}\n", []u8 == []u8); }
+
+main :: () {
+    print("{} {} {}\n", int == int, int == s64, float == float32);
+    print("{} {}\n", []int == []int, [..]int != []int);
+    print("{} {}\n", *Vec2 == *Vec2, [3]Vec2 == [4]Vec2);
+    print("{}\n", #type (int) -> int == #type (int) -> int);
+    #if *u8 == *u8 {
+        print("taken\n");
+    } else {
+        print("not taken\n");
+    }
+    print("{}\n", SAME);
+    int := 5;
+    print("{}\n", int == 5);
+}

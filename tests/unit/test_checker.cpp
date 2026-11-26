@@ -6501,8 +6501,10 @@ TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
               "3:5: 'v' is declared in a top-level #if, so it can't decide another top-level #if\n");
     // A built-in type's name always means the built-in type, even where a
     // branch declares a struct of that name (refused there, if it's checked):
-    // its own messages.
+    // its own messages, a type compared with a value among them (spec 5.20).
     CHECK_STR(decide_source(&a, "#if true { int :: struct { x: int; } }\n#if int == 1 {}", SYSTEM_NONE, nullptr),
+              "2:9: '==' compares a type only with a type, as in T == int\n");
+    CHECK_STR(decide_source(&a, "#if true { int :: struct { x: int; } }\n#if int + 1 == 2 {}", SYSTEM_NONE, nullptr),
               "2:5: 'int' is a type, not a value\n");
     CHECK_STR(decide_source(&a, "#if true { s64 :: struct { x: int; } }\n#if s64() == 1 {}", SYSTEM_NONE, nullptr),
               "2:5: 's64' isn't a procedure, so it can't be called\n");
@@ -12315,5 +12317,89 @@ TEST(value_using_parameters_are_read_only) {
                            "g :: (using e: *Entity) -> s32 #c_call { return cast(s32) id; }\n"
                            "main :: () { }\n"),
               "");
+    arena_free(&a);
+}
+
+// Issue #226: types as values (spec 5.20).
+
+TEST(types_compare_where_they_name_types) {
+    // == and != between two types are constant bools, true when they're
+    // the same type: int and s64 are two, float and float32 one. Each
+    // operand has type Type and keeps the type it denotes. A local of a
+    // built-in type's name hides the type, so int == 5 compares the local,
+    // and *p with p a pointer is an address, not a type: values compared.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: float; }\n"
+                                 "SAME :: int == s64;\n"
+                                 "main :: () {\n"
+                                 "    a := int == int;\n"
+                                 "    b := []int != [..]int;\n"
+                                 "    c := *Vec2 == *Vec2;\n"
+                                 "    d := #type (int) -> int == #type (int) -> int;\n"
+                                 "    e := float == float32;\n"
+                                 "    int := 5;\n"
+                                 "    f := int == 5;\n"
+                                 "    p: *int;\n"
+                                 "    g := *p == *p;\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    const char *constants[] = {"a", "b", "c", "d", "e"};
+    for (const char *name : constants) {
+        Ast_Var *var = (Ast_Var *)find_local(body, name);
+        CHECK(var->type == &type_bool);
+        CHECK(var->value->is_constant);
+        CHECK_EQ(var->value->constant, 1);
+    }
+    Ast_Const *same = (Ast_Const *)top_level_named(tree, "SAME");
+    CHECK(same->type == &type_bool);
+    CHECK(same->is_constant);
+    CHECK_EQ(same->constant, 0);
+    const char *values[] = {"f", "g"};
+    for (const char *name : values) {
+        Ast_Var *var = (Ast_Var *)find_local(body, name);
+        CHECK(var->type == &type_bool);
+        CHECK(!var->value->is_constant);
+    }
+    Ast_Binary *first = (Ast_Binary *)((Ast_Var *)find_local(body, "a"))->value;
+    CHECK(first->left->type == &type_type);
+    CHECK(first->right->type == &type_type);
+    CHECK(!first->left->is_constant);
+    CHECK(type_value(first->left) == &type_int);
+    arena_free(&a);
+}
+
+TEST(types_are_no_values_elsewhere) {
+    // A type where a value goes is refused but for a comparison of types:
+    // a type value at its start, naming its type; a type against a value
+    // at the operator. Type, the type of types, is written nowhere, and no
+    // declaration takes its name.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Type :: struct { }\n"
+                           "main :: () {\n"
+                           "    x := []int;\n"
+                           "    y := #type (int) -> int;\n"
+                           "    z := int == 3;\n"
+                           "    w := 3 != int;\n"
+                           "    v : Type;\n"
+                           "    u := size_of(Type);\n"
+                           "    t := Type;\n"
+                           "}\n"),
+              "1:1: 'Type' is a built-in type\n"
+              "3:10: '[]int' is a type, not a value\n"
+              "4:10: '(int) -> int' is a type, not a value\n"
+              "5:14: '==' compares a type only with a type, as in T == int\n"
+              "6:12: '!=' compares a type only with a type, as in T == int\n"
+              "7:9: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
+              "8:18: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
+              "9:10: 'Type' is a type, not a value\n");
+    // A type in parentheses is none, as a literal's type never is: a value.
+    CHECK_STR(check_source(&a, "main :: () { x := (int) == int; y := ([]int) != []int; }\n"),
+              "1:20: 'int' is a type, not a value\n"
+              "1:38: '[]int' is a type, not a value\n");
     arena_free(&a);
 }

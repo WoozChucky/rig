@@ -10,7 +10,8 @@
 // size_of, type_info, fields (e.x), struct literals (Vec2.{1, 2}),
 // elements (a[i]) and array literals (int.[1, 2]), spreads (..xs, a view
 // passed as a '..T' parameter's arguments), members without their enum
-// (.FREE), and code run while compiling (#run e).
+// (.FREE), code run while compiling (#run e), and types written where a
+// value goes ([]int == [..]int, #type (int) -> int).
 // And structs, unions and enums, declared at the top level, the files a
 // program loads (#load "PATH";), named there too, and the code it runs while
 // compiling for its effect (#run e; and #run { ... }), there too. And code
@@ -87,6 +88,7 @@ enum Ast_Kind : u8 {
     AST_DOT_NAME,      // Ast_Dot_Name: .FREE, a member without its enum (spec 3.18)
     AST_SWITCH,        // Ast_Switch: if x == { case 1; ... }  if #complete m == { ... } (spec 6.14)
     AST_CASE,          // Ast_Case: case 1; statements  case; statements
+    AST_TYPE_VALUE,    // Ast_Type_Value: a type written where a value goes, [N]T []T [..]T #type T (spec 5.20)
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -401,6 +403,17 @@ struct Ast_Size_Of : Ast {
 struct Ast_Type_Info : Ast {
     Ast_Type *type_expr;
     Type *described;  // T, once checked (void too)
+};
+
+// A type written where a value goes (spec 5.20): [N]T, []T or [..]T, read
+// as a type because a '[' starts no expression, or #type T, any type, a
+// procedure type's above all (its (int) would read as parentheses). pos is
+// its '[' or its '#type'. A name and *X stay an Ast_Name and an Ast_Unary:
+// whether they name a type is the checker's to say, by the name's lookup.
+// Only the places that take a type value check one (check_expr.cpp's
+// check_type_value); anywhere else it's "'[]int' is a type, not a value".
+struct Ast_Type_Value : Ast {
+    Ast_Type *type_expr;
 };
 
 // e.x: the field x of the struct e, or of the struct e points at (one
@@ -941,6 +954,9 @@ Token_Kind compound_operator(Token_Kind op);
 // (defer (block ...)) for defer { ... }.
 // A spread prints as (spread E): (call sum (int 0) (spread (name values)))
 // for sum(0, ..values).
+// A type where a value goes prints as (type T), T as a type prints:
+// (type (view int)) for []int, (type (proc-type (params int) (returns
+// int))) for #type (int) -> int.
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
 // a load as (load "world/map.rig"), and a top-level run and #if as above,
 // each on a line of its own among the procedures, in source order. On a
