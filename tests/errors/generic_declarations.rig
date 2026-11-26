@@ -1,0 +1,37 @@
+// Mistakes in generic procedures' declarations (issue #226, spec 7.11),
+// one generic each, said once, at the generic: a type parameter declared
+// twice, used before its $ (in an earlier parameter's type, or inside an
+// array's count before its $, in the same parameter or an earlier one),
+// named as a parameter is, named as a built-in type, and an unknown type,
+// whose generic's two calls say nothing more.
+// Then two generics no call instantiates, whose bodies have their names
+// resolved but aren't type-checked: only the name declared nowhere is
+// said, in each.
+twice :: (a: $T, b: $T) { }
+early :: (a: T, b: $T) { }
+counted :: (x: [size_of(T)]int, y: $T) -> int { return x.count; }
+run_counted :: (x: [#run size_of(T)]int, y: $T) -> int { return x.count; }
+own_count :: (x: [size_of(T)]$T) -> int { return x.count; }
+compared :: (x: [cast(int) (T == int)]int, y: $T) -> int { return x.count; }
+taken :: (T: int, b: $T) { }
+built_in :: (a: $int) { }
+missing :: (a: $T, b: Nope) -> T { return a; }
+
+lib :: (a: $T) -> T {
+    x := a.nothing + "s";
+    y: T = .NONE;
+    return nope(x, y);
+}
+
+lib2 :: (a: $T) {
+    z: Missing;
+    #if T == int { w := 1; } else { w := 2; }
+    v := w;
+}
+
+main :: () {
+    m := missing(1, 2);
+    n := missing(true, 3);
+    a: [8]int;
+    b := counted(a, 1) + run_counted(a, 1) + own_count(a);
+}

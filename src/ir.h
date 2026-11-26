@@ -500,8 +500,8 @@ struct Ir_Proc {
     s32 value_count;           // the values numbered so far
     // For a debugger. A procedure the compiler makes has none of them,
     // but for a run's, run.N (ir_lower_run), which stands for its #run.
-    String source_name;        // its name in the source ("main", "sort"); empty for one the compiler
-                               // makes; "#run" for a run's
+    String source_name;        // its name in the source ("main", "sort"), an instance's max(T = int);
+                               // empty for one the compiler makes; "#run" for a run's
     Position pos;              // its declaration: its name; a run's: the #run
     Position body;             // its body's '{'; a run's: its block's '{', or the #run of an expression
                                // run
@@ -525,14 +525,15 @@ struct Ir_Source {
 
 struct Ir_Module {
     Array<Ir_Global> globals;
-    Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), then
-                             // __rig_bounds_failed when a bounds check calls it,
-                             // __rig_string_equal when == on strings or a switch on a string
-                             // does and __rig_no_case when a #complete switch without `case;`,
-                             // or a tagged union's, does (lower.cpp, in the order first
-                             // needed); a compile-time module lowered on demand has the three
-                             // helpers first, then the runs' procedures and what they reach,
-                             // in the order needed (ir_lower_run)
+    Array<Ir_Proc *> procs;  // the program's, in order (every file's, in load order), but its
+                             // generic procedures, which have no code, then their instances
+                             // (spec 7.11), then __rig_bounds_failed when a bounds check calls
+                             // it, __rig_string_equal when == on strings or a switch on a
+                             // string does and __rig_no_case when a #complete switch without
+                             // `case;`, or a tagged union's, does (lower.cpp, in the order
+                             // first needed); a compile-time module lowered on demand has the
+                             // three helpers first, then the runs' procedures and what they
+                             // reach, in the order needed (ir_lower_run)
     // The source files, for a debugger. A module built by hand has none,
     // and gets no debug information.
     Array<Ir_Source> sources;  // indexed by Position.file

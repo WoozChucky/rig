@@ -1,0 +1,33 @@
+tests/errors/generic_declarations.rig:10:21: error: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)
+    twice :: (a: $T, b: $T) { }
+                        ^
+tests/errors/generic_declarations.rig:11:14: error: 'T' is used before '$T' declares it
+    early :: (a: T, b: $T) { }
+                 ^
+tests/errors/generic_declarations.rig:12:25: error: 'T' is used before '$T' declares it
+    counted :: (x: [size_of(T)]int, y: $T) -> int { return x.count; }
+                            ^
+tests/errors/generic_declarations.rig:13:34: error: 'T' is used before '$T' declares it
+    run_counted :: (x: [#run size_of(T)]int, y: $T) -> int { return x.count; }
+                                     ^
+tests/errors/generic_declarations.rig:14:27: error: 'T' is used before '$T' declares it
+    own_count :: (x: [size_of(T)]$T) -> int { return x.count; }
+                              ^
+tests/errors/generic_declarations.rig:15:29: error: 'T' is used before '$T' declares it
+    compared :: (x: [cast(int) (T == int)]int, y: $T) -> int { return x.count; }
+                                ^
+tests/errors/generic_declarations.rig:16:22: error: 'T' is already declared at tests/errors/generic_declarations.rig:16:11
+    taken :: (T: int, b: $T) { }
+                         ^
+tests/errors/generic_declarations.rig:17:17: error: 'int' is a built-in type
+    built_in :: (a: $int) { }
+                    ^
+tests/errors/generic_declarations.rig:18:23: error: unknown type 'Nope'
+    missing :: (a: $T, b: Nope) -> T { return a; }
+                          ^
+tests/errors/generic_declarations.rig:23:12: error: unknown identifier 'nope'
+        return nope(x, y);
+               ^
+tests/errors/generic_declarations.rig:27:8: error: unknown type 'Missing'
+        z: Missing;
+           ^

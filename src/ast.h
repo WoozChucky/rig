@@ -1,7 +1,8 @@
 // ast.h: the syntax tree, what the parser makes of the tokens.
 //
 // Procedures (with a body, or #foreign), their parameters (the last may be
-// '..T', taking any number of arguments) and types, and global variables
+// '..T', taking any number of arguments) and types, which may declare a
+// generic procedure's type parameters ($T), and global variables
 // and constants; in a body, blocks of statements: local variables and
 // constants (several variables at once, from a call's results),
 // assignments, returns, if, while, for, break, continue, defer and
@@ -10,7 +11,8 @@
 // size_of, type_info, fields (e.x), struct literals (Vec2.{1, 2}),
 // elements (a[i]) and array literals (int.[1, 2]), spreads (..xs, a view
 // passed as a '..T' parameter's arguments), members without their enum
-// (.FREE), and code run while compiling (#run e).
+// (.FREE), code run while compiling (#run e), and types written where a
+// value goes ([]int == [..]int, #type (int) -> int).
 // And structs, unions and enums, declared at the top level, the files a
 // program loads (#load "PATH";), named there too, and the code it runs while
 // compiling for its effect (#run e; and #run { ... }), there too. And code
@@ -87,6 +89,8 @@ enum Ast_Kind : u8 {
     AST_DOT_NAME,      // Ast_Dot_Name: .FREE, a member without its enum (spec 3.18)
     AST_SWITCH,        // Ast_Switch: if x == { case 1; ... }  if #complete m == { ... } (spec 6.14)
     AST_CASE,          // Ast_Case: case 1; statements  case; statements
+    AST_TYPE_VALUE,    // Ast_Type_Value: a type written where a value goes, [N]T []T [..]T #type T (spec 5.20)
+    AST_ALIAS,         // Ast_Alias: a name for a type: an instance's type parameter (spec 7.11)
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -111,7 +115,9 @@ struct Ast {
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
                        // type is signed or untyped, zero-extended when unsigned; a bool's
                        // 1 or 0; a float's, the bits of the double holding its value
-                       // (f64_bits), which for a float32 is a float32's value
+                       // (f64_bits), which for a float32 is a float32's value. A type
+                       // value (of type Type, spec 5.20), never a constant, keeps the
+                       // Type * it denotes here (check_expr.cpp's type_value)
 };
 
 // A type as written. Its node is at its first token: the name, the '*', an
@@ -133,6 +139,8 @@ struct Ast_Type : Ast {
     bool is_c_call;             // AST_TYPE_PROC: marked #c_call, C's calling convention (spec 7.6)
     bool is_variadic;           // AST_TYPE_PROC: its last parameter is written ..T, params' last T (spec 3.15)
     Position dots;              // AST_TYPE_PROC: where that '..' is written
+    bool declares;              // AST_TYPE_NAME written $T in a parameter's type: declares type parameter T
+                                // (spec 7.11), at the '$'
 };
 
 struct Ast_Param : Ast {
@@ -150,6 +158,11 @@ struct Ast_Param : Ast {
                                  // #c_call body outside a push_context can't leave it out (spec 7.6)
     bool is_using;  // using e: *Entity (spec 3.21): the body names e's fields directly; cleared by the
                     // checker when its type is one using doesn't take (check_signature)
+    bool is_baked;  // $T: Type or $N: int (spec 7.11): a type or a constant each call gives, baked into
+                    // the instance, which has no parameter for it (check_generic.cpp's make_instance).
+                    // A $N's Ast.type is its constant's type, the one thing the generic's own check
+                    // writes into it (check_generic_signature), which no instance copies (ast_clone)
+    Position dollar;  // where that '$' is written
 };
 
 struct Ast_Proc;
@@ -173,6 +186,8 @@ enum Ast_Resolve : u8 {
     RESOLVE_DONE,
 };
 
+struct Ast_Instance;
+
 // A procedure: a declaration, or the procedure a top-level #run { ... } runs
 // as (Ast_Run.proc). When the parser gave up on a declaration (a syntax
 // error), it is still kept, as a broken entry: is_broken is set and only
@@ -187,6 +202,14 @@ enum Ast_Resolve : u8 {
 // one refused a '..T' (a foreign, #c_call or #compiler procedure), for one
 // with parameters after its '..T' (a procedure type keeps no defaults,
 // issue #197), and when a parameter's or a result's type was an error.
+//
+// A generic procedure (spec 7.11), one whose parameters' types declare a
+// type parameter ($T) or that bakes a parameter ($T: Type, $N: int), is
+// never type-checked as it's written, nor compiled: its own check covers its
+// signature and the names in its body (check_generic.cpp), and each set of
+// types and constants its calls give makes an instance of it (Ast_Instance),
+// a copy of its tree (ast_clone) with those bound. Its type is null: it's no
+// value.
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;  // the named parameters (with C's '..', its fixed parameters)
@@ -197,6 +220,7 @@ struct Ast_Proc : Ast {
     Array<Ast_Type *> results;  // what it returns: none, one or several (-> int, int)
     Ast_Block *body;            // null for a foreign procedure and a #compiler one
     bool is_foreign;
+    Position foreign_pos;       // where #foreign is written
     bool no_bounds_checks;      // #no_abc: its indexing isn't checked against counts (spec 6.5)
     bool is_c_call;             // #c_call: called the way C calls, so C can call it (spec 7.6); a
                                 // foreign procedure is C's, and isn't marked
@@ -215,9 +239,12 @@ struct Ast_Proc : Ast {
                                 // in a global's value (checker.cpp's resolve_signature)
     Ast_Resolve body_resolve;   // its body's: checked in check()'s pass over the bodies, or earlier,
                                 // by a #run that reaches it (checker.cpp's check_body); `resolve` is
-                                // the signature's
+                                // the signature's. A generic's: its body's names walked
+                                // (check_generic_names), in that pass or by the first instance's
+                                // body checked
     bool had_errors;            // its signature's check or its body's reported an error: a #run reaching
-                                // it doesn't run
+                                // it doesn't run. A generic's own signature check or its body's name
+                                // walk did: it makes no instance
     s32 body_levels;            // the deepest levels of its body, its blocks and the expressions and
                                 // types in them together (MAX_DEPTH, counted as that at most): checked
                                 // where a #run reaches it, what it needs starts a level below
@@ -228,6 +255,47 @@ struct Ast_Proc : Ast {
                                 // 0 without defaults, when a default is past MAX_DEPTH (said there, so
                                 // a chain is said once per 1000 levels), and for a procedure refused
                                 // defaults ('..T', C's '..', #compiler), whose defaults go unchecked
+    bool is_generic;                  // a parameter declares a type parameter, $T, or is baked, $T: Type or
+                                      // $N: int (spec 7.11): set by the parser; cleared on an instance's
+                                      // copy, whose T and N are bound
+    Array<Ast_Instance *> instances;  // a generic's instances, the program's one cache of them, in the
+                                      // order made (check_generic.cpp's find_instance)
+    Ast_Instance *instance;           // an instance's record; null for any other procedure
+};
+
+// A name for a type: an instance's type parameter, T bound to int in
+// max(T = int) (spec 7.11), found between the scopes and the top level
+// while the instance is checked (check_generic.cpp's instance_binding).
+// pos is the $T it binds. Made by the checker, written nowhere.
+struct Ast_Alias : Ast {
+    String name;
+    Type *aliased;  // null when it has no type once every struct is laid out (checker.cpp's
+                    // made_again): a struct in it was found in a circle, or too big
+};
+
+// One instance of a generic procedure (spec 7.11): the generic's tree
+// copied (ast_clone), its type parameters bound, checked and compiled as
+// any procedure. The checker makes one per distinct set of bindings, the
+// first time a call needs it (check_generic.cpp's make_instance), and
+// keeps it in its generic's `instances` and the program's
+// (Ast_File.instances).
+struct Ast_Instance {
+    Ast_Proc *generic;
+    Ast_Proc *proc;            // the copy that is checked and compiled
+    Array<Ast *> bindings;     // an Ast_Alias per type parameter, an Ast_Const per constant one ($N: int,
+                               // its value folded, a string's its data), in the order the generic
+                               // declares them
+    String name;               // max(T = int): its name in the debugger and the interpreter's frames
+    String symbol;             // max$T$int: its procedure's symbol, unique in the program
+    Position called_at;        // the start of the call that made it
+    Ast_Instance *made_in;     // the instance whose signature, defaults or body holds that call; null
+    s32 depth;                 // 1 when made outside any instance, made_in's + 1 otherwise
+    bool had_errors;           // its signature's check reported an error (checker.cpp's
+                               // resolve_signature): every call with its bindings gets no type and
+                               // says nothing more (check_generic.cpp's check_instance)
+    String context;            // the chain an error inside it is followed by (check_generic.cpp's
+                               // instance_context), made the first time it's entered (enter_instance);
+                               // empty until then
 };
 
 // A variable: `x : T = e;`, `x := e;` (its type is e's), `x : T;` (zeroed)
@@ -403,6 +471,17 @@ struct Ast_Type_Info : Ast {
     Type *described;  // T, once checked (void too)
 };
 
+// A type written where a value goes (spec 5.20): [N]T, []T or [..]T, read
+// as a type because a '[' starts no expression, or #type T, any type, a
+// procedure type's above all (its (int) would read as parentheses). pos is
+// its '[' or its '#type'. A name and *X stay an Ast_Name and an Ast_Unary:
+// whether they name a type is the checker's to say, by the name's lookup.
+// Only the places that take a type value check one (check_expr.cpp's
+// check_type_value); anywhere else it's "'[]int' is a type, not a value".
+struct Ast_Type_Value : Ast {
+    Ast_Type *type_expr;
+};
+
 // e.x: the field x of the struct e, or of the struct e points at (one
 // pointer: p.x is p.*.x); or, when e is an enum's name, its member x (spec
 // 3.18). A postfix operator, as .* is. pos is the field's name, where a
@@ -509,7 +588,7 @@ enum Array_Builtin : u8 {
 // A procedure built into the language: predeclared, never declared, written
 // nowhere (0:0). The checker types each call of one from its first
 // argument's element type (checker.h's "Resizable arrays"), since no Rig
-// signature could take every [..]T.
+// signature could take every [..]T before generic procedures (spec 7.11).
 struct Ast_Builtin : Ast {
     String name;
     Array_Builtin builtin;
@@ -520,6 +599,8 @@ struct Ast_Call : Ast {
     Array<Ast *> args;
     Ast_Proc *proc;     // the procedure called, found by the checker: a procedure's name, or a
                         // constant naming one (OP :: add;), is a call of the procedure itself;
+                        // for a generic procedure (spec 7.11), the instance the call makes
+                        // (check_expr.cpp's check_generic_call), never the generic;
                         // a call passes the default values of the parameters it leaves out:
                         // those its arguments don't reach, or, with a '..T' parameter, every
                         // parameter after that one, at every call (spec 5.10)
@@ -538,7 +619,8 @@ struct Ast_Call : Ast {
 struct Ast_Name : Ast {
     String name;
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
-                // or an Ast_Struct or an Ast_Enum, whose name is a type, not a value (reported),
+                // or an Ast_Struct, an Ast_Enum or an instance's Ast_Alias (spec 7.11), whose name
+                // is a type, not a value (reported),
                 // or an Ast_Builtin, which only a call's callee may name (spec 3.17)
     Ast *through;  // a using parameter's field (spec 3.21): the chain it means, e.position, whose innermost
                    // operand is an Ast_Name naming the parameter; decl is the parameter. Null otherwise
@@ -830,6 +912,10 @@ struct Ast_File {
     // or check()'s, so the constants a decider resolved with it and the
     // checker's are of one type. Null until then.
     Ast_Enum *operating_system;
+    // Every instance of a generic procedure (spec 7.11), in the order the
+    // checker made them: check()'s last bodies, and lowering's procedures
+    // after the program's own.
+    Array<Ast_Instance *> instances;
 };
 
 // Whether node e was written in parentheses, (e): they leave no node, but
@@ -872,6 +958,20 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
     node->start = pos;
     return node;
 }
+
+// A deep copy of `node`, any node a procedure holds (the procedure itself,
+// its parameters, its results' types, its body, and every statement,
+// expression and type in them), as the parser made it, in arena a: what a
+// generic procedure's instance is made from (spec 7.11), since the checker
+// writes types and declarations into the tree it checks. Strings and
+// positions are shared, being never written; every child node and every
+// Array is new, the checker appending to some. Every field the checker
+// fills is left zero (types, constants, declarations found, resolve states,
+// an #if's decision, ...), so the copy starts unchecked, as the generic's
+// own nodes, never checked, are. A body's block points at its copied
+// procedure. A node only the top level has (a struct, an enum, a #load) is
+// never in one.
+Ast *ast_clone(Arena *a, Ast *node);
 
 // The binary operator a compound assignment applies: TOKEN_PLUS for
 // TOKEN_PLUS_EQUAL (x += e is x = x + e), and so on.
@@ -941,6 +1041,11 @@ Token_Kind compound_operator(Token_Kind op);
 // (defer (block ...)) for defer { ... }.
 // A spread prints as (spread E): (call sum (int 0) (spread (name values)))
 // for sum(0, ..values).
+// A type name that declares a type parameter prints with its '$':
+// (proc max (params (a $T) (b T)) (returns T) ...), (items (view $T)).
+// A type where a value goes prints as (type T), T as a type prints:
+// (type (view int)) for []int, (type (proc-type (params int) (returns
+// int))) for #type (int) -> int.
 // Globals print as locals do, (var counter int) and (const LIMIT (int 100)),
 // a load as (load "world/map.rig"), and a top-level run and #if as above,
 // each on a line of its own among the procedures, in source order. On a

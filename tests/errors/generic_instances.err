@@ -1,0 +1,9 @@
+tests/errors/generic_instances.rig:10:34: error: '+' needs numbers, not 'bool'
+    inner :: (v: $T) -> T { return v + 1; }
+                                     ^
+    in 'inner' with T = bool, called at tests/errors/generic_instances.rig:11:32
+    in 'outer' with T = bool, called at tests/errors/generic_instances.rig:18:10
+tests/errors/generic_instances.rig:13:45: error: 'Vec2' has no field 'z'
+    sum3 :: (a: $T) -> T { return a.x + a.y + a.z; }
+                                                ^
+    in 'sum3' with T = Vec2, called at tests/errors/generic_instances.rig:15:11

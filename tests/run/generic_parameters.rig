@@ -1,0 +1,93 @@
+// Types and constants as generic parameters (issue #226, spec 7.11): a '$'
+// before a parameter's name bakes it into the instance, a type for
+// $T: Type, called get(w, Position), a constant for $N: int, so [N]T is an
+// array type in the signature and the body. Each set of values makes one
+// instance, ring(N = 3, T = int); the type or constant has no code, so its
+// argument is no argument of the instance, and the others keep their order
+// and run once each: get_then's next() right after w, Position having no
+// code, and fill's make() after a dropped N and T. A constant may be an
+// enum's member or a string, compared by its bytes, a float32 or a bool
+// too: fl's F is its float32 value, yes's B decides an #if per instance. A
+// parameter's type may name N: take's *[N]$T. An instance may give its N on
+// to another generic: outer's ring(N + 1, int). A $T: Type takes any type
+// written as a value: sz's []int and #type (int) -> int. The same compiled,
+// interpreted and in #runs, a constant's and a top-level one.
+#import "Basic";
+
+World :: struct { p: Position; }
+
+Position :: struct { x: int; }
+
+Mode :: enum { A; B; }
+
+get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }
+
+ring :: ($N: int, $T: Type) -> [N]T {
+    r: [N]T;
+    return r;
+}
+
+fill :: ($N: int, $T: Type, value: T) -> [N]T {
+    r: [N]T;
+    for * r { it.* = value; }
+    return r;
+}
+
+flag :: ($M: Mode) -> int { return cast(int) M; }
+
+say :: ($S: string) -> string { return S; }
+
+HI :: "hi";
+
+take :: ($N: int, items: *[N]$T) -> T { return items.*[N - 1]; }
+
+fl :: ($F: float32) -> float32 { return F; }
+
+yes :: ($B: bool) -> int {
+    #if B { return 1; } else { return 0; }
+}
+
+outer :: ($N: int) -> int { return ring(N + 1, int).count; }
+
+sz :: ($T: Type) -> int { return size_of(T); }
+
+get_then :: (w: *World, $T: Type, n: int) -> int { return get(w, T).x + n; }
+
+next :: () -> int {
+    print("next\n");
+    return 2;
+}
+
+make :: () -> int {
+    print("make\n");
+    return 5;
+}
+
+R :: #run ring(2, int).count;
+
+#run {
+    print("{}\n", fill(2, string, "x"));
+    print("{} {} {} {}\n", fl(0.1), yes(true), yes(false), outer(2));
+}
+
+main :: () {
+    world: World;
+    get(*world, Position).x = 7;
+    print("{}\n", get(*world, Position).x);
+    print("{}\n", ring(3, int).count);
+    names := ring(2, string);
+    names[0] = "a";
+    names[1] = "b";
+    print("{}\n", names);
+    print("{}\n", fill(4, int, 5));
+    print("{}\n", fill(3, int, make()));
+    print("{}\n", flag(.B));
+    print("{}\n", say("hi"));
+    print("{} {}\n", say("ho"), say(HI));
+    digits := int.[1, 2, 3];
+    print("{}\n", take(3, *digits));
+    print("{}\n", get_then(*world, Position, next()));
+    print("{}\n", R);
+    print("{} {} {} {}\n", fl(0.1), yes(true), yes(false), outer(2));
+    print("{} {}\n", sz([]int), sz(#type (int) -> int));
+}

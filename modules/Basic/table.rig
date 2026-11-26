@@ -13,9 +13,9 @@
 //
 // There are two kinds, Table for string keys and Int_Table for int keys,
 // each with its procedures named by it, table_ and int_table_, since Rig
-// has no generics or overloading yet. Both lay out their entries the same
-// way and share the probing and the growing, and differ only in the key:
-// how it is hashed, compared, kept and given back.
+// has no generic structs (issue #227) or overloading yet. Both lay out
+// their entries the same way and share the probing and the growing, and
+// differ only in the key: how it is hashed, compared, kept and given back.
 //
 // A table's entries, a power of two of them, are one run of memory from its
 // allocator, the one its init is given, the context's unless another is.

@@ -25,7 +25,11 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...) {
     vsnprintf(text, (size_t)n + 1, fmt, args);
     va_end(args);
 
-    array_add(&d->messages, {pos, {(const u8 *)text, n}, {}});
+    // An error inside an instance of a generic procedure takes the chain
+    // the checker set (spec 7.11), copied: the checker's text may not
+    // outlive it.
+    String context = d->context.count ? string_copy(&d->arena, d->context) : String{};
+    array_add(&d->messages, {pos, {(const u8 *)text, n}, {}, context});
     d->error_count++;
 }
 
@@ -116,8 +120,10 @@ String diag_render(Arena *a, Diagnostics *d) {
             array_add(&out, c < line.count && line.data[c] == '\t' ? (u8)'\t' : (u8)' ');
         }
         append(&out, str("^\n"));
-        // Then its lines, if it has any: a failed #run's frames.
+        // Then its lines, if it has any: a failed #run's frames; then its
+        // instance chain, if it's inside an instance of a generic procedure.
         append(&out, m->lines);
+        append(&out, m->context);
     }
     String result = string_copy(a, {out.data, out.count});
     array_free(&out);

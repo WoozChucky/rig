@@ -3509,6 +3509,48 @@ TEST(broken_struct_in_a_resizable_array_says_nothing_more) {
     arena_free(&a);
 }
 
+TEST(broken_struct_in_an_instance_says_nothing_more) {
+    // So too for an instance of a generic procedure (spec 7.11) a global's
+    // value makes during the declarations, with T a [..]Bad before Bad's
+    // layout fails. Its body waits for check()'s last pass; made again by
+    // then, its parameter's type and its binding have none, so converting x
+    // or a T says nothing.
+    Arena a = arena_make();
+    const char *bodies[] = {"{ k: int = x; return 0; }", "{ y: T; k: int = y; return 0; }"};
+    for (const char *body : bodies) {
+        String text = string_printf(&a,
+                                    "g : [..]Bad;\n"
+                                    "id :: (x: $T) -> int %s\n"
+                                    "h := id(g);\n"
+                                    "Bad :: struct { n: int; again: Bad; }\n"
+                                    "main :: () { }\n",
+                                    body);
+        CHECK_STR(check_with_preload(&a, string_cstr(&a, text)),
+                  "3:6: a global's value must be known while compiling, for now\n"
+                  "4:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n");
+    }
+    arena_free(&a);
+}
+
+TEST(an_instance_made_in_one_whose_binding_lost_its_type) {
+    // An instance whose T lost its type (made again) still has a body that
+    // makes another instance; an error in that one names the chain through
+    // it as the instance was made, T = Bad.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "V := f(cast(*Bad) null);\n"
+                                 "Bad :: struct { a: Bad; }\n"
+                                 "f :: (p: *$T) -> int { return g(1); }\n"
+                                 "g :: (v: $U) -> int { x: int = \"s\"; return v; }\n"
+                                 "main :: () { }\n"),
+              "1:6: a global's value must be known while compiling, for now\n"
+              "2:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "4:32: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "    in 'g' with U = int, called at test.rig:3:31\n"
+              "    in 'f' with T = Bad, called at test.rig:1:6\n");
+    arena_free(&a);
+}
+
 TEST(array_count_rules) {
     // [N]T: N an integer known while compiling, from 0 up; the type at most
     // 2^40 bytes.
@@ -6470,6 +6512,12 @@ TEST(a_top_level_condition_uses_constants_outside_every_if) {
     CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
     CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if size_of(S) == 8 {}", SYSTEM_NONE, &file), "");
     CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    // A comparison of types (spec 5.20), the struct's among them.
+    CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if *S == *S && int != s64 {} else {}", SYSTEM_NONE, &file),
+              "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if S == int {} else {}", SYSTEM_NONE, &file), "");
+    CHECK(file->ifs[0]->taken == (Ast_Block *)file->ifs[0]->else_part);
     arena_free(&a);
 }
 
@@ -6490,6 +6538,11 @@ TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
     CHECK_STR(decide_source(&a, "#if true { T :: struct { x: int; } }\n#if size_of(T) == 8 {}", SYSTEM_NONE, &file),
               "2:13: 'T' is declared in a top-level #if, so it can't decide another top-level #if\n");
     CHECK(file->ifs[1]->failed);
+    // Compared as a type too, where it names none, the decider seeing only
+    // the base (spec 5.20).
+    CHECK_STR(decide_source(&a, "#if true { T :: struct { x: int; } }\n#if T == int {}", SYSTEM_NONE, &file),
+              "2:5: 'T' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[1]->failed);
     // In a branch of a nested #if, or of a later arm, too.
     CHECK_STR(decide_source(&a, "#if false {} else #if true { #if true {} else { DEEP :: 1; } }\n#if DEEP == 1 {}",
                             SYSTEM_NONE, nullptr),
@@ -6501,8 +6554,10 @@ TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
               "3:5: 'v' is declared in a top-level #if, so it can't decide another top-level #if\n");
     // A built-in type's name always means the built-in type, even where a
     // branch declares a struct of that name (refused there, if it's checked):
-    // its own messages.
+    // its own messages, a type compared with a value among them (spec 5.20).
     CHECK_STR(decide_source(&a, "#if true { int :: struct { x: int; } }\n#if int == 1 {}", SYSTEM_NONE, nullptr),
+              "2:9: '==' compares a type only with a type, as in T == int\n");
+    CHECK_STR(decide_source(&a, "#if true { int :: struct { x: int; } }\n#if int + 1 == 2 {}", SYSTEM_NONE, nullptr),
               "2:5: 'int' is a type, not a value\n");
     CHECK_STR(decide_source(&a, "#if true { s64 :: struct { x: int; } }\n#if s64() == 1 {}", SYSTEM_NONE, nullptr),
               "2:5: 's64' isn't a procedure, so it can't be called\n");
@@ -12315,5 +12370,1726 @@ TEST(value_using_parameters_are_read_only) {
                            "g :: (using e: *Entity) -> s32 #c_call { return cast(s32) id; }\n"
                            "main :: () { }\n"),
               "");
+    arena_free(&a);
+}
+
+// Issue #226: types as values (spec 5.20).
+
+TEST(types_compare_where_they_name_types) {
+    // == and != between two types are constant bools, true for == when
+    // they're the same type and for != when they aren't: int and s64 are
+    // two, float and float32 one, *Vec2 and Vec2 two. An enum's and a
+    // union's names name types as a struct's does. Each operand has type
+    // Type and keeps the type it denotes. A local of a built-in type's name
+    // hides the type, so int == 5 compares the local, and *p with p a
+    // pointer is an address, not a type: values compared.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: float; }\n"
+                                 "Mode :: enum { A; }\n"
+                                 "Value :: union { i: int; f: float; }\n"
+                                 "SAME :: int == s64;\n"
+                                 "main :: () {\n"
+                                 "    a := int == int;\n"
+                                 "    b := []int != [..]int;\n"
+                                 "    c := *Vec2 == *Vec2;\n"
+                                 "    d := #type (int) -> int == #type (int) -> int;\n"
+                                 "    e := float == float32;\n"
+                                 "    m := Mode == Mode;\n"
+                                 "    n := Mode != int;\n"
+                                 "    o := Value == Value;\n"
+                                 "    h := int != int;\n"
+                                 "    i := *Vec2 == Vec2;\n"
+                                 "    int := 5;\n"
+                                 "    f := int == 5;\n"
+                                 "    p: *int;\n"
+                                 "    g := *p == *p;\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    const char *constants[] = {"a", "b", "c", "d", "e", "m", "n", "o", "h", "i"};
+    for (s64 k = 0; k < 10; k++) {
+        Ast_Var *var = (Ast_Var *)find_local(body, constants[k]);
+        CHECK(var->type == &type_bool);
+        CHECK(var->value->is_constant);
+        CHECK_EQ(var->value->constant, k < 8 ? 1 : 0);  // h and i false
+    }
+    Ast_Const *same = (Ast_Const *)top_level_named(tree, "SAME");
+    CHECK(same->type == &type_bool);
+    CHECK(same->is_constant);
+    CHECK_EQ(same->constant, 0);
+    const char *values[] = {"f", "g"};
+    for (const char *name : values) {
+        Ast_Var *var = (Ast_Var *)find_local(body, name);
+        CHECK(var->type == &type_bool);
+        CHECK(!var->value->is_constant);
+    }
+    Ast_Binary *first = (Ast_Binary *)((Ast_Var *)find_local(body, "a"))->value;
+    CHECK(first->left->type == &type_type);
+    CHECK(first->right->type == &type_type);
+    CHECK(!first->left->is_constant);
+    CHECK(type_value(first->left) == &type_int);
+    // *Vec2 is a pointer type, not Vec2's.
+    Ast_Binary *pointers = (Ast_Binary *)((Ast_Var *)find_local(body, "c"))->value;
+    Type *pointer = type_value(pointers->left);
+    CHECK(pointer->kind == TYPE_POINTER);
+    CHECK(pointer->pointee == ((Ast_Struct *)top_level_named(tree, "Vec2"))->declared);
+    arena_free(&a);
+}
+
+TEST(types_compare_before_their_layout) {
+    // A comparison of types needs only which types they are, not a struct's
+    // layout, so one in a struct's own array count, directly or through a
+    // constant, is no circle: Node holds a [2]int.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "G :: Node == Node;\n"
+                                 "Node :: struct { a: [cast(int) G + 1]int; }\n"
+                                 "Leaf :: struct { a: [cast(int) (Leaf == Leaf) + 1]int; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Node"))->declared->size, 16);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Leaf"))->declared->size, 16);
+    // An array's elements are still laid out, so an array of Node in Node's
+    // own count is the circle it is anywhere.
+    CHECK_STR(check_source(&a,
+                           "Node :: struct { a: [cast(int) ([2]Node == [2]Node) + 1]int; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n");
+    arena_free(&a);
+}
+
+TEST(types_are_no_values_elsewhere) {
+    // A type where a value goes is refused but for a comparison of types:
+    // a type value at its start, naming its type; a type against a value
+    // at the operator. A type has no order, so '<' and the others say each
+    // type operand's own message. Type, the type of types, is written
+    // nowhere, a type value of it or holding it included, and no struct,
+    // union or enum takes its name.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Type :: struct { }\n"
+                           "main :: () {\n"
+                           "    x := []int;\n"
+                           "    y := #type (int) -> int;\n"
+                           "    z := int == 3;\n"
+                           "    w := 3 != int;\n"
+                           "    v : Type;\n"
+                           "    u := size_of(Type);\n"
+                           "    t := Type;\n"
+                           "    a := int < s64;\n"
+                           "    b := []int >= [2]int;\n"
+                           "    i := Type == int;\n"
+                           "    j := #type []Type;\n"
+                           "}\n"),
+              "1:1: 'Type' is a built-in type\n"
+              "3:10: '[]int' is a type, not a value\n"
+              "4:10: '(int) -> int' is a type, not a value\n"
+              "5:14: '==' compares a type only with a type, as in T == int\n"
+              "6:12: '!=' compares a type only with a type, as in T == int\n"
+              "7:9: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
+              "8:18: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
+              "9:10: 'Type' is a type, not a value\n"
+              "10:10: 'int' is a type, not a value\n"
+              "10:16: 's64' is a type, not a value\n"
+              "11:10: '[]int' is a type, not a value\n"
+              "11:19: '[2]int' is a type, not a value\n"
+              "12:10: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
+              "13:18: 'Type' only names types while compiling; a *Type_Info describes one at run time\n");
+    // A type in parentheses is none, as a literal's type never is: a value.
+    CHECK_STR(check_source(&a, "main :: () { x := (int) == int; y := ([]int) != []int; }\n"),
+              "1:20: 'int' is a type, not a value\n"
+              "1:38: '[]int' is a type, not a value\n");
+    // A mistake in a type value is a written type's, said instead; a value
+    // operand's own mistake is said, and the comparison then says nothing;
+    // a name declared nowhere is no type, so an unknown identifier. void is
+    // no type value, as it's no variable's type.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := []Nope;\n"
+                           "    b := []Nope == int;\n"
+                           "    c := int == nope;\n"
+                           "    d := Nope == int;\n"
+                           "    e := void == int;\n"
+                           "    f := #type void;\n"
+                           "}\n"),
+              "2:12: unknown type 'Nope'\n"
+              "3:12: unknown type 'Nope'\n"
+              "4:17: unknown identifier 'nope'\n"
+              "5:10: unknown identifier 'Nope'\n"
+              "6:10: 'void' is only a pointer's target, as in *void\n"
+              "7:16: 'void' is only a pointer's target, as in *void\n");
+    arena_free(&a);
+}
+
+// Issue #226: generic procedures (spec 7.11).
+
+// Every node of the tree at n, in order, into *nodes, and the buffer of
+// every Array the tree holds that has one into *buffers: a walk of each
+// field ast_clone copies.
+static void tree_parts(Ast *n, Array<Ast *> *nodes, Array<const void *> *buffers);
+
+template<typename T>
+static void tree_list(Array<T *> list, Array<Ast *> *nodes, Array<const void *> *buffers) {
+    if (list.data) array_add(buffers, (const void *)list.data);
+    for (s64 i = 0; i < list.count; i++) tree_parts(list[i], nodes, buffers);
+}
+
+static void tree_parts(Ast *n, Array<Ast *> *nodes, Array<const void *> *buffers) {
+    if (!n) return;
+    array_add(nodes, n);
+    switch (n->kind) {
+    case AST_PROC: {
+        Ast_Proc *p = (Ast_Proc *)n;
+        tree_list(p->params, nodes, buffers);
+        tree_list(p->results, nodes, buffers);
+        tree_parts(p->body, nodes, buffers);
+        break;
+    }
+    case AST_PARAM:
+        tree_parts(((Ast_Param *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Param *)n)->default_value, nodes, buffers);
+        break;
+    case AST_TYPE_NAME:
+    case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
+    case AST_TYPE_PROC: {
+        Ast_Type *t = (Ast_Type *)n;
+        tree_parts(t->pointee, nodes, buffers);
+        tree_parts(t->count, nodes, buffers);
+        tree_parts(t->element, nodes, buffers);
+        tree_list(t->params, nodes, buffers);
+        tree_list(t->results, nodes, buffers);
+        break;
+    }
+    case AST_BLOCK: tree_list(((Ast_Block *)n)->statements, nodes, buffers); break;
+    case AST_CALL:
+        tree_parts(((Ast_Call *)n)->callee, nodes, buffers);
+        tree_list(((Ast_Call *)n)->args, nodes, buffers);
+        break;
+    case AST_VAR:
+        tree_parts(((Ast_Var *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Var *)n)->value, nodes, buffers);
+        break;
+    case AST_CONST: tree_parts(((Ast_Const *)n)->value, nodes, buffers); break;
+    case AST_ASSIGN:
+        tree_list(((Ast_Assign *)n)->targets, nodes, buffers);
+        tree_parts(((Ast_Assign *)n)->value, nodes, buffers);
+        break;
+    case AST_RETURN: tree_list(((Ast_Return *)n)->values, nodes, buffers); break;
+    case AST_UNARY: tree_parts(((Ast_Unary *)n)->operand, nodes, buffers); break;
+    case AST_SPREAD: tree_parts(((Ast_Spread *)n)->operand, nodes, buffers); break;
+    case AST_DEREF: tree_parts(((Ast_Deref *)n)->operand, nodes, buffers); break;
+    case AST_BINARY:
+        tree_parts(((Ast_Binary *)n)->left, nodes, buffers);
+        tree_parts(((Ast_Binary *)n)->right, nodes, buffers);
+        break;
+    case AST_IF:
+        tree_parts(((Ast_If *)n)->condition, nodes, buffers);
+        tree_parts(((Ast_If *)n)->then_block, nodes, buffers);
+        tree_parts(((Ast_If *)n)->else_part, nodes, buffers);
+        break;
+    case AST_IF_DIRECTIVE:
+        tree_parts(((Ast_If_Directive *)n)->condition, nodes, buffers);
+        tree_parts(((Ast_If_Directive *)n)->then_block, nodes, buffers);
+        tree_parts(((Ast_If_Directive *)n)->else_part, nodes, buffers);
+        break;
+    case AST_WHILE:
+        tree_parts(((Ast_While *)n)->condition, nodes, buffers);
+        tree_parts(((Ast_While *)n)->body, nodes, buffers);
+        break;
+    case AST_FOR: {
+        Ast_For *f = (Ast_For *)n;
+        tree_parts(f->iterator, nodes, buffers);
+        tree_parts(f->index, nodes, buffers);
+        tree_parts(f->first, nodes, buffers);
+        tree_parts(f->last, nodes, buffers);
+        tree_parts(f->sequence, nodes, buffers);
+        tree_parts(f->body, nodes, buffers);
+        break;
+    }
+    case AST_CAST:
+        tree_parts(((Ast_Cast *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Cast *)n)->value, nodes, buffers);
+        break;
+    case AST_MULTI_VAR:
+        tree_list(((Ast_Multi_Var *)n)->vars, nodes, buffers);
+        tree_parts(((Ast_Multi_Var *)n)->value, nodes, buffers);
+        break;
+    case AST_SIZE_OF: tree_parts(((Ast_Size_Of *)n)->type_expr, nodes, buffers); break;
+    case AST_TYPE_INFO: tree_parts(((Ast_Type_Info *)n)->type_expr, nodes, buffers); break;
+    case AST_TYPE_VALUE: tree_parts(((Ast_Type_Value *)n)->type_expr, nodes, buffers); break;
+    case AST_MEMBER: tree_parts(((Ast_Member *)n)->operand, nodes, buffers); break;
+    case AST_LITERAL: {
+        Ast_Literal *l = (Ast_Literal *)n;
+        tree_parts(l->type_expr, nodes, buffers);
+        if (l->names.data) array_add(buffers, (const void *)l->names.data);
+        if (l->name_positions.data) array_add(buffers, (const void *)l->name_positions.data);
+        tree_list(l->values, nodes, buffers);
+        break;
+    }
+    case AST_INDEX:
+        tree_parts(((Ast_Index *)n)->operand, nodes, buffers);
+        tree_parts(((Ast_Index *)n)->index, nodes, buffers);
+        break;
+    case AST_RUN: tree_parts(((Ast_Run *)n)->operand, nodes, buffers); break;
+    case AST_DEFER: tree_parts(((Ast_Defer *)n)->statement, nodes, buffers); break;
+    case AST_PUSH_CONTEXT:
+        tree_parts(((Ast_Push_Context *)n)->context, nodes, buffers);
+        tree_parts(((Ast_Push_Context *)n)->block, nodes, buffers);
+        break;
+    case AST_SWITCH:
+        tree_parts(((Ast_Switch *)n)->value, nodes, buffers);
+        tree_list(((Ast_Switch *)n)->cases, nodes, buffers);
+        break;
+    case AST_CASE:
+        tree_parts(((Ast_Case *)n)->value, nodes, buffers);
+        tree_parts(((Ast_Case *)n)->block, nodes, buffers);
+        break;
+    default: break;  // a leaf
+    }
+}
+
+// Whether positions p and q are the same place.
+static bool same_place(Position p, Position q) {
+    return p.file == q.file && p.line == q.line && p.col == q.col;
+}
+
+// Whether node `to`, a copy of `from`, keeps every place the parser gave
+// it, and the levels it counted: its pos and start, and what its kind keeps
+// besides, a directive's place, a '..', an '=', an '==', a '}', a
+// '#through', a literal's field names and theirs, a .NAME's name. A message
+// about an instance's code points where one about the generic's would.
+static bool same_places(Ast *to, Ast *from) {
+    if (!same_place(to->pos, from->pos) || !same_place(to->start, from->start)) return false;
+    switch (from->kind) {
+    case AST_PROC: {
+        Ast_Proc *t = (Ast_Proc *)to, *f = (Ast_Proc *)from;
+        return same_place(t->c_dots_pos, f->c_dots_pos) && same_place(t->foreign_pos, f->foreign_pos) &&
+               same_place(t->c_call_pos, f->c_call_pos) && same_place(t->compiler_pos, f->compiler_pos) &&
+               same_place(t->library_pos, f->library_pos) && same_place(t->c_name_pos, f->c_name_pos) &&
+               t->body_levels == f->body_levels;
+    }
+    case AST_PARAM: {
+        Ast_Param *t = (Ast_Param *)to, *f = (Ast_Param *)from;
+        return same_place(t->dots, f->dots) && same_place(t->equals, f->equals) &&
+               same_place(t->dollar, f->dollar) && t->default_levels == f->default_levels;
+    }
+    case AST_TYPE_NAME:
+    case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
+    case AST_TYPE_PROC: {
+        Ast_Type *t = (Ast_Type *)to, *f = (Ast_Type *)from;
+        return same_place(t->dots, f->dots) && t->levels == f->levels;
+    }
+    case AST_BLOCK: return same_place(((Ast_Block *)to)->end, ((Ast_Block *)from)->end);
+    case AST_BINARY: return same_place(((Ast_Binary *)to)->end, ((Ast_Binary *)from)->end);
+    case AST_VAR: return ((Ast_Var *)to)->levels == ((Ast_Var *)from)->levels;
+    case AST_CONST: return ((Ast_Const *)to)->levels == ((Ast_Const *)from)->levels;
+    case AST_FOR: return same_place(((Ast_For *)to)->dots, ((Ast_For *)from)->dots);
+    case AST_DOT_NAME: return same_place(((Ast_Dot_Name *)to)->name_pos, ((Ast_Dot_Name *)from)->name_pos);
+    case AST_LITERAL: {
+        Ast_Literal *t = (Ast_Literal *)to, *f = (Ast_Literal *)from;
+        if (t->names.count != f->names.count || t->name_positions.count != f->name_positions.count) return false;
+        for (s64 i = 0; i < f->names.count; i++) {
+            if (!string_eq(t->names[i], f->names[i])) return false;
+        }
+        for (s64 i = 0; i < f->name_positions.count; i++) {
+            if (!same_place(t->name_positions[i], f->name_positions[i])) return false;
+        }
+        return true;
+    }
+    case AST_SWITCH: {
+        Ast_Switch *t = (Ast_Switch *)to, *f = (Ast_Switch *)from;
+        return same_place(t->equals, f->equals) && same_place(t->complete, f->complete) &&
+               same_place(t->end, f->end);
+    }
+    case AST_CASE: return same_place(((Ast_Case *)to)->through, ((Ast_Case *)from)->through);
+    default: return true;
+    }
+}
+
+TEST(clones_are_deep_and_unchecked) {
+    // An instance is a copy of its generic's tree, as the parser made it:
+    // every node and every Array new, nothing the checker writes copied,
+    // its body's block pointing at the copy. A procedure holding every
+    // statement and every expression, and a generic one holding the kinds
+    // of parameter and type it doesn't (using, '..int', $T, $N: int, a
+    // procedure type with '..' and one #c_call, #no_abc, a #complete
+    // switch), are each copied before the program is checked: the copy
+    // dumps as the original does, shares no node and no Array's buffer with
+    // it, keeps every place the parser gave each node (same_places), and
+    // checking the program, the original among it, leaves the copy
+    // unchecked. A for loop's iterators, which the dump doesn't mark, stay
+    // read-only.
+    Arena a = arena_make();
+    const char *text =
+        "Vec2 :: struct { x: float; y: float; }\n"
+        "Pair :: struct { a: int; b: int; }\n"
+        "parts :: (using pair: Pair, v: $T, $N: int, f: (int, ..int) -> int, g: () #c_call, rest: ..int) -> int "
+        "#no_abc {\n"
+        "    m: Mode = .A;\n"
+        "    if #complete m == { case .A; case .B; }\n"
+        "    return a + f(1, 2, 3) + rest[0];\n"
+        "}\n"
+        "Mode :: enum { A; B; }\n"
+        "Shape :: union #tagged { circle: float; empty: void; }\n"
+        "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+        "sum :: (values: ..int) -> int { t := 0; for values { t += it; } return t; }\n"
+        "SEVEN :: 7;\n"
+        "everything :: (n: int, s: Shape, loc: Source_Code_Location = #caller_location) -> int {\n"
+        "    x: int = 1;\n"
+        "    y: int = ---;\n"
+        "    K :: 3;\n"
+        "    q, r := divmod(n, 2);\n"
+        "    x = 2;\n"
+        "    x += 1;\n"
+        "    q, r = divmod(x, 3);\n"
+        "    { z := x; }\n"
+        "    if x > 1 { x = 1; } else if x < 0 { x = 0; } else { x = 2; }\n"
+        "    if x == {\n"
+        "        case 1; x = 2; #through;\n"
+        "        case 2; x = 3;\n"
+        "        case; x = 4;\n"
+        "    }\n"
+        "    if s == {\n"
+        "        case .circle; radius := it;\n"
+        "        case .empty;\n"
+        "    }\n"
+        "    while x < 10 { x += 1; if x == 5 { break; } continue; }\n"
+        "    a := int.[1, 2, 3];\n"
+        "    for * a { it.* += 1; }\n"
+        "    for i: 0..2 { x += i; }\n"
+        "    defer x = 0;\n"
+        "    push_context context { x += 1; }\n"
+        "    #if OS == .WINDOWS { w := 1; } else { w := 2; }\n"
+        "    v := Vec2.{x = 1, y = 2.5};\n"
+        "    u: Vec2 = .{1, 2};\n"
+        "    b: [2]int = .[1, 2];\n"
+        "    p := *v;\n"
+        "    m: Mode = .A;\n"
+        "    e := Mode.B;\n"
+        "    f := -x + ~x * (x << 1);\n"
+        "    g := !true && false;\n"
+        "    h := cast(u8) x;\n"
+        "    k := cast,trunc(u8) x;\n"
+        "    l := p.*.x;\n"
+        "    o := size_of(Vec2);\n"
+        "    t := type_info(Vec2);\n"
+        "    c := \"text\";\n"
+        "    nothing: *int = null;\n"
+        "    same := []int == [..]int;\n"
+        "    total := sum(..a);\n"
+        "    ran := #run sum(1, 2);\n"
+        "    return a[0] + q + r + K + total + ran + SEVEN;\n"
+        "}\n"
+        "main :: () { everything(1, Shape.empty); }\n";
+    Diagnostics d = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"), str(text));
+    CHECK_STR(file->load_failure, "");
+    const char *names[] = {"everything", "parts"};
+    Ast_Proc *originals[2], *copies[2];
+    Array<Ast *> copy_nodes[2] = {};
+    for (s64 n = 0; n < 2; n++) {
+        Ast_Proc *original = (Ast_Proc *)top_level_named(file, names[n]);
+        Ast_Proc *copy = (Ast_Proc *)ast_clone(&a, original);
+        originals[n] = original;
+        copies[n] = copy;
+        CHECK_STR(ast_dump_node(&a, copy), string_cstr(&a, ast_dump_node(&a, original)));
+        CHECK(copy->body->proc == copy);
+        CHECK(original->body->proc == original);
+        Array<Ast *> original_nodes = {};
+        Array<const void *> original_buffers = {}, copy_buffers = {};
+        tree_parts(original, &original_nodes, &original_buffers);
+        tree_parts(copy, &copy_nodes[n], &copy_buffers);
+        CHECK_EQ(copy_nodes[n].count, original_nodes.count);
+        CHECK_EQ(copy_buffers.count, original_buffers.count);
+        CHECK(original_nodes.count > (n == 0 ? 200 : 30));
+        for (s64 i = 0; i < copy_nodes[n].count && i < original_nodes.count; i++) {
+            Ast *node = copy_nodes[n][i];
+            CHECK_EQ(node->kind, original_nodes[i]->kind);
+            if (node->kind == original_nodes[i]->kind) CHECK(same_places(node, original_nodes[i]));
+            for (s64 k = 0; k < original_nodes.count; k++) CHECK(node != original_nodes[k]);
+        }
+        for (s64 i = 0; i < copy_buffers.count; i++) {
+            for (s64 k = 0; k < original_buffers.count; k++) CHECK(copy_buffers[i] != original_buffers[k]);
+        }
+        array_free(&original_nodes);
+        array_free(&original_buffers);
+        array_free(&copy_buffers);
+    }
+    const char *iterators[] = {"it", "it_index", "i"};
+    for (const char *name : iterators) {
+        Ast *iterator = find_local(copies[0]->body, name);
+        CHECK(iterator && iterator->kind == AST_VAR && ((Ast_Var *)iterator)->is_iterator);
+    }
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK(originals[0]->type != nullptr);
+    CHECK(((Ast_Var *)originals[0]->body->statements[0])->type == &type_int);
+    for (s64 n = 0; n < 2; n++) {
+        for (s64 i = 0; i < copy_nodes[n].count; i++) CHECK(copy_nodes[n][i]->type == nullptr);
+        CHECK(copies[n]->resolve == RESOLVE_NOT_YET && copies[n]->body_resolve == RESOLVE_NOT_YET);
+        array_free(&copy_nodes[n]);
+    }
+    diag_free(&d);
+    arena_free(&a);
+}
+
+// The source every test of instances starts with.
+static const char *GENERIC_MAX = "Vec2 :: struct { x: float; y: float; }\n"
+                                 "max :: (a: $T, b: T) -> T { if a > b { return a; } return b; }\n";
+
+// GENERIC_MAX, then `rest`, in the arena.
+static const char *with_generic_max(Arena *a, const char *rest) {
+    return string_cstr(a, string_printf(a, "%s%s", GENERIC_MAX, rest));
+}
+
+TEST(instances_are_one_per_set_of_types) {
+    // Each set of types a call infers makes one instance, which every call
+    // with that set shares: int and s64 are two types, float and float32
+    // one. Each instance is named by its bindings, and the call's
+    // procedure is it.
+    Arena a = arena_make();
+    const char *calls = "main :: () {\n"
+                        "    i := max(1, 2);\n"
+                        "    j := max(i, 3);\n"
+                        "    f := max(1.5, 2.5);\n"
+                        "    k := max(cast(s32) 1, 2);\n"
+                        "    l := max(cast(s64) 1, 2);\n"
+                        "    g := max(cast(float) 1, 2);\n"
+                        "}\n";
+    Checked c = check_src(&a, with_generic_max(&a, calls));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *names[] = {"i", "j", "f", "k", "l", "g"};
+    const char *types[] = {"int", "int", "float32", "s32", "s64", "float32"};
+    for (s64 k = 0; k < 6; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Proc *max = (Ast_Proc *)global_named(&c, "max");
+    CHECK_EQ(max->instances.count, 4);
+    if (max->instances.count == 4) {
+        CHECK_STR(max->instances[0]->name, "max(T = int)");
+        CHECK_STR(max->instances[1]->name, "max(T = float32)");
+        CHECK_STR(max->instances[2]->name, "max(T = s32)");
+        CHECK_STR(max->instances[3]->name, "max(T = s64)");
+        CHECK_STR(max->instances[0]->symbol, "max$T$int");
+    }
+    Ast_Call *i = (Ast_Call *)((Ast_Var *)local_named(&c, "i"))->value;
+    Ast_Call *j = (Ast_Call *)((Ast_Var *)local_named(&c, "j"))->value;
+    CHECK(i->proc == j->proc);
+    CHECK(i->proc && i->proc->instance && i->proc->instance->generic == max);
+    CHECK(i->proc && !i->proc->is_generic);
+    CHECK_EQ(c.file->instances.count, 4);
+    token_list_free(c.list);
+
+    // A global's #run, another procedure's call and another instance's
+    // body share them too: they add none of max's, the only new instance
+    // being outer's own.
+    String more = string_printf(&a,
+                                "G :: #run max(1, 2);\n"
+                                "outer :: (x: $T) -> T { return max(x, x); }\n"
+                                "other :: () -> int { return max(5, 6) + outer(7); }\n"
+                                "%s",
+                                calls);
+    c = check_src(&a, with_generic_max(&a, string_cstr(&a, more)));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "max"))->instances.count, 4);
+    CHECK_EQ(c.file->instances.count, 5);
+    Ast_Proc *outer = (Ast_Proc *)global_named(&c, "outer");
+    CHECK_EQ(outer->instances.count, 1);
+    if (outer->instances.count == 1) {
+        Ast_Instance *inst = outer->instances[0];
+        CHECK_STR(inst->name, "outer(T = int)");
+        CHECK(!inst->made_in);
+        CHECK_EQ(inst->depth, 1);
+    }
+    CHECK_EQ(global_named(&c, "G")->constant, 2);
+    token_list_free(c.list);
+
+    // An instance first made in another instance's body records it, one
+    // level deeper.
+    c = check_src(&a,
+                  "wrap :: (x: $T) -> T { return twice(x); }\n"
+                  "twice :: (y: $U) -> U { return y + y; }\n"
+                  "main :: () { a := wrap(1); }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(c.file->instances.count, 2);
+    if (c.file->instances.count == 2) {
+        Ast_Instance *wrap = c.file->instances[0];
+        Ast_Instance *twice = c.file->instances[1];
+        CHECK_STR(twice->name, "twice(U = int)");
+        CHECK(twice->made_in == wrap);
+        CHECK_EQ(twice->depth, 2);
+        CHECK_EQ(twice->called_at.line, 1);
+        CHECK_EQ(twice->called_at.col, 31);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(untyped_arguments_take_the_type_another_fixes) {
+    // The first typed argument fixes T, an untyped constant then taking it,
+    // and a later typed argument converting to it, an s32 widening to the
+    // int it fixes; with none typed, they meet at a type whose default T is
+    // (an untyped float if either is one). A literal with no type of its own
+    // takes T where another argument fixes it.
+    Arena a = arena_make();
+    Checked c = check_src(&a, with_generic_max(&a,
+                                               "pick :: (a: $T, b: T) -> T { return a; }\n"
+                                               "main :: () {\n"
+                                               "    x: u8;\n"
+                                               "    y: float64;\n"
+                                               "    v: Vec2;\n"
+                                               "    i: int;\n"
+                                               "    s: s32;\n"
+                                               "    h: s16;\n"
+                                               "    a := max(1, x);\n"
+                                               "    b := max(x, 1);\n"
+                                               "    c := max(1, 2.5);\n"
+                                               "    d := max(2.5, y);\n"
+                                               "    e := pick(v, .{1, 2});\n"
+                                               "    f := max(i, s);\n"
+                                               "    g := pick(h, x);\n"
+                                               "}\n"));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *names[] = {"a", "b", "c", "d", "e", "f", "g"};
+    const char *types[] = {"u8", "u8", "float32", "float64", "Vec2", "int", "s16"};
+    for (s64 k = 0; k < 7; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Call *f = (Ast_Call *)((Ast_Var *)local_named(&c, "f"))->value;
+    CHECK(f->proc && f->proc->instance);
+    if (f->proc && f->proc->instance) CHECK_STR(f->proc->instance->name, "max(T = int)");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(inference_reads_through_types) {
+    // A pattern binds T where it stands in it: []$T the elements of an
+    // array, a view or a resizable array, *$T a pointer's target, ($T) -> T
+    // a procedure's parameter, (..$T) -> T the elements of its '..' one.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: float; y: float; }\n"
+                                 "first :: (items: []$T) -> T { return items[0]; }\n"
+                                 "deref :: (p: *$T) -> T { return p.*; }\n"
+                                 "apply :: (f: ($T) -> T, x: T) -> T { return f(x); }\n"
+                                 "twice :: (n: int) -> int { return n * 2; }\n"
+                                 "app :: (f: (..$T) -> T, x: T) -> T { return f(x, x); }\n"
+                                 "total :: (v: ..int) -> int { return v[0] + v[1]; }\n"
+                                 "main :: () {\n"
+                                 "    a: [3]int;\n"
+                                 "    r: [..]float;\n"
+                                 "    s: []u8;\n"
+                                 "    v: Vec2;\n"
+                                 "    fa := first(a);\n"
+                                 "    fr := first(r);\n"
+                                 "    fs := first(s);\n"
+                                 "    dv := deref(*v);\n"
+                                 "    ap := apply(twice, 4);\n"
+                                 "    at := app(total, 4);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    const char *names[] = {"fa", "fr", "fs", "dv", "ap", "at"};
+    const char *types[] = {"int", "float32", "u8", "Vec2", "int", "int"};
+    for (s64 k = 0; k < 6; k++) {
+        Type *t = find_local(body, names[k])->type;
+        CHECK_STR(t ? type_name(&a, t) : str("?"), types[k]);
+    }
+    arena_free(&a);
+}
+
+TEST(inference_mistakes) {
+    // What can't be inferred, at the argument; an argument that doesn't
+    // convert to the T another fixed, as any argument; a count that's
+    // wrong, as any call's; a generic's name as a value.
+    Arena a = arena_make();
+    struct Case {
+        const char *body;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"x := max(null, null);", "4:23: can't work out 'T' for 'max': argument 1 has no type of its own\n"},
+        {"x := max(1, null);", "4:26: can't work out 'T' for 'max': argument 2 has no type of its own\n"},
+        {"x := first(5);", "4:25: argument 1 of 'first' has type 'int', which doesn't fit '[]$T'\n"},
+        {"a3(5);", "4:17: argument 1 of 'a3' has type 'int', which doesn't fit '[N + 0]$T'\n"},
+        {"ap(5, 1);", "4:17: argument 1 of 'ap' has type 'int', which doesn't fit '($T, ..T) -> (T, int)'\n"},
+        {"z: *int; pr(z);", "4:26: argument 1 of 'pr' has type '*int', which doesn't fit '**$T'\n"},
+        {"n: int; x := max(cast(s32) 1, n);",
+         "4:44: argument 2 of 'max' has type 'int', which can't be converted to 's32'\n"},
+        {"x := max(1);", "4:19: 'max' takes 2 arguments, but 1 was given\n"},
+        {"m := max;", "4:19: 'max' is generic; call it, or wrap one instance in a procedure\n"},
+        {"x := max(nope, 1);", "4:23: unknown identifier 'nope'\n"},
+        // An argument whose own check failed may have been the one to fix
+        // T, so T says nothing more, though the other has no type of its
+        // own.
+        {"x := max(nope, null);", "4:23: unknown identifier 'nope'\n"},
+        // A spread no '..T' parameter takes is refused before inference,
+        // as any call's, and gives T nothing: T then says nothing more.
+        {"a: [3]int; x := max(..a, ..a);",
+         "4:34: only the arguments of a '..' parameter can be spread, as in f(..values)\n"
+         "4:39: only the arguments of a '..' parameter can be spread, as in f(..values)\n"},
+        {"a: [3]int; x := max(1, ..a);",
+         "4:37: only the arguments of a '..' parameter can be spread, as in f(..values)\n"},
+        // A spread of no sequence among a '..$T' parameter's arguments has
+        // no elements to give T.
+        {"each(..5);", "4:19: '..' spreads a 'int' into 'rest', which needs a '[]$T'\n"},
+    };
+    for (const Case &k : cases) {
+        String rest = string_printf(&a,
+                                    "first :: (items: []$T) -> T { return items[0]; }\n"
+                                    "main :: () { %s }\n"
+                                    "each :: (rest: ..$T) { }\n"
+                                    "N :: 2;\n"
+                                    "a3 :: (a: [N + 0]$T) { }\n"
+                                    "ap :: (f: ($T, ..T) -> (T, int), x: T) { }\n"
+                                    "pr :: (p: **$T) { }\n",
+                                    k.body);
+        CHECK_STR(check_source(&a, with_generic_max(&a, string_cstr(&a, rest))), k.message);
+    }
+    arena_free(&a);
+}
+
+TEST(type_parameters_work_in_an_instance) {
+    // In an instance, T is the type it's bound to: a variable's type,
+    // size_of's, type_info's, a comparison's, an enum's or a tagged union's
+    // name before a member (T.A, T.empty, a tag test's s == T.empty), a
+    // struct's before a literal. #if T == ... picks the code per instance:
+    // the branch not taken is never checked, so v + 1 is checked only where
+    // T isn't Vec2, and is a mistake for a bool.
+    Arena a = arena_make();
+    const char *generics = "Vec2 :: struct { x: float; y: float; }\n"
+                           "Mode :: enum { A; B; }\n"
+                           "info :: (v: $T) -> int, bool, bool {\n"
+                           "    x: T;\n"
+                           "    n := size_of(T);\n"
+                           "    ti := type_info(T);\n"
+                           "    return n, T == int, T != string;\n"
+                           "}\n"
+                           "reset :: (m: *$T) { m.* = T.A; }\n"
+                           "zero :: (v: $T) -> T { return T.{}; }\n"
+                           "only_ints :: (v: $T) -> int { #if T == int { return v; } else { return 0; } }\n"
+                           "bad_for_vec :: (v: $T) -> T { #if T == Vec2 { return v; } else { return v + 1; } }\n"
+                           "Shape :: union #tagged { circle: float; empty: void; }\n"
+                           "clear :: (s: *$T) -> bool { s.* = T.empty; return s.* == T.empty; }\n"
+                           "is_empty :: (s: $T) -> bool { return s == T.empty && T.circle != T.empty; }\n"
+                           "emptied :: (s: $T) -> T { return T.empty; }\n";
+    CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a,
+                                                                  "%s"
+                                                                  "main :: () {\n"
+                                                                  "    v: Vec2;\n"
+                                                                  "    m: Mode;\n"
+                                                                  "    a, b, c := info(1);\n"
+                                                                  "    d, e, f := info(m);\n"
+                                                                  "    g, h, i := info(v);\n"
+                                                                  "    reset(*m);\n"
+                                                                  "    z := zero(v);\n"
+                                                                  "    o := only_ints(1);\n"
+                                                                  "    p := only_ints(v);\n"
+                                                                  "    q := bad_for_vec(v);\n"
+                                                                  "    r := bad_for_vec(2);\n"
+                                                                  "    s: Shape;\n"
+                                                                  "    t := clear(*s);\n"
+                                                                  "    u := is_empty(s);\n"
+                                                                  "    w := emptied(s);\n"
+                                                                  "}\n",
+                                                                  generics))),
+              "");
+    CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a, "%smain :: () { b := bad_for_vec(true); }\n",
+                                                                  generics))),
+              "12:75: '+' needs numbers, not 'bool'\n"
+              "    in 'bad_for_vec' with T = bool, called at test.rig:17:19\n");
+    // T is no value, and no procedure.
+    CHECK_STR(check_source(&a,
+                           "f :: (v: $T) { x := T; T(); y := *T; }\n"
+                           "main :: () { f(1); }\n"),
+              "1:21: 'T' is a type, not a value\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n"
+              "1:24: 'T' isn't a procedure, so it can't be called\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n"
+              "1:35: 'T' is a type, not a value\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n");
+    // An instance's bindings are declared in its body's block, as its
+    // parameters are: a local there can't take T's name, an inner block's
+    // may hide it.
+    CHECK_STR(check_source(&a,
+                           "f :: (v: $T) { T := 1; { T := 2; } }\n"
+                           "main :: () { f(1); }\n"),
+              "1:16: 'T' is already declared at test.rig:1:10\n"
+              "    in 'f' with T = int, called at test.rig:2:14\n");
+    // T.empty, T bound to Shape, is Shape.empty: compared with a *Shape, a
+    // test's operand or a switch's, it gets the hint Shape.empty gets.
+    CHECK_STR(check_source(&a,
+                           "Shape :: union #tagged { circle: float; empty: void; }\n"
+                           "f :: (p: *$T) -> bool { return p == T.empty; }\n"
+                           "g :: (p: *$T) { if p == { case T.empty; } }\n"
+                           "main :: () { s: Shape; b := f(*s); g(*s); }\n"),
+              "2:39: 'T.empty' names a member of 'Shape', not '*Shape'; write p.* == T.empty\n"
+              "    in 'f' with T = Shape, called at test.rig:4:29\n"
+              "3:34: 'T.empty' names a member of 'Shape', not '*Shape'; write if p.* == {\n"
+              "    in 'g' with T = Shape, called at test.rig:4:36\n");
+    arena_free(&a);
+}
+
+TEST(a_global_worked_out_in_an_instance_is_the_programs) {
+    // A global, a constant or a type first worked out from inside an
+    // instance, here by a #run that reaches the instance's body during the
+    // declarations, is the program's: it doesn't see the instance's T, so
+    // SIZE's T is the top level's struct, not the int f is called with,
+    // and with no T at the top level, B's is unknown.
+    Arena a = arena_make();
+    Checked c = check_src(&a,
+                          "T :: struct { big: [100]u8; }\n"
+                          "A :: #run f(1);\n"
+                          "f :: (v: $T) -> int { return SIZE; }\n"
+                          "SIZE :: size_of(T);\n"
+                          "main :: () { }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_EQ(global_named(&c, "A")->constant, 100);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a,
+                           "A :: #run f(1);\n"
+                           "f :: (v: $T) -> int { return B; }\n"
+                           "B :: size_of(T);\n"
+                           "main :: () { }\n"),
+              "3:14: unknown type 'T'\n");
+    arena_free(&a);
+}
+
+TEST(a_numbered_symbol_is_checked_again) {
+    // An instance's symbol told apart by a number is checked against every
+    // earlier one too: a name another's number made is taken, so the next
+    // number is tried. (A binding's text ending in a number, as a constant's
+    // may, makes a name end in $digits.)
+    Arena a = arena_make();
+    Ast_Proc generic = {};
+    generic.name = str("g");
+    Ast_Instance first = {}, second = {};
+    first.symbol = str("g$T$$$$int$N$2$3");
+    second.symbol = str("g$T$$$$int$N$2");
+    array_add(&generic.instances, &first);
+    array_add(&generic.instances, &second);
+    CHECK_STR(instance_symbol(&a, &generic, str("g(T = []*int, N = 2)")), "g$T$$$$int$N$2$4");
+    CHECK_STR(instance_symbol(&a, &generic, str("g(T = int, N = 2)")), "g$T$int$N$2");
+    array_free(&generic.instances);
+    arena_free(&a);
+}
+
+TEST(generic_refusals) {
+    // C has none of Rig's generics, and a #compiler procedure is one the
+    // compiler does for the types written: each is refused at its
+    // directive. A parameter whose type declares a type parameter takes no
+    // default value, for now.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a, "f :: (a: $T) #foreign libc;\nmain :: () { }\n"),
+              "1:14: 'f' is generic, so it can't be #foreign\n");
+    CHECK_STR(check_source(&a, "g :: (a: $T) #c_call { }\nmain :: () { }\n"),
+              "1:14: 'g' is generic, so it can't be #c_call\n");
+    CHECK_STR(check_source(&a, "h :: (a: $T, b: $U = 1) { }\nmain :: () { }\n"),
+              "1:20: a parameter that declares '$U' can't have a default value, for now\n");
+    CHECK_STR(check_source(&a, "k :: (a: $T) #compiler;\nmain :: () { }\n"),
+              "1:14: #compiler is only for the modules that ship with rig\n"
+              "1:14: 'k' is generic, so it can't be #compiler\n");
+    // A generic whose signature has a mistake makes no instance: its calls
+    // say nothing more.
+    CHECK_STR(check_source(&a,
+                           "m :: (a: $T, b: Nope) { }\n"
+                           "main :: () { m(1, 2); m(true, 3); }\n"),
+              "1:17: unknown type 'Nope'\n");
+    // So is a void that isn't a pointer's target, and C's '..', which only a
+    // foreign procedure takes: each said once, at the generic, called or
+    // not.
+    CHECK_STR(check_source(&a,
+                           "n :: (a: $T, b: void, c: []void) -> void { }\n"
+                           "main :: () { n(1, 2, 3); n(true, 3, 4); }\n"),
+              "1:17: 'void' is only a pointer's target, as in *void\n"
+              "1:28: 'void' is only a pointer's target, as in *void\n"
+              "1:37: 'void' is only a pointer's target, as in *void\n");
+    CHECK_STR(check_source(&a,
+                           "p :: (a: $T, ..) { }\n"
+                           "q :: (a: $T, ..) { }\n"
+                           "main :: () { p(1, 2); p(true); }\n"),
+              "1:14: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
+              "(values: ..int)\n"
+              "2:14: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
+              "(values: ..int)\n");
+    // A generic the parser gave up on is a broken entry: its calls say
+    // nothing more, a type given for its $T: Type included, while an
+    // argument's own mistake is still one.
+    CHECK_STR(check_source(&a,
+                           "get :: ($T: Type) -> int { x := 1 return 0; }\n"
+                           "main :: () { a := get(int); b := get([]int); c := get(nope); }\n"),
+              "1:35: expected ';', found 'return'\n"
+              "2:55: unknown identifier 'nope'\n");
+    // An instance whose own signature has a mistake, a default that doesn't
+    // convert to its T, says it once, where it's made, and stays cached:
+    // every call with its bindings, the first too, gets no type and says
+    // nothing more, so using s or t says nothing.
+    Checked c = check_src(&a,
+                          "f :: (a: $T, b: T = 1) -> T { return a; }\n"
+                          "main :: () { s := f(\"x\"); n: int = s; t := f(\"y\"); m: int = t; f(\"z\", \"w\"); }\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              "1:21: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "    in 'f' with T = string, called at test.rig:2:19\n");
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "f"))->instances.count, 1);
+    CHECK_STR(type_of(&a, &c, "s"), "?");
+    CHECK_STR(type_of(&a, &c, "t"), "?");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #226: generic declarations on their own, and errors inside
+// instances (spec 7.11).
+
+TEST(generic_declaration_mistakes) {
+    // A generic's own mistakes are said once, at the generic, whether it's
+    // called or not: a type parameter declared twice, used before its $,
+    // named as a parameter is or as a built-in type, a parameter's name
+    // given twice, an unknown type. A generic with one makes no instance:
+    // its calls get no type and say nothing more.
+    Arena a = arena_make();
+    struct Case {
+        const char *generic;
+        const char *call;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"f :: (a: $T, b: $T) -> int { return 1; }", "f(1, true)",
+         "1:17: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        {"g :: (a: T, b: $T) -> int { return 1; }", "g(1, 2)", "1:10: 'T' is used before '$T' declares it\n"},
+        {"p :: (f: (T) -> $T) -> int { return 1; }", "p(null)", "1:11: 'T' is used before '$T' declares it\n"},
+        // So is one inside an array's count, before the $ or in its own
+        // parameter's element type after the count.
+        {"s :: (a: [size_of(T)]int, b: $T) -> int { return 1; }", "s(1, 2)",
+         "1:19: 'T' is used before '$T' declares it\n"},
+        {"u :: (a: [size_of(T)]$T) -> int { return 1; }", "u(1)", "1:19: 'T' is used before '$T' declares it\n"},
+        {"h :: (T: int, b: $T) -> int { return 1; }", "h(1, 2)", "1:18: 'T' is already declared at test.rig:1:7\n"},
+        {"q :: (a: $T, T: int) -> int { return 1; }", "q(1, 2)", "1:14: 'T' is already declared at test.rig:1:10\n"},
+        {"r :: (a: $T, a: int) -> int { return 1; }", "r(1, 2)", "1:14: 'a' is already declared at test.rig:1:7\n"},
+        {"k :: (a: $int) -> int { return 1; }", "k(1)", "1:10: 'int' is a built-in type\n"},
+        {"m :: (a: $T, b: Nope) -> int { return 1; }", "m(1, 2)", "1:17: unknown type 'Nope'\n"},
+        {"t :: (a: [..]$U, b: $U) -> int { return 1; }", "t(1, 2)",
+         "1:21: 'U' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        // A $T refused for a parameter's name still declares it for a later
+        // use; a built-in type's name before a $ of it is the built-in type.
+        {"n :: (T: int, b: $T, c: T) -> int { return 1; }", "n(1, 2, 3)",
+         "1:18: 'T' is already declared at test.rig:1:7\n"},
+        {"o :: (a: int, b: $int) -> int { return 1; }", "o(1, 2)", "1:18: 'int' is a built-in type\n"},
+    };
+    for (const Case &k : cases) {
+        String text = string_printf(&a, "%s\nmain :: () { x := %s; y := %s; z: string = x; }\n", k.generic, k.call,
+                                    k.call);
+        Checked c = check_src(&a, string_cstr(&a, text));
+        diag_sort(&c.list->diag);
+        CHECK_STR(messages(&a, &c.list->diag), k.message);
+        CHECK_STR(type_of(&a, &c, "x"), "?");
+        CHECK_STR(type_of(&a, &c, "y"), "?");
+        CHECK_EQ(c.file->instances.count, 0);
+        token_list_free(c.list);
+    }
+    // A type parameter declared inside [], [N] or [..] is declared for the
+    // parameters after it.
+    CHECK_STR(check_source(&a,
+                           "has :: (items: []$T, x: T) -> bool { return true; }\n"
+                           "three :: (a: [3]$V, b: V) { }\n"
+                           "main :: () { }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(uninstantiated_bodies_resolve_names_only) {
+    // A generic's body is walked once for its names, whether an instance is
+    // made or not: a name declared nowhere is said, as a value or as a type,
+    // and nothing that depends on T is checked (a member, a .NAME, a
+    // string added to a member). Every branch of an #if is walked, and what
+    // any declares is known after it. A generic with a using parameter says
+    // no unknown identifier: any may be a field.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "lib :: (a: $T) -> T { x := a.nothing + \"s\"; y: T = .NONE; return nope(x, y); }\n"
+                           "main :: () { }\n"),
+              "1:66: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "lib2 :: (a: $T) { z: Missing; #if T == int { w := 1; } else { w := 2; } v := w; }\n"
+                           "main :: () { }\n"),
+              "1:22: unknown type 'Missing'\n");
+    // Each branch's names are its own while it's walked, the else branch's
+    // too, and both branches' are known after the chain.
+    CHECK_STR(check_source(&a,
+                           "f :: (a: $T) { #if T == int { w := 1; } else { u := w + nope; } v := w + u; }\n"
+                           "main :: () { }\n"),
+              "1:53: unknown identifier 'w'\n"
+              "1:57: unknown identifier 'nope'\n");
+    // A using parameter's fields are values: a written type is still
+    // looked up, as a field is no type.
+    CHECK_STR(check_source(&a,
+                           "lib3 :: (using e: *$T) { q := position; r: Nope; }\n"
+                           "main :: () { }\n"),
+              "1:44: unknown type 'Nope'\n");
+    // After a #load or a top-level #if's condition failed (lost_a_file), a
+    // name declared nowhere may be the lost file's: nothing is said.
+    {
+        Token_List *list = src("lib4 :: (a: $T) { x := nope; y: Nope; }\n"
+                               "main :: () { }\n");
+        Ast_File *file = parse(list->tokens, &a, &list->diag);
+        file->lost_a_file = true;
+        check(file, &a, &list->diag);
+        CHECK_STR(messages(&a, &list->diag), "");
+        token_list_free(list);
+    }
+    // Every statement and expression that holds a name is walked: one
+    // declared nowhere in each is said, in order, and a variable is
+    // declared after its value (k := k). A member's name and a literal's
+    // field names (f) are T's, never looked at.
+    CHECK_STR(check_source(&a,
+                           "each :: (a: $T) {\n"
+                           "    defer n1 = 0;\n"
+                           "    push_context n2 { }\n"
+                           "    x := cast(int) n3;\n"
+                           "    y := int.[n4, 1];\n"
+                           "    z := a[n5];\n"
+                           "    w := -n6;\n"
+                           "    if a == { case n7; }\n"
+                           "    while n8 { }\n"
+                           "    for 0..n9 { }\n"
+                           "    v := Q.{1};\n"
+                           "    u := size_of(R);\n"
+                           "    p := *n10;\n"
+                           "    t := n11.f;\n"
+                           "    s := .{f = n12};\n"
+                           "    k := k;\n"
+                           "    x = n13;\n"
+                           "    if n14 { }\n"
+                           "    K :: n15;\n"
+                           "    m1, m2 := n16;\n"
+                           "    b := 1 + n17;\n"
+                           "    each(n18);\n"
+                           "    i := type_info(S);\n"
+                           "    j := [..]U;\n"
+                           "    l := #run n19;\n"
+                           "    o := n20.*;\n"
+                           "    for n21 { }\n"
+                           "    for n22..2 { }\n"
+                           "    each(..n23);\n"
+                           "    if n24 == { }\n"
+                           "    c := cast(V) 1;\n"
+                           "    d := #type W;\n"
+                           "    #if n25 { }\n"
+                           "    e: [n26]int;\n"
+                           "    g: (*X) -> []Y;\n"
+                           "    if true { n27 = 0; } else { n28 = 0; }\n"
+                           "    while true { n29 = 0; }\n"
+                           "    for 0..1 { n30 = 0; }\n"
+                           "    push_context context { n31 = 0; }\n"
+                           "    { n32 = 0; }\n"
+                           "    if a == { case 1; n33 = 0; }\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "2:11: unknown identifier 'n1'\n"
+              "3:18: unknown identifier 'n2'\n"
+              "4:20: unknown identifier 'n3'\n"
+              "5:15: unknown identifier 'n4'\n"
+              "6:12: unknown identifier 'n5'\n"
+              "7:11: unknown identifier 'n6'\n"
+              "8:20: unknown identifier 'n7'\n"
+              "9:11: unknown identifier 'n8'\n"
+              "10:12: unknown identifier 'n9'\n"
+              "11:10: unknown type 'Q'\n"
+              "12:18: unknown type 'R'\n"
+              "13:11: unknown identifier 'n10'\n"
+              "14:10: unknown identifier 'n11'\n"
+              "15:16: unknown identifier 'n12'\n"
+              "16:10: unknown identifier 'k'\n"
+              "17:9: unknown identifier 'n13'\n"
+              "18:8: unknown identifier 'n14'\n"
+              "19:10: unknown identifier 'n15'\n"
+              "20:15: unknown identifier 'n16'\n"
+              "21:14: unknown identifier 'n17'\n"
+              "22:10: unknown identifier 'n18'\n"
+              "23:20: unknown type 'S'\n"
+              "24:14: unknown type 'U'\n"
+              "25:15: unknown identifier 'n19'\n"
+              "26:10: unknown identifier 'n20'\n"
+              "27:9: unknown identifier 'n21'\n"
+              "28:9: unknown identifier 'n22'\n"
+              "29:12: unknown identifier 'n23'\n"
+              "30:8: unknown identifier 'n24'\n"
+              "31:15: unknown type 'V'\n"
+              "32:16: unknown type 'W'\n"
+              "33:9: unknown identifier 'n25'\n"
+              "34:9: unknown identifier 'n26'\n"
+              "35:10: unknown type 'X'\n"
+              "35:18: unknown type 'Y'\n"
+              "36:15: unknown identifier 'n27'\n"
+              "36:33: unknown identifier 'n28'\n"
+              "37:18: unknown identifier 'n29'\n"
+              "38:16: unknown identifier 'n30'\n"
+              "39:28: unknown identifier 'n31'\n"
+              "40:7: unknown identifier 'n32'\n"
+              "41:23: unknown identifier 'n33'\n");
+    // Every kind of name a body declares is found where it's in scope:
+    // parameters, type parameters, locals, constants, several variables of
+    // one call, a loop's iterators named or not, a tagged switch's it, the
+    // top level's names, the built-in types and procedures. One used out of
+    // its scope, or before it's declared, is unknown, and so is a name in
+    // an array's count.
+    CHECK_STR(check_source(&a,
+                           "Shape :: union #tagged { circle: float; empty: void; }\n"
+                           "G := 1;\n"
+                           "divmod :: (a: int, b: int) -> int, int { return a / b, a % b; }\n"
+                           "all :: (s: $T, v: []T) -> int {\n"
+                           "    K :: 2;\n"
+                           "    q, r := divmod(K, G);\n"
+                           "    for v { q += it_index; }\n"
+                           "    for e: v { r += it_index; }\n"
+                           "    for i: 0..2 { q += i; }\n"
+                           "    if s == { case .circle; f := it; }\n"
+                           "    b: [..]int;\n"
+                           "    array_add(*b, cast(int) size_of(T) + size_of(Shape));\n"
+                           "    m := T == int && s64 != u8;\n"
+                           "    defer q = 0;\n"
+                           "    push_context context { r += 1; }\n"
+                           "    return q + r + all(s, v);\n"
+                           "}\n"
+                           "out_of_scope :: (s: $T) {\n"
+                           "    { inner := 1; }\n"
+                           "    x := inner;\n"
+                           "    y := later;\n"
+                           "    later := 1;\n"
+                           "    for 0..2 { }\n"
+                           "    z := it;\n"
+                           "    w: [N]Unknown;\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "20:10: unknown identifier 'inner'\n"
+              "21:10: unknown identifier 'later'\n"
+              "24:10: unknown identifier 'it'\n"
+              "25:9: unknown identifier 'N'\n"
+              "25:11: unknown type 'Unknown'\n");
+    // A generic whose walk said something makes no instance after it, and
+    // an instance made before it isn't checked: its errors would only say
+    // the walk's again, with the instance's chain this time. The call after
+    // it has no type.
+    Checked c = check_src(&a,
+                          "main :: () { x := early(1); }\n"
+                          "early :: (a: $T) -> T { return nope + a; }\n"
+                          "late :: (a: $T) -> T { return nope + a; }\n"
+                          "other :: () { y := late(1); }\n");
+    diag_sort(&c.list->diag);
+    CHECK_STR(messages(&a, &c.list->diag),
+              "2:32: unknown identifier 'nope'\n"
+              "3:31: unknown identifier 'nope'\n");
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "early"))->instances.count, 1);
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "late"))->instances.count, 0);
+    CHECK_STR(type_of(&a, &c, "y"), "?");
+    token_list_free(c.list);
+    // An instance's body a #run reaches during the declarations, before its
+    // generic's turn, has the walk run first: its mistake is the
+    // generic's, said once, with no chain, and the body isn't checked. So
+    // too when the #run is in the body of an instance, whose chain is set
+    // as the walk runs, and set back after it for the body's own errors.
+    CHECK_STR(check_source(&a,
+                           "X :: #run early(1);\n"
+                           "early :: (a: $T) -> T { return nope + a; }\n"
+                           "main :: () { }\n"),
+              "2:32: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: #run h(1);\n"
+                           "h :: (v: $T) -> int { return nope; }\n"
+                           "main :: () { }\n"),
+              "2:30: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: #run outer(1);\n"
+                           "outer :: (v: $T) -> int { return #run h(1); }\n"
+                           "h :: (v: $T) -> int { return nope; }\n"
+                           "main :: () { }\n"),
+              "3:30: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: #run outer(true);\n"
+                           "outer :: (v: $T) -> int { n := #run h(1); b: bool = 1; return n; }\n"
+                           "h :: (v: $T) -> int { return nope; }\n"
+                           "main :: () { }\n"),
+              "2:53: a value of type 'int' doesn't convert to 'bool' implicitly\n"
+              "    in 'outer' with T = bool, called at test.rig:1:11\n"
+              "3:30: unknown identifier 'nope'\n");
+    arena_free(&a);
+}
+
+TEST(using_parameters_reach_through_a_type_parameter) {
+    // In an instance, a using parameter whose type names a type parameter,
+    // *$T, reaches the fields of the struct T is bound to (spec 3.21): its
+    // body reads and writes them by their names. Its bindings are declared
+    // in its body's block, as its parameters are (spec 4.7), so a binding
+    // hides a field of its name, T there being the type.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Entity :: struct { position: int; }\n"
+                           "move :: (using e: *$T, by: int) -> int { position += by; return position; }\n"
+                           "main :: () { e: Entity; n := move(*e, 4); }\n"),
+              "");
+    CHECK_STR(check_source(&a,
+                           "Named :: struct { T: int; }\n"
+                           "shadow :: (using e: *$T) -> int { return T; }\n"
+                           "main :: () { n: Named; x := shadow(*n); }\n"),
+              "2:42: 'T' is a type, not a value\n"
+              "    in 'shadow' with T = Named, called at test.rig:3:29\n");
+    // So a constant parameter hides a field of its name in the body: f's N
+    // is the int, not the string field. In a default value the fields come
+    // before the bindings (spec 4.7), so g's N there is the field, which a
+    // default can't use (spec 3.21), said with the instance's chain.
+    CHECK_STR(check_source(&a,
+                           "V :: struct { N: string; }\n"
+                           "f :: (using v: *V, $N: int) -> int { return N; }\n"
+                           "g :: (using v: *V, $N: int, k: int = N) -> int { return k; }\n"
+                           "main :: () { v: V; x := f(*v, 7); y := g(*v, 7); }\n"),
+              "3:38: a default value can't use 'N', a field of the parameter 'v'\n"
+              "    in 'g' with N = 7, called at test.rig:4:40\n");
+    arena_free(&a);
+}
+
+TEST(instance_errors_name_their_chain) {
+    // An error inside an instance is followed by its chain, one line per
+    // instance from it out to the one a call outside any instance made:
+    // its bindings and the call that made it. Said once, with the first
+    // call, however many calls share the instance.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "inner :: (v: $T) -> T { return v + 1; }\n"
+                           "outer :: (v: $T) -> T { return inner(v); }\n"
+                           "main :: () {\n"
+                           "    b := outer(true);\n"
+                           "    c := outer(true);\n"
+                           "}\n"),
+              "1:34: '+' needs numbers, not 'bool'\n"
+              "    in 'inner' with T = bool, called at test.rig:2:32\n"
+              "    in 'outer' with T = bool, called at test.rig:4:10\n");
+    // A global worked out from inside an instance, here by a #run that
+    // reaches the instance's body during the declarations, is the
+    // program's: its mistake has no chain.
+    CHECK_STR(check_source(&a,
+                           "A :: #run f(1);\n"
+                           "f :: (v: $T) -> int { return X; }\n"
+                           "X : int = needs_g();\n"
+                           "needs_g :: () -> string { return \"s\"; }\n"
+                           "main :: () { }\n"),
+              "3:11: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    // But a type the instance needs laid out while its own layout is under
+    // way is found defined in terms of itself inside the instance, so that
+    // mistake has the instance's chain, which shows the way round. A type
+    // first laid out from inside it, Inner, is the program's: no chain.
+    CHECK_STR(check_source(&a,
+                           "sz :: ($T: Type) -> int { return size_of(T); }\n"
+                           "Bad :: struct { a: [#run sz(Bad)]u8; }\n"
+                           "Good :: struct { a: [#run sz(Inner)]u8; }\n"
+                           "Inner :: struct { b: Nope; }\n"
+                           "main :: () { x: Bad; y: Good; }\n"),
+              "2:1: 'Bad' is defined in terms of itself\n"
+              "    in 'sz' with T = Bad, called at test.rig:2:26\n"
+              "4:22: unknown type 'Nope'\n");
+    // An error in an instance's signature, a default that doesn't convert
+    // to its T, has its chain too; the call's own mistakes, counted,
+    // inferred or converted, are the caller's and have none.
+    CHECK_STR(check_source(&a,
+                           "f :: (a: $T, b: T = 1) -> T { return a; }\n"
+                           "g :: (a: $T, b: T) -> T { return a; }\n"
+                           "main :: () { s := f(\"x\"); t := g(1); n: int; u := g(n, \"y\"); }\n"),
+              "1:21: a value of type 'int' doesn't convert to 'string' implicitly\n"
+              "    in 'f' with T = string, called at test.rig:3:19\n"
+              "3:32: 'g' takes 2 arguments, but 1 was given\n"
+              "3:56: argument 2 of 'g' has type 'string', which can't be converted to 'int'\n");
+    // Inside an instance, the call's own mistakes have the caller's chain,
+    // after the callee's instance's signature was checked inside it.
+    CHECK_STR(check_source(&a,
+                           "inner :: (a: $T, b: T) { }\n"
+                           "outer :: (v: $T) { n: int; inner(n, \"y\"); inner(v); }\n"
+                           "main :: () { outer(true); }\n"),
+              "2:37: argument 2 of 'inner' has type 'string', which can't be converted to 'int'\n"
+              "    in 'outer' with T = bool, called at test.rig:3:14\n"
+              "2:43: 'inner' takes 2 arguments, but 1 was given\n"
+              "    in 'outer' with T = bool, called at test.rig:3:14\n");
+    // A procedure a #run inside an instance lowers on demand is the
+    // program's, lowered with no chain; the instance's errors after it
+    // have the instance's chain again. An instance's body a global's #run
+    // lowers has its chain only while it's lowered: a later error outside
+    // any instance has none.
+    CHECK_STR(check_source(&a,
+                           "helper :: () -> int { return 3; }\n"
+                           "f :: (v: $T) { x := #run helper(); y: bool = x; }\n"
+                           "main :: () { f(1); }\n"),
+              "2:46: a value of type 'int' doesn't convert to 'bool' implicitly\n"
+              "    in 'f' with T = int, called at test.rig:3:14\n");
+    CHECK_STR(check_source(&a,
+                           "G :: #run f(1);\n"
+                           "f :: (v: $T) -> int { return 1; }\n"
+                           "main :: () { y: bool = 1; }\n"),
+              "3:24: a value of type 'int' doesn't convert to 'bool' implicitly\n");
+    arena_free(&a);
+}
+
+// The expected chain of `generic`'s instances from T = int to T = int
+// behind `depth` - 1 pointers, innermost first, each made at the call `at`
+// in the one before it, the first by main's call at `first`, capped as
+// instance_context caps it.
+static String pointer_chain(Arena *a, const char *generic, s64 depth, const char *at, const char *first) {
+    String expected = {};
+    for (s64 d = depth; d >= 1; d--) {
+        if (depth > 21 && d == depth - 10) {
+            expected = string_printf(a, STR_FMT "    ... %lld more instances\n", STR_ARG(expected),
+                                     (long long)(depth - 20));
+            d = 11;
+            continue;
+        }
+        Array<u8> type = {};
+        for (s64 i = 0; i < d - 1; i++) array_add(&type, (u8)'*');
+        for (const char *p = "int"; *p; p++) array_add(&type, (u8)*p);
+        expected = string_printf(a, STR_FMT "    in '%s' with T = %.*s, called at test.rig:%s\n", STR_ARG(expected),
+                                 generic, (int)type.count, (const char *)type.data, d == 1 ? first : at);
+        array_free(&type);
+    }
+    return expected;
+}
+
+TEST(instance_chains_show_up_to_21_instances) {
+    // A chain of 21 instances is shown whole; of 22, the innermost and
+    // outermost ten, and the two between them counted, as one left out
+    // would take the line that says so.
+    Arena a = arena_make();
+    for (s64 depth = 21; depth <= 22; depth++) {
+        Array<u8> stars = {};
+        for (s64 i = 0; i < depth - 1; i++) array_add(&stars, (u8)'*');
+        const char *text = string_cstr(&a, string_printf(&a,
+                                                         "grow :: (v: $T) { #if T == %.*sint { y: bool = v; } "
+                                                         "else { x := v; grow(*x); } }\n"
+                                                         "main :: () { grow(1); }\n",
+                                                         (int)stars.count, (const char *)stars.data));
+        String expected = string_printf(&a, "1:%lld: a value of type '%.*sint' doesn't convert to 'bool' implicitly\n",
+                                        (long long)(depth + 43), (int)stars.count, (const char *)stars.data);
+        array_free(&stars);
+        String at = string_printf(&a, "1:%lld", (long long)(depth + 63));
+        expected = string_printf(&a, STR_FMT STR_FMT, STR_ARG(expected),
+                                 STR_ARG(pointer_chain(&a, "grow", depth, string_cstr(&a, at), "2:14")));
+        CHECK_STR(check_source(&a, text), string_cstr(&a, expected));
+    }
+    arena_free(&a);
+}
+
+TEST(instances_have_a_depth_limit) {
+    // Each instance's body making the next, deeper, instance, never the
+    // same one, nests at most MAX_DEPTH instances: the one too many is
+    // refused at its call, with the chain of the instances it's in, the
+    // innermost and outermost ten.
+    Arena a = arena_make();
+    // The instance at depth d is T = int behind d - 1 pointers, made at the
+    // call in the body of the one before it, the first by main's.
+    String expected = string_printf(&a,
+                                    "1:27: 'grow' is instantiated more than 1000 levels deep, each instance's body "
+                                    "making the next\n" STR_FMT,
+                                    STR_ARG(pointer_chain(&a, "grow", 1000, "1:27", "2:14")));
+    CHECK_STR(check_source(&a,
+                           "grow :: (v: $T) { x := v; grow(*x); }\n"
+                           "main :: () { grow(1); }\n"),
+              string_cstr(&a, expected));
+    // An instance's signature is checked where its call needs it, inside
+    // the signature of the instance whose default value makes it: those
+    // nest as declarations do, and meet that limit first, said once, with
+    // the chain of the instances whose signatures are under way. The calls
+    // have no type, and nothing goes on from the one too deep later.
+    // A later call with the too-deep instance's own bindings finds it
+    // refused: it says nothing more and has no type.
+    Array<u8> stars = {};
+    for (s64 i = 0; i < 250; i++) array_add(&stars, (u8)'*');
+    const char *text = string_cstr(&a, string_printf(&a,
+                                                     "f :: (a: $T, b: int = f(cast(*T) null)) -> int { return 1; }\n"
+                                                     "main :: () { x := f(1); y := f(cast(%.*sint) null); "
+                                                     "z: string = y; }\n",
+                                                     (int)stars.count, (const char *)stars.data));
+    array_free(&stars);
+    Checked c = check_src(&a, text);
+    CHECK_STR(messages(&a, &c.list->diag),
+              string_cstr(&a, string_printf(&a,
+                                            "1:1: 'f' is nested too deeply in the declarations that need it (more "
+                                            "than 1000 levels)\n" STR_FMT,
+                                            STR_ARG(pointer_chain(&a, "f", 250, "1:23", "2:19")))));
+    CHECK_STR(type_of(&a, &c, "x"), "?");
+    CHECK_STR(type_of(&a, &c, "y"), "?");
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #226: types and constants as generic parameters (spec 7.11).
+
+// The declarations every test of baked parameters starts with: a $T: Type
+// after a value, a constant and a type, a constant of an enum and of a
+// string, one a number must fit, and a $T: Type between two values.
+static const char *GENERIC_BAKED = "World :: struct { p: Position; }\n"
+                                   "Position :: struct { x: int; }\n"
+                                   "get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }\n"
+                                   "ring :: ($N: int, $T: Type) -> [N]T { r: [N]T; return r; }\n"
+                                   "Mode :: enum { A; B; }\n"
+                                   "flag :: ($M: Mode) -> int { return cast(int) M; }\n"
+                                   "say :: ($S: string) -> string { return S; }\n"
+                                   "small :: ($N: u8) -> u8 { return N; }\n"
+                                   "get_then :: (w: *World, $T: Type, n: int) -> int { return n; }\n";
+
+TEST(baked_parameters_bind_types_and_constants) {
+    // A $T: Type takes a type, a $N: int a constant: each is bound in the
+    // instance, named by it, and no parameter of it, its argument dropped
+    // from the call, which has no code for it. One instance per set of
+    // values: ring(3, int) twice makes one, and a string is compared by its
+    // bytes, so "hi" from two literals and from a constant is one, "ho"
+    // another. A parameter's type may name N after it: take's *[N]$T. A
+    // $T: Type takes any type written as a value, *Position and []int too.
+    Arena a = arena_make();
+    Checked c = check_src(&a, string_cstr(&a, string_printf(&a,
+                                                            "%s"
+                                                            "HI :: \"hi\";\n"
+                                                            "take :: ($N: int, items: *[N]$T) -> T "
+                                                            "{ return items.*[0]; }\n"
+                                                            "main :: () {\n"
+                                                            "    w: World;\n"
+                                                            "    g := get(*w, Position);\n"
+                                                            "    r := ring(3, int);\n"
+                                                            "    r2 := ring(3, int);\n"
+                                                            "    f := flag(.B);\n"
+                                                            "    s := say(\"hi\");\n"
+                                                            "    s2 := say(\"ho\");\n"
+                                                            "    s3 := say(\"hi\");\n"
+                                                            "    s4 := say(HI);\n"
+                                                            "    n := get_then(*w, Position, 4);\n"
+                                                            "    a: [3]int;\n"
+                                                            "    t := take(3, *a);\n"
+                                                            "    p := ring(2, *Position);\n"
+                                                            "    v := ring(2, []int);\n"
+                                                            "}\n",
+                                                            GENERIC_BAKED)));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *names[] = {"g", "r", "r2", "f", "s", "s2", "s3", "s4", "n", "t", "p", "v"};
+    const char *types[] = {"*Position", "[3]int", "[3]int", "int", "string",        "string",
+                           "string",    "string", "int",    "int", "[2]*Position", "[2][]int"};
+    for (s64 k = 0; k < 12; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Proc *say = (Ast_Proc *)global_named(&c, "say");
+    CHECK_EQ(say->instances.count, 2);
+    if (say->instances.count == 2) {
+        CHECK_STR(say->instances[0]->name, "say(S = \"hi\")");
+        CHECK_STR(say->instances[1]->name, "say(S = \"ho\")");
+    }
+    Ast_Proc *ring = (Ast_Proc *)global_named(&c, "ring");
+    CHECK_EQ(ring->instances.count, 3);
+    if (ring->instances.count == 3) {
+        CHECK_STR(ring->instances[0]->name, "ring(N = 3, T = int)");
+        CHECK_STR(ring->instances[0]->symbol, "ring$N$3$T$int");
+        CHECK_EQ(ring->instances[0]->proc->params.count, 0);
+        CHECK_STR(ring->instances[1]->name, "ring(N = 2, T = *Position)");
+        CHECK_STR(ring->instances[2]->name, "ring(N = 2, T = []int)");
+    }
+    const char *calls[] = {"r", "r2"};
+    for (const char *call : calls) {
+        Ast_Call *made = (Ast_Call *)((Ast_Var *)local_named(&c, call))->value;
+        CHECK_EQ(made->args.count, 0);
+    }
+    struct Named {
+        const char *generic;
+        const char *name;
+        s64 params;
+    };
+    const Named named[] = {
+        {"flag", "flag(M = Mode.B)", 0},
+        {"get", "get(T = Position)", 1},
+        {"get_then", "get_then(T = Position)", 2},
+        {"take", "take(N = 3, T = int)", 1},
+    };
+    for (const Named &k : named) {
+        Ast_Proc *generic = (Ast_Proc *)global_named(&c, k.generic);
+        CHECK_EQ(generic->instances.count, 1);
+        if (generic->instances.count != 1) continue;
+        CHECK_STR(generic->instances[0]->name, k.name);
+        CHECK_EQ(generic->instances[0]->proc->params.count, k.params);
+    }
+    // get_then's dropped argument leaves the others in order: w, then n.
+    Ast_Call *then = (Ast_Call *)((Ast_Var *)local_named(&c, "n"))->value;
+    CHECK_EQ(then->args.count, 2);
+    if (then->args.count == 2) CHECK_EQ(then->args[1]->constant, 4);
+    token_list_free(c.list);
+
+    // A constant's name is its value's, as the program would write it: a
+    // negative or an unsigned integer, a bool, a float the shortest that
+    // reads back as it (a whole one written out, with a .0, below 10^15; a
+    // NaN or an infinity as a division that makes one), an enum's value with
+    // no member as a cast, a string with its escapes. One value written two
+    // ways is one instance: fl(2) is fl(2.0)'s, si(cast(s8) -3) si(-3)'s.
+    c = check_src(&a,
+                  "Mode :: enum { A; B; }\n"
+                  "si :: ($N: s8) { }\n"
+                  "un :: ($N: u64) { }\n"
+                  "yes :: ($B: bool) { }\n"
+                  "fl :: ($F: float32) { }\n"
+                  "db :: ($F: float64) { }\n"
+                  "md :: ($M: Mode) { }\n"
+                  "st :: ($S: string) { }\n"
+                  "main :: () {\n"
+                  "    si(-3);\n"
+                  "    un(18446744073709551615);\n"
+                  "    yes(true);\n"
+                  "    fl(0.1);\n"
+                  "    db(0.1);\n"
+                  "    md(cast(Mode) 7);\n"
+                  "    st(\"a\\tb\\\"c\");\n"
+                  "    fl(2.0);\n"
+                  "    fl(100.0);\n"
+                  "    db(-3.0);\n"
+                  "    db(123456789012345.0);\n"
+                  "    db(1e15);\n"
+                  "    db(0.00001);\n"
+                  "    fl(3.4028234e38);\n"
+                  "    db(0.0 / 0.0);\n"
+                  "    db(1.0 / 0.0);\n"
+                  "    fl(-1.0 / 0.0);\n"
+                  "    fl(2);\n"
+                  "    si(cast(s8) -3);\n"
+                  "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *values[] = {"si(N = -3)",
+                            "un(N = 18446744073709551615)",
+                            "yes(B = true)",
+                            "fl(F = 0.1)",
+                            "db(F = 0.1)",
+                            "md(M = cast(Mode) 7)",
+                            "st(S = \"a\\tb\\\"c\")",
+                            "fl(F = 2.0)",
+                            "fl(F = 100.0)",
+                            "db(F = -3.0)",
+                            "db(F = 123456789012345.0)",
+                            "db(F = 1e+15)",
+                            "db(F = 1e-05)",
+                            "fl(F = 3.4028235e+38)",
+                            "db(F = 0.0 / 0.0)",
+                            "db(F = 1.0 / 0.0)",
+                            "fl(F = -1.0 / 0.0)"};
+    CHECK_EQ(c.file->instances.count, 17);
+    for (s64 k = 0; k < 17 && k < c.file->instances.count; k++) CHECK_STR(c.file->instances[k]->name, values[k]);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(baked_parameter_mistakes) {
+    // A $T: Type's argument must be a type, a $N's must be known while
+    // compiling, and convert to N's type as any argument does. A '$'
+    // parameter is a type or a constant of a number, bool, enum or string
+    // type, never '..', with no default value for now, and before any '..'
+    // parameter, which would leave it no argument. Type stays refused as a
+    // variable's type.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"main :: () { w: World; get(*w, 3); }", "10:32: argument 2 of 'get' must be a type, for '$T: Type'\n"},
+        {"main :: () { w: World; get(*w, nope); }", "10:32: unknown identifier 'nope'\n"},
+        {"main :: () { n := 3; ring(n, int); }",
+         "10:27: argument 1 of 'ring' must be known while compiling, for '$N: int'\n"},
+        {"main :: () { s := \"x\"; say(s); }",
+         "10:28: argument 1 of 'say' must be known while compiling, for '$S: string'\n"},
+        {"main :: () { ring(int, int); }", "10:19: 'int' is a type, not a value\n"},
+        {"main :: () { small(300); }", "10:20: 300 doesn't fit in 'u8'\n"},
+        {"main :: () { flag(1); }", "10:19: argument 1 of 'flag' has type 'int', which can't be converted to 'Mode'\n"},
+        // The arguments after a dropped one are counted as written.
+        {"main :: () { w: World; get_then(*w, Position, \"x\"); }",
+         "10:47: argument 3 of 'get_then' has type 'string', which can't be converted to 'int'\n"},
+        {"main :: () { rest(3, 1, \"x\"); }\nrest :: ($N: int, values: ..int) -> int { return N; }",
+         "10:25: argument 3 of 'rest' has type 'string', which can't be converted to 'int'\n"},
+        // A parameter's type naming N is N's array type in the instance.
+        {"main :: () { a: [3]int; take(4, *a); }\ntake :: ($N: int, items: *[N]$T) -> T { return items.*[0]; }",
+         "10:33: argument 2 of 'take' has type '*[3]int', which can't be converted to '*[4]int'\n"},
+        {"bad :: ($V: []int) { }",
+         "10:13: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'[]int'\n"},
+        {"bad :: ($V: World) { }",
+         "10:13: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'World'\n"},
+        {"bad :: ($V: Nope) { }", "10:13: unknown type 'Nope'\n"},
+        // A type parameter or a constant one is no constant's type.
+        {"bad :: (a: $T, $V: T) { }",
+         "10:20: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'T'\n"},
+        {"bad :: ($N: int, $V: N) { }",
+         "10:22: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'N'\n"},
+        // One whose $ comes after it is that one mistake, said once.
+        {"e :: ($M: T, a: $T) { }", "10:11: 'T' is used before '$T' declares it\n"},
+        // A struct that holds itself makes no instance: the call says
+        // nothing more.
+        {"main :: () { x := f(3); }\nS :: struct { s: S; }\nf :: ($N: S) -> int { return 1; }",
+         "11:1: 'S' contains itself; it can hold a pointer to itself, *S\n"},
+        {"many :: ($T: ..Type) { }",
+         "10:14: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
+         "..$T\n"},
+        {"nums :: ($N: ..int) { }",
+         "10:14: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
+         "..$T\n"},
+        {"dflt :: ($N: int = 4) { }", "10:18: a parameter that declares '$N' can't have a default value, for now\n"},
+        // A '$' parameter, having no default value, can't come after one
+        // that has: each parameter after that needs one.
+        {"after :: (x: int = 1, $N: int) -> int { return x * 10 + N; }",
+         "10:23: a '$' parameter can't come after one with a default value, since each parameter after that needs "
+         "one\n"},
+        {"after :: (x: int = 1, $T: Type) { }",
+         "10:23: a '$' parameter can't come after one with a default value, since each parameter after that needs "
+         "one\n"},
+        {"late :: (r: ..int, $N: int) { }",
+         "10:20: a '$' parameter can't come after a '..' parameter, which takes every argument left\n"},
+        {"twice :: ($N: int, $N: int) { }", "10:21: 'N' is already declared at test.rig:10:12\n"},
+        {"twice :: ($T: Type, a: $T) { }",
+         "10:24: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        {"early :: (a: T, $T: Type) { }", "10:14: 'T' is used before '$T' declares it\n"},
+        {"early :: (a: *[N + 1]int, $N: int) { }", "10:16: 'N' is used before '$N' declares it\n"},
+        // So is one in a literal, or in a type in the count.
+        {"e1 :: (a: *[int.[N, 1][0]]int, $N: int) { }", "10:18: 'N' is used before '$N' declares it\n"},
+        {"e2 :: (a: *[size_of([N]int)]int, $N: int) { }", "10:22: 'N' is used before '$N' declares it\n"},
+        // A type parameter in a count is one too, as a type or as a value.
+        {"e3 :: (a: *[cast(int) (T == int)]int, $T: Type) { }", "10:24: 'T' is used before '$T' declares it\n"},
+        {"e4 :: (a: *[#run size_of(T)]int, $T: Type) { }", "10:26: 'T' is used before '$T' declares it\n"},
+        {"e5 :: (a: *[T.[1, 2].count]int, $T: Type) { }", "10:13: 'T' is used before '$T' declares it\n"},
+        {"count :: ($N: int, a: N) { }", "10:23: 'N' is not a type\n"},
+        // A second $N is the one mistake, said once.
+        {"count :: ($N: int, a: $N) { }",
+         "10:23: 'N' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        // A built-in type's name always means the type (spec 3.1).
+        {"mk :: ($int: Type) { }", "10:9: 'int' is a built-in type\n"},
+        {"k :: ($int: int) -> int { return 0; }", "10:8: 'int' is a built-in type\n"},
+        // A refused using $N reaches no fields, so names are still checked.
+        {"used :: (using $N: int) { x; }",
+         "10:20: 'using' needs a struct or a pointer to one, not 'int'\n10:27: unknown identifier 'x'\n"},
+        {"used :: (using $T: Type) { }", "10:20: 'using' needs a struct or a pointer to one, not 'Type'\n"},
+        {"v : Type;", "10:5: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
+    };
+    for (const Case &k : cases) {
+        // A declaration on its own needs a main after it.
+        bool main = strncmp(k.text, "main", 4) == 0;
+        String text = string_printf(&a, "%s%s\n%s", GENERIC_BAKED, k.text, main ? "" : "main :: () { }\n");
+        CHECK_STR(check_source(&a, string_cstr(&a, text)), k.message);
+    }
+    // After a #load failed (lost_a_file), a $N's type declared nowhere may
+    // be the lost file's: nothing is said, and no call makes an instance.
+    Token_List *list = src("f :: ($N: Foo) -> int { return 1; }\n"
+                           "main :: () { x := f(3); }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    file->lost_a_file = true;
+    check(file, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "f"))->instances.count, 0);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+// Issue #226: '..$T', defaults and #run in generics (spec 7.11).
+
+TEST(rest_arguments_fix_t_by_the_first_typed_one) {
+    // Each of a '..$T' parameter's arguments gives T, the first typed one
+    // fixing it, an untyped constant then converting to it; with none typed,
+    // they meet at a type whose default T is, an untyped float if any is
+    // one. A spread gives its elements' type. With no argument, nothing
+    // gives T.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    const char *sum = "sum :: (values: ..$T) -> T { t: T; for values { t += it; } return t; }\n";
+    String uses = string_printf(&a,
+                                "%smain :: () {\n"
+                                "    x: s16;\n"
+                                "    a: [3]float;\n"
+                                "    r: [..]int;\n"
+                                "    s1 := sum(1, 2, x);\n"
+                                "    s2 := sum(1, 2);\n"
+                                "    s3 := sum(1.5, 2);\n"
+                                "    s4 := sum(..a);\n"
+                                "    s5 := sum(..r);\n"
+                                "}\n",
+                                sum);
+    CHECK_STR(check_with_preload(&a, string_cstr(&a, uses), &tree), "");
+    const char *names[] = {"s1", "s2", "s3", "s4", "s5"};
+    const char *types[] = {"s16", "int", "float32", "float32", "int"};
+    for (s64 k = 0; k < 5; k++) CHECK_STR(type_of_main_local(&a, tree, names[k]), types[k]);
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { s := sum(); }\n", sum))),
+              "2:19: can't work out 'T' for 'sum': no argument gives it\n");
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { n: int; s := sum(n, \"a\"); }\n",
+                                                             sum))),
+              "2:34: argument 2 of 'sum' has type 'string', which can't be converted to 'int'\n");
+    // An untyped constant fixes nothing while a typed argument is there:
+    // "a" makes T a string, and 1 doesn't convert to it. The instance for
+    // string is made, its own mistake said inside it.
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { s := sum(1, \"a\"); }\n", sum))),
+              "1:51: '+=' needs numbers, not 'string'\n"
+              "    in 'sum' with T = string, called at test.rig:2:19\n"
+              "2:23: argument 1 of 'sum' has type 'int', which can't be converted to 'string'\n");
+    // Another parameter's type that names T gives it when the '..T' one is
+    // given nothing.
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (first: $T, rest: ..T) -> T { return first; }\n"
+                                 "main :: () {\n"
+                                 "    x: s16;\n"
+                                 "    a := f(1);\n"
+                                 "    b := f(x, 1, 2);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    CHECK_STR(type_of_main_local(&a, tree, "a"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "b"), "s16");
+    arena_free(&a);
+}
+
+TEST(generic_default_places_are_said_once) {
+    // Where a generic's defaults go doesn't depend on T: a mistake in it is
+    // the generic's, said once, at the generic, with no instance chain,
+    // whether it's called or not, and the generic makes no instance. Its
+    // '$' parameters' own default rules say nothing more here.
+    Arena a = arena_make();
+    struct Case {
+        const char *generic;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"f :: (n: int = 1, values: ..$T) -> int { return n; }",
+         "1:14: 'n' can't have a default value, since a '..' parameter comes after it\n"},
+        {"g :: (values: ..$T, loc: int) -> int { return 1; }",
+         "1:21: 'loc' needs a default value, since it comes after the '..' parameter\n"},
+        {"h :: (by: int = 1, v: $T) -> int { return by; }",
+         "1:20: 'v' needs a default value, since a parameter before it has one\n"},
+        {"k :: (v: $T, by: T = 2, n: int) -> int { return n; }",
+         "1:25: 'n' needs a default value, since a parameter before it has one\n"},
+        {"m :: (v: $T, rest: ..T = 1) -> int { return 1; }",
+         "1:24: a '..' parameter can't have a default value: given no arguments, it is empty\n"},
+        {"p :: (by: int = 1, $N: int) -> int { return N; }",
+         "1:20: a '$' parameter can't come after one with a default value, since each parameter after that needs "
+         "one\n"},
+        {"q :: (values: ..$T, $N: int) -> int { return N; }",
+         "1:21: a '$' parameter can't come after a '..' parameter, which takes every argument left\n"},
+        {"r :: (v: $T = 1, n: int) -> int { return n; }",
+         "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
+        // A refused default counts as none, so a '$' parameter after it
+        // is told nothing.
+        {"s :: (v: $T = 1, $N: int) -> int { return N; }",
+         "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
+        {"t :: ($M: int = 1, $N: int) -> int { return N; }",
+         "1:15: a parameter that declares '$M' can't have a default value, for now\n"},
+    };
+    for (const Case &k : cases) {
+        // Called with two types, and not called at all.
+        String called = string_printf(&a, "%s\nmain :: () { x := %c(1, 2); y := %c(1.5, 2); }\n", k.generic,
+                                      k.generic[0], k.generic[0]);
+        Checked c = check_src(&a, string_cstr(&a, called));
+        CHECK_STR(messages(&a, &c.list->diag), k.message);
+        CHECK_EQ(c.file->instances.count, 0);
+        token_list_free(c.list);
+        String alone = string_printf(&a, "%s\nmain :: () { }\n", k.generic);
+        CHECK_STR(check_source(&a, string_cstr(&a, alone)), k.message);
+    }
     arena_free(&a);
 }

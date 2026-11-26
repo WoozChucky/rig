@@ -1,0 +1,30 @@
+tests/errors/generic_parameters.rig:14:13: error: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not '[]int'
+    bad :: ($V: []int) { }
+                ^
+tests/errors/generic_parameters.rig:15:14: error: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: ..$T
+    many :: ($T: ..Type) { }
+                 ^
+tests/errors/generic_parameters.rig:16:14: error: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: ..$T
+    nums :: ($N: ..int) { }
+                 ^
+tests/errors/generic_parameters.rig:17:18: error: a parameter that declares '$N' can't have a default value, for now
+    dflt :: ($N: int = 4) { }
+                     ^
+tests/errors/generic_parameters.rig:18:23: error: a '$' parameter can't come after one with a default value, since each parameter after that needs one
+    after :: (x: int = 1, $N: int) -> int { return x * 10 + N; }
+                          ^
+tests/errors/generic_parameters.rig:20:5: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+    v : Type;
+        ^
+tests/errors/generic_parameters.rig:24:18: error: argument 2 of 'get' must be a type, for '$T: Type'
+        a := get(*w, 3);
+                     ^
+tests/errors/generic_parameters.rig:26:15: error: argument 1 of 'ring' must be known while compiling, for '$N: int'
+        b := ring(n, int);
+                  ^
+tests/errors/generic_parameters.rig:27:15: error: 'int' is a type, not a value
+        c := ring(int, int);
+                  ^
+tests/errors/generic_parameters.rig:28:16: error: 300 doesn't fit in 'u8'
+        d := small(300);
+                   ^

@@ -1,0 +1,8 @@
+// A #compiler call (spec 7.9) in a generic procedure's body is refused in
+// each instance's body when the program is lowered, followed, as any
+// error inside an instance is (spec 7.11), by the instance's chain: mk's
+// instance for int, made by main's call. rig check, which never lowers
+// the program, has nothing to say.
+#import "Compiler";
+mk :: (a: $T) { w := create_workspace("game"); }
+main :: () { mk(1); }

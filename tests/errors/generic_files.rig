@@ -1,0 +1,12 @@
+// An instance of a generic procedure is the program's, whichever file
+// calls it (issue #226, spec 7.11): negate, which a #loaded file declares,
+// is called with a bool from this file and from that one. Its one instance
+// for bool is checked once: its error, in the loaded file, is said once,
+// its chain naming the call in this file that made it, and the loaded
+// file's call of the same instance says nothing more.
+#load "load/generic_files.rig";
+
+main :: () {
+    x := negate(true);
+    y := from_loaded();
+}

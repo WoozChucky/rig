@@ -14,7 +14,8 @@
 // anything up again. A member without its enum, .FREE, gets its enum's
 // type and the member's value, as a constant does. checker.cpp checks
 // declarations and statements, check_expr.cpp expressions, check_run.cpp
-// #run and what it reaches; check.h is what they share.
+// #run and what it reaches, check_generic.cpp generic procedures'
+// instances; check.h is what they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
@@ -939,10 +940,11 @@
 //   array_remove_ordered(array, index), array_remove_unordered(array,
 //   index), array_reserve(array, count), array_resize(array, count),
 //   array_reset(array) and array_free(array), each array a *[..]T. They're
-//   the language's, not Basic's, because Rig has no generics: a
-//   parameter has one type, so no procedure written in Rig takes both a
-//   *[..]int and a *[..]Vec2; a '..T' gathers values of the one T its
-//   procedure names; and an Any says a value's type only at run time, so
+//   the language's, not Basic's, because they came before generic
+//   procedures (spec 7.11; #230 moves them into Preload): a parameter
+//   had one type, so no procedure written in Rig took both a *[..]int
+//   and a *[..]Vec2; a '..T' gathers values of the one T its procedure
+//   names; and an Any says a value's type only at run time, so
 //   array_add(*numbers, "x") would compile, and 3 added to a [..]u8 would
 //   be an int. So the checker types each call. Each is predeclared
 //   (checker.cpp's BUILTIN_PROCEDURES, declare_predeclared), an Ast_Builtin
@@ -1239,6 +1241,195 @@
 //   is information only: types, layouts, literals, type information and
 //   the debug information are a struct's as ever.
 //
+// Types as values (issue #226, spec 5.20).
+// - A type may be written where a value goes, for the places that take
+//   one: `[N]T`, `[]T` and `[..]T` (a '[' starts no expression) and
+//   `#type T` are an Ast_Type_Value; a name and `*X` are a name and an
+//   address as written, which name a type when the name's lookup finds a
+//   struct, an enum or an instance's type parameter (an Ast_Alias), or
+//   nothing while the name is a built-in type's
+//   (check_expr.cpp's expr_names_type): a local `int := 5;` hides the type
+//   int there, `int == 5` comparing the local. A type in parentheses is
+//   none, as for a literal's type: `(int) == int` is "'int' is a type, not
+//   a value". Any type but void, which is no value's ("'void' is only a
+//   pointer's target, as in *void", at it) and Type, written nowhere
+//   (below); resolved for its Type * only (checker.cpp's
+//   resolve_type_value): a struct named there needs no layout, so
+//   `Node == Node` may be in Node's own array count.
+// - Type (type_type, TYPE_TYPE) is the type of types, a built-in type's
+//   name, so no struct, union or enum takes it ("'Type' is a built-in
+//   type"), while a variable, a constant, a parameter or a procedure may,
+//   hiding it where a value goes, as `int := 5;` hides int. It's written
+//   nowhere but as a baked $T: Type parameter's type (check_generic.cpp's
+//   takes_a_type): a variable, any other parameter, a field, a cast,
+//   size_of, type_info and a type value of it are "'Type' only names types
+//   while compiling; a *Type_Info describes one at run time", at the type
+//   (checker.cpp's resolve_written).
+// - Only == and != and a $T: Type parameter's argument take type values
+//   for now. For == and != (check_type_comparison), with either operand
+//   naming a type, both must ("'==' compares a type only with a type, as
+//   in T == int", at the operator), and the result is a constant bool, 1
+//   for == when they're the same type (one Type *), for != when they
+//   aren't: `int == s64` is false, `float == float32` true, so `#if`
+//   decides on one and a constant may be one. A $T: Type's argument is
+//   checked as a type value when it names a type (check_expr.cpp's
+//   check_generic_call). Anywhere else a type is "'Vec2' is a type, not a
+//   value" as ever, at a name (`*Vec2` at Vec2), and "'[]int' is a type,
+//   not a value" at an Ast_Type_Value's start, its type named as messages
+//   name types.
+// - What lowering may rely on: no node of type Type is lowered. A type
+//   value has type Type and is never a constant (Ast.is_constant false),
+//   the type it denotes in Ast.constant's bits (type_value); a comparison
+//   of types is a constant bool, its operand_type Type, lowered as its
+//   constant. A #run's walk takes a node of type Type as a leaf
+//   (check_run.cpp's walk_expression).
+//
+// Generic procedures (issue #226, spec 7.11).
+// - A procedure whose parameters' types declare a type parameter, $T, or
+//   that bakes a parameter, $T: Type or $N: int (Ast_Proc.is_generic), is
+//   checked as none of its instances: its own signature check
+//   (check_generic.cpp's check_generic_signature) takes its type parameters
+//   as types still to be known, resolves its other type names once, so
+//   "unknown type 'Nope'" is said at the generic and not per instance, and
+//   writes nothing into its nodes but a $N's type (in its Ast_Param's
+//   Ast.type), which no instance copies: each copies them unchecked. It
+//   refuses a default value on a parameter whose type declares one ("a
+//   parameter that declares '$U' can't have a default value, for now", at
+//   the '='), and #foreign, #c_call and #compiler ("'f' is generic, so it
+//   can't be #foreign", at the directive; a #compiler one outside the
+//   modules is said to be that first). It has no procedure type: its name
+//   as a value is "'max' is generic; call it, or wrap one instance in a
+//   procedure", at the name.
+// - The names its parameters declare are checked there too, in the order
+//   they're written: a second $T is "'T' is declared twice; '$' goes on
+//   its first use only, as in (a: $T, b: T)", at its $; a use before the
+//   $T is "'T' is used before '$T' declares it", at the use; a parameter
+//   or a type parameter of a name another has is "'T' is already declared
+//   at PATH:L:C", at the later one; a $T, or a baked parameter ($int: int,
+//   $int: Type), of a built-in type's name is "'int' is a built-in type".
+// - Its body is type-checked only as each instance's, never on its own:
+//   on its own its names are walked (check_generic.cpp's
+//   check_generic_names), once, in its turn in check()'s pass over the
+//   bodies or for the first of its instances' bodies checked before that.
+//   A name declared nowhere is "unknown identifier 'x'" ("unknown type
+//   'Foo'" where a type is written), said at the generic with no instance
+//   chain; what depends on T (a member's name, a .NAME, a literal's field
+//   names) isn't looked at; every branch of an #if is walked, and what
+//   any declares is known after it; with a using parameter no unknown
+//   identifier is said, a field of T's maybe (an unknown type still is).
+//   A walk that said something counts as the generic's errors
+//   (had_errors): it makes no instance after, and the bodies of the
+//   instances made before aren't checked.
+// - A call of one (check_expr.cpp's check_generic_call) checks its
+//   arguments as any call's, counts them as any call does (the same
+//   messages), and infers the type parameters from them
+//   (check_generic.cpp's check_instance): each from the arguments whose
+//   parameter's type names it, in order, the first typed one fixing it, a
+//   pattern read through pointers, arrays' views' and resizable arrays'
+//   elements and procedure types' parts ("argument 1 of 'first' has type
+//   'int', which doesn't fit '[]$T'" where it can't match); untyped
+//   numbers alone give the default type of the type they meet at; an
+//   argument with no type of its own alone is "can't work out 'T' for
+//   'max': argument 1 has no type of its own"; none at all is "...: no
+//   argument gives it", at the callee. An argument whose own check failed
+//   leaves a type parameter it might have fixed unknown, silently. A
+//   generic whose signature check failed makes no instance: its calls say
+//   nothing more. An instance whose own signature check failed (a default
+//   that doesn't convert to T) stays cached, its errors said once: every
+//   call with its bindings gets no type and says nothing more.
+// - Each distinct set of bindings (a type by its Type *, a constant by its
+//   type and value, below) makes one instance, program-wide: the generic's
+//   tree copied (ast_clone), its type bindings Ast_Aliases, named max(T =
+//   int), its symbol max$T$int (with '$' and the instance's number after
+//   it, max$T$int$2, when an earlier instance of the generic has that
+//   symbol), kept in the generic's cache (Ast_Proc.instances) and the
+//   program's list (Ast_File.instances). Its signature is checked where the
+//   call needs it, as any signature is (resolve_signature); its body after
+//   every other body and top-level #run, in the order the instances were
+//   made, or where a #run reaches it first. The call then calls the
+//   instance, and is checked as a call of it: each argument converts to its
+//   parameter's type in the instance, with the usual messages.
+// - Checker.instance is the instance whose signature, defaults or body is
+//   being checked: its bindings are found after the scopes and the using
+//   parameters' fields, before the top level (find_name, check_lookup),
+//   and its body declares them in its scope, as its parameters. It's set
+//   aside with the scopes (leave_scopes), so a global, a constant or a type
+//   worked out from inside an instance doesn't see its T. A binding is a
+//   type wherever a type is written (resolve_written), a type value
+//   (expr_names_type), "'T' is a type, not a value" as a value, "'T' isn't
+//   a procedure, so it can't be called" as a callee, and T.A, T.empty or
+//   T.{...} when it's an enum's, a tagged union's or a struct's
+//   (through_alias).
+// - Every error recorded while Checker.instance is set is followed by its
+//   chain (Diagnostics.context, which enter_instance sets wherever
+//   Checker.instance changes): "    in 'inner' with T = bool, called at
+//   PATH:L:C" for it, then for the instance whose signature, defaults or
+//   body made it, out to the one made outside any instance; of more than
+//   21, the innermost and outermost ten, "    ... N more instances"
+//   between (instance_context). Set aside with the scopes, so a global, a
+//   constant or a type worked out from inside an instance has none; a
+//   call's own mistakes (its count, the inference, the conversions) are
+//   the caller's, with the caller's chain; and the errors of a generic's
+//   body walk (check_generic_names) are the generic's and have none.
+// - Instances nest at most MAX_DEPTH deep (spec 9.4): the call that would
+//   make one inside an instance MAX_DEPTH deep makes none and has no type,
+//   "'grow' is instantiated more than 1000 levels deep, each instance's
+//   body making the next", at the call, with its chain. An instance's
+//   signature is checked inside what needs its call, so instances made by
+//   each one's default values meet the limit on declarations first
+//   (open_declaration): said once, with the chain, the instance too deep
+//   having errors, never checked later.
+// - A '$' before a parameter's name bakes it (Ast_Param.is_baked): $T: Type
+//   takes a type, $N: X a constant, and the procedure is generic. Its own
+//   check (check_baked_parameter) keeps a constant's type in the
+//   parameter's Ast.type, a number's, a bool's, an enum's or string ("a '$'
+//   parameter is a type, '$T: Type', or a constant of a number, bool, enum
+//   or string type, not '[]int'", at the type), and refuses '..' ("a '$'
+//   parameter can't be '..': ...", at the '..'), a place after a '..T'
+//   parameter ("a '$' parameter can't come after a '..' parameter, which
+//   takes every argument left", at the '$'), a default value ("a parameter
+//   that declares '$N' can't have a default value, for now"), a place after
+//   a parameter with one ("a '$' parameter can't come after one with a
+//   default value, since each parameter after that needs one", at the '$')
+//   and using. A constant parameter's name in a type is "'N' is not a
+//   type".
+// - A call checks a $T: Type's argument as a type value (check_type_value)
+//   when it names a type, as a value otherwise: "argument 2 of 'get' must
+//   be a type, for '$T: Type'". A $N's converts to N's type as any
+//   argument does (its messages), and must then be known while compiling,
+//   folded or constant data: "argument 1 of 'ring' must be known while
+//   compiling, for '$N: int'". These bind first (check_generic.cpp's
+//   bake_argument), the $T's in the parameters' types after. A constant
+//   binds as an Ast_Const of its value (constant_binding), compared in the
+//   cache by its type and value, a string's by its bytes, and named as the
+//   program would write it, ring(N = 3, T = int), flag(M = Mode.B),
+//   say(S = "hi"). The instance has no parameter for a baked one, and once
+//   it's known the call drops their arguments: a type or a constant has no
+//   code. Messages about the arguments left count them as written
+//   (check_expr.cpp's written_index).
+// - What any procedure has, an instance has as its own, with nothing more
+//   to it: a '..$T' parameter's arguments each give T, as its pattern
+//   (check_generic.cpp's pattern_of_argument), the first typed one fixing
+//   it, a spread its elements' type (argument_type), and the rest convert
+//   to it as any '..T' argument does; a call that gives it nothing, and no
+//   other parameter's type names T, is "can't work out 'T' for 'sum': no
+//   argument gives it", at the callee. Where defaults go doesn't depend on
+//   T, so a mistake in it is the generic's, said once, at the generic
+//   (checker.cpp's check_default_places). A default value, which may name
+//   T (`by: T = 2`, `n: int = size_of(T)`), is checked with the instance's
+//   signature, under its Checker.instance, so it converts to that
+//   instance's type; #caller_location is the call's place as for any
+//   default, after a baked parameter's dropped argument too. A #run in an
+//   instance's body runs once per instance and sees its bindings, so
+//   `#if #run type_info(T).tag == .ENUM` is decided per instance. A #run
+//   that fails names each instance its code called in its frames, by its
+//   readable name (the Ir_Proc's source_name); one in an instance's body
+//   is followed, after its frames, by that instance's chain.
+// - What lowering may rely on: no generic procedure is lowered, and no
+//   call's proc is one; each instance is a procedure, keyed by its symbol
+//   (lower.cpp's proc_symbol), after the program's own procedures; no
+//   call holds an argument for a baked parameter.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),
@@ -1288,8 +1479,11 @@ struct Compile_Time;  // run.h: the compile-time world
 
 // Checks the program, every file's declarations in one tree (load.h),
 // filling in types and the procedures calls refer to: the declarations,
-// then the bodies, then the top-level #runs (checked, never run here). True
-// when the checker reported no errors (the parser or the loader may have).
+// then the bodies (a generic procedure's only walked for its names), then
+// the top-level #runs (checked, never run here), then the bodies of the
+// generic procedures' instances, in the order they were made, the list
+// growing as bodies make more (spec 7.11). True when the checker reported
+// no errors (the parser or the loader may have).
 // Expression #runs run while it checks, where it first needs their values
 // (spec 7.8): in `world`, which the caller keeps for the top-level runs;
 // without one, check() makes one of its own and frees it before returning.

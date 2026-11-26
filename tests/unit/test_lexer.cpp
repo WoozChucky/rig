@@ -680,3 +680,16 @@ TEST(star_after_a_dot_is_alone) {
                 TOKEN_STAR_EQUAL, TOKEN_DOT_DOT, TOKEN_STAR_EQUAL, TOKEN_EOF);
     lexed_free(l);
 }
+
+TEST(lexes_dollar) {
+    // Issue #226: '$' declares a generic procedure's type parameter, $T
+    // (spec 7.11), a token of its own before the name.
+    Lexed *l = lex_text("a: $T");
+    CHECK_KINDS(l, TOKEN_IDENT, TOKEN_COLON, TOKEN_DOLLAR, TOKEN_IDENT, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 0);
+    lexed_free(l);
+    l = lex_text("$");
+    CHECK_KINDS(l, TOKEN_DOLLAR, TOKEN_EOF);
+    CHECK_EQ(l->diag.error_count, 0);
+    lexed_free(l);
+}

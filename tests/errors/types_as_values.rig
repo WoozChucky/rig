@@ -1,0 +1,22 @@
+// Types where a value goes that aren't (issue #226, spec 5.20), one a line:
+// Type, the type of types, declared at the top level, which a built-in
+// type's name can't be; then in a body a type value as a variable's value,
+// a procedure type's under #type too, a type compared with a value on
+// either side, a variable and size_of of Type, which is written nowhere,
+// Type itself as a value, types under '<' and '>=', which give types no
+// order, and a type value of Type and one holding it.
+Type :: struct { }
+
+main :: () {
+    x := []int;
+    y := #type (int) -> int;
+    z := int == 3;
+    w := 3 != int;
+    v : Type;
+    u := size_of(Type);
+    t := Type;
+    a := int < s64;
+    b := []int >= [..]int;
+    i := Type == int;
+    j := #type []Type;
+}

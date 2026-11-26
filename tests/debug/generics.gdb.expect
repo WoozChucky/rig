@@ -1,0 +1,28 @@
+type = void (int (*)[2], struct Context *)
+generics.rig, line 20.
+pick(T = Vec2) (result$=
+20	    chosen := b;
+{x = 1, y = 2}
+exited normally
+in pick(T = Vec2) at
+breakpoint already hit 1 time
+generics.rig:20. (2 locations)
+pick(T = int) (context=
+20	    chosen := b;
+#0  pick(T = int) (context=
+a = 3
+b = 4
+first = true
+pick(T = Vec2) (result$=
+20	    chosen := b;
+#0  pick(T = Vec2) (result$=
+exited normally
+static void pick(T = Vec2);
+static int pick(T = int);
+pick(T = int) (context=
+20	    chosen := b;
+pick(T = Vec2) (result$=
+20	    chosen := b;
+exited normally
+pick. (2 locations)
+!.debug_names not created by gdb

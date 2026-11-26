@@ -1,8 +1,9 @@
-// check.h: what the checker's three files share. checker.cpp checks
+// check.h: what the checker's four files share. checker.cpp checks
 // declarations and statements and keeps the scopes; check_expr.cpp checks
 // expressions: their types, the constants it folds, and the implicit
-// conversions; check_run.cpp checks #run and walks what it reaches
-// (checker.h has the rules).
+// conversions; check_run.cpp checks #run and walks what it reaches;
+// check_generic.cpp makes generic procedures' instances (checker.h has the
+// rules).
 
 #pragma once
 
@@ -85,6 +86,25 @@ struct Checker {
                                  // without Preload (checker.cpp's declare_top_level finds both)
     Type *any_type;              // Preload's Any (spec 3.16): what every value converts to; null
                                  // without Preload
+    Ast_Instance *instance;      // the instance of a generic procedure whose signature, defaults or body
+                                 // is being checked (spec 7.11): its bindings are found after the scopes
+                                 // and the using parameters, before the top level (instance_binding);
+                                 // null elsewhere. Set aside with the scopes (checker.cpp's leave_scopes),
+                                 // so a declaration worked out inside an instance doesn't see its T.
+                                 // Changed only by enter_instance, which gives the errors recorded
+                                 // meanwhile its chain (Diagnostics.context), but a generic's body
+                                 // walk's, which have none (check_generic_names)
+};
+
+// A type or constant parameter of a generic procedure (spec 7.11), $T or
+// $N: int, while a call of it is matched against its arguments
+// (check_generic.cpp's check_instance).
+struct Generic_Binding {
+    String name;
+    Position declared;  // its '$'
+    bool is_type;       // a type parameter, $T; a constant one, $N: int, isn't
+    Type *type;         // is_type: what it's bound to, null until then; otherwise the constant's type
+    Ast *value;         // a constant one's argument, converted
 };
 
 // checker.cpp
@@ -125,6 +145,28 @@ Type *resolve_type(Checker *c, Ast_Type *written);
 // what's wrong with it, and type_info, which describes it (what a *void
 // points at).
 Type *resolve_type_or_void(Checker *c, Ast_Type *written);
+
+// resolve_type for a type written where a value goes (spec 5.20), which
+// needs only its Type *, not its layout: a struct named right there is
+// taken as a pointer's target is, so `Node == Node` may be in Node's own
+// array count. An array's elements are laid out still, its Type holding
+// its size. void is refused as resolve_type refuses it.
+Type *resolve_type_value(Checker *c, Ast_Type *written);
+
+// "only a foreign procedure can take C's '..'; a Rig procedure takes more
+// arguments as '..T', as in (values: ..int)", at the '..' of Rig procedure
+// proc, a generic one's too (check_generic_signature).
+void refuse_c_dots(Checker *c, Ast_Proc *proc);
+
+// Says where procedure proc's default values can't go (spec 7.2; why, at
+// its definition): one before a '..' parameter or on it, and a parameter with
+// none after one that has one or after the '..' parameter. A parameter
+// marked in `settled` (null for none) has its default and its place said
+// already, a generic's '$' ones and those with a default whose type declares
+// a '$T' (check_generic_signature): its default counts as none, and nothing
+// is said of it. The index of the first parameter whose default is to be
+// checked.
+s64 check_default_places(Checker *c, Ast_Proc *proc, const bool *settled);
 
 // Makes sure the type of field `index` of struct t is known: a late field's
 // (one holding a pointer or a view, checker.cpp's lay_out) is made here if
@@ -402,6 +444,28 @@ bool check_both_numbers(Checker *c, Type *left, Type *right, Position at, const 
 // either is one.
 Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);
 
+// Whether e denotes a type (spec 5.20): an Ast_Type_Value, a name whose
+// lookup finds a struct, an enum or an instance's type parameter (an
+// Ast_Alias, spec 7.11), or none while type_from_name knows it
+// (a local `int := 5;` hides the type int), or *X of such an X; never one
+// in parentheses, which is a value, as (Vec2).{1} is no literal. Looks only:
+// nothing is checked or said (a global the lookup finds is worked out, as
+// any lookup of it does: check_lookup).
+bool expr_names_type(Checker *c, Ast *e);
+
+// The type e, which expr_names_type holds for, denotes, resolved as a
+// written type is, with its messages ("unknown type 'Foo'", "'Type' only
+// names types while compiling; ..."), but needing no layout
+// (resolve_type_value); e->type then Type (type_type), and the type kept
+// for type_value. Null after a mistake, said. For a place that takes a
+// type value: for now == and != between types, and a $T: Type parameter's
+// argument (check_generic_call).
+Type *check_type_value(Checker *c, Ast *e);
+
+// The type a checked type value denotes (Ast.constant's bits; Ast.is_constant
+// stays false, so nothing folds or lowers it).
+Type *type_value(Ast *e);
+
 // Whether op is / or %: the operators whose integer divisor mustn't be 0.
 bool is_division(Token_Kind op);
 
@@ -424,3 +488,86 @@ void check_top_level_run(Checker *c, Ast_Run *run);
 // has no value: its failure (or its reached errors) was said already, so a
 // value needing it says nothing more.
 bool has_failed_run(Ast *e);
+
+// check_generic.cpp
+
+// A generic procedure's own signature (spec 7.11), in place of
+// check_signature (checker.cpp's resolve_signature): its parameters' and
+// results' types with its type parameters taken as types still to be
+// known, their other type names resolved and a void anywhere but behind a
+// pointer refused, so a mistake there is said once, not once per instance,
+// and nothing written into its nodes, which each instance copies
+// unchecked (an array's count is each instance's to check, its mistakes
+// said per instance); the refusals of a default value on a parameter that
+// declares a type parameter, of C's '..', of #foreign, #c_call and
+// #compiler; and the mistakes in the names its parameters declare: a $T
+// twice, a type or constant parameter used before its $, a name two of
+// them declare, a $T or a baked parameter of a built-in type's name. A
+// baked parameter's own (spec 7.11, Ast_Param.is_baked): $T: Type, or a
+// constant of a number, bool, enum or string type, whose type this keeps
+// in the parameter's Ast.type, never '..', with no default value, after
+// no '..' parameter and no parameter with a default value, never using.
+// Where its default values may go (checker.cpp's check_default_places),
+// which doesn't depend on T, its '$' parameters and the defaults refused
+// above passed over. Its type stays null: a generic is no value. Its
+// default values themselves are each instance's, checked and converted
+// with its signature.
+void check_generic_signature(Checker *c, Ast_Proc *generic);
+
+// Whether param is a $T: Type (spec 7.11), which takes a type: known by
+// its type's written name, Type, before any type is resolved.
+bool takes_a_type(Ast_Param *param);
+
+// The walk over a generic procedure's body (spec 7.11), which is
+// type-checked only as each instance's: the names it uses that are declared
+// nowhere, said once, at the generic, as the checker says them ("unknown
+// identifier 'x'", "unknown type 'Foo'"), nothing else, and nothing written
+// into its nodes. What depends on T isn't looked at: a member's name, a
+// .NAME, a literal's field names. Every branch of an #if, along an else-#if
+// chain too, is walked. With a using parameter no unknown identifier is
+// said, a field of T's maybe; nor after a #load or a top-level #if's
+// condition failed (Checker.lost_a_file). Run once, in check()'s pass over
+// the bodies in the generic's turn, or earlier for the first of its
+// instances' bodies checked (Ast_Proc.body_resolve says it's done): a
+// mistake sets the generic's had_errors, so it makes no instance after, and
+// the bodies of those made before aren't checked.
+void check_generic_names(Checker *c, Ast_Proc *generic);
+
+// The lines an error inside instance inst is followed by (spec 7.11,
+// Diagnostic.context): "    in 'max' with T = Vec2, called at
+// main.rig:12:5\n" for it, then for the instance whose signature,
+// defaults or body made it, and so on out to the one made outside any
+// instance. Of more than 21, the innermost and outermost ten, "    ... N
+// more instances\n" between them.
+String instance_context(Checker *c, Ast_Instance *inst);
+
+// The instance of generic a call with arguments `args`, checked already,
+// makes (spec 7.11): its baked parameters' types and constants taken from
+// their arguments, its type parameters inferred from the others (their
+// messages at an argument, or at `callee` when no argument names one), then
+// the program's one instance for those bindings, found in generic's cache
+// or made (ast_clone) where the call starting at `called_at` needs it, its
+// signature checked then. Its procedure, or null after saying why, or when
+// the instance's signature had errors (Ast_Instance.had_errors, said once,
+// where it was made). Takes no Ast_Call, so any construct that calls a
+// generic may.
+Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at);
+
+// The binding of instance inst called `name`, an Ast_Alias for a type
+// parameter, an Ast_Const for a constant one; null when it has none.
+Ast *instance_binding(Ast_Instance *inst, String name);
+
+// The name binding b of an instance binds, T or N: its Ast_Alias's or its
+// Ast_Const's.
+String binding_name(Ast *b);
+
+// How messages and names write an instance's bindings: "T = int", ", "
+// between several, in the order the generic declares them; a constant's
+// value as the program would write it, "N = 3", "M = Mode.B", "S = \"hi\"".
+String bindings_text(Arena *a, Array<Ast *> bindings);
+
+// Makes inst the instance being checked (Checker.instance), and its chain
+// (instance_context, made once, Ast_Instance.context) what every error is
+// followed by from now on (Diagnostics.context); null leaves every
+// instance, and errors have no chain, as checker.cpp's leave_scopes does.
+void enter_instance(Checker *c, Ast_Instance *inst);

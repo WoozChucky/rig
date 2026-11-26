@@ -1,7 +1,8 @@
 // ast.cpp: dumping the syntax tree as S-expressions, what the tree's
-// operators mean, and the order of a file's declarations: by position, file
-// by file in load order (before), which ast_declarations merges them in and
-// ast_sort_declarations puts each list in (see ast.h).
+// operators mean, the order of a file's declarations: by position, file by
+// file in load order (before), which ast_declarations merges them in and
+// ast_sort_declarations puts each list in (see ast.h), and copying a
+// procedure's tree for an instance of a generic procedure (ast_clone).
 
 #include "ast.h"
 
@@ -112,7 +113,10 @@ static void dump_type(Array<u8> *buffer, Ast_Type *type) {
         dump_type(buffer, type->element);
         out(buffer, ")");
         break;
-    default: out(buffer, type->name); break;
+    default:
+        if (type->declares) out(buffer, "$");
+        out(buffer, type->name);
+        break;
     }
 }
 
@@ -161,9 +165,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_PARAM: {
         // (rest int), or (rest (.. int)) for rest: ..int; a default value
         // follows the type, (times int (default (int 2))) for times: int = 2.
-        // A using one says so first: (using e (ptr Entity)).
+        // A using one says so first: (using e (ptr Entity)). A baked one's
+        // name keeps its '$': ($N int), ($T Type).
         Ast_Param *param = (Ast_Param *)node;
         out(buffer, param->is_using ? "(using " : "(");
+        if (param->is_baked) out(buffer, "$");
         out(buffer, param->name);
         out(buffer, param->is_variadic ? " (.. " : " ");
         dump_type(buffer, param->type_expr);
@@ -394,6 +400,12 @@ static void dump(Array<u8> *buffer, Ast *node) {
         dump_type(buffer, ((Ast_Type_Info *)node)->type_expr);
         out(buffer, ")");
         break;
+    case AST_TYPE_VALUE:
+        // (type (view int)) for []int where a value goes, #type T alike.
+        out(buffer, "(type ");
+        dump_type(buffer, ((Ast_Type_Value *)node)->type_expr);
+        out(buffer, ")");
+        break;
     case AST_STRUCT: {
         // (struct Vec2 (x float32) (y float32)), (union Value (i s64)); an
         // anonymous member's has no name: (union (key Key) (mouse Mouse)).
@@ -615,7 +627,412 @@ static void dump(Array<u8> *buffer, Ast *node) {
         out(buffer, ")");
         break;
     }
+    case AST_ALIAS:
+        // (alias T): an instance's type parameter, which the checker makes
+        // and no tree holds, as a built-in procedure isn't in one either:
+        // the case is here so the switch covers every Ast_Kind.
+        out(buffer, "(alias ");
+        out(buffer, ((Ast_Alias *)node)->name);
+        out(buffer, ")");
+        break;
     }
+}
+
+// Copying a procedure's tree (ast_clone). Each node is copied field by
+// field: what the parser wrote, its children copied in turn; what the
+// checker writes is left zero, as ast_new leaves it, but for the -1 the
+// parser itself puts in a member's index.
+
+// A new node of from's struct and kind, at its places, nothing else set.
+template<typename T>
+static T *node_like(Arena *a, T *from) {
+    T *to = ast_new<T>(a, from->kind, from->pos);
+    to->start = from->start;
+    return to;
+}
+
+// An Array of copies of from's nodes, in order, on the heap as the parser's.
+template<typename T>
+static Array<T *> clone_list(Arena *a, Array<T *> from) {
+    Array<T *> to = {};
+    array_reserve(&to, from.count);
+    for (s64 i = 0; i < from.count; i++) array_add(&to, (T *)ast_clone(a, from[i]));
+    return to;
+}
+
+// A copy of an Array of values (names, positions), on the heap too.
+template<typename T>
+static Array<T> copy_list(Array<T> from) {
+    Array<T> to = {};
+    array_reserve(&to, from.count);
+    for (s64 i = 0; i < from.count; i++) array_add(&to, from[i]);
+    return to;
+}
+
+static Ast_Type *clone_type(Arena *a, Ast_Type *from) {
+    return (Ast_Type *)ast_clone(a, from);
+}
+
+static Ast_Block *clone_block(Arena *a, Ast_Block *from) {
+    return (Ast_Block *)ast_clone(a, from);
+}
+
+Ast *ast_clone(Arena *a, Ast *node) {
+    if (!node) return nullptr;
+    switch (node->kind) {
+    case AST_PROC: {
+        Ast_Proc *from = (Ast_Proc *)node;
+        RIG_ASSERT(!from->is_broken);
+        Ast_Proc *to = node_like(a, from);
+        to->name = from->name;
+        to->params = clone_list(a, from->params);
+        to->is_c_variadic = from->is_c_variadic;
+        to->c_dots_pos = from->c_dots_pos;
+        to->results = clone_list(a, from->results);
+        to->body = clone_block(a, from->body);
+        if (to->body) to->body->proc = to;
+        to->is_foreign = from->is_foreign;
+        to->foreign_pos = from->foreign_pos;
+        to->no_bounds_checks = from->no_bounds_checks;
+        to->is_c_call = from->is_c_call;
+        to->c_call_pos = from->c_call_pos;
+        to->is_compiler = from->is_compiler;
+        to->compiler_pos = from->compiler_pos;
+        to->foreign_library = from->foreign_library;
+        to->library_pos = from->library_pos;
+        to->has_c_name = from->has_c_name;
+        to->c_name = from->c_name;
+        to->c_name_pos = from->c_name_pos;
+        to->body_levels = from->body_levels;
+        to->is_generic = from->is_generic;
+        return to;
+    }
+    case AST_PARAM: {
+        Ast_Param *from = (Ast_Param *)node;
+        Ast_Param *to = node_like(a, from);
+        to->name = from->name;
+        to->type_expr = clone_type(a, from->type_expr);
+        to->is_variadic = from->is_variadic;
+        to->dots = from->dots;
+        to->default_value = ast_clone(a, from->default_value);
+        to->equals = from->equals;
+        to->default_levels = from->default_levels;
+        to->is_using = from->is_using;
+        to->is_baked = from->is_baked;
+        to->dollar = from->dollar;
+        return to;
+    }
+    case AST_TYPE_NAME:
+    case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
+    case AST_TYPE_PROC: {
+        Ast_Type *from = (Ast_Type *)node;
+        Ast_Type *to = node_like(a, from);
+        to->name = from->name;
+        to->pointee = clone_type(a, from->pointee);
+        to->count = ast_clone(a, from->count);
+        to->element = clone_type(a, from->element);
+        to->levels = from->levels;
+        to->params = clone_list(a, from->params);
+        to->results = clone_list(a, from->results);
+        to->is_c_call = from->is_c_call;
+        to->is_variadic = from->is_variadic;
+        to->dots = from->dots;
+        to->declares = from->declares;
+        return to;
+    }
+    case AST_BLOCK: {
+        // A procedure's body gets its procedure from AST_PROC's case.
+        Ast_Block *from = (Ast_Block *)node;
+        Ast_Block *to = node_like(a, from);
+        to->statements = clone_list(a, from->statements);
+        to->end = from->end;
+        return to;
+    }
+    case AST_CALL: {
+        Ast_Call *from = (Ast_Call *)node;
+        Ast_Call *to = node_like(a, from);
+        to->callee = ast_clone(a, from->callee);
+        to->args = clone_list(a, from->args);
+        return to;
+    }
+    case AST_NAME: {
+        Ast_Name *from = (Ast_Name *)node;
+        Ast_Name *to = node_like(a, from);
+        to->name = from->name;
+        return to;
+    }
+    case AST_STRING: {
+        Ast_String *from = (Ast_String *)node;
+        Ast_String *to = node_like(a, from);
+        to->value = from->value;
+        return to;
+    }
+    case AST_INT: {
+        Ast_Int *from = (Ast_Int *)node;
+        Ast_Int *to = node_like(a, from);
+        to->value = from->value;
+        return to;
+    }
+    case AST_FLOAT: {
+        Ast_Float *from = (Ast_Float *)node;
+        Ast_Float *to = node_like(a, from);
+        to->value = from->value;
+        to->float32_value = from->float32_value;
+        return to;
+    }
+    case AST_BOOL: {
+        Ast_Bool *from = (Ast_Bool *)node;
+        Ast_Bool *to = node_like(a, from);
+        to->value = from->value;
+        return to;
+    }
+    case AST_VAR: {
+        Ast_Var *from = (Ast_Var *)node;
+        Ast_Var *to = node_like(a, from);
+        to->name = from->name;
+        to->type_expr = clone_type(a, from->type_expr);
+        to->value = ast_clone(a, from->value);
+        to->is_uninitialized = from->is_uninitialized;
+        to->is_global = from->is_global;
+        to->is_iterator = from->is_iterator;
+        to->levels = from->levels;
+        return to;
+    }
+    case AST_CONST: {
+        Ast_Const *from = (Ast_Const *)node;
+        Ast_Const *to = node_like(a, from);
+        to->name = from->name;
+        to->value = ast_clone(a, from->value);
+        to->levels = from->levels;
+        return to;
+    }
+    case AST_ASSIGN: {
+        Ast_Assign *from = (Ast_Assign *)node;
+        Ast_Assign *to = node_like(a, from);
+        to->op = from->op;
+        to->targets = clone_list(a, from->targets);
+        to->value = ast_clone(a, from->value);
+        return to;
+    }
+    case AST_RETURN: {
+        Ast_Return *from = (Ast_Return *)node;
+        Ast_Return *to = node_like(a, from);
+        to->values = clone_list(a, from->values);
+        return to;
+    }
+    case AST_UNARY: {
+        Ast_Unary *from = (Ast_Unary *)node;
+        Ast_Unary *to = node_like(a, from);
+        to->op = from->op;
+        to->operand = ast_clone(a, from->operand);
+        return to;
+    }
+    case AST_SPREAD: {
+        Ast_Spread *from = (Ast_Spread *)node;
+        Ast_Spread *to = node_like(a, from);
+        to->operand = ast_clone(a, from->operand);
+        return to;
+    }
+    case AST_DEREF: {
+        Ast_Deref *from = (Ast_Deref *)node;
+        Ast_Deref *to = node_like(a, from);
+        to->operand = ast_clone(a, from->operand);
+        return to;
+    }
+    case AST_BINARY: {
+        Ast_Binary *from = (Ast_Binary *)node;
+        Ast_Binary *to = node_like(a, from);
+        to->op = from->op;
+        to->left = ast_clone(a, from->left);
+        to->right = ast_clone(a, from->right);
+        to->end = from->end;
+        return to;
+    }
+    case AST_IF: {
+        // An else-if chain is copied along a loop, as ast_dump prints it:
+        // a chain of generated arms may be long (parse_if says why).
+        Ast_If *first = nullptr, *last = nullptr;
+        Ast *part = node;
+        while (part && part->kind == AST_IF) {
+            Ast_If *from = (Ast_If *)part;
+            Ast_If *to = node_like(a, from);
+            to->condition = ast_clone(a, from->condition);
+            to->then_block = clone_block(a, from->then_block);
+            if (last) {
+                last->else_part = to;
+            } else {
+                first = to;
+            }
+            last = to;
+            part = from->else_part;
+        }
+        last->else_part = ast_clone(a, part);  // the last else's block, or null
+        return first;
+    }
+    case AST_IF_DIRECTIVE: {
+        // A body's #if, its chain along a loop as an if's. A top-level one
+        // is never in a procedure.
+        Ast_If_Directive *first = nullptr, *last = nullptr;
+        Ast *part = node;
+        while (part && part->kind == AST_IF_DIRECTIVE) {
+            Ast_If_Directive *from = (Ast_If_Directive *)part;
+            RIG_ASSERT(!from->is_top_level);
+            Ast_If_Directive *to = node_like(a, from);
+            to->condition = ast_clone(a, from->condition);
+            to->then_block = clone_block(a, from->then_block);
+            if (last) {
+                last->else_part = to;
+            } else {
+                first = to;
+            }
+            last = to;
+            part = from->else_part;
+        }
+        last->else_part = ast_clone(a, part);
+        return first;
+    }
+    case AST_WHILE: {
+        Ast_While *from = (Ast_While *)node;
+        Ast_While *to = node_like(a, from);
+        to->condition = ast_clone(a, from->condition);
+        to->body = clone_block(a, from->body);
+        return to;
+    }
+    case AST_FOR: {
+        Ast_For *from = (Ast_For *)node;
+        Ast_For *to = node_like(a, from);
+        to->iterator = (Ast_Var *)ast_clone(a, from->iterator);
+        to->index = (Ast_Var *)ast_clone(a, from->index);
+        to->first = ast_clone(a, from->first);
+        to->last = ast_clone(a, from->last);
+        to->sequence = ast_clone(a, from->sequence);
+        to->by_pointer = from->by_pointer;
+        to->dots = from->dots;
+        to->body = clone_block(a, from->body);
+        return to;
+    }
+    case AST_BREAK:
+    case AST_CONTINUE: return node_like(a, (Ast_Jump *)node);
+    case AST_CAST: {
+        Ast_Cast *from = (Ast_Cast *)node;
+        Ast_Cast *to = node_like(a, from);
+        to->type_expr = clone_type(a, from->type_expr);
+        to->value = ast_clone(a, from->value);
+        to->is_trunc = from->is_trunc;
+        return to;
+    }
+    case AST_MULTI_VAR: {
+        Ast_Multi_Var *from = (Ast_Multi_Var *)node;
+        Ast_Multi_Var *to = node_like(a, from);
+        to->vars = clone_list(a, from->vars);
+        to->value = ast_clone(a, from->value);
+        return to;
+    }
+    case AST_NULL:
+    case AST_CONTEXT:
+    case AST_CALLER_LOCATION: return node_like(a, node);
+    case AST_SIZE_OF: {
+        Ast_Size_Of *from = (Ast_Size_Of *)node;
+        Ast_Size_Of *to = node_like(a, from);
+        to->type_expr = clone_type(a, from->type_expr);
+        return to;
+    }
+    case AST_TYPE_INFO: {
+        Ast_Type_Info *from = (Ast_Type_Info *)node;
+        Ast_Type_Info *to = node_like(a, from);
+        to->type_expr = clone_type(a, from->type_expr);
+        return to;
+    }
+    case AST_TYPE_VALUE: {
+        Ast_Type_Value *from = (Ast_Type_Value *)node;
+        Ast_Type_Value *to = node_like(a, from);
+        to->type_expr = clone_type(a, from->type_expr);
+        return to;
+    }
+    case AST_MEMBER: {
+        Ast_Member *from = (Ast_Member *)node;
+        Ast_Member *to = node_like(a, from);
+        to->operand = ast_clone(a, from->operand);
+        to->name = from->name;
+        to->index = -1;  // as the parser makes it
+        return to;
+    }
+    case AST_LITERAL: {
+        Ast_Literal *from = (Ast_Literal *)node;
+        Ast_Literal *to = node_like(a, from);
+        to->type_expr = clone_type(a, from->type_expr);
+        to->names = copy_list(from->names);
+        to->name_positions = copy_list(from->name_positions);
+        to->values = clone_list(a, from->values);
+        to->is_array = from->is_array;
+        return to;
+    }
+    case AST_INDEX: {
+        Ast_Index *from = (Ast_Index *)node;
+        Ast_Index *to = node_like(a, from);
+        to->operand = ast_clone(a, from->operand);
+        to->index = ast_clone(a, from->index);
+        return to;
+    }
+    case AST_RUN: {
+        // An expression #run; a #run { ... } is the top level's.
+        Ast_Run *from = (Ast_Run *)node;
+        RIG_ASSERT(!from->proc && !from->is_top_level);
+        Ast_Run *to = node_like(a, from);
+        to->operand = ast_clone(a, from->operand);
+        return to;
+    }
+    case AST_DEFER: {
+        Ast_Defer *from = (Ast_Defer *)node;
+        Ast_Defer *to = node_like(a, from);
+        to->statement = ast_clone(a, from->statement);
+        return to;
+    }
+    case AST_PUSH_CONTEXT: {
+        Ast_Push_Context *from = (Ast_Push_Context *)node;
+        Ast_Push_Context *to = node_like(a, from);
+        to->context = ast_clone(a, from->context);
+        to->block = clone_block(a, from->block);
+        return to;
+    }
+    case AST_DOT_NAME: {
+        Ast_Dot_Name *from = (Ast_Dot_Name *)node;
+        Ast_Dot_Name *to = node_like(a, from);
+        to->name = from->name;
+        to->name_pos = from->name_pos;
+        return to;
+    }
+    case AST_SWITCH: {
+        Ast_Switch *from = (Ast_Switch *)node;
+        Ast_Switch *to = node_like(a, from);
+        to->value = ast_clone(a, from->value);
+        to->equals = from->equals;
+        to->is_complete = from->is_complete;
+        to->complete = from->complete;
+        to->cases = clone_list(a, from->cases);
+        to->end = from->end;
+        return to;
+    }
+    case AST_CASE: {
+        Ast_Case *from = (Ast_Case *)node;
+        Ast_Case *to = node_like(a, from);
+        to->value = ast_clone(a, from->value);
+        to->block = clone_block(a, from->block);
+        to->through = from->through;
+        return to;
+    }
+    case AST_STRUCT:
+    case AST_FIELD:
+    case AST_ENUM:
+    case AST_LOAD:
+    case AST_BUILTIN:
+    case AST_ALIAS: break;
+    }
+    RIG_ASSERT(!"not a node a procedure holds");
+    return nullptr;
 }
 
 static String finish(Arena *a, Array<u8> *buffer) {

@@ -12,9 +12,12 @@
 // and a caret, indented. A #run that failed while compiling has more
 // indented lines after the caret, the calls that led there, one a line
 // (`    in NAME (PATH:L:C)`), and between the innermost and outermost ten,
-// when there are many, `    ... N more calls`. The live check reads the
-// first line only: the indented ones are for people reading a terminal,
-// and it skips them.
+// when there are many, `    ... N more calls`. An error inside an
+// instance of a generic procedure has more after any frames: a line for
+// each instance it's in, `    in 'max' with T = Vec2, called at
+// PATH:L:C`, with `    ... N more instances` between, when there are
+// many. The live check reads the first line only: the indented ones are
+// for people reading a terminal, and it skips them.
 
 'use strict';
 

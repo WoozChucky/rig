@@ -4552,3 +4552,139 @@ TEST(parses_using_parameters) {
     token_list_free(list);
     arena_free(&a);
 }
+
+// Issue #226: types where a value goes (spec 5.20).
+
+TEST(parses_types_where_values_go) {
+    // A '[' starting an expression begins a type, [N]T, []T or [..]T, and
+    // #type any type, a procedure type's too: each an Ast_Type_Value,
+    // dumped (type T). A name and *X parse as a name and an address, the
+    // checker saying whether they name a type.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "b := []int == [..]int;", &errors),
+              "(block (var b _ (binary == (type (view int)) (type (resizable int)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "c := [3]Vec2 != #type (int) -> int;", &errors),
+              "(block (var c _ (binary != (type (array (int 3) Vec2)) "
+              "(type (proc-type (params int) (returns int))))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "d := *Vec2 == *Vec2;", &errors),
+              "(block (var d _ (binary == (unary * (name Vec2)) (unary * (name Vec2)))))");
+    CHECK_STR(errors, "");
+    // No literal follows a type value: only a name is a literal's type.
+    body_dump(&a, "e := []int.{1};", &errors);
+    CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
+    // So an array literal written as C writes one, not .[1, 2, 3] or
+    // int.[1, 2, 3] (spec 5.17), is a type's start: the count stops at its
+    // first ',', and [] needs its element type.
+    body_dump(&a, "x := [1, 2, 3];", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ','\n");
+    body_dump(&a, "y := [];", &errors);
+    CHECK_STR(errors, "2:12: expected a type, found ';'\n");
+    // The node is at its '[' or its '#type'.
+    Token_List *list = src("f :: () { x := []int; y := #type *u8; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    Ast *x = ((Ast_Var *)file->procs[0]->body->statements[0])->value;
+    Ast *y = ((Ast_Var *)file->procs[0]->body->statements[1])->value;
+    CHECK_EQ(x->kind, AST_TYPE_VALUE);
+    CHECK_EQ(x->pos.col, 16);
+    CHECK_EQ(y->kind, AST_TYPE_VALUE);
+    CHECK_EQ(y->pos.col, 28);
+    token_list_free(list);
+    // After a signature, where the body goes, #type is no unknown
+    // directive: the '{' is what's missing, as for a #caller_location.
+    parse_src(&a, "f :: () #type int { }\n", &errors);
+    CHECK_STR(errors, "1:9: expected '{', found directive\n");
+    arena_free(&a);
+}
+
+// Issue #226: generic procedures (spec 7.11).
+
+TEST(parses_type_parameters) {
+    // $T in a parameter's type declares T, at any depth in it, a procedure
+    // type's parameters included: a type name marked so, dumped $T, which
+    // makes the procedure generic. Its other uses are plain names.
+    Arena a = arena_make();
+    Token_List *list = src("max :: (a: $T, b: T) -> T { return a; }\n"
+                           "first :: (items: []$T, f: ($T) -> T) { }\n"
+                           "main :: () { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file),
+              "(proc max (params (a $T) (b T)) (returns T) (block (return (name a))))\n"
+              "(proc first (params (items (view $T)) (f (proc-type (params $T) (returns T)))) (block))\n"
+              "(proc main (params) (block))\n");
+    CHECK(file->procs[0]->is_generic);
+    CHECK(file->procs[1]->is_generic);
+    CHECK(!file->procs[2]->is_generic);
+    // The declaring name is at its '$'.
+    Ast_Type *declares = file->procs[0]->params[0]->type_expr;
+    CHECK(declares->declares);
+    CHECK_EQ(declares->pos.col, 12);
+    CHECK(!file->procs[0]->params[1]->type_expr->declares);
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(dollar_mistakes) {
+    // Only a procedure declaration's parameter's type declares a type
+    // parameter: a '$' in any other type is refused at it, and a '$' where
+    // an expression starts is none.
+    Arena a = arena_make();
+    String errors;
+    const char *refused =
+        "'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T";
+    struct Case {
+        const char *text;
+        s32 col;
+    };
+    const Case cases[] = {
+        {"f :: () -> $T { }\n", 12},
+        {"S :: struct { x: $T; }\n", 18},
+        {"main :: () { x: $T; }\n", 17},
+        {"main :: () { n := size_of($T); }\n", 27},
+        {"p : ($T) -> int;\n", 6},
+        {"g :: (a: [size_of($T)]int) { }\n", 19},
+        {"f :: (a: $T, b: int = size_of($T)) { }\n", 31},
+        {"main :: () { x := cast($T) 1; }\n", 24},
+        {"main :: () { x := type_info($T); }\n", 29},
+        {"main :: () { x := #type $T; }\n", 25},
+    };
+    for (const Case &k : cases) {
+        parse_src(&a, k.text, &errors);
+        CHECK_STR(errors, string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, refused)));
+    }
+    parse_src(&a, "main :: () { x := $T; }\n", &errors);
+    CHECK_STR(errors, "1:19: expected an expression, found '$'\n");
+    arena_free(&a);
+}
+
+TEST(parses_baked_parameters) {
+    // A '$' before a parameter's name bakes it (spec 7.11): a type, $T:
+    // Type, or a constant, $N: int, dumped with its '$'. Either makes the
+    // procedure generic, and '(' '$' after '::' begins a signature. A later
+    // parameter's type may name N in an array's count.
+    Arena a = arena_make();
+    Token_List *list = src("get :: (w: *World, $T: Type) -> *T { return null; }\n"
+                           "fill :: ($N: int, items: *[N]$T) { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file),
+              "(proc get (params (w (ptr World)) ($T Type)) (returns (ptr T)) (block (return (null))))\n"
+              "(proc fill (params ($N int) (items (ptr (array (name N) $T)))) (block))\n");
+    CHECK_EQ(file->procs.count, 2);
+    if (file->procs.count == 2) {
+        CHECK(file->procs[0]->is_generic);
+        CHECK(file->procs[1]->is_generic);
+        Ast_Param *t = file->procs[0]->params[1];
+        CHECK(t->is_baked);
+        CHECK_EQ(t->dollar.col, 20);
+        CHECK_EQ(t->pos.col, 21);
+        CHECK(!file->procs[0]->params[0]->is_baked);
+        CHECK(file->procs[1]->params[0]->is_baked);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}

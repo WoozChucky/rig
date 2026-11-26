@@ -14,6 +14,9 @@
             "include": "#strings"
         },
         {
+            "include": "#type-value"
+        },
+        {
             "include": "#directives"
         },
         {
@@ -154,8 +157,8 @@
         "declarations": {
             "patterns": [
                 {
-                    "comment": "name :: ( ... is a procedure when the parenthesis holds nothing, starts with a parameter (IDENT ':' or IDENT ':=', a using one's 'using' before them, the parser's procedure_follows), or ends the line: a one-line approximation of the parser's parameters_follow, which looks past the ')'. Otherwise a parenthesised constant.",
-                    "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\(\\s*(?:\\)|$|(?:using\\s+)?[A-Za-z_][A-Za-z0-9_]*\\s*:(?!:)))",
+                    "comment": "name :: ( ... is a procedure when the parenthesis holds nothing, starts with a parameter (IDENT ':' or IDENT ':=', a using one's 'using' or a baked one's '$' before them, the parser's procedure_follows), or ends the line: a one-line approximation of the parser's parameters_follow, which looks past the ')'. Otherwise a parenthesised constant.",
+                    "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\(\\s*(?:\\)|$|(?:using\\s+)?\\$?[A-Za-z_][A-Za-z0-9_]*\\s*:(?!:)))",
                     "captures": {
                         "1": {
                             "name": "entity.name.function.rig"
@@ -204,6 +207,21 @@
                 }
             },
             "end": "\\)|$",
+            "patterns": [
+                {
+                    "include": "#type"
+                }
+            ]
+        },
+        "type-value": {
+            "comment": "#type T (spec 5.20): a type written where a value goes, #type (int) -> int; the directive is coloured as any, T as a type (the repository's type rule), as after a cast's '(', up to what ends a value there: ; = != && || , ) ] { } or the line's end. A type value written with '[', []int == [..]int, needs no rule: its names are coloured as anywhere.",
+            "begin": "(#type)\\b",
+            "beginCaptures": {
+                "1": {
+                    "name": "keyword.other.directive.rig"
+                }
+            },
+            "end": "(?=[;=,)\\]{}]|!=|&&|\\|\\||$)",
             "patterns": [
                 {
                     "include": "#type"
@@ -318,7 +336,7 @@
         "types": {
             "comment": "The checker's built-in type names (src/types.cpp's NAMED_TYPES), then the ones the language will have but the checker doesn't know yet (tests/unit/test_grammar.cpp's RESERVED_TYPES).",
             "name": "support.type.primitive.rig",
-            "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|void|string)\\b"
+            "match": "\\b(?:s8|s16|s32|s64|u8|u16|u32|u64|int|bool|float|float32|float64|void|string|Type)\\b"
         },
         "type-name": {
             "comment": "A name where a type is written: a built-in type keeps its scope (#types), any other is a type the program declares.",
@@ -507,7 +525,7 @@
         },
         "operators": {
             "comment": "The lexer's punctuation but the brackets, longest first, each its own capture group with its scope (tests/unit/test_grammar.cpp's OPERATOR_SCOPES): the first alternative that matches is then the longest, as the lexer reads them, so <<= is one operator, not << and =. --- (a variable left uninitialised on purpose) is here too.",
-            "match": "(<<=)|(>>=)|(---)|(::)|(:=)|(->)|(\\.\\.)|(<=)|(>=)|(==)|(!=)|(&&)|(\\|\\|)|(<<)|(>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(,)|(;)|(:)|(=)|(\\.)|(\\+)|(-)|(\\*)|(/)|(%)|(&)|(\\|)|(\\^)|(~)|(!)|(<)|(>)",
+            "match": "(<<=)|(>>=)|(---)|(::)|(:=)|(->)|(\\.\\.)|(<=)|(>=)|(==)|(!=)|(&&)|(\\|\\|)|(<<)|(>>)|(\\+=)|(-=)|(\\*=)|(/=)|(%=)|(&=)|(\\|=)|(\\^=)|(,)|(;)|(:)|(=)|(\\.)|(\\+)|(-)|(\\*)|(/)|(%)|(&)|(\\|)|(\\^)|(~)|(!)|(<)|(>)|(\\$)",
             "captures": {
                 "1": {
                     "name": "keyword.operator.assignment.compound.rig"
@@ -628,13 +646,16 @@
                 },
                 "40": {
                     "name": "keyword.operator.comparison.rig"
+                },
+                "41": {
+                    "name": "storage.modifier.type-parameter.rig"
                 }
             }
         },
         "invalid": {
-            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments.",
+            "comment": "Characters the lexer rejects: punctuation Rig doesn't use, and non-ASCII outside strings and comments. A '$' is Rig's, before a type parameter's name (spec 7.11), which #operators colours.",
             "name": "invalid.illegal.character.rig",
-            "match": "[@$?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
+            "match": "[@?'`\\\\]|\\w*[^\\x00-\\x7F]\\w*"
         }
     }
 }

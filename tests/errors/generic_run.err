@@ -1,0 +1,12 @@
+tests/errors/generic_run.rig:17:34: error: #run failed: runtime error: assertion failed: too big
+    limit :: (v: $T) -> int { return #run check_size(size_of(T)); }
+                                     ^
+    in assert (@MODULES@/Basic/assert.rig:66:5)
+    in check_size (tests/errors/generic_run.rig:13:5)
+    in #run (tests/errors/generic_run.rig:17:34)
+    in 'limit' with T = Big, called at tests/errors/generic_run.rig:25:10
+tests/errors/generic_run.rig:21:6: error: #run failed: runtime error: index 3 is out of bounds (count 2)
+    X :: #run at(int.[1, 2], 3);
+         ^
+    in at(T = int) (tests/errors/generic_run.rig:19:48)
+    in #run (tests/errors/generic_run.rig:21:6)

@@ -1,0 +1,4 @@
+tests/errors/load/generic_files.rig:3:33: error: '-' needs a number, not 'bool'
+    negate :: (v: $T) -> T { return -v; }
+                                    ^
+    in 'negate' with T = bool, called at tests/errors/generic_files.rig:10:10

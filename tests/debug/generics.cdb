@@ -1,0 +1,15 @@
+l+t
+l+s
+l+l
+x generics!ring*
+bp `generics.rig:20`
+bm generics!pick*
+g
+p
+k 1
+dv /t
+g
+p
+k 1
+?? a
+q

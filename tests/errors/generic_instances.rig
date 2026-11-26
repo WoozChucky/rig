@@ -1,0 +1,22 @@
+// Errors inside instances of generic procedures (issue #226, spec 7.11),
+// each followed by the instances it's in, innermost first, and the call
+// that made each. inner's instance for bool, made by outer's for bool,
+// adds a number to a bool: one error, two lines of chain, said once though
+// main calls outer twice. sum3's instance for Vec2, first made by X's #run,
+// reads a field Vec2 hasn't: its one line names X's call, and main's call
+// of the same instance says nothing more.
+Vec2 :: struct { x: float; y: float; }
+
+inner :: (v: $T) -> T { return v + 1; }
+outer :: (v: $T) -> T { return inner(v); }
+
+sum3 :: (a: $T) -> T { return a.x + a.y + a.z; }
+
+X :: #run sum3(Vec2.{1, 2});
+
+main :: () {
+    b := outer(true);
+    c := outer(true);
+    v: Vec2;
+    s := sum3(v);
+}

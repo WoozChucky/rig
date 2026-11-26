@@ -220,6 +220,10 @@ static bool walk_proc(Reach *r, Ast_Proc *proc) {
 // reach is walked for them (reach_described).
 static bool walk_expression(Reach *r, Ast *e) {
     if (!e->type) return false;
+    // A type where a value goes (spec 5.20), an operand of a comparison of
+    // types, has no code: the comparison is a constant. A leaf, its parts
+    // never looked at.
+    if (e->type == &type_type) return true;
     reach_type(r, e->type);
     if (e->to_any != ANY_NONE) reach_described(r, e->type);
     if (e->kind == AST_TYPE_INFO) reach_described(r, ((Ast_Type_Info *)e)->described);

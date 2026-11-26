@@ -1,0 +1,42 @@
+tests/errors/types_as_values.rig:8:1: error: 'Type' is a built-in type
+    Type :: struct { }
+    ^
+tests/errors/types_as_values.rig:11:10: error: '[]int' is a type, not a value
+        x := []int;
+             ^
+tests/errors/types_as_values.rig:12:10: error: '(int) -> int' is a type, not a value
+        y := #type (int) -> int;
+             ^
+tests/errors/types_as_values.rig:13:14: error: '==' compares a type only with a type, as in T == int
+        z := int == 3;
+                 ^
+tests/errors/types_as_values.rig:14:12: error: '!=' compares a type only with a type, as in T == int
+        w := 3 != int;
+               ^
+tests/errors/types_as_values.rig:15:9: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+        v : Type;
+            ^
+tests/errors/types_as_values.rig:16:18: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+        u := size_of(Type);
+                     ^
+tests/errors/types_as_values.rig:17:10: error: 'Type' is a type, not a value
+        t := Type;
+             ^
+tests/errors/types_as_values.rig:18:10: error: 'int' is a type, not a value
+        a := int < s64;
+             ^
+tests/errors/types_as_values.rig:18:16: error: 's64' is a type, not a value
+        a := int < s64;
+                   ^
+tests/errors/types_as_values.rig:19:10: error: '[]int' is a type, not a value
+        b := []int >= [..]int;
+             ^
+tests/errors/types_as_values.rig:19:19: error: '[..]int' is a type, not a value
+        b := []int >= [..]int;
+                      ^
+tests/errors/types_as_values.rig:20:10: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+        i := Type == int;
+             ^
+tests/errors/types_as_values.rig:21:18: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+        j := #type []Type;
+                     ^

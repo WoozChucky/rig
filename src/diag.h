@@ -9,7 +9,9 @@
 //
 // A few have more lines after the caret: a #run that failed while
 // compiling is followed by the calls that led to the failure, one a line
-// (spec 7.8, Diagnostic.lines).
+// (spec 7.8, Diagnostic.lines); an error inside an instance of a generic
+// procedure, after those, by the instances it's in and the calls that made
+// them, one a line (spec 7.11, Diagnostic.context).
 //
 // Errors are collected, not printed at once: the compiler keeps going after
 // one (an editor's live check needs that: rig check --stdin or
@@ -56,6 +58,10 @@ struct Diagnostic {
                    // (PATH:L:C)\n" each, spec 7.8, and "    ... N more calls\n" between the
                    // innermost and outermost ten when there are many: run.cpp's
                    // report_failure); empty for most
+    String context;  // the instance chain of an error inside an instance of a generic procedure
+                     // (spec 7.11), printed after `lines`: "    in 'max' with T = Vec2, called at
+                     // PATH:L:C\n" per instance, innermost first (check_generic.cpp's
+                     // instance_context); empty for most
 };
 
 // Zero-initialised ({}) is ready to use.
@@ -64,6 +70,10 @@ struct Diagnostics {
     Array<Source_File> files;
     Array<Diagnostic> messages;
     s64 error_count;
+    String context;  // given, copied, to every error recorded while it's set (Diagnostic.context);
+                     // empty: none. The checker sets it to the chain of the instance being checked
+                     // (check_generic.cpp's enter_instance), and lowering to the chain of the
+                     // instance whose body it lowers (lower.cpp's lower_body)
 };
 
 // Registers a file; the result is its index, for Position.file. The text
@@ -76,7 +86,8 @@ s32 diag_add_file(Diagnostics *d, String path, String text);
 // copied.
 void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows);
 
-// Records an error at pos, with a printf-style message.
+// Records an error at pos, with a printf-style message, and the context, if
+// one is set (Diagnostics.context), copied.
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 
 // Gives the error reported last these lines, copied: each ends with a line
@@ -96,7 +107,8 @@ s64 diag_line_start(String text, s32 line);
 void diag_sort(Diagnostics *d);
 
 // Every error, in the list's order (the order reported, or diag_sort's once
-// sorted), in the format above.
+// sorted), in the format above: its message, source line and caret, then
+// its lines, then its context.
 String diag_render(Arena *a, Diagnostics *d);
 
 // diag_render, written to stderr, after stdout is flushed: what the #runs

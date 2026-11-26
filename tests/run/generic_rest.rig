@@ -1,0 +1,108 @@
+// What any procedure has, in generic procedures (issue #226, spec 7.11).
+// A '..$T' parameter: each of its arguments gives T, the first typed one
+// fixing it, and a spread gives its elements' type, so sum(..float.[...])
+// is sum for float32. After another parameter, a '..$T' one takes the
+// arguments after that one's, a baked one's too: rep's $N, rept's $U. A
+// call that gives a '..T' nothing takes T from another parameter: lead(5).
+// A default value may name T, and is checked and converted per instance:
+// scale's `by: T = 2` is an int for scale(3) and a float32 for scale(1.5),
+// sized's size_of(T) each instance's own size. A default #caller_location
+// is the place of each call that leaves it out, two calls of one instance
+// each their own, after a baked $T too, whose argument has no code. A #run
+// inside an instance sees that instance's T: kind's #if picks a branch per
+// instance by its type's tag, while compiling. It sees its constant
+// parameters too: doubled's twice(N), and mixed's N and T together. It runs
+// once per instance, where that instance's body is checked: tag's counted
+// bumps a global of the #runs' world once for tag's instance for int,
+// called from the top-level #run and from main, and once for its instance
+// for u8, so the top-level #run sees two runs, and each call of tag for int
+// gets the one value its instance baked. A binding hides a top-level name
+// of its own in the signature and the defaults, as in the body: nth's
+// default N is the call's 5, not the top-level 2, and widen's default
+// converts to its W, an int, not to the top-level struct W. The same
+// compiled, interpreted and in #runs, a constant's and a top-level one.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+
+Mode :: enum { A; B; }
+
+sum :: (values: ..$T) -> T {
+    t: T;
+    for values { t += it; }
+    return t;
+}
+
+scale :: (v: $T, by: T = 2) -> T { return v * by; }
+
+sized :: (v: $T, n: int = size_of(T)) -> int { return n; }
+
+where :: (v: $T, loc: Source_Code_Location = #caller_location) -> int { return loc.line; }
+
+where2 :: ($T: Type, loc: Source_Code_Location = #caller_location) -> int { return loc.column; }
+
+rep :: ($N: int, values: ..$T) -> T { return sum(..values) * cast(T) N; }
+
+rept :: ($U: Type, values: ..$T) -> int { return size_of(U) + values.count; }
+
+lead :: (a: $T, rest: ..T) -> T { return a + sum(..rest); }
+
+kind :: (v: $T) -> string {
+    #if #run type_info(T).tag == .ENUM {
+        return "enum";
+    } else #if #run type_info(T).tag == .STRUCT {
+        return "struct";
+    } else {
+        return "other";
+    }
+}
+
+runs := 0;
+
+counted :: () -> int {
+    runs += 1;
+    return runs;
+}
+
+tag :: (v: $T) -> int { return #run counted(); }
+
+twice :: (n: int) -> int { return n * 2; }
+
+doubled :: ($N: int) -> int { return #run twice(N); }
+
+mixed :: ($N: int, v: $T) -> int { return #run twice(N + size_of(T)); }
+
+N :: 2;
+
+W :: struct { x: int; }
+
+nth :: ($N: int, x: int = N) -> int { return x; }
+
+widen :: (a: $W, b: W = 1) -> W { return a + b; }
+
+K :: #run kind(Mode.A);
+
+#run {
+    print("{}\n", sum(1, 2));
+    print("{}\n", rep(3, 1, 2));
+    print("{} {}\n", tag(1), tag(cast(u8) 2));
+    print("{}\n", runs);
+}
+
+main :: () {
+    x: s16 = 4;
+    print("{}\n", sum(1, 2, 3));
+    print("{}\n", sum(..float.[1.5, 2.5]));
+    print("{} {} {}\n", scale(3), scale(1.5), scale(3, 3));
+    print("{} {}\n", sized(cast(u8) 1), sized(Vec2.{}));
+    print("{}\n", where(1));
+    print("{}\n", where(2));
+    print("{} {}\n", where2(int), where2(int));
+    print("{} {}\n", rep(3, 1, 2), rep(2, ..float.[1.5, 2.5]));
+    print("{} {} {}\n", rept(u8, 1, 2, 3), lead(5), lead(1, x, 2));
+    print("{} {} {}\n", kind(Mode.B), kind(Vec2.{}), kind(3));
+    print("{}\n", K);
+    print("{} {}\n", tag(3), tag(4));
+    print("{} {} {}\n", doubled(5), mixed(3, cast(u8) 1), mixed(4, 1));
+    print("{} {}\n", nth(5), widen(1));
+}

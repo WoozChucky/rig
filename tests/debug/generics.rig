@@ -1,0 +1,35 @@
+// A debugger's view of generic procedures (bin/run-tests runs it under gdb
+// with generics.gdb and under cdb with generics.cdb). Each instance is a
+// procedure of its own (spec 7.11), named as the instance is, pick(T =
+// int), in a backtrace too, with its instance's parameter types: an int's
+// value, a Vec2 by its address. A line of pick's body has code in each
+// instance: gdb sets a breakpoint on it in each ("2 locations") and stops in
+// each in turn; cdb refuses it, as a deferred line's ("Ambiguous symbol
+// error", spec 10.7), which its script pins on purpose, then sets one on
+// each instance, `bm generics!pick*`, at its first instruction, and steps to
+// the line. gdb's `break 'pick(T = Vec2)'` sets one on that instance only:
+// the first stop is there, though pick(T = int) runs first, and it's hit
+// once; `rbreak ^pick(` sets one on each, as `break pick` does once gdb has
+// read the symbols. ring's instance takes no N or T: only its result's
+// address and the context.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Vec2 :: struct { x: int; y: int; }
+
+pick :: (a: $T, b: T, first: bool) -> T {
+    chosen := b;
+    if first { chosen = a; }
+    return chosen;
+}
+
+ring :: ($N: int, $T: Type) -> [N]T {
+    r: [N]T;
+    return r;
+}
+
+main :: () {
+    i := pick(3, 4, true);
+    v := pick(Vec2.{1, 2}, Vec2.{3, 4}, false);
+    r := ring(2, int);
+    printf("%lld %lld %lld %lld\n", i, v.x, v.y, r.count);
+}

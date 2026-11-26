@@ -28,13 +28,17 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = ['using'] IDENT ':' ['..'] type ['=' expression]
+//   param       = ['using'] ['$'] IDENT ':' ['..'] type ['=' expression]
 //                                                                  'using': its struct's fields named
 //                                                                  directly in the body (spec 3.21);
+//                                                                  '$': a type or a constant each call
+//                                                                  gives, $T: Type, $N: int (spec 7.11);
 //                                                                  '..': a '..T' parameter, one at most;
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)
+//               | '$' IDENT                                        a type parameter's declaration, only
+//                                                                  in a param's type (spec 7.11)
 //   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
@@ -73,6 +77,7 @@
 //               | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
 //               | '.' IDENT                                       (a member without its enum)
+//               | '[' [expression | '..'] ']' type | '#type' type  (a type where a value goes, spec 5.20)
 //   fields      = [field {',' field} [',']]
 //   field       = [IDENT '='] expression
 //   values      = [expression {',' expression} [',']]
@@ -239,6 +244,32 @@
 // which the checker says, so the parser takes it wherever an expression
 // starts (`x := #caller_location;` parses).
 //
+// A type may be written where a value goes (spec 5.20), for the places that
+// take one, such as `T == int`: a '[', which starts no expression, begins
+// one, `[]int == [..]int`, and #type, Jai's directive, any type,
+// `#type (int) -> int`, whose (int) would otherwise read as parentheses.
+// Either is an Ast_Type_Value, at its '[' or #type, its type read a level
+// down, as size_of's is. A name and *X parse as a name and an address, as
+// ever: whether they name a type is the checker's to say. No literal
+// follows a type value, `[]int.{1}` being "expected a field's name".
+//
+// A generic procedure (spec 7.11), Jai's, declares a type parameter with
+// '$' before a name in a parameter's type, its first use: `max :: (a: $T,
+// b: T) -> T`, `first :: (items: []$T) -> T`, at any depth in the type, a
+// procedure type's parameters included, `f: ($T) -> T`, but not in an
+// array's count. The name is an Ast_Type of AST_TYPE_NAME marked
+// `declares`, at the '$', and the procedure is generic (Ast_Proc.is_generic).
+// A '$' in any other type, a result's, a field's, a variable's, a cast's,
+// size_of's, a type value's or a procedure type outside a parameter, is
+// "'$' declares a type parameter only in a procedure's parameter, as in max
+// :: (a: $T, b: T) -> T", at the '$', and the declaration is given up. A
+// '$' where an expression starts is no expression: "expected an expression,
+// found '$'". A '$' before a parameter's name bakes the parameter into each
+// instance (Ast_Param.is_baked, at its '$'): `get :: (w: *World, $T:
+// Type)` takes a type, `fill :: ($N: int, items: *[N]$T)` a constant, and
+// makes the procedure generic too. Which types such a parameter may have is
+// the checker's to say.
+//
 // A spread, ..e (spec 5.10), passes a view's or an array's elements as a
 // call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -
 // is, so ..a + b is (..a) + b; the parser takes it wherever an operand
@@ -247,15 +278,16 @@
 // is no operator: a range's '..' ends the expression before it.
 //
 // At the top level, after '::', a procedure's parameter list starts with
-// '(' ')', '(' IDENT ':', '(' IDENT ':=' or '(' '..'; any other '(' begins
-// a constant's value, so `N :: (1 + 2);` is a constant. A name followed by
-// ':' or ':=' and then a signature with a body or a directive other than
-// #load, #run and #if after it (`greet : () {`) is a procedure with its
-// '::' mistyped: "expected '::', found ':'"; a name, ':' and a procedure
-// type followed by '=' or ';', or by a #load, a #run or an #if (which
-// begins the next declaration, so the variable is then missing its ';'), is
-// a variable of that type: `op : (int) -> int = add;`. Anything else after
-// a top-level name is "expected '::', found ...".
+// '(' ')', '(' IDENT ':', '(' IDENT ':=', '(' '..', '(' 'using' or '(' '$'
+// (a baked parameter, spec 7.11); any other '(' begins a constant's value,
+// so `N :: (1 + 2);` is a constant. A name followed by ':' or ':=' and then
+// a signature with a body or a directive other than #load, #run and #if
+// after it (`greet : () {`) is a procedure with its '::' mistyped:
+// "expected '::', found ':'"; a name, ':' and a procedure type followed by
+// '=' or ';', or by a #load, a #run or an #if (which begins the next
+// declaration, so the variable is then missing its ';'), is a variable of
+// that type: `op : (int) -> int = add;`. Anything else after a top-level
+// name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it, or
