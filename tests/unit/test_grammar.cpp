@@ -105,7 +105,7 @@ enum Operator_Group : u8 {
     OPERATORS_COMMA,                // ,
     OPERATORS_COLON,                // : between a name and its type
     OPERATORS_ACCESSOR,             // . before a field
-    OPERATORS_TYPE_PARAMETER,       // $ before a type parameter's name, $T (spec 7.11)
+    OPERATORS_TYPE_PARAMETER,       // $ before a type parameter's name, $T, or a parameter's, $N: int (spec 7.11)
     OPERATOR_GROUP_COUNT
 };
 

@@ -13541,6 +13541,17 @@ TEST(using_parameters_reach_through_a_type_parameter) {
                            "main :: () { n: Named; x := shadow(*n); }\n"),
               "2:42: 'T' is a type, not a value\n"
               "    in 'shadow' with T = Named, called at test.rig:3:29\n");
+    // So a constant parameter hides a field of its name in the body: f's N
+    // is the int, not the string field. In a default value the fields come
+    // before the bindings (spec 4.7), so g's N there is the field, which a
+    // default can't use (spec 3.21), said with the instance's chain.
+    CHECK_STR(check_source(&a,
+                           "V :: struct { N: string; }\n"
+                           "f :: (using v: *V, $N: int) -> int { return N; }\n"
+                           "g :: (using v: *V, $N: int, k: int = N) -> int { return k; }\n"
+                           "main :: () { v: V; x := f(*v, 7); y := g(*v, 7); }\n"),
+              "3:38: a default value can't use 'N', a field of the parameter 'v'\n"
+              "    in 'g' with N = 7, called at test.rig:4:40\n");
     arena_free(&a);
 }
 
@@ -13570,6 +13581,19 @@ TEST(instance_errors_name_their_chain) {
                            "needs_g :: () -> string { return \"s\"; }\n"
                            "main :: () { }\n"),
               "3:11: a value of type 'string' doesn't convert to 'int' implicitly\n");
+    // But a type the instance needs laid out while its own layout is under
+    // way is found defined in terms of itself inside the instance, so that
+    // mistake has the instance's chain, which shows the way round. A type
+    // first laid out from inside it, Inner, is the program's: no chain.
+    CHECK_STR(check_source(&a,
+                           "sz :: ($T: Type) -> int { return size_of(T); }\n"
+                           "Bad :: struct { a: [#run sz(Bad)]u8; }\n"
+                           "Good :: struct { a: [#run sz(Inner)]u8; }\n"
+                           "Inner :: struct { b: Nope; }\n"
+                           "main :: () { x: Bad; y: Good; }\n"),
+              "2:1: 'Bad' is defined in terms of itself\n"
+              "    in 'sz' with T = Bad, called at test.rig:2:26\n"
+              "4:22: unknown type 'Nope'\n");
     // An error in an instance's signature, a default that doesn't convert
     // to its T, has its chain too; the call's own mistakes, counted,
     // inferred or converted, are the caller's and have none.
@@ -13943,6 +13967,7 @@ TEST(baked_parameter_mistakes) {
         // A refused using $N reaches no fields, so names are still checked.
         {"used :: (using $N: int) { x; }",
          "10:20: 'using' needs a struct or a pointer to one, not 'int'\n10:27: unknown identifier 'x'\n"},
+        {"used :: (using $T: Type) { }", "10:20: 'using' needs a struct or a pointer to one, not 'Type'\n"},
         {"v : Type;", "10:5: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
     };
     for (const Case &k : cases) {

@@ -261,7 +261,10 @@
 // nor at a line holding a runtime check (an
 // index, a division, a checked cast, a field through a pointer), whose
 // failure block is a second piece, nor at a line of deferred code that runs
-// at more than one way out of its block (a copy per way out, pieces apart).
+// at more than one way out of its block (a copy per way out, pieces apart),
+// nor at a line of a generic procedure's body that has code in several
+// instances (one piece per instance); a script breaks in each with `bm
+// NAME!max*` instead, or pins the refusal, as generics.cdb does.
 // gdb, Visual Studio and VS Code take any line, but gdb stops at a deferred
 // line's first copy only, unless the line is in a block of the deferred
 // code that declares a variable itself (gdb keeps one place of a line per

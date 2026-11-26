@@ -89,7 +89,8 @@ enum Token_Kind : u8 {
     TOKEN_CARET_EQUAL,        // ^=
     TOKEN_SHIFT_LEFT_EQUAL,   // <<=
     TOKEN_SHIFT_RIGHT_EQUAL,  // >>=
-    TOKEN_DOLLAR,             // $: declares a generic procedure's type parameter, $T (spec 7.11)
+    TOKEN_DOLLAR,             // $: declares a generic procedure's type parameter, $T, or, before a
+                              // parameter's name, a type or constant one, $T: Type, $N: int (spec 7.11)
 
     TOKEN_KIND_COUNT
 };
