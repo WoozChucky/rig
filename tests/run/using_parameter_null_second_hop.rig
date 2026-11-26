@@ -1,0 +1,19 @@
+// A field two hops into a using parameter that is a null pointer (issue
+// #225, spec 3.21) stops the program at the name written too: position is
+// p.entity.position, and the null p is followed at the entity member on the
+// way, which is at position as the last one is. Compiled and interpreted.
+#import "Basic";
+
+Vec2 :: struct { x: float; y: float; }
+Entity :: struct { id: int; position: Vec2; }
+Player :: struct { using entity: Entity; score: int; }
+
+nested :: (using p: *Player) {
+    position.y = 9;
+}
+
+main :: () {
+    print("before\n");
+    nested(null);
+    print("after\n");
+}

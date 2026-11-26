@@ -12115,6 +12115,23 @@ TEST(using_parameters_name_their_fields) {
         CHECK(id->decl == move->params[0]);
         CHECK_STR(type_name(&a, id->type), "int");
     }
+    // In nested's body, position is p.entity.position: the member on the
+    // way names entity, its operand the parameter.
+    Ast_Proc *nested = (Ast_Proc *)global_named(&c, "nested");
+    Ast *y = ((Ast_Assign *)nested->body->statements[1])->targets[0];
+    CHECK(y->kind == AST_MEMBER && is_name(((Ast_Member *)y)->operand, "position"));
+    if (y->kind == AST_MEMBER && is_name(((Ast_Member *)y)->operand, "position")) {
+        Ast *through = ((Ast_Name *)((Ast_Member *)y)->operand)->through;
+        CHECK(through && is_member(&a, through, "position", "Vec2"));
+        if (through && through->kind == AST_MEMBER) {
+            Ast *entity = ((Ast_Member *)through)->operand;
+            CHECK(is_member(&a, entity, "entity", "Entity"));
+            if (entity->kind == AST_MEMBER) {
+                Ast *p = ((Ast_Member *)entity)->operand;
+                CHECK(is_name(p, "p") && ((Ast_Name *)p)->decl == nested->params[0]);
+            }
+        }
+    }
     token_list_free(c.list);
     // A field holding a pointer is a late one, its type made once every
     // layout is done; p, named through the parameter in a #run an array's
