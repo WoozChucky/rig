@@ -12292,6 +12292,22 @@ TEST(value_using_parameters_are_read_only) {
               "14:34: unknown identifier 'id'\n"
               "17:16: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
               "17:31: unknown identifier 'circle'\n");
+    // A field named as a callee or as a member's operand is refused the
+    // same way, at its name: in a default value, in a #run, and assigned to
+    // through a value parameter.
+    CHECK_STR(check_source(&a, "Vec2 :: struct { x: float; y: float; }\n"
+                               "S :: struct { cb: (int) -> int; v: Vec2; }\n"
+                               "d1 :: (using s: *S, k: int = cb(1)) { }\n"
+                               "d2 :: (using s: *S, k: float = v.x) { }\n"
+                               "r1 :: (using s: *S) { q := #run cb(1); }\n"
+                               "r2 :: (using s: *S) { q := #run v.x; }\n"
+                               "ro :: (using s: S) { v.x = 3; }\n"
+                               "main :: () { }\n"),
+              "3:30: a default value can't use 'cb', a field of the parameter 's'\n"
+              "4:32: a default value can't use 'v', a field of the parameter 's'\n"
+              "5:33: #run can't use 'cb': it's a field of the parameter 's', which doesn't exist while compiling\n"
+              "6:33: #run can't use 'v': it's a field of the parameter 's', which doesn't exist while compiling\n"
+              "7:22: can't assign to 'v': it's a field of the parameter 's'\n");
     // Any procedure may have one: a foreign one, and a #c_call one whose
     // body names a field through it.
     CHECK_STR(check_source(&a, USING_PLAYER
