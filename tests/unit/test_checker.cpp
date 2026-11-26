@@ -13230,6 +13230,13 @@ TEST(generic_declaration_mistakes) {
         {"r :: (a: $T, a: int) -> int { return 1; }", "r(1, 2)", "1:14: 'a' is already declared at test.rig:1:7\n"},
         {"k :: (a: $int) -> int { return 1; }", "k(1)", "1:10: 'int' is a built-in type\n"},
         {"m :: (a: $T, b: Nope) -> int { return 1; }", "m(1, 2)", "1:17: unknown type 'Nope'\n"},
+        {"t :: (a: [..]$U, b: $U) -> int { return 1; }", "t(1, 2)",
+         "1:21: 'U' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        // A $T refused for a parameter's name still declares it for a later
+        // use; a built-in type's name before a $ of it is the built-in type.
+        {"n :: (T: int, b: $T, c: T) -> int { return 1; }", "n(1, 2, 3)",
+         "1:18: 'T' is already declared at test.rig:1:7\n"},
+        {"o :: (a: int, b: $int) -> int { return 1; }", "o(1, 2)", "1:18: 'int' is a built-in type\n"},
     };
     for (const Case &k : cases) {
         String text = string_printf(&a, "%s\nmain :: () { x := %s; y := %s; z: string = x; }\n", k.generic, k.call,
@@ -13242,6 +13249,13 @@ TEST(generic_declaration_mistakes) {
         CHECK_EQ(c.file->instances.count, 0);
         token_list_free(c.list);
     }
+    // A type parameter declared inside [], [N] or [..] is declared for the
+    // parameters after it.
+    CHECK_STR(check_source(&a,
+                           "has :: (items: []$T, x: T) -> bool { return true; }\n"
+                           "three :: (a: [3]$V, b: V) { }\n"
+                           "main :: () { }\n"),
+              "");
     arena_free(&a);
 }
 
@@ -13325,6 +13339,12 @@ TEST(uninstantiated_bodies_resolve_names_only) {
                            "    #if n25 { }\n"
                            "    e: [n26]int;\n"
                            "    g: (*X) -> []Y;\n"
+                           "    if true { n27 = 0; } else { n28 = 0; }\n"
+                           "    while true { n29 = 0; }\n"
+                           "    for 0..1 { n30 = 0; }\n"
+                           "    push_context context { n31 = 0; }\n"
+                           "    { n32 = 0; }\n"
+                           "    if a == { case 1; n33 = 0; }\n"
                            "}\n"
                            "main :: () { }\n"),
               "2:11: unknown identifier 'n1'\n"
@@ -13361,7 +13381,14 @@ TEST(uninstantiated_bodies_resolve_names_only) {
               "33:9: unknown identifier 'n25'\n"
               "34:9: unknown identifier 'n26'\n"
               "35:10: unknown type 'X'\n"
-              "35:18: unknown type 'Y'\n");
+              "35:18: unknown type 'Y'\n"
+              "36:15: unknown identifier 'n27'\n"
+              "36:33: unknown identifier 'n28'\n"
+              "37:18: unknown identifier 'n29'\n"
+              "38:16: unknown identifier 'n30'\n"
+              "39:28: unknown identifier 'n31'\n"
+              "40:7: unknown identifier 'n32'\n"
+              "41:23: unknown identifier 'n33'\n");
     // Every kind of name a body declares is found where it's in scope:
     // parameters, type parameters, locals, constants, several variables of
     // one call, a loop's iterators named or not, a tagged switch's it, the
@@ -13422,7 +13449,7 @@ TEST(uninstantiated_bodies_resolve_names_only) {
     // generic's turn, has the walk run first: its mistake is the
     // generic's, said once, with no chain, and the body isn't checked. So
     // too when the #run is in the body of an instance, whose chain is set
-    // as the walk runs.
+    // as the walk runs, and set back after it for the body's own errors.
     CHECK_STR(check_source(&a,
                            "X :: #run early(1);\n"
                            "early :: (a: $T) -> T { return nope + a; }\n"
@@ -13438,6 +13465,14 @@ TEST(uninstantiated_bodies_resolve_names_only) {
                            "outer :: (v: $T) -> int { return #run h(1); }\n"
                            "h :: (v: $T) -> int { return nope; }\n"
                            "main :: () { }\n"),
+              "3:30: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: #run outer(true);\n"
+                           "outer :: (v: $T) -> int { n := #run h(1); b: bool = 1; return n; }\n"
+                           "h :: (v: $T) -> int { return nope; }\n"
+                           "main :: () { }\n"),
+              "2:53: a value of type 'int' doesn't convert to 'bool' implicitly\n"
+              "    in 'outer' with T = bool, called at test.rig:1:11\n"
               "3:30: unknown identifier 'nope'\n");
     arena_free(&a);
 }
@@ -13489,6 +13524,22 @@ TEST(instance_errors_name_their_chain) {
               "    in 'outer' with T = bool, called at test.rig:3:14\n"
               "2:43: 'inner' takes 2 arguments, but 1 was given\n"
               "    in 'outer' with T = bool, called at test.rig:3:14\n");
+    // A procedure a #run inside an instance lowers on demand is the
+    // program's, lowered with no chain; the instance's errors after it
+    // have the instance's chain again. An instance's body a global's #run
+    // lowers has its chain only while it's lowered: a later error outside
+    // any instance has none.
+    CHECK_STR(check_source(&a,
+                           "helper :: () -> int { return 3; }\n"
+                           "f :: (v: $T) { x := #run helper(); y: bool = x; }\n"
+                           "main :: () { f(1); }\n"),
+              "2:46: a value of type 'int' doesn't convert to 'bool' implicitly\n"
+              "    in 'f' with T = int, called at test.rig:3:14\n");
+    CHECK_STR(check_source(&a,
+                           "G :: #run f(1);\n"
+                           "f :: (v: $T) -> int { return 1; }\n"
+                           "main :: () { y: bool = 1; }\n"),
+              "3:24: a value of type 'int' doesn't convert to 'bool' implicitly\n");
     arena_free(&a);
 }
 
@@ -13559,15 +13610,24 @@ TEST(instances_have_a_depth_limit) {
     // nest as declarations do, and meet that limit first, said once, with
     // the chain of the instances whose signatures are under way. The calls
     // have no type, and nothing goes on from the one too deep later.
-    Checked c = check_src(&a,
-                          "f :: (a: $T, b: int = f(cast(*T) null)) -> int { return 1; }\n"
-                          "main :: () { x := f(1); }\n");
+    // A later call with the too-deep instance's own bindings finds it
+    // refused: it says nothing more and has no type.
+    Array<u8> stars = {};
+    for (s64 i = 0; i < 250; i++) array_add(&stars, (u8)'*');
+    const char *text = string_cstr(&a, string_printf(&a,
+                                                     "f :: (a: $T, b: int = f(cast(*T) null)) -> int { return 1; }\n"
+                                                     "main :: () { x := f(1); y := f(cast(%.*sint) null); "
+                                                     "z: string = y; }\n",
+                                                     (int)stars.count, (const char *)stars.data));
+    array_free(&stars);
+    Checked c = check_src(&a, text);
     CHECK_STR(messages(&a, &c.list->diag),
               string_cstr(&a, string_printf(&a,
                                             "1:1: 'f' is nested too deeply in the declarations that need it (more "
                                             "than 1000 levels)\n" STR_FMT,
                                             STR_ARG(pointer_chain(&a, "f", 250, "1:23", "2:19")))));
     CHECK_STR(type_of(&a, &c, "x"), "?");
+    CHECK_STR(type_of(&a, &c, "y"), "?");
     token_list_free(c.list);
     arena_free(&a);
 }

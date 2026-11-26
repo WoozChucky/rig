@@ -92,7 +92,8 @@ struct Checker {
                                  // null elsewhere. Set aside with the scopes (checker.cpp's leave_scopes),
                                  // so a declaration worked out inside an instance doesn't see its T.
                                  // Changed only by enter_instance, which gives the errors recorded
-                                 // meanwhile its chain (Diagnostics.context)
+                                 // meanwhile its chain (Diagnostics.context), but a generic's body
+                                 // walk's, which have none (check_generic_names)
 };
 
 // A type parameter of a generic procedure (spec 7.11) while a call of it is

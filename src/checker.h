@@ -1361,7 +1361,8 @@
 //   between (instance_context). Set aside with the scopes, so a global, a
 //   constant or a type worked out from inside an instance has none; a
 //   call's own mistakes (its count, the inference, the conversions) are
-//   the caller's, with the caller's chain.
+//   the caller's, with the caller's chain; and the errors of a generic's
+//   body walk (check_generic_names) are the generic's and have none.
 // - Instances nest at most MAX_DEPTH deep (spec 9.4): the call that would
 //   make one inside an instance MAX_DEPTH deep makes none and has no type,
 //   "'grow' is instantiated more than 1000 levels deep, each instance's

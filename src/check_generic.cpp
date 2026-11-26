@@ -2,7 +2,10 @@
 // procedures"). A generic's own signature, checked without its type
 // parameters being any type; the inference of those from a call's
 // arguments; and the instances, one per set of bindings, program-wide:
-// found again, or made, named and their signatures checked.
+// found again, or made, named and their signatures checked, at most
+// MAX_DEPTH deep. The names a generic's parameters declare; the walk over
+// its body for names declared nowhere; and the chain of instances an error
+// inside one is followed by.
 
 #include "check.h"
 
@@ -111,6 +114,15 @@ static Signature_Name *signature_name(Array<Signature_Name> *names, String name)
     return nullptr;
 }
 
+// Whether a $ among `names` declared `name`: the first of that name may be
+// a parameter's, a refused $T after it.
+static bool dollar_declared(Array<Signature_Name> *names, String name) {
+    for (s64 i = 0; i < names->count; i++) {
+        if ((*names)[i].dollar && string_eq((*names)[i].name, name)) return true;
+    }
+    return false;
+}
+
 // The names written type `written`, a parameter's of a generic, declares
 // and uses, in the order they're written (depth first, left to right, an
 // array's count apart), against what the parameters and the parts before
@@ -125,15 +137,18 @@ static Signature_Name *signature_name(Array<Signature_Name> *names, String name)
 //   declare_top_level says of a top-level declaration: "'int' is a built-in
 //   type";
 // - a use of a type parameter written before the $ that declares it: "'T'
-//   is used before '$T' declares it", at the use.
+//   is used before '$T' declares it", at the use; never of a built-in
+//   type's name, which always means the built-in type (spec 3.1).
+// A refused $T is still the $ of its name: a use after it says nothing
+// more.
 static void check_signature_names(Checker *c, Ast_Type *written, Array<Ast_Type *> declared,
                                   Array<Signature_Name> *names) {
     switch (written->kind) {
     case AST_TYPE_NAME: {
         Signature_Name *earlier = signature_name(names, written->name);
         if (!written->declares) {
-            bool declared_yet = earlier && earlier->dollar;
-            if (is_type_parameter(declared, written->name) && !declared_yet) {
+            if (is_type_parameter(declared, written->name) && !type_from_name(written->name) &&
+                !dollar_declared(names, written->name)) {
                 diag_error(c->diag, written->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it",
                            STR_ARG(written->name), STR_ARG(written->name));
             }
@@ -143,6 +158,7 @@ static void check_signature_names(Checker *c, Ast_Type *written, Array<Ast_Type 
                        STR_ARG(written->name));
         } else if (earlier) {
             report_declared_again(c, written->name, written->pos, earlier->pos);
+            array_add(names, {written->name, written->pos, true});
         } else {
             if (type_from_name(written->name)) {
                 diag_error(c->diag, written->pos, "'" STR_FMT "' is a built-in type", STR_ARG(written->name));
@@ -795,7 +811,7 @@ static void names_block(Name_Walk *w, Ast_Block *block) {
     w->names.count = outer;
 }
 
-// A body's #if (spec 6.10): which branch is taken depends on T, so every
+// A body's #if (spec 4.9): which branch is taken depends on T, so every
 // condition and every branch is walked, each branch's names declared only
 // in it while it's walked; then, as #if makes no scope, what any branch
 // declares is known after the chain (a branch taken declares it there).
