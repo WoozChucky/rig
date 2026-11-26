@@ -3101,7 +3101,10 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 
 // A procedure's default values (issue #155, spec 7.2), checked with its
 // signature, once every parameter's type is known, `base` being the
-// signature's level (check_signature's).
+// signature's level (check_signature's). Where defaults may go, the next
+// two paragraphs but C's '..' and #compiler, is check_default_places', which
+// a generic's signature checks too, once, at the generic
+// (check_generic_signature).
 //
 // A call gives the parameters in order, and leaves out the last ones: so
 // once a parameter has a default, every one after it has one, or it's
@@ -3180,25 +3183,16 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // then converted to its parameter's type as any default is: `loc: int =
 // #caller_location` is "a value of type 'Source_Code_Location' doesn't
 // convert to 'int' implicitly". An Any parameter doesn't take it.
-static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
+s64 check_default_places(Checker *c, Ast_Proc *proc, const bool *settled) {
     Array<Ast_Param *> &params = proc->params;
     s64 first = 0;
-    while (first < params.count && !params[first]->default_value) first++;
-    const char *refused = proc->is_c_variadic ? "a procedure that takes C's '..'"
-                          : proc->is_compiler ? "a #compiler procedure"
-                                              : nullptr;
-    if (refused) {
-        if (first < params.count) {
-            diag_error(c->diag, params[first]->equals, "%s can't have default values, for now", refused);
-        }
-        return;
-    }
+    while (first < params.count && (!params[first]->default_value || (settled && settled[first]))) first++;
     s64 dots = variadic_index(proc);
     if (dots >= 0) {
         // Only the defaults after the '..T' parameter are checked: the
         // others are refused.
         for (s64 i = 0; i <= dots; i++) {
-            if (!params[i]->default_value) continue;
+            if (!params[i]->default_value || (settled && settled[i])) continue;
             if (i < dots) {
                 diag_error(c->diag, params[i]->equals,
                            "'" STR_FMT "' can't have a default value, since a '..' parameter comes after it",
@@ -3209,20 +3203,38 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
             }
         }
         for (s64 i = dots + 1; i < params.count; i++) {
-            if (params[i]->default_value) continue;
+            if (params[i]->default_value || (settled && settled[i])) continue;
             diag_error(c->diag, params[i]->pos,
                        "'" STR_FMT "' needs a default value, since it comes after the '..' parameter",
                        STR_ARG(params[i]->name));
         }
-        first = dots + 1;
-    } else {
-        for (s64 i = first + 1; i < params.count; i++) {
-            if (params[i]->default_value) continue;
-            diag_error(c->diag, params[i]->pos,
-                       "'" STR_FMT "' needs a default value, since a parameter before it has one",
-                       STR_ARG(params[i]->name));
-        }
+        return dots + 1;
     }
+    for (s64 i = first + 1; i < params.count; i++) {
+        if (params[i]->default_value || (settled && settled[i])) continue;
+        diag_error(c->diag, params[i]->pos,
+                   "'" STR_FMT "' needs a default value, since a parameter before it has one",
+                   STR_ARG(params[i]->name));
+    }
+    return first;
+}
+
+static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
+    Array<Ast_Param *> &params = proc->params;
+    const char *refused = proc->is_c_variadic ? "a procedure that takes C's '..'"
+                          : proc->is_compiler ? "a #compiler procedure"
+                                              : nullptr;
+    if (refused) {
+        s64 at = 0;
+        while (at < params.count && !params[at]->default_value) at++;
+        if (at < params.count) {
+            diag_error(c->diag, params[at]->equals, "%s can't have default values, for now", refused);
+        }
+        return;
+    }
+    // An instance's places were its generic's, checked there once: with a
+    // mistake in them it makes no instance, so here they say nothing.
+    s64 first = check_default_places(c, proc, nullptr);
     if (first == params.count) return;
     push_scope(c);
     Table<Ast *> *scope = &c->scopes[c->scopes.count - 1];

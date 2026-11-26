@@ -13935,5 +13935,61 @@ TEST(rest_arguments_fix_t_by_the_first_typed_one) {
               "1:51: '+=' needs numbers, not 'string'\n"
               "    in 'sum' with T = string, called at test.rig:2:19\n"
               "2:23: argument 1 of 'sum' has type 'int', which can't be converted to 'string'\n");
+    // Another parameter's type that names T gives it when the '..T' one is
+    // given nothing.
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (first: $T, rest: ..T) -> T { return first; }\n"
+                                 "main :: () {\n"
+                                 "    x: s16;\n"
+                                 "    a := f(1);\n"
+                                 "    b := f(x, 1, 2);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    CHECK_STR(type_of_main_local(&a, tree, "a"), "int");
+    CHECK_STR(type_of_main_local(&a, tree, "b"), "s16");
+    arena_free(&a);
+}
+
+TEST(generic_default_places_are_said_once) {
+    // Where a generic's defaults go doesn't depend on T: a mistake in it is
+    // the generic's, said once, at the generic, with no instance chain,
+    // whether it's called or not, and the generic makes no instance. Its
+    // '$' parameters' own default rules say nothing more here.
+    Arena a = arena_make();
+    struct Case {
+        const char *generic;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"f :: (n: int = 1, values: ..$T) -> int { return n; }",
+         "1:14: 'n' can't have a default value, since a '..' parameter comes after it\n"},
+        {"g :: (values: ..$T, loc: int) -> int { return 1; }",
+         "1:21: 'loc' needs a default value, since it comes after the '..' parameter\n"},
+        {"h :: (by: int = 1, v: $T) -> int { return by; }",
+         "1:20: 'v' needs a default value, since a parameter before it has one\n"},
+        {"k :: (v: $T, by: T = 2, n: int) -> int { return n; }",
+         "1:25: 'n' needs a default value, since a parameter before it has one\n"},
+        {"m :: (v: $T, rest: ..T = 1) -> int { return 1; }",
+         "1:24: a '..' parameter can't have a default value: given no arguments, it is empty\n"},
+        {"p :: (by: int = 1, $N: int) -> int { return N; }",
+         "1:20: a '$' parameter can't come after one with a default value, since each parameter after that needs "
+         "one\n"},
+        {"q :: (values: ..$T, $N: int) -> int { return N; }",
+         "1:21: a '$' parameter can't come after a '..' parameter, which takes every argument left\n"},
+        {"r :: (v: $T = 1, n: int) -> int { return n; }",
+         "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
+    };
+    for (const Case &k : cases) {
+        // Called with two types, and not called at all.
+        String called = string_printf(&a, "%s\nmain :: () { x := %c(1, 2); y := %c(1.5, 2); }\n", k.generic,
+                                      k.generic[0], k.generic[0]);
+        Checked c = check_src(&a, string_cstr(&a, called));
+        CHECK_STR(messages(&a, &c.list->diag), k.message);
+        CHECK_EQ(c.file->instances.count, 0);
+        token_list_free(c.list);
+        String alone = string_printf(&a, "%s\nmain :: () { }\n", k.generic);
+        CHECK_STR(check_source(&a, string_cstr(&a, alone)), k.message);
+    }
     arena_free(&a);
 }

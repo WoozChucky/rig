@@ -1,14 +1,17 @@
 // What any procedure has, in generic procedures (issue #226, spec 7.11).
 // A '..$T' parameter: each of its arguments gives T, the first typed one
 // fixing it, and a spread gives its elements' type, so sum(..float.[...])
-// is sum for float32. A default value may name T, and is checked and
-// converted per instance: scale's `by: T = 2` is an int for scale(3) and a
-// float32 for scale(1.5), sized's size_of(T) each instance's own size. A
-// default #caller_location is the place of each call that leaves it out,
-// after a baked $T too, whose argument has no code. A #run inside an
-// instance sees that instance's T: kind's #if picks a branch per instance
-// by its type's tag, while compiling. The same compiled, interpreted and
-// in #runs, a constant's and a top-level one.
+// is sum for float32. After another parameter, a '..$T' one takes the
+// arguments after that one's, a baked one's too: rep's $N, rept's $U. A
+// call that gives a '..T' nothing takes T from another parameter: lead(5).
+// A default value may name T, and is checked and converted per instance:
+// scale's `by: T = 2` is an int for scale(3) and a float32 for scale(1.5),
+// sized's size_of(T) each instance's own size. A default #caller_location
+// is the place of each call that leaves it out, two calls of one instance
+// each their own, after a baked $T too, whose argument has no code. A #run
+// inside an instance sees that instance's T: kind's #if picks a branch per
+// instance by its type's tag, while compiling. The same compiled,
+// interpreted and in #runs, a constant's and a top-level one.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -27,7 +30,13 @@ sized :: (v: $T, n: int = size_of(T)) -> int { return n; }
 
 where :: (v: $T, loc: Source_Code_Location = #caller_location) -> int { return loc.line; }
 
-where2 :: ($T: Type, loc: Source_Code_Location = #caller_location) -> int { return loc.line; }
+where2 :: ($T: Type, loc: Source_Code_Location = #caller_location) -> int { return loc.column; }
+
+rep :: ($N: int, values: ..$T) -> T { return sum(..values) * cast(T) N; }
+
+rept :: ($U: Type, values: ..$T) -> int { return size_of(U) + values.count; }
+
+lead :: (a: $T, rest: ..T) -> T { return a + sum(..rest); }
 
 kind :: (v: $T) -> string {
     #if #run type_info(T).tag == .ENUM {
@@ -43,14 +52,20 @@ K :: #run kind(Mode.A);
 
 #run {
     print("{}\n", sum(1, 2));
+    print("{}\n", rep(3, 1, 2));
 }
 
 main :: () {
+    x: s16 = 4;
     print("{}\n", sum(1, 2, 3));
     print("{}\n", sum(..float.[1.5, 2.5]));
     print("{} {} {}\n", scale(3), scale(1.5), scale(3, 3));
     print("{} {}\n", sized(cast(u8) 1), sized(Vec2.{}));
-    print("{} {}\n", where(1), where2(int));
+    print("{}\n", where(1));
+    print("{}\n", where(2));
+    print("{} {}\n", where2(int), where2(int));
+    print("{} {}\n", rep(3, 1, 2), rep(2, ..float.[1.5, 2.5]));
+    print("{} {} {}\n", rept(u8, 1, 2, 3), lead(5), lead(1, x, 2));
     print("{} {} {}\n", kind(Mode.B), kind(Vec2.{}), kind(3));
     print("{}\n", K);
 }

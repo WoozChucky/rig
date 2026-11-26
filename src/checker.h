@@ -1408,15 +1408,18 @@
 //   it, a spread its elements' type (argument_type), and the rest convert
 //   to it as any '..T' argument does; a call that gives it nothing, and no
 //   other parameter's type names T, is "can't work out 'T' for 'sum': no
-//   argument gives it", at the callee. A default value, which may name T
-//   (`by: T = 2`, `n: int = size_of(T)`), is checked with the instance's
+//   argument gives it", at the callee. Where defaults go doesn't depend on
+//   T, so a mistake in it is the generic's, said once, at the generic
+//   (checker.cpp's check_default_places). A default value, which may name
+//   T (`by: T = 2`, `n: int = size_of(T)`), is checked with the instance's
 //   signature, under its Checker.instance, so it converts to that
 //   instance's type; #caller_location is the call's place as for any
 //   default, after a baked parameter's dropped argument too. A #run in an
 //   instance's body runs once per instance and sees its bindings, so
-//   `#if #run type_info(T).tag == .ENUM` is decided per instance; one that
-//   fails names the instance in its frames by its readable name (the
-//   Ir_Proc's source_name), and its message is followed by the chain.
+//   `#if #run type_info(T).tag == .ENUM` is decided per instance. A #run
+//   that fails names each instance its code called in its frames, by its
+//   readable name (the Ir_Proc's source_name); one in an instance's body
+//   is followed, after its frames, by that instance's chain.
 // - What lowering may rely on: no generic procedure is lowered, and no
 //   call's proc is one; each instance is a procedure, keyed by its symbol
 //   (lower.cpp's proc_symbol), after the program's own procedures; no

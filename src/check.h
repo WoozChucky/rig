@@ -159,6 +159,16 @@ Type *resolve_type_value(Checker *c, Ast_Type *written);
 // proc, a generic one's too (check_generic_signature).
 void refuse_c_dots(Checker *c, Ast_Proc *proc);
 
+// Says where procedure proc's default values can't go (spec 7.2, checker.cpp's
+// check_defaults): one before a '..' parameter or on it, and a parameter with
+// none after one that has one or after the '..' parameter. A parameter
+// marked in `settled` (null for none) has its default and its place said
+// already, a generic's '$' ones and those with a default whose type declares
+// a '$T' (check_generic_signature): its default counts as none, and nothing
+// is said of it. The index of the first parameter whose default is to be
+// checked.
+s64 check_default_places(Checker *c, Ast_Proc *proc, const bool *settled);
+
 // Makes sure the type of field `index` of struct t is known: a late field's
 // (one holding a pointer or a view, checker.cpp's lay_out) is made here if
 // it isn't yet, as a literal or a field access in a global's value or an

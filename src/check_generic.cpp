@@ -449,8 +449,12 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
         check_signature_names(c, param->type_expr, declared, &names);
     }
     array_free(&names);
+    // The parameters whose default and place are said here, for
+    // check_default_places to pass over.
+    Array<bool> settled = {};
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
+        array_add(&settled, param->is_baked);
         if (param->is_baked) {
             check_baked_parameter(c, generic, i, declared);
             continue;
@@ -464,8 +468,14 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
             diag_error(c->diag, param->equals,
                        "a parameter that declares '$" STR_FMT "' can't have a default value, for now",
                        STR_ARG(declares));
+            settled[i] = true;
         }
     }
+    // Where the defaults go doesn't depend on T, so a mistake in it is the
+    // generic's, said once, here, called or not, and makes no instance; each
+    // instance checks only its defaults' values.
+    check_default_places(c, generic, settled.data);
+    array_free(&settled);
     for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared, false);
     // C's '..' is a foreign procedure's, as check_signature says; a foreign
     // generic is refused below.
