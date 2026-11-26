@@ -383,24 +383,28 @@ static Ast *find_name(Checker *c, String name) {
 // type. A name the walk finds twice at one depth (across the parameters or
 // in one) is still theirs, and check_using_name says it's ambiguous; so is
 // one whose walk meets a circle, or a layout found wrong, said already
-// (check_layout, check_member_under_way): root isn't set, and
-// check_using_name leaves the name undeclared.
-Ast *check_lookup(Checker *c, String name, bool *through_using) {
-    if (through_using) *through_using = false;
+// (check_layout, check_member_under_way): the walk sets no root, which
+// stays the first parameter, and check_using_name leaves the name
+// undeclared. The walk runs once: its result goes to the caller in
+// *through, for check_using_name to read, or, for a caller that passes
+// none, is freed here.
+Ast *check_lookup(Checker *c, String name, Using_Name *through) {
+    Using_Name own;
+    Using_Name *walk = through ? through : &own;
+    *walk = {};
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
     }
     if (c->using_params.count) {
-        Array<s32> path = {}, other = {};
-        s32 root = 0, other_root = 0;
-        s32 reached = check_find_using(c, name, &path, &root, &other, &other_root);
-        array_free(&path);
-        array_free(&other);
-        if (reached) {
-            if (through_using) *through_using = true;
-            return c->using_params[root];
+        walk->found = check_find_using(c, name, &walk->path, &walk->root, &walk->other, &walk->other_root);
+        // Only a caller that passes through reads the paths, and only when
+        // the name is there.
+        if (!through || !walk->found) {
+            array_free(&walk->path);
+            array_free(&walk->other);
         }
+        if (walk->found) return c->using_params[walk->root];
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;

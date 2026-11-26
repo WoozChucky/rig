@@ -11586,8 +11586,9 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
     // One whose using field reaches it is laid out, and is the circle it
     // closes: C, in it, has no fields to search, so the walk ends there,
     // the circle alone said, as b.c.d.g says it: for a bare name, a field,
-    // a literal's name and an assignment's target, h there not taken for
-    // the procedure ("can't assign to 'h': it's a procedure").
+    // a literal's name, an assignment's target, a callee and a member's
+    // operand, h there not taken for the procedure ("can't assign to 'h':
+    // it's a procedure", or a call of it), nor g.k for a field of an int.
     const char *reached = "A :: struct { arr: [#run f(null)]int; }\n"
                           "B :: struct { using c: *C; }\n"
                           "C :: struct { a: A; using d: *D; }\n"
@@ -11600,8 +11601,10 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
         {"(b: *B)", "return b.g;"},
         {"(b: *B)", "v := B.{g = 1}; return 2;"},
         {"(using b: *B)", "h = 4; return 2;"},
+        {"(using b: *B)", "h(); return 2;"},
+        {"(using b: *B)", "return g.k;"},
     };
-    for (s64 i = 0; i < 4; i++) {
+    for (s64 i = 0; i < 6; i++) {
         CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, reaching[i][0], reaching[i][1]))),
                   "1:1: 'A' is defined in terms of itself\n");
     }
@@ -12223,6 +12226,16 @@ TEST(using_parameter_names_come_between_locals_and_globals) {
                                "main :: () { }\n"),
               "5:60: '.empty' needs a struct or a pointer to one, not 'int'\n"
               "7:24: 'Vec2' isn't a procedure, so it can't be called\n");
+    // Ambiguous as a callee, as a member's operand and as an operand.
+    CHECK_STR(check_source(&a, "A :: struct { x: int; }\n"
+                               "A2 :: struct { x: int; }\n"
+                               "f :: (using a: *A, using b: *A2) { x(); }\n"
+                               "g :: (using a: *A, using b: *A2) -> int { return x.y; }\n"
+                               "k :: (using a: *A, using b: *A2) { p := *x; }\n"
+                               "main :: () { }\n"),
+              "3:36: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "4:50: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "5:42: 'x' is ambiguous: 'a.x' or 'b.x'\n");
     arena_free(&a);
 }
 

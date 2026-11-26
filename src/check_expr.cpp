@@ -962,7 +962,7 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
     diag_error(c->diag, name->pos, "a default value can't use the parameter '" STR_FMT "'", STR_ARG(name->name));
 }
 
-static Type *check_using_name(Checker *c, Ast_Name *name);
+static Type *check_using_name(Checker *c, Ast_Name *name, Using_Name *through);
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
@@ -981,15 +981,18 @@ static Type *check_using_name(Checker *c, Ast_Name *name);
 // can't be a value: it's built into the language". A field of a using
 // parameter's struct (spec 3.21) is the field, through the parameter
 // (check_using_name).
-static Type *check_name(Checker *c, Ast_Name *name) {
-    bool through_using;
-    Ast *decl = check_lookup(c, name->name, &through_using);
+//
+// The name is looked up first, by check_name or by a caller that looks it
+// up to see what it declares (check_callee, check_member): decl and
+// *through are what check_lookup found, so the using parameters' fields are
+// walked once. *through's paths are freed.
+static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *through) {
     name->decl = decl;
     if (!decl) {
         report_undeclared(c, name, false);
         return nullptr;
     }
-    if (through_using) return check_using_name(c, name);
+    if (through->found) return check_using_name(c, name, through);
     switch (decl->kind) {
     case AST_VAR: return decl->type;
     case AST_PARAM:
@@ -1065,6 +1068,13 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;
     }
+}
+
+// A name used as a value (check_named), looked up here.
+static Type *check_name(Checker *c, Ast_Name *name) {
+    Using_Name through;
+    Ast *decl = check_lookup(c, name->name, &through);
+    return check_named(c, name, decl, &through);
 }
 
 // An extra argument (one after the fixed parameters of a procedure that
@@ -1248,7 +1258,11 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     Type *t = nullptr;
     if (callee->kind == AST_NAME) {
         Ast_Name *name = (Ast_Name *)callee;
-        Ast *decl = check_lookup(c, name->name, nullptr);
+        // A using parameter's field is a value, its walk's paths left for
+        // check_named; a name that returns before, a procedure's, a type's
+        // or none, wasn't found there, so has none to free.
+        Using_Name through;
+        Ast *decl = check_lookup(c, name->name, &through);
         if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM) {
             name->decl = decl;
             if (decl) {
@@ -1269,7 +1283,9 @@ static bool check_callee(Checker *c, Ast_Call *call) {
             call->builtin = (Ast_Builtin *)decl;
             return true;
         }
-        t = check_expression(c, name);  // a variable's, a parameter's or a constant's value
+        // A variable's, a parameter's, a using parameter's field's or a
+        // constant's value.
+        t = name->type = check_named(c, name, decl, &through);
         if (decl->kind == AST_CONST && ((Ast_Const *)decl)->proc) {
             call->proc = ((Ast_Const *)decl)->proc;
             return true;
@@ -2809,8 +2825,8 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // said of the name itself, not a mistake found in the procedure's
         // value, such as "'printf' can't be a value" for one taking C's '..'.
         Ast_Name *name = (Ast_Name *)e;
-        bool through_using;
-        Ast *decl = check_lookup(c, name->name, &through_using);
+        Using_Name through;
+        Ast *decl = check_lookup(c, name->name, &through);
         name->decl = decl;
         if (!decl) {
             report_undeclared(c, name, false);
@@ -2819,8 +2835,8 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // A using parameter's field (spec 3.21): the chain it means, worked
         // out (or refused in a default value) as for its value, then a
         // place or not as the chain is.
-        if (through_using) {
-            Type *t = check_using_name(c, name);
+        if (through.found) {
+            Type *t = check_using_name(c, name, &through);
             if (!t || !name_is_place(c, name, for_writing)) return false;
             name->type = t;
             return true;
@@ -3353,14 +3369,15 @@ static Ast *member_chain(Checker *c, Ast *operand, Type **s, Array<s32> path, Po
 }
 
 // A name check_lookup found among the fields of the procedure's using
-// parameters (spec 3.21), as check_find_using finds it: position in move's
-// body is e.position. name->through gets the chain it means, made as
-// check_member makes one through using fields (member_chain): an Ast_Name
-// naming the parameter, then a member for each field on the way, each at
-// the name written, so a null pointer followed on the way, the parameter's
-// or a field's, is said there (spec 8.4). name->decl is the parameter, and
-// the field's type is returned. Lowering, places and #run's walk follow the
-// chain (checker.h's using section).
+// parameters (spec 3.21): position in move's body is e.position. The walk
+// was check_lookup's (check_find_using), *through what it found, read here
+// rather than walked again, and its paths freed. name->through gets the
+// chain it means, made as check_member makes one through using fields
+// (member_chain): an Ast_Name naming the parameter, then a member for each
+// field on the way, each at the name written, so a null pointer followed on
+// the way, the parameter's or a field's, is said there (spec 8.4).
+// name->decl is the parameter, and the field's type is returned. Lowering,
+// places and #run's walk follow the chain (checker.h's using section).
 //
 // Two at the first depth that has one, across the parameters or in one,
 // are "'x' is ambiguous: 'a.x' or 'b.x'", at the name, each path written
@@ -3370,19 +3387,16 @@ static Ast *member_chain(Checker *c, Ast *operand, Type **s, Array<s32> path, Po
 // In a default value the field is refused as its parameter is
 // (check_defaults): "a default value can't use 'id', a field of the
 // parameter 'e'". Null after any.
-static Type *check_using_name(Checker *c, Ast_Name *name) {
-    Array<s32> path = {}, other = {};
-    s32 root = 0, other_root = 0;
-    s32 found = check_find_using(c, name->name, &path, &root, &other, &other_root);
+static Type *check_using_name(Checker *c, Ast_Name *name, Using_Name *through) {
     Type *t = nullptr;
     name->decl = nullptr;
-    if (found == 2) {
-        Ast_Param *a = c->using_params[root], *b = c->using_params[other_root];
+    if (through->found == 2) {
+        Ast_Param *a = c->using_params[through->root], *b = c->using_params[through->other_root];
         diag_error(c->diag, name->pos, "'" STR_FMT "' is ambiguous: '" STR_FMT "' or '" STR_FMT "'",
-                   STR_ARG(name->name), STR_ARG(member_path_text(c, using_struct(a), path, a->name)),
-                   STR_ARG(member_path_text(c, using_struct(b), other, b->name)));
-    } else if (found == 1) {
-        Ast_Param *param = c->using_params[root];
+                   STR_ARG(name->name), STR_ARG(member_path_text(c, using_struct(a), through->path, a->name)),
+                   STR_ARG(member_path_text(c, using_struct(b), through->other, b->name)));
+    } else if (through->found == 1) {
+        Ast_Param *param = c->using_params[through->root];
         name->decl = param;
         if (c->default_of) {
             diag_error(c->diag, name->pos,
@@ -3395,16 +3409,16 @@ static Type *check_using_name(Checker *c, Ast_Name *name) {
             base->type = param->type;
             // Every member, the last's too, is at the name written.
             Type *s = using_struct(param);
-            Ast *chain = member_chain(c, base, &s, path, name->pos, name->pos);
-            s32 last = path[path.count - 1];
+            Ast *chain = member_chain(c, base, &s, through->path, name->pos, name->pos);
+            s32 last = through->path[through->path.count - 1];
             // The last field's type may be a late one's, not made yet.
             check_late_field(c, s, last);
             name->through = member_link(c, chain, s, last, name->pos, name->pos);
             t = name->through->type;
         }
     }
-    array_free(&path);
-    array_free(&other);
+    array_free(&through->path);
+    array_free(&through->other);
     return t;
 }
 
@@ -3467,9 +3481,13 @@ static Type *check_using_name(Checker *c, Ast_Name *name) {
 // no member of is "'Shape' has no member 'z'" there.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
+    Type *t;
     if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
         Ast_Name *name = (Ast_Name *)operand;
-        Ast *decl = check_lookup(c, name->name, nullptr);
+        // An enum's or a tagged union's name wasn't found among the using
+        // parameters' fields, so has no paths to free.
+        Using_Name through;
+        Ast *decl = check_lookup(c, name->name, &through);
         if (decl && decl->kind == AST_ENUM) {
             name->decl = decl;
             Ast_Enum *e = (Ast_Enum *)decl;
@@ -3485,12 +3503,21 @@ static Type *check_member(Checker *c, Ast_Member *m) {
             Ast_Struct *s = (Ast_Struct *)decl;
             m->of_tagged = s;
             if (!s->declared) return nullptr;  // its layout failed, said: a circle, too big, or a tag too small
-            Type *t = s->declared;
+            t = s->declared;
             m->made = void_member_value(c, t, m->name, m->pos, m, &m->index);
             return m->made ? t : nullptr;
         }
+        // Any other name is an operand, checked as check_operand checks
+        // one (a name is never void, as only a call is), from the lookup
+        // made here.
+        t = name->type = check_named(c, name, decl, &through);
+        if (t && type_waits_for_one(t)) {
+            check_default_type(c, name);  // reports it
+            t = nullptr;
+        }
+    } else {
+        t = check_operand(c, m->operand);
     }
-    Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
     if (t->kind == TYPE_ARRAY || type_has_view_fields(t)) return check_sequence_member(c, m, t);
     Type *s = type_is_pointer(t) && t->pointee->kind == TYPE_STRUCT ? t->pointee : t;

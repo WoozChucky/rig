@@ -88,17 +88,30 @@ struct Checker {
 
 // checker.cpp
 
+// Where check_lookup found a name among the fields the using parameters
+// reach (spec 3.21): check_find_using's result, kept so the walk runs once
+// per use.
+struct Using_Name {
+    s32 found;         // 0: not there; 1; 2: ambiguous; -1: a circle or a layout found wrong, said
+    s32 root;          // the first path's parameter, an index into Checker.using_params
+    s32 other_root;    // the second's
+    Array<s32> path;   // the first path's field indices from its parameter's struct down
+    Array<s32> other;  // the second's
+};
+
 // The declaration `name` means where the checker is: the innermost block's
 // that declares it, else a field of a using parameter's struct
-// (Checker.using_params, spec 3.21): the parameter is returned, and
-// *through_using set, for the caller to work out the field
-// (check_expr.cpp's check_using_name); else the top level's (a procedure,
-// a global or a constant); null when there's none. A global or constant
-// found at the top level is checked first if it hasn't been yet
-// (resolve_global), so its type and value are known, whatever the order of
-// the declarations. through_using may be null, for a caller that only
-// asks whether the name is a type's, an enum's or a procedure's.
-Ast *check_lookup(Checker *c, String name, bool *through_using);
+// (Checker.using_params, spec 3.21): the parameter is returned, and the
+// walk that found the field left in *through (found not 0), for the caller
+// to work out the field from (check_expr.cpp's check_using_name, which
+// frees its paths); else the top level's (a procedure, a global or a
+// constant); null when there's none. *through's found is 0 then, and it
+// holds nothing to free. A global or constant found at the top level is
+// checked first if it hasn't been yet (resolve_global), so its type and
+// value are known, whatever the order of the declarations. through may be
+// null, for a caller that only asks whether the name is a type's, an
+// enum's or a procedure's.
+Ast *check_lookup(Checker *c, String name, Using_Name *through);
 
 // The type a written type means, or null after reporting an unknown name,
 // or void anywhere but behind a pointer ("'void' is only a pointer's
