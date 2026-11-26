@@ -5026,6 +5026,12 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     l->defers.count = 0;
     l->checking_bounds = l->bounds_checks && !source->no_bounds_checks;
     l->is_entry = string_eq(source->name, str("main"));
+    // An error found here in an instance's body (spec 7.11) is followed by
+    // its chain, as the checker's are (Diagnostics.context): made when its
+    // signature was checked. Set back when the body is done, as lowering on
+    // demand may run while the checker has one set.
+    String outer_context = l->diag->context;
+    l->diag->context = source->instance ? source->instance->context : String{};
     // Where the body's context comes from (spec 7.10): main and a run's
     // procedure start with the default one, even a main marked #c_call; a
     // procedure that takes it (takes_context) is given its caller's; a
@@ -5107,6 +5113,7 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     l->defers.count = 0;
     l->is_entry = false;
     l->context = -1;
+    l->diag->context = outer_context;
 }
 
 // The tables and arrays a lowering keeps, freed.

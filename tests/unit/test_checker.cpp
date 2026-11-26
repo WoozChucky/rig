@@ -13261,10 +13261,107 @@ TEST(uninstantiated_bodies_resolve_names_only) {
                            "lib2 :: (a: $T) { z: Missing; #if T == int { w := 1; } else { w := 2; } v := w; }\n"
                            "main :: () { }\n"),
               "1:22: unknown type 'Missing'\n");
+    // Each branch's names are its own while it's walked, the else branch's
+    // too, and both branches' are known after the chain.
     CHECK_STR(check_source(&a,
-                           "lib3 :: (using e: *$T) { q := position; }\n"
+                           "f :: (a: $T) { #if T == int { w := 1; } else { u := w + nope; } v := w + u; }\n"
                            "main :: () { }\n"),
-              "");
+              "1:53: unknown identifier 'w'\n"
+              "1:57: unknown identifier 'nope'\n");
+    // A using parameter's fields are values: a written type is still
+    // looked up, as a field is no type.
+    CHECK_STR(check_source(&a,
+                           "lib3 :: (using e: *$T) { q := position; r: Nope; }\n"
+                           "main :: () { }\n"),
+              "1:44: unknown type 'Nope'\n");
+    // After a #load or a top-level #if's condition failed (lost_a_file), a
+    // name declared nowhere may be the lost file's: nothing is said.
+    {
+        Token_List *list = src("lib4 :: (a: $T) { x := nope; y: Nope; }\n"
+                               "main :: () { }\n");
+        Ast_File *file = parse(list->tokens, &a, &list->diag);
+        file->lost_a_file = true;
+        check(file, &a, &list->diag);
+        CHECK_STR(messages(&a, &list->diag), "");
+        token_list_free(list);
+    }
+    // Every statement and expression that holds a name is walked: one
+    // declared nowhere in each is said, in order, and a variable is
+    // declared after its value (k := k). A member's name and a literal's
+    // field names (f) are T's, never looked at.
+    CHECK_STR(check_source(&a,
+                           "each :: (a: $T) {\n"
+                           "    defer n1 = 0;\n"
+                           "    push_context n2 { }\n"
+                           "    x := cast(int) n3;\n"
+                           "    y := int.[n4, 1];\n"
+                           "    z := a[n5];\n"
+                           "    w := -n6;\n"
+                           "    if a == { case n7; }\n"
+                           "    while n8 { }\n"
+                           "    for 0..n9 { }\n"
+                           "    v := Q.{1};\n"
+                           "    u := size_of(R);\n"
+                           "    p := *n10;\n"
+                           "    t := n11.f;\n"
+                           "    s := .{f = n12};\n"
+                           "    k := k;\n"
+                           "    x = n13;\n"
+                           "    if n14 { }\n"
+                           "    K :: n15;\n"
+                           "    m1, m2 := n16;\n"
+                           "    b := 1 + n17;\n"
+                           "    each(n18);\n"
+                           "    i := type_info(S);\n"
+                           "    j := [..]U;\n"
+                           "    l := #run n19;\n"
+                           "    o := n20.*;\n"
+                           "    for n21 { }\n"
+                           "    for n22..2 { }\n"
+                           "    each(..n23);\n"
+                           "    if n24 == { }\n"
+                           "    c := cast(V) 1;\n"
+                           "    d := #type W;\n"
+                           "    #if n25 { }\n"
+                           "    e: [n26]int;\n"
+                           "    g: (*X) -> []Y;\n"
+                           "}\n"
+                           "main :: () { }\n"),
+              "2:11: unknown identifier 'n1'\n"
+              "3:18: unknown identifier 'n2'\n"
+              "4:20: unknown identifier 'n3'\n"
+              "5:15: unknown identifier 'n4'\n"
+              "6:12: unknown identifier 'n5'\n"
+              "7:11: unknown identifier 'n6'\n"
+              "8:20: unknown identifier 'n7'\n"
+              "9:11: unknown identifier 'n8'\n"
+              "10:12: unknown identifier 'n9'\n"
+              "11:10: unknown type 'Q'\n"
+              "12:18: unknown type 'R'\n"
+              "13:11: unknown identifier 'n10'\n"
+              "14:10: unknown identifier 'n11'\n"
+              "15:16: unknown identifier 'n12'\n"
+              "16:10: unknown identifier 'k'\n"
+              "17:9: unknown identifier 'n13'\n"
+              "18:8: unknown identifier 'n14'\n"
+              "19:10: unknown identifier 'n15'\n"
+              "20:15: unknown identifier 'n16'\n"
+              "21:14: unknown identifier 'n17'\n"
+              "22:10: unknown identifier 'n18'\n"
+              "23:20: unknown type 'S'\n"
+              "24:14: unknown type 'U'\n"
+              "25:15: unknown identifier 'n19'\n"
+              "26:10: unknown identifier 'n20'\n"
+              "27:9: unknown identifier 'n21'\n"
+              "28:9: unknown identifier 'n22'\n"
+              "29:12: unknown identifier 'n23'\n"
+              "30:8: unknown identifier 'n24'\n"
+              "31:15: unknown type 'V'\n"
+              "32:16: unknown type 'W'\n"
+              "33:9: unknown identifier 'n25'\n"
+              "34:9: unknown identifier 'n26'\n"
+              "35:10: unknown type 'X'\n"
+              "35:18: unknown type 'Y'\n");
     // Every kind of name a body declares is found where it's in scope:
     // parameters, type parameters, locals, constants, several variables of
     // one call, a loop's iterators named or not, a tagged switch's it, the
@@ -13306,14 +13403,42 @@ TEST(uninstantiated_bodies_resolve_names_only) {
               "25:11: unknown type 'Unknown'\n");
     // A generic whose walk said something makes no instance after it, and
     // an instance made before it isn't checked: its errors would only say
-    // the walk's again, without the instance's chain.
-    CHECK_STR(check_source(&a,
-                           "main :: () { x := early(1); }\n"
-                           "early :: (a: $T) -> T { return nope + a; }\n"
-                           "late :: (a: $T) -> T { return nope + a; }\n"
-                           "other :: () { y := late(1); }\n"),
+    // the walk's again, without the instance's chain. The call after it
+    // has no type.
+    Checked c = check_src(&a,
+                          "main :: () { x := early(1); }\n"
+                          "early :: (a: $T) -> T { return nope + a; }\n"
+                          "late :: (a: $T) -> T { return nope + a; }\n"
+                          "other :: () { y := late(1); }\n");
+    diag_sort(&c.list->diag);
+    CHECK_STR(messages(&a, &c.list->diag),
               "2:32: unknown identifier 'nope'\n"
               "3:31: unknown identifier 'nope'\n");
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "early"))->instances.count, 1);
+    CHECK_EQ(((Ast_Proc *)global_named(&c, "late"))->instances.count, 0);
+    CHECK_STR(type_of(&a, &c, "y"), "?");
+    token_list_free(c.list);
+    // An instance's body a #run reaches during the declarations, before its
+    // generic's turn, has the walk run first: its mistake is the
+    // generic's, said once, with no chain, and the body isn't checked. So
+    // too when the #run is in the body of an instance, whose chain is set
+    // as the walk runs.
+    CHECK_STR(check_source(&a,
+                           "X :: #run early(1);\n"
+                           "early :: (a: $T) -> T { return nope + a; }\n"
+                           "main :: () { }\n"),
+              "2:32: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: #run h(1);\n"
+                           "h :: (v: $T) -> int { return nope; }\n"
+                           "main :: () { }\n"),
+              "2:30: unknown identifier 'nope'\n");
+    CHECK_STR(check_source(&a,
+                           "A :: #run outer(1);\n"
+                           "outer :: (v: $T) -> int { return #run h(1); }\n"
+                           "h :: (v: $T) -> int { return nope; }\n"
+                           "main :: () { }\n"),
+              "3:30: unknown identifier 'nope'\n");
     arena_free(&a);
 }
 
@@ -13354,6 +13479,62 @@ TEST(instance_errors_name_their_chain) {
               "    in 'f' with T = string, called at test.rig:3:19\n"
               "3:32: 'g' takes 2 arguments, but 1 was given\n"
               "3:56: argument 2 of 'g' has type 'string', which can't be converted to 'int'\n");
+    // Inside an instance, the call's own mistakes have the caller's chain,
+    // after the callee's instance's signature was checked inside it.
+    CHECK_STR(check_source(&a,
+                           "inner :: (a: $T, b: T) { }\n"
+                           "outer :: (v: $T) { n: int; inner(n, \"y\"); inner(v); }\n"
+                           "main :: () { outer(true); }\n"),
+              "2:37: argument 2 of 'inner' has type 'string', which can't be converted to 'int'\n"
+              "    in 'outer' with T = bool, called at test.rig:3:14\n"
+              "2:43: 'inner' takes 2 arguments, but 1 was given\n"
+              "    in 'outer' with T = bool, called at test.rig:3:14\n");
+    arena_free(&a);
+}
+
+// The expected chain of `generic`'s instances from T = int to T = int
+// behind `depth` - 1 pointers, innermost first, each made at the call `at`
+// in the one before it, the first by main's call at `first`, capped as
+// instance_context caps it.
+static String pointer_chain(Arena *a, const char *generic, s64 depth, const char *at, const char *first) {
+    String expected = {};
+    for (s64 d = depth; d >= 1; d--) {
+        if (depth > 21 && d == depth - 10) {
+            expected = string_printf(a, STR_FMT "    ... %lld more instances\n", STR_ARG(expected), (long long)(depth - 20));
+            d = 11;
+            continue;
+        }
+        Array<u8> type = {};
+        for (s64 i = 0; i < d - 1; i++) array_add(&type, (u8)'*');
+        for (const char *p = "int"; *p; p++) array_add(&type, (u8)*p);
+        expected = string_printf(a, STR_FMT "    in '%s' with T = %.*s, called at test.rig:%s\n", STR_ARG(expected),
+                                 generic, (int)type.count, (const char *)type.data, d == 1 ? first : at);
+        array_free(&type);
+    }
+    return expected;
+}
+
+TEST(instance_chains_show_up_to_21_instances) {
+    // A chain of 21 instances is shown whole; of 22, the innermost and
+    // outermost ten, and the two between them counted, as one left out
+    // would take the line that says so.
+    Arena a = arena_make();
+    for (s64 depth = 21; depth <= 22; depth++) {
+        Array<u8> stars = {};
+        for (s64 i = 0; i < depth - 1; i++) array_add(&stars, (u8)'*');
+        const char *text = string_cstr(&a, string_printf(&a,
+                                                         "grow :: (v: $T) { #if T == %.*sint { y: bool = v; } "
+                                                         "else { x := v; grow(*x); } }\n"
+                                                         "main :: () { grow(1); }\n",
+                                                         (int)stars.count, (const char *)stars.data));
+        String expected = string_printf(&a, "1:%lld: a value of type '%.*sint' doesn't convert to 'bool' implicitly\n",
+                                        (long long)(depth + 43), (int)stars.count, (const char *)stars.data);
+        array_free(&stars);
+        String at = string_printf(&a, "1:%lld", (long long)(depth + 63));
+        expected = string_printf(&a, STR_FMT STR_FMT, STR_ARG(expected),
+                                 STR_ARG(pointer_chain(&a, "grow", depth, string_cstr(&a, at), "2:14")));
+        CHECK_STR(check_source(&a, text), string_cstr(&a, expected));
+    }
     arena_free(&a);
 }
 
@@ -13363,26 +13544,30 @@ TEST(instances_have_a_depth_limit) {
     // refused at its call, with the chain of the instances it's in, the
     // innermost and outermost ten.
     Arena a = arena_make();
-    String expected = str("1:27: 'grow' is instantiated more than 1000 levels deep, each instance's body making "
-                          "the next\n");
     // The instance at depth d is T = int behind d - 1 pointers, made at the
     // call in the body of the one before it, the first by main's.
-    for (s64 d = 1000; d >= 1; d--) {
-        if (d == 990) {
-            expected = string_printf(&a, STR_FMT "    ... 980 more instances\n", STR_ARG(expected));
-            d = 11;
-            continue;
-        }
-        Array<u8> type = {};
-        for (s64 i = 0; i < d - 1; i++) array_add(&type, (u8)'*');
-        for (const char *p = "int"; *p; p++) array_add(&type, (u8)*p);
-        expected = string_printf(&a, STR_FMT "    in 'grow' with T = %.*s, called at test.rig:%s\n", STR_ARG(expected),
-                                 (int)type.count, (const char *)type.data, d == 1 ? "2:14" : "1:27");
-        array_free(&type);
-    }
+    String expected = string_printf(&a,
+                                    "1:27: 'grow' is instantiated more than 1000 levels deep, each instance's body "
+                                    "making the next\n" STR_FMT,
+                                    STR_ARG(pointer_chain(&a, "grow", 1000, "1:27", "2:14")));
     CHECK_STR(check_source(&a,
                            "grow :: (v: $T) { x := v; grow(*x); }\n"
                            "main :: () { grow(1); }\n"),
               string_cstr(&a, expected));
+    // An instance's signature is checked where its call needs it, inside
+    // the signature of the instance whose default value makes it: those
+    // nest as declarations do, and meet that limit first, said once, with
+    // the chain of the instances whose signatures are under way. The calls
+    // have no type, and nothing goes on from the one too deep later.
+    Checked c = check_src(&a,
+                          "f :: (a: $T, b: int = f(cast(*T) null)) -> int { return 1; }\n"
+                          "main :: () { x := f(1); }\n");
+    CHECK_STR(messages(&a, &c.list->diag),
+              string_cstr(&a, string_printf(&a,
+                                            "1:1: 'f' is nested too deeply in the declarations that need it (more "
+                                            "than 1000 levels)\n" STR_FMT,
+                                            STR_ARG(pointer_chain(&a, "f", 250, "1:23", "2:19")))));
+    CHECK_STR(type_of(&a, &c, "x"), "?");
+    token_list_free(c.list);
     arena_free(&a);
 }

@@ -1308,10 +1308,11 @@
 //   'Foo'" where a type is written), said at the generic with no instance
 //   chain; what depends on T (a member's name, a .NAME, a literal's field
 //   names) isn't looked at; every branch of an #if is walked, and what
-//   any declares is known after it; with a using parameter no name is
-//   unknown, a field of T's maybe. A walk that said something counts as
-//   the generic's errors (had_errors): it makes no instance after, and
-//   the bodies of the instances made before aren't checked.
+//   any declares is known after it; with a using parameter no unknown
+//   identifier is said, a field of T's maybe (an unknown type still is).
+//   A walk that said something counts as the generic's errors
+//   (had_errors): it makes no instance after, and the bodies of the
+//   instances made before aren't checked.
 // - A call of one (check_expr.cpp's check_generic_call) checks its
 //   arguments as any call's, counts them as any call does (the same
 //   messages), and infers the type parameters from them
@@ -1364,7 +1365,11 @@
 // - Instances nest at most MAX_DEPTH deep (spec 9.4): the call that would
 //   make one inside an instance MAX_DEPTH deep makes none and has no type,
 //   "'grow' is instantiated more than 1000 levels deep, each instance's
-//   body making the next", at the call, with its chain.
+//   body making the next", at the call, with its chain. An instance's
+//   signature is checked inside what needs its call, so instances made by
+//   each one's default values meet the limit on declarations first
+//   (open_declaration): said once, with the chain, the instance too deep
+//   having errors, never checked later.
 // - What lowering may rely on: no generic procedure is lowered, and no
 //   call's proc is one; each instance is a procedure, keyed by its symbol
 //   (lower.cpp's proc_symbol), after the program's own procedures.

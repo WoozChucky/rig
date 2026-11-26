@@ -1,0 +1,4 @@
+tests/errors/generic_compiler_call.rig:7:22: error: 'create_workspace' can only be called while compiling
+    mk :: (a: $T) { w := create_workspace("game"); }
+                         ^
+    in 'mk' with T = int, called at tests/errors/generic_compiler_call.rig:8:14

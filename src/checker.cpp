@@ -3407,7 +3407,15 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     for (s64 i = 0; i < proc->results.count; i++) {
         if (proc->results[i]->levels > levels) levels = proc->results[i]->levels;
     }
-    if (!open_declaration(c, proc, proc->name, levels, &outer)) return false;
+    if (!open_declaration(c, proc, proc->name, levels, &outer)) {
+        // An instance's signature is checked only where its call needs it
+        // (make_instance): one too deep there has errors, said once, as any
+        // signature's are, so its calls have no type and it's never checked
+        // again. Checked later, a generic whose default values instantiate
+        // it with a deeper type would go on from there, and say so again.
+        if (proc->instance) proc->instance->had_errors = true;
+        return false;
+    }
     Outer_Scopes scopes = leave_scopes(c);  // its types' names are the top level's
     enter_instance(c, proc->instance);      // and an instance's bindings
     proc->resolve = RESOLVE_UNDER_WAY;
@@ -3930,13 +3938,13 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     for (s64 i = 0; i < file->runs.count; i++) check_top_level_run(&c, file->runs[i]);
     // Then the instances' bodies, in the order the instances were made, each
     // that isn't done yet: a body checked here may make more instances, which
-    // join the end of the list, and are checked in their turn. This is an
-    // instance's own turn, at level 0, as a declaration's is in the pass
-    // above: a signature its call found nested too deeply (said there) is
-    // checked here first.
+    // join the end of the list, and are checked in their turn. One whose
+    // signature its call found nested too deeply (said there) never had
+    // it checked, and has errors (resolve_signature): its body isn't
+    // checked either.
     for (s64 i = 0; i < file->instances.count; i++) {
         Ast_Proc *proc = file->instances[i]->proc;
-        resolve_signature(&c, proc);
+        if (proc->resolve != RESOLVE_DONE) continue;
         if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) check_body(&c, proc);
     }
 
