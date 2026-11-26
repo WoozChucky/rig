@@ -72,7 +72,8 @@ struct Diagnostics {
     s64 error_count;
     String context;  // given, copied, to every error recorded while it's set (Diagnostic.context);
                      // empty: none. The checker sets it to the chain of the instance being checked
-                     // (check_generic.cpp's enter_instance)
+                     // (check_generic.cpp's enter_instance), and lowering to the chain of the
+                     // instance whose body it lowers (lower.cpp's lower_body)
 };
 
 // Registers a file; the result is its index, for Position.file. The text

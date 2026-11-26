@@ -922,9 +922,9 @@ static String proc_symbol(Ast_Proc *proc) {
 
 // The index in module->procs of procedure `proc`, a Rig or foreign one of
 // the program, from any of its files, an instance of a generic one too: its
-// symbol's (proc_symbol). ir_lower numbered every
-// procedure first; on demand, one nothing named before is declared now,
-// its body lowered later (declare_proc). A foreign one named here is one
+// symbol's (proc_symbol). ir_lower numbered every procedure first; on
+// demand, one nothing named before is declared now, its body lowered later
+// (declare_proc). A foreign one named here is one
 // the program uses (used_foreign): a const.N for a debugger alone names
 // only one the program uses already (constant_bytes), so it adds none.
 static s32 proc_index_of(Lowering *l, Ast_Proc *proc) {

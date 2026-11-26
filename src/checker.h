@@ -1246,7 +1246,8 @@
 //   one: `[N]T`, `[]T` and `[..]T` (a '[' starts no expression) and
 //   `#type T` are an Ast_Type_Value; a name and `*X` are a name and an
 //   address as written, which name a type when the name's lookup finds a
-//   struct or an enum, or nothing while the name is a built-in type's
+//   struct, an enum or an instance's type parameter (an Ast_Alias), or
+//   nothing while the name is a built-in type's
 //   (check_expr.cpp's expr_names_type): a local `int := 5;` hides the type
 //   int there, `int == 5` comparing the local. A type in parentheses is
 //   none, as for a literal's type: `(int) == int` is "'int' is a type, not
@@ -1290,22 +1291,21 @@
 //   (check_generic.cpp's check_generic_signature) takes its type
 //   parameters as types still to be known, resolves its other type names
 //   once, so "unknown type 'Nope'" is said at the generic and not per
-//   instance, and writes nothing into its nodes but a $N's type
-//   (Ast_Param.is_baked), which no instance copies: each copies them
-//   unchecked. It refuses a default value on a parameter
-//   whose type declares one ("a parameter that declares '$U' can't have a
-//   default value, for now", at the '='), and #foreign, #c_call and
-//   #compiler ("'f' is generic, so it can't be #foreign", at the
-//   directive; a #compiler one outside the modules is said to be that
-//   first). It has no procedure type: its name as a value is "'max' is
+//   instance, and writes nothing into its nodes but a $N's type (in its
+//   Ast_Param's Ast.type), which no instance copies: each copies them
+//   unchecked. It refuses a default value on a parameter whose type
+//   declares one ("a parameter that declares '$U' can't have a default
+//   value, for now", at the '='), and #foreign, #c_call and #compiler ("'f'
+//   is generic, so it can't be #foreign", at the directive; a #compiler one
+//   outside the modules is said to be that first). It has no procedure type: its name as a value is "'max' is
 //   generic; call it, or wrap one instance in a procedure", at the name.
 // - The names its parameters declare are checked there too, in the order
 //   they're written: a second $T is "'T' is declared twice; '$' goes on
 //   its first use only, as in (a: $T, b: T)", at its $; a use before the
 //   $T is "'T' is used before '$T' declares it", at the use; a parameter
 //   or a type parameter of a name another has is "'T' is already declared
-//   at PATH:L:C", at the later one; a $T of a built-in type's name is
-//   "'int' is a built-in type".
+//   at PATH:L:C", at the later one; a $T, or a baked parameter ($int: int,
+//   $int: Type), of a built-in type's name is "'int' is a built-in type".
 // - Its body is type-checked only as each instance's, never on its own:
 //   on its own its names are walked (check_generic.cpp's
 //   check_generic_names), once, in its turn in check()'s pass over the
@@ -1336,15 +1336,16 @@
 //   nothing more. An instance whose own signature check failed (a default
 //   that doesn't convert to T) stays cached, its errors said once: every
 //   call with its bindings gets no type and says nothing more.
-// - Each distinct set of bindings (a type by its Type *) makes one
-//   instance, program-wide: the generic's tree copied (ast_clone), its
-//   type bindings Ast_Aliases, named max(T = int), its symbol max$T$int (with
-//   $N after it when an earlier instance of the generic has that symbol),
-//   kept in the generic's cache (Ast_Proc.instances) and the program's list
-//   (Ast_File.instances). Its signature is checked where the call needs it,
-//   as any signature is (resolve_signature); its body after every other
-//   body and top-level #run, in the order the instances were made, or
-//   where a #run reaches it first. The call then calls the instance, and
+// - Each distinct set of bindings (a type by its Type *, a constant by its
+//   type and value, below) makes one instance, program-wide: the generic's
+//   tree copied (ast_clone), its type bindings Ast_Aliases, named max(T =
+//   int), its symbol max$T$int (with '$' and the instance's number after
+//   it, max$T$int$2, when an earlier instance of the generic has that
+//   symbol), kept in the generic's cache (Ast_Proc.instances) and the
+//   program's list (Ast_File.instances). Its signature is checked where the
+//   call needs it, as any signature is (resolve_signature); its body after
+//   every other body and top-level #run, in the order the instances were
+//   made, or where a #run reaches it first. The call then calls the instance, and
 //   is checked as a call of it: each argument converts to its parameter's
 //   type in the instance, with the usual messages.
 // - Checker.instance is the instance whose signature, defaults or body is
@@ -1379,15 +1380,18 @@
 //   having errors, never checked later.
 // - A '$' before a parameter's name bakes it (Ast_Param.is_baked): $T:
 //   Type takes a type, $N: X a constant, and the procedure is generic. Its
-//   own check (check_baked_parameter) keeps a constant's type on the
-//   parameter, a number's, a bool's, an enum's or string ("a '$' parameter
+//   own check (check_baked_parameter) keeps a constant's type in the
+//   parameter's Ast.type, a number's, a bool's, an enum's or string ("a '$' parameter
 //   is a type, '$T: Type', or a constant of a number, bool, enum or string
 //   type, not '[]int'", at the type), and refuses '..' ("a '$' parameter
 //   can't be '..': ...", at the '..'), a place after a '..T' parameter ("a
 //   '$' parameter can't come after a '..' parameter, which takes every
 //   argument left", at the '$'), a default value ("a parameter that
-//   declares '$N' can't have a default value, for now") and using. A
-//   constant parameter's name in a type is "'N' is not a type".
+//   declares '$N' can't have a default value, for now"), a place after a
+//   parameter with one ("a '$' parameter can't come after one with a
+//   default value, since each parameter after that needs one", at the '$')
+//   and using. A constant parameter's name in a type is "'N' is not a
+//   type".
 // - A call checks a $T: Type's argument as a type value (check_type_value)
 //   when it names a type, as a value otherwise: "argument 2 of 'get' must
 //   be a type, for '$T: Type'". A $N's converts to N's type as any
@@ -1474,8 +1478,11 @@ struct Compile_Time;  // run.h: the compile-time world
 
 // Checks the program, every file's declarations in one tree (load.h),
 // filling in types and the procedures calls refer to: the declarations,
-// then the bodies, then the top-level #runs (checked, never run here). True
-// when the checker reported no errors (the parser or the loader may have).
+// then the bodies (a generic procedure's only walked for its names), then
+// the top-level #runs (checked, never run here), then the bodies of the
+// generic procedures' instances, in the order they were made, the list
+// growing as bodies make more (spec 7.11). True when the checker reported
+// no errors (the parser or the loader may have).
 // Expression #runs run while it checks, where it first needs their values
 // (spec 7.8): in `world`, which the caller keeps for the top-level runs;
 // without one, check() makes one of its own and frees it before returning.

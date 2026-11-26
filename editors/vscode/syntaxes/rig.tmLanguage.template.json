@@ -214,7 +214,7 @@
             ]
         },
         "type-value": {
-            "comment": "#type T (spec 5.20): a type written where a value goes, #type (int) -> int; #type is a directive as any, T a type (#type), as after a cast's '(', up to what ends a value there: ; = != && || , ) ] { } or the line's end. A type value written with '[', []int == [..]int, needs no rule: its names are coloured as anywhere.",
+            "comment": "#type T (spec 5.20): a type written where a value goes, #type (int) -> int; the directive is coloured as any, T as a type (the repository's type rule), as after a cast's '(', up to what ends a value there: ; = != && || , ) ] { } or the line's end. A type value written with '[', []int == [..]int, needs no rule: its names are coloured as anywhere.",
             "begin": "(#type)\\b",
             "beginCaptures": {
                 "1": {

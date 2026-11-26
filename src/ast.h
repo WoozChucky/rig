@@ -115,7 +115,9 @@ struct Ast {
     u64 constant;      // that value's bits: an integer's sign-extended to 64 bits when its
                        // type is signed or untyped, zero-extended when unsigned; a bool's
                        // 1 or 0; a float's, the bits of the double holding its value
-                       // (f64_bits), which for a float32 is a float32's value
+                       // (f64_bits), which for a float32 is a float32's value. A type
+                       // value (of type Type, spec 5.20), never a constant, keeps the
+                       // Type * it denotes here (check_expr.cpp's type_value)
 };
 
 // A type as written. Its node is at its first token: the name, the '*', an
@@ -184,6 +186,8 @@ enum Ast_Resolve : u8 {
     RESOLVE_DONE,
 };
 
+struct Ast_Instance;
+
 // A procedure: a declaration, or the procedure a top-level #run { ... } runs
 // as (Ast_Run.proc). When the parser gave up on a declaration (a syntax
 // error), it is still kept, as a broken entry: is_broken is set and only
@@ -206,8 +210,6 @@ enum Ast_Resolve : u8 {
 // types and constants its calls give makes an instance of it (Ast_Instance),
 // a copy of its tree (ast_clone) with those bound. Its type is null: it's no
 // value.
-struct Ast_Instance;
-
 struct Ast_Proc : Ast {
     String name;
     Array<Ast_Param *> params;  // the named parameters (with C's '..', its fixed parameters)
@@ -237,9 +239,12 @@ struct Ast_Proc : Ast {
                                 // in a global's value (checker.cpp's resolve_signature)
     Ast_Resolve body_resolve;   // its body's: checked in check()'s pass over the bodies, or earlier,
                                 // by a #run that reaches it (checker.cpp's check_body); `resolve` is
-                                // the signature's
+                                // the signature's. A generic's: its body's names walked
+                                // (check_generic_names), in that pass or by the first instance's
+                                // body checked
     bool had_errors;            // its signature's check or its body's reported an error: a #run reaching
-                                // it doesn't run
+                                // it doesn't run. A generic's own signature check or its body's name
+                                // walk did: it makes no instance
     s32 body_levels;            // the deepest levels of its body, its blocks and the expressions and
                                 // types in them together (MAX_DEPTH, counted as that at most): checked
                                 // where a #run reaches it, what it needs starts a level below
