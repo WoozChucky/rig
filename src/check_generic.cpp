@@ -358,7 +358,9 @@ static bool used_before_its_dollar(Ast_Proc *generic, s64 index, Array<Generic_B
 // - having none, it can't come after a parameter that has one, as every
 //   parameter after that needs one (spec 7.2), which its instance, without
 //   it, wouldn't say: "a '$' parameter can't come after one with a default
-//   value, since each parameter after that needs one", at its '$';
+//   value, since each parameter after that needs one", at its '$'. A
+//   default refused already, a '$' parameter's or one on a parameter that
+//   declares '$T' (`settled`), counts as none;
 // - a constant one's type is a number's, a bool's, an enum's or string:
 //   anything else, a type parameter or a constant one too, is "a '$'
 //   parameter is a type, '$T: Type', or a constant of a number, bool, enum
@@ -371,7 +373,8 @@ static bool used_before_its_dollar(Ast_Proc *generic, s64 index, Array<Generic_B
 // Once one is refused, nothing more is said of it: a type of a type
 // parameter's name used before its $, said so (check_signature_names), is
 // that one mistake.
-static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Array<Generic_Binding> declared) {
+static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Array<Generic_Binding> declared,
+                                  const bool *settled) {
     Ast_Param *param = generic->params[index];
     if (param->is_variadic) {
         diag_error(c->diag, param->dots,
@@ -392,7 +395,7 @@ static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Arra
         return;
     }
     for (s64 i = 0; i < index; i++) {
-        if (!generic->params[i]->default_value) continue;
+        if (!generic->params[i]->default_value || settled[i]) continue;
         diag_error(c->diag, param->dollar,
                    "a '$' parameter can't come after one with a default value, since each parameter after that "
                    "needs one");
@@ -456,7 +459,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
         Ast_Param *param = generic->params[i];
         array_add(&settled, param->is_baked);
         if (param->is_baked) {
-            check_baked_parameter(c, generic, i, declared);
+            check_baked_parameter(c, generic, i, declared, settled.data);
             continue;
         }
         check_generic_type(c, param->type_expr, declared, false);

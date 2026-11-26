@@ -10,8 +10,14 @@
 // is the place of each call that leaves it out, two calls of one instance
 // each their own, after a baked $T too, whose argument has no code. A #run
 // inside an instance sees that instance's T: kind's #if picks a branch per
-// instance by its type's tag, while compiling. The same compiled,
-// interpreted and in #runs, a constant's and a top-level one.
+// instance by its type's tag, while compiling. It sees its constant
+// parameters too: doubled's twice(N), and mixed's N and T together. It runs
+// once per instance, where that instance's body is checked: tag's counted
+// bumps a global of the #runs' world once for tag's instance for int,
+// called from the top-level #run and from main, and once for its instance
+// for u8, so the top-level #run sees two runs, and each call of tag for int
+// gets the one value its instance baked. The same compiled, interpreted and
+// in #runs, a constant's and a top-level one.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -48,11 +54,28 @@ kind :: (v: $T) -> string {
     }
 }
 
+runs := 0;
+
+counted :: () -> int {
+    runs += 1;
+    return runs;
+}
+
+tag :: (v: $T) -> int { return #run counted(); }
+
+twice :: (n: int) -> int { return n * 2; }
+
+doubled :: ($N: int) -> int { return #run twice(N); }
+
+mixed :: ($N: int, v: $T) -> int { return #run twice(N + size_of(T)); }
+
 K :: #run kind(Mode.A);
 
 #run {
     print("{}\n", sum(1, 2));
     print("{}\n", rep(3, 1, 2));
+    print("{} {}\n", tag(1), tag(cast(u8) 2));
+    print("{}\n", runs);
 }
 
 main :: () {
@@ -68,4 +91,6 @@ main :: () {
     print("{} {} {}\n", rept(u8, 1, 2, 3), lead(5), lead(1, x, 2));
     print("{} {} {}\n", kind(Mode.B), kind(Vec2.{}), kind(3));
     print("{}\n", K);
+    print("{} {}\n", tag(3), tag(4));
+    print("{} {} {}\n", doubled(5), mixed(3, cast(u8) 1), mixed(4, 1));
 }

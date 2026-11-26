@@ -13979,6 +13979,12 @@ TEST(generic_default_places_are_said_once) {
          "1:21: a '$' parameter can't come after a '..' parameter, which takes every argument left\n"},
         {"r :: (v: $T = 1, n: int) -> int { return n; }",
          "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
+        // A refused default counts as none, so a '$' parameter after it
+        // is told nothing.
+        {"s :: (v: $T = 1, $N: int) -> int { return N; }",
+         "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
+        {"t :: ($M: int = 1, $N: int) -> int { return N; }",
+         "1:15: a parameter that declares '$M' can't have a default value, for now\n"},
     };
     for (const Case &k : cases) {
         // Called with two types, and not called at all.

@@ -506,9 +506,11 @@ bool has_failed_run(Ast *e);
 // a $T of a built-in type's name. A baked parameter's own (spec 7.11):
 // $T: Type, or a constant of a number, bool, enum or string type, whose
 // type this keeps on the parameter (Ast_Param.is_baked), never '..', with
-// no default value, before any '..' parameter. Its type stays null: a
-// generic is no value. Its default values are each instance's, checked
-// with its signature.
+// no default value, before any '..' parameter. Where its default values
+// may go (checker.cpp's check_default_places), which doesn't depend on T,
+// its '$' parameters and the defaults refused above passed over. Its type
+// stays null: a generic is no value. Its default values themselves are
+// each instance's, checked and converted with its signature.
 void check_generic_signature(Checker *c, Ast_Proc *generic);
 
 // Whether param is a $T: Type (spec 7.11), which takes a type: known by
