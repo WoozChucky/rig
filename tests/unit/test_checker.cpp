@@ -11586,13 +11586,15 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
     // One whose using field reaches it is laid out, and is the circle it
     // closes: C, in it, has no fields to search, so the walk ends there,
     // the circle alone said, as b.c.d.g says it: for a bare name, a field,
-    // a literal's name and an assignment's target, h there not taken for
-    // the procedure ("can't assign to 'h': it's a procedure").
+    // a literal's name, an assignment's target, a callee and a member's
+    // operand, h there not taken for the procedure ("can't assign to 'h':
+    // it's a procedure", or h() short of its argument), nor g.k for a field
+    // of an int.
     const char *reached = "A :: struct { arr: [#run f(null)]int; }\n"
                           "B :: struct { using c: *C; }\n"
                           "C :: struct { a: A; using d: *D; }\n"
                           "D :: struct { g: int; h: int; }\n"
-                          "h :: () -> int { return 3; }\n"
+                          "h :: (n: int) -> int { return n; }\n"
                           "f :: %s -> int { %s }\n"
                           "main :: () { x: A; }\n";
     const char *reaching[][2] = {
@@ -11600,8 +11602,10 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
         {"(b: *B)", "return b.g;"},
         {"(b: *B)", "v := B.{g = 1}; return 2;"},
         {"(using b: *B)", "h = 4; return 2;"},
+        {"(using b: *B)", "h(); return 2;"},
+        {"(using b: *B)", "return g.k;"},
     };
-    for (s64 i = 0; i < 4; i++) {
+    for (s64 i = 0; i < 6; i++) {
         CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, reached, reaching[i][0], reaching[i][1]))),
                   "1:1: 'A' is defined in terms of itself\n");
     }
@@ -12115,6 +12119,23 @@ TEST(using_parameters_name_their_fields) {
         CHECK(id->decl == move->params[0]);
         CHECK_STR(type_name(&a, id->type), "int");
     }
+    // In nested's body, position is p.entity.position: the member on the
+    // way names entity, its operand the parameter.
+    Ast_Proc *nested = (Ast_Proc *)global_named(&c, "nested");
+    Ast *y = ((Ast_Assign *)nested->body->statements[1])->targets[0];
+    CHECK(y->kind == AST_MEMBER && is_name(((Ast_Member *)y)->operand, "position"));
+    if (y->kind == AST_MEMBER && is_name(((Ast_Member *)y)->operand, "position")) {
+        Ast *through = ((Ast_Name *)((Ast_Member *)y)->operand)->through;
+        CHECK(through && is_member(&a, through, "position", "Vec2"));
+        if (through && through->kind == AST_MEMBER) {
+            Ast *entity = ((Ast_Member *)through)->operand;
+            CHECK(is_member(&a, entity, "entity", "Entity"));
+            if (entity->kind == AST_MEMBER) {
+                Ast *p = ((Ast_Member *)entity)->operand;
+                CHECK(is_name(p, "p") && ((Ast_Name *)p)->decl == nested->params[0]);
+            }
+        }
+    }
     token_list_free(c.list);
     // A field holding a pointer is a late one, its type made once every
     // layout is done; p, named through the parameter in a #run an array's
@@ -12130,6 +12151,25 @@ TEST(using_parameters_name_their_fields) {
     if (q->kind == AST_NAME) {
         Ast *through = ((Ast_Name *)q)->through;
         CHECK(through && is_member(&a, through, "p", "*int"));
+    }
+    token_list_free(c.list);
+    // The late field one value using field further in is made too: it's
+    // Inner's, the struct the chain's last member is in, not T's.
+    c = check_src(&a, "A :: struct { arr: [#run h(null)]int; }\n"
+                      "Inner :: struct { p: *int; }\n"
+                      "T :: struct { using inner: Inner; k: int; }\n"
+                      "h :: (using t: *T) -> int { if t == null { return 3; } q := p; return 1; }\n"
+                      "main :: () { a: A; n := a.arr; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "[3]int");
+    q = ((Ast_Var *)local_of_proc(&c, "h", "q"))->value;
+    CHECK(is_name(q, "p"));
+    if (q->kind == AST_NAME) {
+        Ast *through = ((Ast_Name *)q)->through;
+        CHECK(through && is_member(&a, through, "p", "*int"));
+        if (through && through->kind == AST_MEMBER) {
+            CHECK(is_member(&a, ((Ast_Member *)through)->operand, "inner", "Inner"));
+        }
     }
     token_list_free(c.list);
     arena_free(&a);
@@ -12206,6 +12246,16 @@ TEST(using_parameter_names_come_between_locals_and_globals) {
                                "main :: () { }\n"),
               "5:60: '.empty' needs a struct or a pointer to one, not 'int'\n"
               "7:24: 'Vec2' isn't a procedure, so it can't be called\n");
+    // Ambiguous as a callee, as a member's operand and as an operand.
+    CHECK_STR(check_source(&a, "A :: struct { x: int; }\n"
+                               "A2 :: struct { x: int; }\n"
+                               "f :: (using a: *A, using b: *A2) { x(); }\n"
+                               "g :: (using a: *A, using b: *A2) -> int { return x.y; }\n"
+                               "k :: (using a: *A, using b: *A2) { p := *x; }\n"
+                               "main :: () { }\n"),
+              "3:36: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "4:50: 'x' is ambiguous: 'a.x' or 'b.x'\n"
+              "5:42: 'x' is ambiguous: 'a.x' or 'b.x'\n");
     arena_free(&a);
 }
 
@@ -12242,6 +12292,22 @@ TEST(value_using_parameters_are_read_only) {
               "14:34: unknown identifier 'id'\n"
               "17:16: 'using' can't reach into a tagged union, 'Shape': its members are read in a switch\n"
               "17:31: unknown identifier 'circle'\n");
+    // A field named as a callee or as a member's operand is refused the
+    // same way, at its name: in a default value, in a #run, and assigned to
+    // through a value parameter.
+    CHECK_STR(check_source(&a, "Vec2 :: struct { x: float; y: float; }\n"
+                               "S :: struct { cb: (int) -> int; v: Vec2; }\n"
+                               "d1 :: (using s: *S, k: int = cb(1)) { }\n"
+                               "d2 :: (using s: *S, k: float = v.x) { }\n"
+                               "r1 :: (using s: *S) { q := #run cb(1); }\n"
+                               "r2 :: (using s: *S) { q := #run v.x; }\n"
+                               "ro :: (using s: S) { v.x = 3; }\n"
+                               "main :: () { }\n"),
+              "3:30: a default value can't use 'cb', a field of the parameter 's'\n"
+              "4:32: a default value can't use 'v', a field of the parameter 's'\n"
+              "5:33: #run can't use 'cb': it's a field of the parameter 's', which doesn't exist while compiling\n"
+              "6:33: #run can't use 'v': it's a field of the parameter 's', which doesn't exist while compiling\n"
+              "7:22: can't assign to 'v': it's a field of the parameter 's'\n");
     // Any procedure may have one: a foreign one, and a #c_call one whose
     // body names a field through it.
     CHECK_STR(check_source(&a, USING_PLAYER

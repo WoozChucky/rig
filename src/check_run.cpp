@@ -136,7 +136,7 @@ static const char *local_kind(Ast *decl) {
 // parameter 'e', which doesn't exist while compiling". Its local constants
 // are known while compiling, and are fine. A #run inside it had its own
 // operand checked so. In a default value (Checker.default_of), a parameter
-// was refused already, by check_name or check_addressable, and isn't said
+// was refused already, by check_named or check_addressable, and isn't said
 // again. True when there's none.
 static bool uses_no_locals(Checker *c, Ast *operand) {
     Array<Ast *> pending = {};

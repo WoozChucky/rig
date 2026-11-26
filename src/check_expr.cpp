@@ -962,7 +962,7 @@ static void report_parameter_in_default(Checker *c, Ast_Name *name) {
     diag_error(c->diag, name->pos, "a default value can't use the parameter '" STR_FMT "'", STR_ARG(name->name));
 }
 
-static Type *check_using_name(Checker *c, Ast_Name *name);
+static Type *check_using_name(Checker *c, Ast_Name *name, Using_Name *through);
 
 // A name used as a value: a variable's or parameter's value, or a
 // constant's, which is known while compiling, or a procedure, of its
@@ -981,15 +981,18 @@ static Type *check_using_name(Checker *c, Ast_Name *name);
 // can't be a value: it's built into the language". A field of a using
 // parameter's struct (spec 3.21) is the field, through the parameter
 // (check_using_name).
-static Type *check_name(Checker *c, Ast_Name *name) {
-    bool through_using;
-    Ast *decl = check_lookup(c, name->name, &through_using);
+//
+// The name is looked up first, by check_name or by a caller that looks it
+// up to see what it declares (check_callee, check_member): decl and
+// *through are what check_lookup found, so the using parameters' fields are
+// walked once. *through's paths are freed.
+static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *through) {
     name->decl = decl;
     if (!decl) {
         report_undeclared(c, name, false);
         return nullptr;
     }
-    if (through_using) return check_using_name(c, name);
+    if (through->found) return check_using_name(c, name, through);
     switch (decl->kind) {
     case AST_VAR: return decl->type;
     case AST_PARAM:
@@ -1065,6 +1068,13 @@ static Type *check_name(Checker *c, Ast_Name *name) {
         return nullptr;
     default: RIG_ASSERT(!"not a declaration"); return nullptr;
     }
+}
+
+// A name used as a value (check_named), looked up here.
+static Type *check_name(Checker *c, Ast_Name *name) {
+    Using_Name through;
+    Ast *decl = check_lookup(c, name->name, &through);
+    return check_named(c, name, decl, &through);
 }
 
 // An extra argument (one after the fixed parameters of a procedure that
@@ -1248,7 +1258,12 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     Type *t = nullptr;
     if (callee->kind == AST_NAME) {
         Ast_Name *name = (Ast_Name *)callee;
-        Ast *decl = check_lookup(c, name->name, nullptr);
+        // A using parameter's field is a value, its walk's paths left for
+        // check_named; a name that returns before, a procedure's, a
+        // built-in's, a type's or none, wasn't found there, so has none to
+        // free.
+        Using_Name through;
+        Ast *decl = check_lookup(c, name->name, &through);
         if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM) {
             name->decl = decl;
             if (decl) {
@@ -1269,7 +1284,9 @@ static bool check_callee(Checker *c, Ast_Call *call) {
             call->builtin = (Ast_Builtin *)decl;
             return true;
         }
-        t = check_expression(c, name);  // a variable's, a parameter's or a constant's value
+        // A variable's, a parameter's, a using parameter's field's or a
+        // constant's value.
+        t = name->type = check_named(c, name, decl, &through);
         if (decl->kind == AST_CONST && ((Ast_Const *)decl)->proc) {
             call->proc = ((Ast_Const *)decl)->proc;
             return true;
@@ -2809,8 +2826,8 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // said of the name itself, not a mistake found in the procedure's
         // value, such as "'printf' can't be a value" for one taking C's '..'.
         Ast_Name *name = (Ast_Name *)e;
-        bool through_using;
-        Ast *decl = check_lookup(c, name->name, &through_using);
+        Using_Name through;
+        Ast *decl = check_lookup(c, name->name, &through);
         name->decl = decl;
         if (!decl) {
             report_undeclared(c, name, false);
@@ -2819,13 +2836,13 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
         // A using parameter's field (spec 3.21): the chain it means, worked
         // out (or refused in a default value) as for its value, then a
         // place or not as the chain is.
-        if (through_using) {
-            Type *t = check_using_name(c, name);
+        if (through.found) {
+            Type *t = check_using_name(c, name, &through);
             if (!t || !name_is_place(c, name, for_writing)) return false;
             name->type = t;
             return true;
         }
-        // In a default value a parameter is refused as check_name refuses
+        // In a default value a parameter is refused as check_named refuses
         // its value: it doesn't exist where the default is worked out, so
         // that it has no address isn't the mistake.
         if (decl->kind == AST_PARAM && c->default_of) {
@@ -3100,52 +3117,6 @@ enum Using_Reach {
     REACH_DEEPER,
 };
 
-// A struct the using walk (find_through_using) searches: its type, null
-// for one reached through a using field until the walk takes it at its
-// depth (take_using_struct), and for one it doesn't search; how it was
-// reached, the one searched before it that holds it, or points at it (an
-// index into the walk's list, -1 for one the walk starts at), and its field
-// there; the depth it's searched at, an anonymous member at its outer's;
-// which of the structs the walk starts at it was reached from; and how far
-// into it the walk looks.
-struct Using_Search {
-    Type *type;
-    s64 outer;
-    s32 field;
-    s32 depth;
-    s32 root;
-    Using_Reach reach;
-};
-
-// The using walk's state: its list of structs searched or to search (each
-// path's way back up), those to search at the next depth, and the first
-// two places where the name is, each a struct in the list and its field.
-struct Using_Walk {
-    Checker *c;
-    String name;
-    Array<Using_Search> list;
-    Array<s64> next;
-    s32 found;
-    s64 found_in[2];
-    s32 found_field[2];
-};
-
-// Whether struct `type`, held or pointed at by a using field, is searched at
-// `depth`: not when it was searched at an earlier depth, where it held no
-// match and queued what it reaches, nor when it's searched at this one
-// through two paths already, which are enough to say a name is ambiguous.
-// Those keep the walk small, and end it on cycles (a struct that points at
-// itself, or at one that points back).
-static bool using_search_needed(Using_Walk *w, Type *type, s32 depth) {
-    s32 paths = 0;
-    for (s64 i = 0; i < w->list.count; i++) {
-        if (w->list[i].type != type) continue;
-        if (w->list[i].depth < depth) return false;
-        paths++;
-    }
-    return paths < 2;
-}
-
 // Whether struct s's declaration has a field named `name` of its own: one
 // of an anonymous member too, at any nesting, whose fields are s's (spec
 // 3.19).
@@ -3200,42 +3171,43 @@ static Using_Reach using_reach(Checker *c, Type *t, String name) {
     return may ? REACH_DEEPER : REACH_NONE;
 }
 
-// Takes struct `at` of the walk's list as its depth is about to be
+// Takes step `at` of the walk for `name` as its depth is about to be
 // searched, not before: a name found at a shallower depth needs nothing
 // deeper, and making a type or a layout it doesn't need could meet a
 // circle that isn't there (a #run during the layouts reading a field of
 // its own). One reached through a using field is the field's type, or the
 // struct it points at: a pointer using field's type is made first if it
 // isn't yet (check_late_field), which says whether using takes it. How far
-// the walk looks into it is then known (using_reach). It isn't searched
-// (no type) when the field's type is unknown (an error, a circle), nor
-// when using_search_needed says so, nor when its declaration can't hold
-// the name: a name found nowhere, a global or a procedure a using body
-// names, reaches every depth, and would lay out every struct the walk
-// reaches. The struct itself isn't laid out here.
-static void take_using_struct(Using_Walk *w, s64 at) {
+// the walk looks into it is then known (using_reach), and returned. It
+// isn't searched (its step's type left null, and REACH_NONE) when the
+// field's type is unknown (an error, a circle), nor when field_walk_needed
+// says so, nor when its declaration can't hold the name: a name found
+// nowhere, a global or a procedure a using body names, reaches every
+// depth, and would lay out every struct the walk reaches. The struct
+// itself isn't laid out here.
+static Using_Reach take_using_struct(Checker *c, Field_Walk *w, s64 at, String name) {
     Type *held = w->list[at].type;  // one the walk starts at
     if (w->list[at].outer >= 0) {
         Type *outer = w->list[w->list[at].outer].type;
         s32 index = w->list[at].field;
-        check_late_field(w->c, outer, index);
+        check_late_field(c, outer, index);
         Type_Field *field = &outer->fields[index];
         held = nullptr;
         if (field->is_using && field->type) held = type_is_pointer(field->type) ? field->type->pointee : field->type;
-        if (held && !using_search_needed(w, held, w->list[at].depth)) held = nullptr;
+        if (held && !field_walk_needed(w, held, w->list[at].depth)) held = nullptr;
     }
-    Using_Reach reach = held ? using_reach(w->c, held, w->name) : REACH_NONE;
+    Using_Reach reach = held ? using_reach(c, held, name) : REACH_NONE;
     w->list[at].type = reach == REACH_NONE ? nullptr : held;
-    w->list[at].reach = reach;
+    return reach;
 }
 
-// Searches struct `at` of the walk's list, at its depth, for the name, or
+// Searches step `at` of the walk, a struct at its depth, for `name`, or
 // with `queue` queues its using fields for the next depth: each of its
 // fields in order, an anonymous member searched in its place, as its fields
-// are its outer's (spec 3.19). The name's places are counted, the first two
-// kept; a using field is queued for its struct, taken at the next depth
-// (take_using_struct).
-static void search_using_struct(Using_Walk *w, s64 at, bool queue) {
+// are its outer's (spec 3.19). The name's places are counted
+// (field_walk_found); a using field is queued for its struct, taken at the
+// next depth (take_using_struct).
+static void search_using_struct(Field_Walk *w, s64 at, String name, bool queue) {
     Type *t = w->list[at].type;
     s32 depth = w->list[at].depth;
     s32 root = w->list[at].root;
@@ -3243,42 +3215,20 @@ static void search_using_struct(Using_Walk *w, s64 at, bool queue) {
         Type_Field *field = &t->fields[i];
         if (!field->name.count) {
             if (!field->type || field->type->kind != TYPE_STRUCT) continue;
-            array_add(&w->list, Using_Search{field->type, at, (s32)i, depth, root, REACH_OWN});
-            search_using_struct(w, w->list.count - 1, queue);
+            array_add(&w->list, Field_Step{field->type, at, (s32)i, depth, root});
+            search_using_struct(w, w->list.count - 1, name, queue);
             continue;
         }
         if (queue) {
             if (!field->is_using) continue;
-            array_add(&w->list, Using_Search{nullptr, at, (s32)i, depth + 1, root, REACH_NONE});
+            array_add(&w->list, Field_Step{nullptr, at, (s32)i, depth + 1, root});
             array_add(&w->next, w->list.count - 1);
             continue;
         }
         // A late field's type may not be made yet: it's found all the
         // same, and its type made by the caller (check_late_field).
-        if (string_eq(field->name, w->name)) {
-            if (w->found < 2) {
-                w->found_in[w->found] = at;
-                w->found_field[w->found] = (s32)i;
-            }
-            w->found++;
-        }
+        if (string_eq(field->name, name)) field_walk_found(w, at, (s32)i);
     }
-}
-
-// The path of the k-th place the walk found the name: the field indices
-// from the struct it started at down, into *path, and that struct's number
-// among those it started at.
-static s32 using_found_path(Using_Walk *w, s32 k, Array<s32> *path) {
-    path->count = 0;
-    array_add(path, w->found_field[k]);
-    s64 at = w->found_in[k];
-    for (; w->list[at].outer >= 0; at = w->list[at].outer) array_add(path, w->list[at].field);
-    for (s64 j = 0; j < path->count / 2; j++) {
-        s32 swapped = (*path)[j];
-        (*path)[j] = (*path)[path->count - 1 - j];
-        (*path)[path->count - 1 - j] = swapped;
-    }
-    return w->list[at].root;
 }
 
 // Where member `name` is, from the `count` structs `roots`, searched at
@@ -3309,45 +3259,36 @@ static s32 find_through_using(Checker *c, Type **roots, s32 count, String name, 
     path->count = 0;
     other->count = 0;
     if (!name.count) return 0;  // an anonymous member's, which is searched, not named
-    Using_Walk w = {};
-    w.c = c;
-    w.name = name;
-    Array<s64> level = {};  // the structs searched at this depth
-    for (s32 r = 0; r < count; r++) {
-        array_add(&w.list, Using_Search{roots[r], -1, -1, 0, r, REACH_NONE});
-        array_add(&level, w.list.count - 1);
-    }
+    Field_Walk w = {};
+    for (s32 r = 0; r < count; r++) field_walk_add_root(&w, roots[r], r);
+    // How far the walk looks into each struct of this depth: reach[i]
+    // belongs to w.level[i].
+    Array<Using_Reach> reach = {};
     bool said = false;  // a circle, or a layout found wrong
-    while (level.count && !w.found && !said) {
-        for (s64 i = 0; i < level.count && !said; i++) {
-            take_using_struct(&w, level[i]);
-            if (w.list[level[i]].reach != REACH_OWN) continue;
-            said = !check_layout(c, w.list[level[i]].type);
-            if (!said) search_using_struct(&w, level[i], false);
+    while (w.level.count && !w.found && !said) {
+        reach.count = 0;
+        for (s64 i = 0; i < w.level.count && !said; i++) {
+            array_add(&reach, take_using_struct(c, &w, w.level[i], name));
+            if (reach[i] != REACH_OWN) continue;
+            said = !check_layout(c, w.list[w.level[i]].type);
+            if (!said) search_using_struct(&w, w.level[i], name, false);
         }
         // Not found here, it may be in a struct here still under way.
-        for (s64 i = 0; i < level.count && !w.found && !said; i++) {
-            if (w.list[level[i]].reach == REACH_OWN) said = check_member_under_way(c, w.list[level[i]].type, name);
+        for (s64 i = 0; i < w.level.count && !w.found && !said; i++) {
+            if (reach[i] == REACH_OWN) said = check_member_under_way(c, w.list[w.level[i]].type, name);
         }
         // Not found at all, the next depth holds what this one's using
         // fields reach.
-        for (s64 i = 0; i < level.count && !w.found && !said; i++) {
-            Using_Reach reach = w.list[level[i]].reach;
-            if (reach == REACH_NONE) continue;
-            if (reach == REACH_DEEPER) said = !check_layout(c, w.list[level[i]].type);
-            if (!said) search_using_struct(&w, level[i], true);
+        for (s64 i = 0; i < w.level.count && !w.found && !said; i++) {
+            if (reach[i] == REACH_NONE) continue;
+            if (reach[i] == REACH_DEEPER) said = !check_layout(c, w.list[w.level[i]].type);
+            if (!said) search_using_struct(&w, w.level[i], name, true);
         }
-        Array<s64> searched = level;
-        level = w.next;
-        w.next = searched;
-        w.next.count = 0;
+        field_walk_next_depth(&w);
     }
-    s32 found = said ? -1 : w.found < 2 ? w.found : 2;
-    if (found >= 1) *path_root = using_found_path(&w, 0, path);
-    if (found == 2) *other_root = using_found_path(&w, 1, other);
-    array_free(&level);
-    array_free(&w.next);
-    array_free(&w.list);
+    s32 found = said ? -1 : field_walk_paths(&w, path, path_root, other, other_root);
+    array_free(&reach);
+    field_walk_free(&w);
     return found;
 }
 
@@ -3393,16 +3334,56 @@ s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array
     return found;
 }
 
+// The member reaching field `index` of struct s from operand: named as the
+// field (none for an anonymous member), its index and type the field's, at
+// pos and start. The caller makes a late field's type first
+// (check_late_field).
+static Ast_Member *member_link(Checker *c, Ast *operand, Type *s, s32 index, Position pos, Position start) {
+    Type_Field *field = &s->fields[index];
+    Ast_Member *m = ast_new<Ast_Member>(c->arena, AST_MEMBER, pos);
+    m->start = start;
+    m->operand = operand;
+    m->name = field->name;
+    m->index = index;
+    m->type = field->type;
+    return m;
+}
+
+// operand followed through every field of path but the last, from struct
+// *s: the chain (operand itself for a one-field path), *s left at the
+// struct the last field is in, stepping through a pointer field to its
+// pointee.
+//
+// Reached through anonymous members (spec 3.19), e.key is
+// e.<anonymous>.key, and through using fields (spec 3.21), p.position is
+// p.entity.position: a member for each field on the way but the last
+// (member_link), each at pos and starting at start, which lowering and the
+// rest see as fields of fields. A one-field path makes none; the caller
+// makes the member of the last field on the chain returned (check_member's
+// own, check_using_name's member_link), and both pass the written name's
+// position as pos. The first member made takes operand as written, so a pointer is
+// followed once, there, as for a field of its own; a using field that is a
+// pointer is followed by the member after it, as any pointer's field is.
+static Ast *member_chain(Checker *c, Ast *operand, Type **s, Array<s32> path, Position pos, Position start) {
+    Ast *chain = operand;
+    for (s64 k = 0; k + 1 < path.count; k++) {
+        Ast_Member *m = member_link(c, chain, *s, path[k], pos, start);
+        *s = type_is_pointer(m->type) ? m->type->pointee : m->type;
+        chain = m;
+    }
+    return chain;
+}
+
 // A name check_lookup found among the fields of the procedure's using
-// parameters (spec 3.21), as check_find_using finds it: position in move's
-// body is e.position. name->through gets the chain it means, made as
-// check_member makes one through using fields: an Ast_Name naming the
-// parameter, then a member for each field on the way, named as the field
-// (no name for an anonymous member), each at the name written, so a null
-// pointer followed on the way, the parameter's or a field's, is said there
-// (spec 8.4). name->decl is the parameter, and the field's type is
-// returned. Lowering, places and #run's walk follow the chain (checker.h's
-// using section).
+// parameters (spec 3.21): position in move's body is e.position. The walk
+// was check_lookup's (check_find_using), *through what it found, read here
+// rather than walked again, and its paths freed. name->through gets the
+// chain it means, made as check_member makes one through using fields
+// (member_chain): an Ast_Name naming the parameter, then a member for each
+// field on the way, each at the name written, so a null pointer followed on
+// the way, the parameter's or a field's, is said there (spec 8.4).
+// name->decl is the parameter, and the field's type is returned. Lowering,
+// places and #run's walk follow the chain (checker.h's using section).
 //
 // Two at the first depth that has one, across the parameters or in one,
 // are "'x' is ambiguous: 'a.x' or 'b.x'", at the name, each path written
@@ -3412,19 +3393,16 @@ s32 check_find_using(Checker *c, String name, Array<s32> *path, s32 *root, Array
 // In a default value the field is refused as its parameter is
 // (check_defaults): "a default value can't use 'id', a field of the
 // parameter 'e'". Null after any.
-static Type *check_using_name(Checker *c, Ast_Name *name) {
-    Array<s32> path = {}, other = {};
-    s32 root = 0, other_root = 0;
-    s32 found = check_find_using(c, name->name, &path, &root, &other, &other_root);
+static Type *check_using_name(Checker *c, Ast_Name *name, Using_Name *through) {
     Type *t = nullptr;
     name->decl = nullptr;
-    if (found == 2) {
-        Ast_Param *a = c->using_params[root], *b = c->using_params[other_root];
+    if (through->found == 2) {
+        Ast_Param *a = c->using_params[through->root], *b = c->using_params[through->other_root];
         diag_error(c->diag, name->pos, "'" STR_FMT "' is ambiguous: '" STR_FMT "' or '" STR_FMT "'",
-                   STR_ARG(name->name), STR_ARG(member_path_text(c, using_struct(a), path, a->name)),
-                   STR_ARG(member_path_text(c, using_struct(b), other, b->name)));
-    } else if (found == 1) {
-        Ast_Param *param = c->using_params[root];
+                   STR_ARG(name->name), STR_ARG(member_path_text(c, using_struct(a), through->path, a->name)),
+                   STR_ARG(member_path_text(c, using_struct(b), through->other, b->name)));
+    } else if (through->found == 1) {
+        Ast_Param *param = c->using_params[through->root];
         name->decl = param;
         if (c->default_of) {
             diag_error(c->diag, name->pos,
@@ -3435,26 +3413,18 @@ static Type *check_using_name(Checker *c, Ast_Name *name) {
             base->name = param->name;
             base->decl = param;
             base->type = param->type;
-            Ast *chain = base;
+            // Every member, the last's too, is at the name written.
             Type *s = using_struct(param);
-            for (s64 k = 0; k < path.count; k++) {
-                // The last field's type may be a late one's, not made yet.
-                if (k + 1 == path.count) check_late_field(c, s, path[k]);
-                Type_Field *field = &s->fields[path[k]];
-                Ast_Member *m = ast_new<Ast_Member>(c->arena, AST_MEMBER, name->pos);
-                m->operand = chain;
-                m->name = field->name;
-                m->index = path[k];
-                m->type = field->type;
-                chain = m;
-                if (k + 1 < path.count) s = type_is_pointer(field->type) ? field->type->pointee : field->type;
-            }
-            name->through = chain;
-            t = chain->type;
+            Ast *chain = member_chain(c, base, &s, through->path, name->pos, name->pos);
+            s32 last = through->path[through->path.count - 1];
+            // The last field's type may be a late one's, not made yet.
+            check_late_field(c, s, last);
+            name->through = member_link(c, chain, s, last, name->pos, name->pos);
+            t = name->through->type;
         }
     }
-    array_free(&path);
-    array_free(&other);
+    array_free(&through->path);
+    array_free(&through->other);
     return t;
 }
 
@@ -3517,9 +3487,13 @@ static Type *check_using_name(Checker *c, Ast_Name *name) {
 // no member of is "'Shape' has no member 'z'" there.
 static Type *check_member(Checker *c, Ast_Member *m) {
     Ast *operand = m->operand;
+    Type *t;
     if (operand->kind == AST_NAME && !ast_in_parentheses(operand)) {
         Ast_Name *name = (Ast_Name *)operand;
-        Ast *decl = check_lookup(c, name->name, nullptr);
+        // An enum's or a tagged union's name wasn't found among the using
+        // parameters' fields, so has no paths to free.
+        Using_Name through;
+        Ast *decl = check_lookup(c, name->name, &through);
         if (decl && decl->kind == AST_ENUM) {
             name->decl = decl;
             Ast_Enum *e = (Ast_Enum *)decl;
@@ -3535,12 +3509,21 @@ static Type *check_member(Checker *c, Ast_Member *m) {
             Ast_Struct *s = (Ast_Struct *)decl;
             m->of_tagged = s;
             if (!s->declared) return nullptr;  // its layout failed, said: a circle, too big, or a tag too small
-            Type *t = s->declared;
+            t = s->declared;
             m->made = void_member_value(c, t, m->name, m->pos, m, &m->index);
             return m->made ? t : nullptr;
         }
+        // Any other name is an operand, checked as check_operand checks
+        // one (a name is never void, as only a call is), from the lookup
+        // made here.
+        t = name->type = check_named(c, name, decl, &through);
+        if (t && type_waits_for_one(t)) {
+            check_default_type(c, name);  // reports it
+            t = nullptr;
+        }
+    } else {
+        t = check_operand(c, m->operand);
     }
-    Type *t = check_operand(c, m->operand);
     if (!t) return nullptr;
     if (t->kind == TYPE_ARRAY || type_has_view_fields(t)) return check_sequence_member(c, m, t);
     Type *s = type_is_pointer(t) && t->pointee->kind == TYPE_STRUCT ? t->pointee : t;
@@ -3599,24 +3582,10 @@ static Type *check_member(Checker *c, Ast_Member *m) {
         return nullptr;
     }
     array_free(&other);
-    // Reached through anonymous members (spec 3.19), e.key is
-    // e.<anonymous>.key, and through using fields (spec 3.21), p.position
-    // is p.entity.position: a member for each field on the way, named as
-    // the field (no name for an anonymous member), made here, at the name
-    // written. The first takes e as written, so a pointer is followed once,
-    // there, as for a field of its own; a using field that is a pointer is
-    // followed by the member after it, as any pointer's field is.
-    for (s64 k = 0; k + 1 < path.count; k++) {
-        Type_Field *field = &s->fields[path[k]];
-        Ast_Member *inner = ast_new<Ast_Member>(c->arena, AST_MEMBER, m->pos);
-        inner->start = m->start;
-        inner->operand = m->operand;
-        inner->name = field->name;
-        inner->index = path[k];
-        inner->type = field->type;
-        s = type_is_pointer(field->type) ? field->type->pointee : field->type;
-        m->operand = inner;
-    }
+    // Reached through anonymous members or using fields, e becomes the
+    // chain of the fields on the way (member_chain), each at the name
+    // written and starting where e does; m reaches the last.
+    m->operand = member_chain(c, m->operand, &s, path, m->pos, m->start);
     m->index = path[path.count - 1];
     array_free(&path);
     check_late_field(c, s, m->index);

@@ -383,24 +383,28 @@ static Ast *find_name(Checker *c, String name) {
 // type. A name the walk finds twice at one depth (across the parameters or
 // in one) is still theirs, and check_using_name says it's ambiguous; so is
 // one whose walk meets a circle, or a layout found wrong, said already
-// (check_layout, check_member_under_way): root isn't set, and
-// check_using_name leaves the name undeclared.
-Ast *check_lookup(Checker *c, String name, bool *through_using) {
-    if (through_using) *through_using = false;
+// (check_layout, check_member_under_way): the walk sets no root, which
+// stays the first parameter, and check_using_name leaves the name
+// undeclared. The walk runs once: its result goes to the caller in
+// *through, for check_using_name to read, or, for a caller that passes
+// none, is freed here.
+Ast *check_lookup(Checker *c, String name, Using_Name *through) {
+    Using_Name own;
+    Using_Name *walk = through ? through : &own;
+    *walk = {};
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
         if (found) return *found;
     }
     if (c->using_params.count) {
-        Array<s32> path = {}, other = {};
-        s32 root = 0, other_root = 0;
-        s32 reached = check_find_using(c, name, &path, &root, &other, &other_root);
-        array_free(&path);
-        array_free(&other);
-        if (reached) {
-            if (through_using) *through_using = true;
-            return c->using_params[root];
+        walk->found = check_find_using(c, name, &walk->path, &walk->root, &walk->other, &walk->other_root);
+        // Only a caller that passes through reads the paths, and only when
+        // the name is there.
+        if (!through || !walk->found) {
+            array_free(&walk->path);
+            array_free(&walk->other);
         }
+        if (walk->found) return c->using_params[walk->root];
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
@@ -3050,7 +3054,7 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // the procedure's own parameters, which hide the top level's names there as
 // they do in the body (spec 4.7), so they're put in a scope of their own
 // (table_put: the body says a name declared twice, declare), and
-// c->default_of makes check_name, and check_addressable for its address,
+// c->default_of makes check_named, and check_addressable for its address,
 // refuse each: "a default value can't use the parameter 'times'", at the
 // name. A global times can't stand in for the parameter, which is what the
 // default would seem to mean. So are the fields of its using parameters
@@ -3226,7 +3230,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
 // The procedure's type (Ast.type) is its signature's procedure type: #c_call
 // when it's marked so, or foreign (C's own), and variadic with a '..T'. One
 // that takes C's bare '..' has none: no procedure type takes it, so it can
-// only be called (check_name). Nor has one with parameters after its '..T'
+// only be called (check_named). Nor has one with parameters after its '..T'
 // (issue #197): a procedure type keeps no defaults, which are all a call
 // gives them (proc_type_of_signature).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {

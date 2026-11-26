@@ -1,0 +1,1 @@
+tests/run/using_parameter_null_second_hop.rig:12:5: runtime error: null pointer dereference

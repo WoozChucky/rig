@@ -292,6 +292,69 @@ bool type_has_view_fields(Type *t);
 // lets a variadic call pass (checker.h).
 Type *type_c_promoted(Type *t);
 
+// A walk through a struct's fields to the structs they hold, breadth first,
+// depth by depth: what type_find_member, type_find_base and the checker's
+// walk through using fields (check_expr.cpp's find_through_using) keep
+// while each searches a struct its own way. A step is a struct the walk
+// searches, or will, and how it was reached, so each place found reads
+// back as a path of field indices from the struct the walk started at.
+struct Field_Step {
+    Type *type;  // the struct; in find_through_using's walk, null for one reached through a
+                 // using field until that walk takes it at its depth, and for one it doesn't
+                 // search
+    s64 outer;   // the step it was reached from (holding it or pointing at it), an index into
+                 // list; -1 for a root
+    s32 field;   // its field there
+    s32 depth;   // the depth it's searched at; an anonymous member at its outer's
+    s32 root;    // which root it was reached from
+};
+
+struct Field_Walk {
+    Array<Field_Step> list;  // every step, searched or to search: each path's way back up
+    Array<s64> level;        // the steps searched at this depth, indices into list
+    Array<s64> next;         // those to search at the next
+    s32 found;               // places found so far; the first two kept in found_in/found_field
+    s64 found_in[2];         // the step each is in
+    s32 found_field[2];      // and its field there
+};
+
+// Starts walk w at struct t, root number `root`: a step at depth 0, into
+// its list and the depth searched first.
+void field_walk_add_root(Field_Walk *w, Type *t, s32 root);
+
+// Whether struct `type`, reached through a using field, is searched at
+// `depth`: not when it was searched at an earlier depth, where it held
+// nothing found and queued what it reaches, nor when two paths reach it at
+// this one already, enough to say a thing is found two ways. That keeps
+// the walk small: a struct holding two of another, each holding two of a
+// third, would otherwise be searched twice as often at each depth. In
+// find_through_using's walk through using fields, which follows pointer
+// using fields too, it also ends cycles (a struct that points at itself,
+// or at one that points back); a struct can't hold itself by value, so
+// type_find_base meets none.
+bool field_walk_needed(Field_Walk *w, Type *type, s32 depth);
+
+// Counts a place found, field `field` of step `at`, keeping the first two
+// in walk order: a message naming two places names those.
+void field_walk_found(Field_Walk *w, s64 at, s32 field);
+
+// Moves the walk to the next depth: the steps queued for it become the
+// ones searched, and the queue is emptied (the two buffers swapped).
+void field_walk_next_depth(Field_Walk *w);
+
+// The path of the k-th place found: its field indices from its root down,
+// into *path. Returns the root.
+s32 field_walk_path(Field_Walk *w, s32 k, Array<s32> *path);
+
+// How many places the walk found, 0, 1 or 2 (two or more), with the first's
+// path and root in *path and *path_root when there's one, the second's in
+// *other and *other_root when there are two; those not filled are left as
+// they are.
+s32 field_walk_paths(Field_Walk *w, Array<s32> *path, s32 *path_root, Array<s32> *other, s32 *other_root);
+
+// Frees the walk's three lists.
+void field_walk_free(Field_Walk *w);
+
 // Where member `name` of struct or union t is (spec 3.19): t's own named
 // fields first, then its anonymous members' fields, depth by depth. *path
 // gets the field indices from t down; it's left empty when no field has the
