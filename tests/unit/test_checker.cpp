@@ -11588,12 +11588,13 @@ TEST(using_walks_lay_out_only_the_structs_they_enter) {
     // the circle alone said, as b.c.d.g says it: for a bare name, a field,
     // a literal's name, an assignment's target, a callee and a member's
     // operand, h there not taken for the procedure ("can't assign to 'h':
-    // it's a procedure", or a call of it), nor g.k for a field of an int.
+    // it's a procedure", or h() short of its argument), nor g.k for a field
+    // of an int.
     const char *reached = "A :: struct { arr: [#run f(null)]int; }\n"
                           "B :: struct { using c: *C; }\n"
                           "C :: struct { a: A; using d: *D; }\n"
                           "D :: struct { g: int; h: int; }\n"
-                          "h :: () -> int { return 3; }\n"
+                          "h :: (n: int) -> int { return n; }\n"
                           "f :: %s -> int { %s }\n"
                           "main :: () { x: A; }\n";
     const char *reaching[][2] = {
