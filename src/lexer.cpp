@@ -407,7 +407,7 @@ static const Punctuation PUNCTUATION[] = {
     {":", TOKEN_COLON},    {"=", TOKEN_EQUAL},     {".", TOKEN_DOT},     {"+", TOKEN_PLUS},
     {"-", TOKEN_MINUS},    {"*", TOKEN_STAR},      {"/", TOKEN_SLASH},   {"%", TOKEN_PERCENT},
     {"&", TOKEN_AMP},      {"|", TOKEN_PIPE},      {"^", TOKEN_CARET},   {"~", TOKEN_TILDE},
-    {"!", TOKEN_BANG},     {"<", TOKEN_LESS},      {">", TOKEN_GREATER},     {"$", TOKEN_DOLLAR},
+    {"!", TOKEN_BANG},     {"<", TOKEN_LESS},      {">", TOKEN_GREATER}, {"$", TOKEN_DOLLAR},
 };
 
 // Punctuation, or a byte that starts no token at all.

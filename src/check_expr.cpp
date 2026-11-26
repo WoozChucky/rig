@@ -1515,10 +1515,10 @@ static Type *check_builtin_call(Checker *c, Ast_Call *call) {
 }
 
 // "'f' takes 2 arguments, but 1 was given", at the callee of a call to
-// `name` whose count doesn't fit its n parameters (check_call): "takes 1 to
-// 3" ("1 or 2") when `required` of them must be given, "at least" its
+// `name` whose count doesn't fit its n parameters (count_arguments): "takes
+// 1 to 3" ("1 or 2") when `required` of them must be given, "at least" its
 // `fixed` ones when it takes `more` ('..T' or C's '..'), each counting the
-// arguments as check_call does: `given`, or `before` a spread for "at
+// arguments as count_arguments does: `given`, or `before` a spread for "at
 // least".
 static void report_argument_count(Checker *c, Ast_Call *call, String name, s64 required, s64 n, s64 fixed, bool more,
                                   s64 given, s64 before) {
@@ -1533,11 +1533,31 @@ static void report_argument_count(Checker *c, Ast_Call *call, String name, s64 r
     }
 }
 
+// Whether a call of `name` with `given` arguments fits its n parameters,
+// counted as check_call and check_generic_call count them: the fixed ones,
+// those before its '..T' one at `dots` (-1 when there's none), then any
+// number more when it takes `more` ('..T' or C's '..'); a spread kept last
+// stands for all of the '..T' ones, so it isn't counted (*spreads). A
+// direct call of `proc` that takes no more may leave out the parameters
+// with default values (spec 5.10); a call through a value, proc null,
+// whose type keeps none, gives them all. Said when it doesn't fit
+// (report_argument_count).
+static bool count_arguments(Checker *c, Ast_Call *call, String name, Ast_Proc *proc, s64 n, s64 given, s64 dots,
+                            bool more, bool *spreads) {
+    s64 fixed = dots >= 0 ? dots : n;
+    *spreads = dots >= 0 && given && call->args[given - 1]->kind == AST_SPREAD;
+    s64 before = *spreads ? given - 1 : given;
+    s64 required = proc && !more ? required_arguments(proc) : n;
+    if (more ? before >= fixed : (given >= required && given <= n)) return true;
+    report_argument_count(c, call, name, required, n, fixed, more, given, before);
+    return false;
+}
+
 // A call of a generic procedure (spec 7.11), call->proc the generic: its
 // arguments checked, each as check_call checks one, a spread refused where
 // check_call refuses one (refuse_spread), so it gives T nothing, then
-// counted against the generic's parameters as check_call counts them (the
-// same messages), then the instance they make (check_generic.cpp's
+// counted against the generic's parameters as check_call counts them
+// (count_arguments), then the instance they make (check_generic.cpp's
 // check_instance) taking the generic's place in call->proc, for check_call
 // to go on with as with any call: each argument converts to its parameter's
 // type in the instance, so once T is fixed, `max(x_s32, y_int)` is
@@ -1577,15 +1597,8 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
         bool kept = dots >= 0 && (i == given - 1 || (i >= dots && dots < n - 1));
         if (call->args[i]->kind == AST_SPREAD && !kept) refuse_spread(c, call->args[i]);
     }
-    bool more = dots >= 0;
-    s64 fixed = more ? dots : n;
-    bool spreads = more && given && call->args[given - 1]->kind == AST_SPREAD;
-    s64 before = spreads ? given - 1 : given;
-    s64 required = more ? n : required_arguments(generic);
-    if (more ? before < fixed : (given < required || given > n)) {
-        report_argument_count(c, call, generic->name, required, n, fixed, more, given, before);
-        return false;
-    }
+    bool spreads;
+    if (!count_arguments(c, call, generic->name, generic, n, given, dots, dots >= 0, &spreads)) return false;
     Ast_Proc *instance = check_instance(c, generic, call->args, call->callee, call->start);
     if (!instance) return false;
     call->proc = instance;
@@ -1699,18 +1712,12 @@ static Type *check_call(Checker *c, Ast_Call *call) {
         if (arg->kind == AST_SPREAD && (!gathers || i != given - 1)) refuse_spread(c, arg);
     }
     // A procedure that takes C's '..' or a '..T' takes its fixed parameters
-    // and any number more; a spread kept stands for all of the '..T' ones,
-    // so it isn't counted.
-    bool spreads = gathers && given && call->args[given - 1]->kind == AST_SPREAD;
+    // and any number more (count_arguments).
     bool more = gathers || (proc && proc->is_c_variadic);
-    s64 before = spreads ? given - 1 : given;
-    // A direct call may leave out the parameters with default values (spec
-    // 5.10); a call through a value, whose type keeps none, gives them all.
-    s64 required = proc && !more ? required_arguments(proc) : n;
-    if (more ? before < fixed : (given < required || given > n)) {
-        report_argument_count(c, call, name, required, n, fixed, more, given, before);
+    bool spreads;
+    if (!count_arguments(c, call, name, proc, n, given, dots, more, &spreads)) {
         if (spreads) call->args[given - 1]->type = nullptr;  // not taken: nothing more to say of it
-    } else if (spreads && before > fixed) {
+    } else if (spreads && given - 1 > fixed) {
         Ast *spread = call->args[given - 1];
         diag_error(c->diag, spread->pos,
                    "'" STR_FMT "' takes its '..' arguments one by one or as one spread view, not both",
@@ -2511,10 +2518,9 @@ static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
 // type, as in T == int", at the operator, unless either operand had a
 // mistake of its own, said instead: a type's as a written type's are, a
 // value's as ever (one whose check still gives a type, a call with too
-// many arguments, is compared too, both said).
-static Type *check_type_comparison(Checker *c, Ast_Binary *b) {
-    bool left_names = expr_names_type(c, b->left);
-    bool right_names = expr_names_type(c, b->right);
+// many arguments, is compared too, both said). left_names and right_names
+// say which operands name a type (expr_names_type), as check_binary found.
+static Type *check_type_comparison(Checker *c, Ast_Binary *b, bool left_names, bool right_names) {
     Type *left = left_names ? check_type_value(c, b->left) : check_value(c, b->left);
     Type *right = right_names ? check_type_value(c, b->right) : check_value(c, b->right);
     if (!left || !right) return nullptr;
@@ -2571,8 +2577,10 @@ static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
     // Types compared (spec 5.20): T == int, []int != [..]int.
-    if (equality && (expr_names_type(c, b->left) || expr_names_type(c, b->right))) {
-        return check_type_comparison(c, b);
+    if (equality) {
+        bool left_type = expr_names_type(c, b->left);
+        bool right_type = expr_names_type(c, b->right);
+        if (left_type || right_type) return check_type_comparison(c, b, left_type, right_type);
     }
     Type *left = nullptr, *right = nullptr;
     bool left_checked = false, right_checked = false;

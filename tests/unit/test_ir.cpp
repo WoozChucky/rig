@@ -7794,16 +7794,6 @@ TEST(instances_are_procedures_of_their_own) {
     arena_free(&a);
 }
 
-// The line of `ir` from `start` to its end, without the newline; "" when
-// `start` isn't in it.
-static String line_from(String ir, const char *start) {
-    s64 at = index_of(ir, start);
-    if (at < 0) return {};
-    String rest = string_slice(ir, at, ir.count - at);
-    s64 end = index_of(rest, "\n");
-    return end < 0 ? rest : string_slice(rest, 0, end);
-}
-
 TEST(baked_arguments_have_no_code) {
     // A type or a constant given to a '$' parameter is no argument of the
     // instance, which has no parameter for it: ring's call passes only its
@@ -7824,10 +7814,12 @@ TEST(baked_arguments_have_no_code) {
                                 "}\n");
     String ir = ir_print(&a, m);
     String main = proc_ir(ir, "main");
-    CHECK_STR(line_from(main, "call @ring$N$3$T$int("), "call @ring$N$3$T$int(%2)");
-    CHECK_STR(line_from(main, "call @get$T$Position("), "call @get$T$Position(%0)");
-    CHECK_STR(line_from(main, "call @get_then$T$Position("), "call @get_then$T$Position(%0, %6)");
-    CHECK_STR(line_from(ir, "proc @ring$N$3$T$int("), "proc @ring$N$3$T$int(ptr) {");
+    // Each call's line holds its whole argument list, closed (helpers.cpp's
+    // line_with gives the whole line).
+    CHECK(contains(line_with(main, "call @ring$N$3$T$int("), "call @ring$N$3$T$int(%2)"));
+    CHECK(contains(line_with(main, "call @get$T$Position("), "call @get$T$Position(%0)"));
+    CHECK(contains(line_with(main, "call @get_then$T$Position("), "call @get_then$T$Position(%0, %6)"));
+    CHECK_STR(line_with(ir, "proc @ring$N$3$T$int("), "proc @ring$N$3$T$int(ptr) {");
     CHECK(contains(proc_ir(ir, "ring$N$3$T$int"), "const i64 3"));
     arena_free(&a);
 }

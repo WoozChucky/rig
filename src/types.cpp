@@ -484,7 +484,8 @@ String type_name(Arena *a, Type *t) {
     return {(const u8 *)name, length};
 }
 
-// Appends text to a name being built.
+// Appends text to a name being built: a type's here, a written type's in
+// check_generic.cpp (written_type_text).
 static void add_text(Array<u8> *name, String text) {
     for (s64 i = 0; i < text.count; i++) array_add(name, text.data[i]);
 }

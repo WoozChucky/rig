@@ -280,11 +280,12 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         // An instance's type parameter (spec 7.11): the type it's bound to,
         // a struct's laid out where the struct's name would be. One that
         // lost its type (made again, made_again) is null, said.
-        Type *t = ((Ast_Alias *)decl)->aliased;
-        if (t && !behind_pointer && t->kind == TYPE_STRUCT && t->decl && t->decl->resolve != RESOLVE_DONE) {
-            return resolve_struct(c, t->decl);
+        Type *bound = ((Ast_Alias *)decl)->aliased;
+        if (bound && !behind_pointer && bound->kind == TYPE_STRUCT && bound->decl &&
+            bound->decl->resolve != RESOLVE_DONE) {
+            return resolve_struct(c, bound->decl);
         }
-        return t;
+        return bound;
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
@@ -3928,8 +3929,8 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // a type's count may have called one. A binding that has no type now
     // (null) leaves every use of T in its body silent, as a parameter's
     // does; an instance its body makes names it in its chain as it was
-    // made (check_generic.cpp's instance_line). A constant binding's type, a number's, a bool's, an enum's or
-    // string, is never made again.
+    // made (check_generic.cpp's instance_line). A constant binding's type,
+    // a number's, a bool's, an enum's or string, is never made again.
     for (s64 i = 0; i < file->instances.count; i++) {
         Ast_Instance *inst = file->instances[i];
         for (s64 k = 0; k < inst->bindings.count; k++) {

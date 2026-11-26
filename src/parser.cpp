@@ -50,7 +50,7 @@ struct Parser {
     // A '$T' was read in the parameters of the procedure being read, or a
     // '$' before a parameter's name: it's generic (Ast_Proc.is_generic,
     // parse_procedure).
-    bool declared_type_parameter;
+    bool read_a_dollar;
 };
 
 // A limit of the compiler (spec 6.1): an expression nests at most MAX_DEPTH
@@ -283,13 +283,13 @@ static bool set_height(Parser *p, s32 height) {
     return true;
 }
 
-// Reads the type of a size_of, a type_info or a cast a level down
-// (MAX_DEPTH): every stage goes from the expression into its type, so
-// that's one more level on the way to whatever the type holds. The level
-// opens unchecked: a type that's a name opens nothing and reaches no
-// deeper, so size_of(int) and cast(int) x are fine at any depth an
-// expression may have; parse_type checks the levels before each '*' or '['
-// it opens.
+// Reads the type of a size_of, a type_info, a cast or a type value
+// (parse_type_value) a level down (MAX_DEPTH): every stage goes from the
+// expression into its type, so that's one more level on the way to
+// whatever the type holds. The level opens unchecked: a type that's a name
+// opens nothing and reaches no deeper, so size_of(int) and cast(int) x are
+// fine at any depth an expression may have; parse_type checks the levels
+// before each '*' or '[' it opens.
 static Ast_Type *parse_type_below(Parser *p) {
     p->levels++;
     reach(p, open_levels(p) < MAX_DEPTH ? open_levels(p) : MAX_DEPTH);
@@ -1846,7 +1846,7 @@ static Ast_Type *parse_type_level(Parser *p) {
         Ast_Type *named = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, t->pos);
         named->name = name->text;
         named->declares = true;
-        p->declared_type_parameter = true;
+        p->read_a_dollar = true;
         return named;
     }
     if (t->kind == TOKEN_IDENT) {
@@ -1879,7 +1879,7 @@ static Ast_Type *parse_whole_type(Parser *p) {
 // '$' before the name bakes it (Ast_Param.is_baked, at its '$'; spec
 // 7.11): each call gives a type, `$T: Type`, or a constant, `$N: int`,
 // which its instance is made for, and the procedure is generic
-// (Parser.declared_type_parameter). What it may be is the checker's to say.
+// (Parser.read_a_dollar). What it may be is the checker's to say.
 //
 // A '..' before the type makes the parameter a '..T' one (spec 7.2), which
 // takes the call's other arguments: its type as written is T, and the
@@ -1916,7 +1916,7 @@ static Ast_Param *parse_param(Parser *p) {
     if (dollar) {
         param->is_baked = true;
         param->dollar = dollar->pos;
-        p->declared_type_parameter = true;
+        p->read_a_dollar = true;
     }
     if (peek(p)->kind == TOKEN_DOT_DOT) {
         param->is_variadic = true;
@@ -2011,7 +2011,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     proc->name = name->text;
     if (!expect(p, TOKEN_LPAREN)) return nullptr;
     bool gathers = false;  // a '..T' parameter was read
-    p->declared_type_parameter = false;
+    p->read_a_dollar = false;
     if (peek(p)->kind != TOKEN_RPAREN) {
         for (;;) {
             if (peek(p)->kind == TOKEN_DOT_DOT) {
@@ -2033,7 +2033,7 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
         }
     }
     if (!expect(p, TOKEN_RPAREN)) return nullptr;
-    proc->is_generic = p->declared_type_parameter;
+    proc->is_generic = p->read_a_dollar;
     if (peek(p)->kind == TOKEN_ARROW) {
         advance(p);
         bool listed;

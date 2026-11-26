@@ -105,7 +105,6 @@ struct Generic_Binding {
     bool is_type;       // a type parameter, $T; a constant one, $N: int, isn't
     Type *type;         // is_type: what it's bound to, null until then; otherwise the constant's type
     Ast *value;         // a constant one's argument, converted
-    s32 from;           // the argument that fixed it; -1 until one does
 };
 
 // checker.cpp
@@ -502,15 +501,17 @@ bool has_failed_run(Ast *e);
 // said per instance); the refusals of a default value on a parameter that
 // declares a type parameter, of C's '..', of #foreign, #c_call and
 // #compiler; and the mistakes in the names its parameters declare: a $T
-// twice, a type parameter used before its $T, a name two of them declare,
-// a $T of a built-in type's name. A baked parameter's own (spec 7.11):
-// $T: Type, or a constant of a number, bool, enum or string type, whose
-// type this keeps on the parameter (Ast_Param.is_baked), never '..', with
-// no default value, before any '..' parameter. Where its default values
-// may go (checker.cpp's check_default_places), which doesn't depend on T,
-// its '$' parameters and the defaults refused above passed over. Its type
-// stays null: a generic is no value. Its default values themselves are
-// each instance's, checked and converted with its signature.
+// twice, a type or constant parameter used before its $, a name two of
+// them declare, a $T or a baked parameter of a built-in type's name. A
+// baked parameter's own (spec 7.11, Ast_Param.is_baked): $T: Type, or a
+// constant of a number, bool, enum or string type, whose type this keeps
+// in the parameter's Ast.type, never '..', with no default value, after
+// no '..' parameter and no parameter with a default value, never using.
+// Where its default values may go (checker.cpp's check_default_places),
+// which doesn't depend on T, its '$' parameters and the defaults refused
+// above passed over. Its type stays null: a generic is no value. Its
+// default values themselves are each instance's, checked and converted
+// with its signature.
 void check_generic_signature(Checker *c, Ast_Proc *generic);
 
 // Whether param is a $T: Type (spec 7.11), which takes a type: known by
@@ -522,8 +523,8 @@ bool takes_a_type(Ast_Param *param);
 // declared nowhere, said once, at the generic, as the checker says them
 // ("unknown identifier 'x'", "unknown type 'Foo'"), nothing else, and
 // nothing written into its nodes. What depends on T isn't looked at: a
-// member's name, a .NAME, a literal's field names. Both branches of an #if
-// are walked. With a using parameter no unknown identifier is said, a field
+// member's name, a .NAME, a literal's field names. Every branch of an #if,
+// along an else-#if chain too, is walked. With a using parameter no unknown identifier is said, a field
 // of T's maybe; nor after a #load or a top-level #if's condition failed
 // (Checker.lost_a_file). Run once, in check()'s pass over the bodies in the
 // generic's turn, or earlier for the first of its instances' bodies

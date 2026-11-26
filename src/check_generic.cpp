@@ -24,7 +24,6 @@ static void add_generic_parameter(Array<Generic_Binding> *declared, String name,
     b.declared = at;
     b.is_type = is_type;
     b.type = type;
-    b.from = -1;
     array_add(declared, b);
 }
 
@@ -266,8 +265,8 @@ static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declare
 // and uses, in the order they're written (depth first, left to right, an
 // array's count before its elements), against what the parameters and the
 // parts before them declared (*names, which this adds to), and the type
-// parameters the whole signature declares (`declared`), said once, at the
-// generic (spec 7.11):
+// and constant parameters the whole signature declares (`declared`), said
+// once, at the generic (spec 7.11):
 // - a $T where an earlier $T declared the name: "'T' is declared twice; '$'
 //   goes on its first use only, as in (a: $T, b: T)", at the second $;
 // - a $T of a parameter's name: "'T' is already declared at PATH:L:C", at
@@ -556,8 +555,8 @@ static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, G
 }
 
 // Binds the type parameters written type `pattern` names to the parts of
-// type t they stand for, from argument `arg`: a name not bound yet, alone
-// (`$T` or `T`), is t. The rest of the pattern is walked through as far as
+// type t, an argument's, they stand for: a name not bound yet, alone (`$T`
+// or `T`), is t. The rest of the pattern is walked through as far as
 // it holds one: a pointer's target, an array's, a view's or a resizable
 // array's elements, a procedure type's parameters and results. A view's
 // takes the elements of an array, a view or a resizable array, which all
@@ -566,22 +565,21 @@ static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, G
 // converts is the call's to say (check_call). False when a part can't
 // match: t isn't the kind of type the pattern is, where it names one still
 // to bind.
-static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindings, s32 arg) {
+static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindings) {
     if (!names_unbound(pattern, bindings, nullptr)) return true;
     switch (pattern->kind) {
     case AST_TYPE_NAME: {
         Generic_Binding *b = binding_named(bindings, pattern->name);
         b->type = t;
-        b->from = arg;
         return true;
     }
-    case AST_TYPE_POINTER: return t->kind == TYPE_POINTER && match_type(pattern->pointee, t->pointee, bindings, arg);
+    case AST_TYPE_POINTER: return t->kind == TYPE_POINTER && match_type(pattern->pointee, t->pointee, bindings);
     case AST_TYPE_VIEW:
         return (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) &&
-               match_type(pattern->element, t->element, bindings, arg);
-    case AST_TYPE_ARRAY: return t->kind == TYPE_ARRAY && match_type(pattern->element, t->element, bindings, arg);
+               match_type(pattern->element, t->element, bindings);
+    case AST_TYPE_ARRAY: return t->kind == TYPE_ARRAY && match_type(pattern->element, t->element, bindings);
     case AST_TYPE_RESIZABLE:
-        return t->kind == TYPE_RESIZABLE && match_type(pattern->element, t->element, bindings, arg);
+        return t->kind == TYPE_RESIZABLE && match_type(pattern->element, t->element, bindings);
     case AST_TYPE_PROC: {
         if (t->kind != TYPE_PROC || t->param_count != pattern->params.count ||
             t->result_count != pattern->results.count || t->is_variadic != pattern->is_variadic) {
@@ -590,12 +588,12 @@ static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindi
         for (s64 i = 0; i < t->param_count; i++) {
             // A '..T' parameter is a []T, and its pattern T.
             bool dots = t->is_variadic && i == t->param_count - 1;
-            if (!match_type(pattern->params[i], dots ? t->params[i]->element : t->params[i], bindings, arg)) {
+            if (!match_type(pattern->params[i], dots ? t->params[i]->element : t->params[i], bindings)) {
                 return false;
             }
         }
         for (s64 i = 0; i < t->result_count; i++) {
-            if (!match_type(pattern->results[i], t->results[i], bindings, arg)) return false;
+            if (!match_type(pattern->results[i], t->results[i], bindings)) return false;
         }
         return true;
     }
@@ -603,49 +601,45 @@ static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindi
     }
 }
 
-// Appends text to a text being built.
-static void add_generic_text(Array<u8> *text, String s) {
-    for (s64 i = 0; i < s.count; i++) array_add(text, s.data[i]);
-}
-
-// Written type `written` as Rig writes it, for a message: `[]$T`, `*T`,
-// `[N]$T` (its count as the program wrote it), `($T) -> T`.
+// Appends written type `written` to `text` as Rig writes it, for a
+// message: `[]$T`, `*T`, `[N]$T` (its count as the program wrote it),
+// `($T) -> T`.
 static void add_written_type(Checker *c, Array<u8> *text, Ast_Type *written) {
     switch (written->kind) {
     case AST_TYPE_NAME:
         if (written->declares) array_add(text, (u8)'$');
-        add_generic_text(text, written->name);
+        add_text(text, written->name);
         return;
     case AST_TYPE_POINTER:
         array_add(text, (u8)'*');
         add_written_type(c, text, written->pointee);
         return;
-    case AST_TYPE_VIEW: add_generic_text(text, str("[]")); break;
-    case AST_TYPE_RESIZABLE: add_generic_text(text, str("[..]")); break;
+    case AST_TYPE_VIEW: add_text(text, str("[]")); break;
+    case AST_TYPE_RESIZABLE: add_text(text, str("[..]")); break;
     case AST_TYPE_ARRAY:
         array_add(text, (u8)'[');
-        add_generic_text(text, source_text(c, written->count->start, written->element->start, ']'));
+        add_text(text, source_text(c, written->count->start, written->element->start, ']'));
         array_add(text, (u8)']');
         break;
     case AST_TYPE_PROC: {
         array_add(text, (u8)'(');
         for (s64 i = 0; i < written->params.count; i++) {
-            if (i > 0) add_generic_text(text, str(", "));
-            if (written->is_variadic && i == written->params.count - 1) add_generic_text(text, str(".."));
+            if (i > 0) add_text(text, str(", "));
+            if (written->is_variadic && i == written->params.count - 1) add_text(text, str(".."));
             add_written_type(c, text, written->params[i]);
         }
         array_add(text, (u8)')');
         if (written->results.count) {
-            add_generic_text(text, str(" -> "));
+            add_text(text, str(" -> "));
             bool listed = written->results.count > 1;
             if (listed) array_add(text, (u8)'(');
             for (s64 i = 0; i < written->results.count; i++) {
-                if (i > 0) add_generic_text(text, str(", "));
+                if (i > 0) add_text(text, str(", "));
                 add_written_type(c, text, written->results[i]);
             }
             if (listed) array_add(text, (u8)')');
         }
-        if (written->is_c_call) add_generic_text(text, str(" #c_call"));
+        if (written->is_c_call) add_text(text, str(" #c_call"));
         return;
     }
     default: RIG_ASSERT(!"not a written type"); return;
@@ -653,6 +647,8 @@ static void add_written_type(Checker *c, Array<u8> *text, Ast_Type *written) {
     add_written_type(c, text, written->element);
 }
 
+// Written type `written` as Rig writes it (add_written_type), in the arena,
+// for a message.
 static String written_type_text(Checker *c, Ast_Type *written) {
     Array<u8> text = {};
     add_written_type(c, &text, written);
@@ -728,7 +724,6 @@ static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *
             return false;
         }
         b->type = type_value(arg);
-        b->from = (s32)index;
         return true;
     }
     s64 errors = c->diag->error_count;
@@ -743,12 +738,12 @@ static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *
         return false;
     }
     b->value = arg;
-    b->from = (s32)index;
     return true;
 }
 
-// Binds generic's type parameters (in `bindings`) from args, checked
-// already, as spec 7.11 says, saying why when one can't be: false then.
+// Binds generic's type and constant parameters (in `bindings`) from args,
+// checked already, as spec 7.11 says, saying why when one can't be: false
+// then.
 // - Each baked parameter's argument, first, gives its type or constant
 //   (bake_argument). They're all before any '..' parameter, so argument i
 //   is parameter i's.
@@ -787,7 +782,7 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
             if (pattern->kind == AST_TYPE_NAME) continue;  // its default only if nothing typed fixes it
             t = t == &type_untyped_float ? &type_float32 : &type_int;
         }
-        if (match_type(pattern, t, bindings, (s32)i)) continue;
+        if (match_type(pattern, t, bindings)) continue;
         diag_error(c->diag, args[i]->start,
                    "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which doesn't fit '" STR_FMT "'",
                    (long long)(i + 1), STR_ARG(generic->name), STR_ARG(type_name(c->arena, t)),
@@ -936,13 +931,13 @@ String bindings_text(Arena *a, Array<Ast *> bindings) {
     Array<u8> text = {};
     for (s64 i = 0; i < bindings.count; i++) {
         Ast *b = bindings[i];
-        if (i > 0) add_generic_text(&text, str(", "));
-        add_generic_text(&text, binding_name(b));
-        add_generic_text(&text, str(" = "));
+        if (i > 0) add_text(&text, str(", "));
+        add_text(&text, binding_name(b));
+        add_text(&text, str(" = "));
         if (b->kind == AST_ALIAS) {
-            add_generic_text(&text, type_name(a, ((Ast_Alias *)b)->aliased));
+            add_text(&text, type_name(a, ((Ast_Alias *)b)->aliased));
         } else {
-            add_generic_text(&text, constant_text(a, (Ast_Const *)b));
+            add_text(&text, constant_text(a, (Ast_Const *)b));
         }
     }
     String result = string_copy(a, {text.data, text.count});
@@ -981,11 +976,11 @@ String instance_context(Checker *c, Ast_Instance *inst) {
         // is 2 at least, as one left out would take the line that says so.
         if (chain.count > 2 * INSTANCES_SHOWN + 1 && i == INSTANCES_SHOWN) {
             s64 left_out = chain.count - 2 * INSTANCES_SHOWN;
-            add_generic_text(&text, string_printf(c->arena, "    ... %lld more instances\n", (long long)left_out));
+            add_text(&text, string_printf(c->arena, "    ... %lld more instances\n", (long long)left_out));
             i += left_out - 1;
             continue;
         }
-        add_generic_text(&text, instance_line(c, chain[i]));
+        add_text(&text, instance_line(c, chain[i]));
     }
     String result = string_copy(c->arena, {text.data, text.count});
     array_free(&text);
