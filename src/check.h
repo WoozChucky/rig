@@ -519,18 +519,18 @@ void check_generic_signature(Checker *c, Ast_Proc *generic);
 bool takes_a_type(Ast_Param *param);
 
 // The walk over a generic procedure's body (spec 7.11), which is
-// type-checked only as each instance's: the names it uses that are
-// declared nowhere, said once, at the generic, as the checker says them
-// ("unknown identifier 'x'", "unknown type 'Foo'"), nothing else, and
-// nothing written into its nodes. What depends on T isn't looked at: a
-// member's name, a .NAME, a literal's field names. Every branch of an #if,
-// along an else-#if chain too, is walked. With a using parameter no unknown identifier is said, a field
-// of T's maybe; nor after a #load or a top-level #if's condition failed
-// (Checker.lost_a_file). Run once, in check()'s pass over the bodies in the
-// generic's turn, or earlier for the first of its instances' bodies
-// checked (Ast_Proc.body_resolve says it's done): a mistake sets the
-// generic's had_errors, so it makes no instance after, and the bodies of
-// those made before aren't checked.
+// type-checked only as each instance's: the names it uses that are declared
+// nowhere, said once, at the generic, as the checker says them ("unknown
+// identifier 'x'", "unknown type 'Foo'"), nothing else, and nothing written
+// into its nodes. What depends on T isn't looked at: a member's name, a
+// .NAME, a literal's field names. Every branch of an #if, along an else-#if
+// chain too, is walked. With a using parameter no unknown identifier is
+// said, a field of T's maybe; nor after a #load or a top-level #if's
+// condition failed (Checker.lost_a_file). Run once, in check()'s pass over
+// the bodies in the generic's turn, or earlier for the first of its
+// instances' bodies checked (Ast_Proc.body_resolve says it's done): a
+// mistake sets the generic's had_errors, so it makes no instance after, and
+// the bodies of those made before aren't checked.
 void check_generic_names(Checker *c, Ast_Proc *generic);
 
 // The lines an error inside instance inst is followed by (spec 7.11,

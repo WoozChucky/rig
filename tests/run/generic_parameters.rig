@@ -5,13 +5,13 @@
 // instance, ring(N = 3, T = int); the type or constant has no code, so its
 // argument is no argument of the instance, and the others keep their order
 // and run once each: get_then's next() right after w, Position having no
-// code, and fill's make() after a dropped N and T. A constant may be an enum's member
-// or a string, compared by its bytes, a float32 or a bool too: fl's F is
-// its float32 value, yes's B decides an #if per instance. A parameter's
-// type may name N: take's *[N]$T. An instance may give its N on to another
-// generic: outer's ring(N + 1, int). A $T: Type takes any type written as a
-// value: sz's []int and #type (int) -> int. The same compiled, interpreted
-// and in #runs, a constant's and a top-level one.
+// code, and fill's make() after a dropped N and T. A constant may be an
+// enum's member or a string, compared by its bytes, a float32 or a bool
+// too: fl's F is its float32 value, yes's B decides an #if per instance. A
+// parameter's type may name N: take's *[N]$T. An instance may give its N on
+// to another generic: outer's ring(N + 1, int). A $T: Type takes any type
+// written as a value: sz's []int and #type (int) -> int. The same compiled,
+// interpreted and in #runs, a constant's and a top-level one.
 #import "Basic";
 
 World :: struct { p: Position; }

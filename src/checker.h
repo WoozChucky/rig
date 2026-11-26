@@ -1288,17 +1288,18 @@
 // - A procedure whose parameters' types declare a type parameter, $T, or
 //   that bakes a parameter, $T: Type or $N: int (Ast_Proc.is_generic), is
 //   checked as none of its instances: its own signature check
-//   (check_generic.cpp's check_generic_signature) takes its type
-//   parameters as types still to be known, resolves its other type names
-//   once, so "unknown type 'Nope'" is said at the generic and not per
-//   instance, and writes nothing into its nodes but a $N's type (in its
-//   Ast_Param's Ast.type), which no instance copies: each copies them
-//   unchecked. It refuses a default value on a parameter whose type
-//   declares one ("a parameter that declares '$U' can't have a default
-//   value, for now", at the '='), and #foreign, #c_call and #compiler ("'f'
-//   is generic, so it can't be #foreign", at the directive; a #compiler one
-//   outside the modules is said to be that first). It has no procedure type: its name as a value is "'max' is
-//   generic; call it, or wrap one instance in a procedure", at the name.
+//   (check_generic.cpp's check_generic_signature) takes its type parameters
+//   as types still to be known, resolves its other type names once, so
+//   "unknown type 'Nope'" is said at the generic and not per instance, and
+//   writes nothing into its nodes but a $N's type (in its Ast_Param's
+//   Ast.type), which no instance copies: each copies them unchecked. It
+//   refuses a default value on a parameter whose type declares one ("a
+//   parameter that declares '$U' can't have a default value, for now", at
+//   the '='), and #foreign, #c_call and #compiler ("'f' is generic, so it
+//   can't be #foreign", at the directive; a #compiler one outside the
+//   modules is said to be that first). It has no procedure type: its name
+//   as a value is "'max' is generic; call it, or wrap one instance in a
+//   procedure", at the name.
 // - The names its parameters declare are checked there too, in the order
 //   they're written: a second $T is "'T' is declared twice; '$' goes on
 //   its first use only, as in (a: $T, b: T)", at its $; a use before the
@@ -1345,9 +1346,9 @@
 //   program's list (Ast_File.instances). Its signature is checked where the
 //   call needs it, as any signature is (resolve_signature); its body after
 //   every other body and top-level #run, in the order the instances were
-//   made, or where a #run reaches it first. The call then calls the instance, and
-//   is checked as a call of it: each argument converts to its parameter's
-//   type in the instance, with the usual messages.
+//   made, or where a #run reaches it first. The call then calls the
+//   instance, and is checked as a call of it: each argument converts to its
+//   parameter's type in the instance, with the usual messages.
 // - Checker.instance is the instance whose signature, defaults or body is
 //   being checked: its bindings are found after the scopes and the using
 //   parameters' fields, before the top level (find_name, check_lookup),
@@ -1378,17 +1379,17 @@
 //   each one's default values meet the limit on declarations first
 //   (open_declaration): said once, with the chain, the instance too deep
 //   having errors, never checked later.
-// - A '$' before a parameter's name bakes it (Ast_Param.is_baked): $T:
-//   Type takes a type, $N: X a constant, and the procedure is generic. Its
-//   own check (check_baked_parameter) keeps a constant's type in the
-//   parameter's Ast.type, a number's, a bool's, an enum's or string ("a '$' parameter
-//   is a type, '$T: Type', or a constant of a number, bool, enum or string
-//   type, not '[]int'", at the type), and refuses '..' ("a '$' parameter
-//   can't be '..': ...", at the '..'), a place after a '..T' parameter ("a
-//   '$' parameter can't come after a '..' parameter, which takes every
-//   argument left", at the '$'), a default value ("a parameter that
-//   declares '$N' can't have a default value, for now"), a place after a
-//   parameter with one ("a '$' parameter can't come after one with a
+// - A '$' before a parameter's name bakes it (Ast_Param.is_baked): $T: Type
+//   takes a type, $N: X a constant, and the procedure is generic. Its own
+//   check (check_baked_parameter) keeps a constant's type in the
+//   parameter's Ast.type, a number's, a bool's, an enum's or string ("a '$'
+//   parameter is a type, '$T: Type', or a constant of a number, bool, enum
+//   or string type, not '[]int'", at the type), and refuses '..' ("a '$'
+//   parameter can't be '..': ...", at the '..'), a place after a '..T'
+//   parameter ("a '$' parameter can't come after a '..' parameter, which
+//   takes every argument left", at the '$'), a default value ("a parameter
+//   that declares '$N' can't have a default value, for now"), a place after
+//   a parameter with one ("a '$' parameter can't come after one with a
 //   default value, since each parameter after that needs one", at the '$')
 //   and using. A constant parameter's name in a type is "'N' is not a
 //   type".

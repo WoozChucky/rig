@@ -24,8 +24,8 @@
 // through print_formatted, the one format walk. The helpers under them,
 // print_or_append, print_quoted, print_item, print_enum and
 // print_formatted, take a string builder (builder.rig) first, and a null
-// one means standard output: Rig had no closures or generics when this was
-// written (issue #230), so a null builder is how one walk writes to either.
+// one means standard output, since Rig had no closures or generics when
+// this was written (#230 makes Basic generic): one walk writes to either.
 // print passes null; print_to_builder takes a builder and stops the program
 // on a null one. Written to standard output, nothing is allocated;
 // print_to_builder and print_error write into a builder of their own on the
