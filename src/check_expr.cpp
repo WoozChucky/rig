@@ -2841,7 +2841,7 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
             name->type = t;
             return true;
         }
-        // In a default value a parameter is refused as check_name refuses
+        // In a default value a parameter is refused as check_named refuses
         // its value: it doesn't exist where the default is worked out, so
         // that it has no address isn't the mistake.
         if (decl->kind == AST_PARAM && c->default_of) {

@@ -3054,7 +3054,7 @@ static void check_caller_location_default(Checker *c, Ast *value, Type *param_ty
 // the procedure's own parameters, which hide the top level's names there as
 // they do in the body (spec 4.7), so they're put in a scope of their own
 // (table_put: the body says a name declared twice, declare), and
-// c->default_of makes check_name, and check_addressable for its address,
+// c->default_of makes check_named, and check_addressable for its address,
 // refuse each: "a default value can't use the parameter 'times'", at the
 // name. A global times can't stand in for the parameter, which is what the
 // default would seem to mean. So are the fields of its using parameters
@@ -3230,7 +3230,7 @@ static void check_defaults(Checker *c, Ast_Proc *proc, s32 base) {
 // The procedure's type (Ast.type) is its signature's procedure type: #c_call
 // when it's marked so, or foreign (C's own), and variadic with a '..T'. One
 // that takes C's bare '..' has none: no procedure type takes it, so it can
-// only be called (check_name). Nor has one with parameters after its '..T'
+// only be called (check_named). Nor has one with parameters after its '..T'
 // (issue #197): a procedure type keeps no defaults, which are all a call
 // gives them (proc_type_of_signature).
 static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {

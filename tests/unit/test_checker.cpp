@@ -12153,6 +12153,25 @@ TEST(using_parameters_name_their_fields) {
         CHECK(through && is_member(&a, through, "p", "*int"));
     }
     token_list_free(c.list);
+    // The late field one value using field further in is made too: it's
+    // Inner's, the struct the chain's last member is in, not T's.
+    c = check_src(&a, "A :: struct { arr: [#run h(null)]int; }\n"
+                      "Inner :: struct { p: *int; }\n"
+                      "T :: struct { using inner: Inner; k: int; }\n"
+                      "h :: (using t: *T) -> int { if t == null { return 3; } q := p; return 1; }\n"
+                      "main :: () { a: A; n := a.arr; }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "n"), "[3]int");
+    q = ((Ast_Var *)local_of_proc(&c, "h", "q"))->value;
+    CHECK(is_name(q, "p"));
+    if (q->kind == AST_NAME) {
+        Ast *through = ((Ast_Name *)q)->through;
+        CHECK(through && is_member(&a, through, "p", "*int"));
+        if (through && through->kind == AST_MEMBER) {
+            CHECK(is_member(&a, ((Ast_Member *)through)->operand, "inner", "Inner"));
+        }
+    }
+    token_list_free(c.list);
     arena_free(&a);
 }
 
