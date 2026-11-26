@@ -31,7 +31,7 @@ struct Checker {
     // default values are being checked, in order, each of a type using
     // takes; set aside with the scopes (checker.cpp's leave_scopes).
     Array<Ast_Param *> using_params;
-    Array<Ast *> loops;         // the loops around the statement being checked, innermost
+    Array<Ast *> loops;          // the loops around the statement being checked, innermost
                                  // last (Ast_While, Ast_For): what break and continue act on
     Ast_Defer *deferring;        // the innermost defer whose statement is being checked (spec 6.12);
                                  // null outside deferred code. A body checked on demand sets it
@@ -93,7 +93,8 @@ struct Checker {
 // reach (spec 3.21): check_find_using's result, kept so the walk runs once
 // per use.
 struct Using_Name {
-    s32 found;         // 0: not there; 1; 2: ambiguous; -1: a circle or a layout found wrong, said
+    s32 found;         // 0: not there; 1: one place; 2: ambiguous; -1: a circle or a layout
+                       // found wrong, said
     s32 root;          // the first path's parameter, an index into Checker.using_params
     s32 other_root;    // the second's
     Array<s32> path;   // the first path's field indices from its parameter's struct down
@@ -106,7 +107,8 @@ struct Using_Name {
 // walk that found the field left in *through (found not 0), for the caller
 // to work out the field from (check_expr.cpp's check_using_name, which
 // frees its paths); else the top level's (a procedure, a global or a
-// constant); null when there's none. *through's found is 0 then, and it
+// constant); null when there's none. For all but a using parameter's
+// field, a block's, the top level's or none, *through's found is 0 and it
 // holds nothing to free. A global or constant found at the top level is
 // checked first if it hasn't been yet (resolve_global), so its type and
 // value are known, whatever the order of the declarations. through may be

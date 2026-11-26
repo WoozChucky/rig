@@ -1259,8 +1259,9 @@ static bool check_callee(Checker *c, Ast_Call *call) {
     if (callee->kind == AST_NAME) {
         Ast_Name *name = (Ast_Name *)callee;
         // A using parameter's field is a value, its walk's paths left for
-        // check_named; a name that returns before, a procedure's, a type's
-        // or none, wasn't found there, so has none to free.
+        // check_named; a name that returns before, a procedure's, a
+        // built-in's, a type's or none, wasn't found there, so has none to
+        // free.
         Using_Name through;
         Ast *decl = check_lookup(c, name->name, &through);
         if (!decl || decl->kind == AST_STRUCT || decl->kind == AST_ENUM) {
@@ -3260,7 +3261,9 @@ static s32 find_through_using(Checker *c, Type **roots, s32 count, String name, 
     if (!name.count) return 0;  // an anonymous member's, which is searched, not named
     Field_Walk w = {};
     for (s32 r = 0; r < count; r++) field_walk_add_root(&w, roots[r], r);
-    Array<Using_Reach> reach = {};  // how far the walk looks into each struct of this depth, as w.level
+    // How far the walk looks into each struct of this depth: reach[i]
+    // belongs to w.level[i].
+    Array<Using_Reach> reach = {};
     bool said = false;  // a circle, or a layout found wrong
     while (w.level.count && !w.found && !said) {
         reach.count = 0;
@@ -3353,9 +3356,12 @@ static Ast_Member *member_link(Checker *c, Ast *operand, Type *s, s32 index, Pos
 //
 // Reached through anonymous members (spec 3.19), e.key is
 // e.<anonymous>.key, and through using fields (spec 3.21), p.position is
-// p.entity.position: a member for each field on the way (member_link),
-// made here, at the name written, which lowering and the rest see as
-// fields of fields. The first takes operand as written, so a pointer is
+// p.entity.position: a member for each field on the way but the last
+// (member_link), each at pos and starting at start, which lowering and the
+// rest see as fields of fields. A one-field path makes none; the caller
+// makes the member of the last field on the chain returned (check_member's
+// own, check_using_name's member_link), and both pass the written name's
+// position as pos. The first member made takes operand as written, so a pointer is
 // followed once, there, as for a field of its own; a using field that is a
 // pointer is followed by the member after it, as any pointer's field is.
 static Ast *member_chain(Checker *c, Ast *operand, Type **s, Array<s32> path, Position pos, Position start) {

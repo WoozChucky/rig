@@ -299,8 +299,9 @@ Type *type_c_promoted(Type *t);
 // searches, or will, and how it was reached, so each place found reads
 // back as a path of field indices from the struct the walk started at.
 struct Field_Step {
-    Type *type;  // the struct; in the checker's walk, null for one reached through a using
-                 // field until the walk takes it at its depth, and for one it doesn't search
+    Type *type;  // the struct; in find_through_using's walk, null for one reached through a
+                 // using field until that walk takes it at its depth, and for one it doesn't
+                 // search
     s64 outer;   // the step it was reached from (holding it or pointing at it), an index into
                  // list; -1 for a root
     s32 field;   // its field there
@@ -326,10 +327,11 @@ void field_walk_add_root(Field_Walk *w, Type *t, s32 root);
 // nothing found and queued what it reaches, nor when two paths reach it at
 // this one already, enough to say a thing is found two ways. That keeps
 // the walk small: a struct holding two of another, each holding two of a
-// third, would otherwise be searched twice as often at each depth. In the
-// name walk, which follows pointer using fields, it also ends cycles (a
-// struct that points at itself, or at one that points back); a struct
-// can't hold itself by value, so type_find_base meets none.
+// third, would otherwise be searched twice as often at each depth. In
+// find_through_using's walk through using fields, which follows pointer
+// using fields too, it also ends cycles (a struct that points at itself,
+// or at one that points back); a struct can't hold itself by value, so
+// type_find_base meets none.
 bool field_walk_needed(Field_Walk *w, Type *type, s32 depth);
 
 // Counts a place found, field `field` of step `at`, keeping the first two
