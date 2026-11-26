@@ -4588,11 +4588,43 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "2:12: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
     body_dump(&a, "x := .[[1, 2], [3]];", &errors);
     CHECK_STR(errors, "2:12: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    // The brackets a '[' opens inside close again: f(1)'s ')' and a[0]'s
+    // ']' are not the literal's own.
+    body_dump(&a, "x := [f(1)];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := [a[0], 1];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
     // A ',' nested in the count is no literal's, and a type after the ']'
-    // makes it a type; [..] and a '[' where a type goes are always a type's,
-    // with their own messages.
+    // makes it a type, whichever token starts it: a name, '*', '[', '(' or
+    // '$'. [..] and a '[' where a type goes are always a type's, with their
+    // own messages.
     body_dump(&a, "x := [f(1, 2)]int == [g(.[1, 2])]u8;", &errors);
     CHECK_STR(errors, "");
+    body_dump(&a, "x := []*u8 == [2][3]int;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [3](int) -> int == [3](int) -> int;", &errors);
+    CHECK_STR(errors, "");
+    // So is a '[' whose look-ahead meets a ';' or a ')' or '}' it didn't
+    // open before its ']'.
+    body_dump(&a, "x := [1;", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    body_dump(&a, "x := [3; ];", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    body_dump(&a, "x := [1; y := 1, 2;", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    body_dump(&a, "x := f([1), 2);", &errors);
+    CHECK_STR(errors, "2:14: expected ']', found ')'\n");
+    body_dump(&a, "x := .{[1}, 2};", &errors);
+    CHECK_STR(errors, "2:14: expected ']', found '}'\n");
+    // A token the lexer refused after the ']' was its to report, and the
+    // type's message stays silent about it.
+    Diagnostics d = {};
+    s32 refused = diag_add_file(&d, str("test.rig"), str("f :: () {\n    x := [] @int;\n}\n"));
+    Array<Token> tokens = lex(&d, refused, &a);
+    parse(tokens, &a, &d);
+    CHECK_STR(messages(&a, &d), "2:13: unexpected character '@'\n");
+    array_free(&tokens);
+    diag_free(&d);
     body_dump(&a, "x := [..];", &errors);
     CHECK_STR(errors, "2:14: expected a type, found ';'\n");
     body_dump(&a, "x := []$T;", &errors);

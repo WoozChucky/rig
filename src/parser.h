@@ -128,9 +128,10 @@
 // *(a[0]), a[i].x[j] is ((a[i]).x)[j]), at its '['. An array
 // literal is T.[a, b] (T the elements' type, a name, as a struct literal's
 // is) or .[a, b], which takes its type where it's used; its values are in
-// order, never named. `for a { ... }` goes over a's elements: the
-// expression after 'for' (and the iterator's name) with the body's '{'
-// right after it, no '..', is the loop's sequence, and `for * a` makes the
+// order, never named; one written as C writes it, [1, 2, 3], is refused
+// (spec 5.17). `for a { ... }` goes over a's elements: the expression
+// after 'for' (and the iterator's name) with the body's '{' right after
+// it, no '..', is the loop's sequence, and `for * a` makes the
 // iterator a pointer to each element; whether a is an array, a view or a
 // string, and whether a range takes the '*', is the checker's to say.
 // #no_abc after a procedure's results turns its bounds checks off; a body
@@ -246,8 +247,11 @@
 //
 // A type may be written where a value goes (spec 5.20), for the places that
 // take one, such as `T == int`: a '[', which starts no expression, begins
-// one, `[]int == [..]int`, and #type, Jai's directive, any type,
-// `#type (int) -> int`, whose (int) would otherwise read as parentheses.
+// one, `[]int == [..]int`, unless it can't, with a ',' of its own in its
+// brackets or no type after its ']' (c_style_literal_follows): that's an
+// array literal written as C writes one, [1, 2, 3] or [], refused at the
+// '['. And #type, Jai's directive, begins any type, `#type (int) -> int`,
+// whose (int) would otherwise read as parentheses.
 // Either is an Ast_Type_Value, at its '[' or #type, its type read a level
 // down, as size_of's is. A name and *X parse as a name and an address, as
 // ever: whether they name a type is the checker's to say. No literal

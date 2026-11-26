@@ -1718,8 +1718,9 @@ static bool starts_a_type(Token_Kind kind) {
 // start (spec 5.20): its brackets hold a ',' of their own (not one nested in
 // '( )', '[ ]' or '{ }', as [f(1, 2)]int's), or its ']' has no type after
 // it. [..] is always a type's, and so is a '[' whose look-ahead meets a ';',
-// the end, or a ')' or '}' it didn't open before its ']': the type's own
-// messages say what's wrong there. Scans tokens only, as proc_type_follows
+// the end, or a ')' or '}' it didn't open before its ']', or whose ']' has
+// a token the lexer refused after it: the type's own messages, or the
+// lexer's, say what's wrong there. Scans tokens only, as proc_type_follows
 // does.
 static bool c_style_literal_follows(Parser *p) {
     if (peek(p, 1)->kind == TOKEN_DOT_DOT) return false;
@@ -1733,8 +1734,11 @@ static bool c_style_literal_follows(Parser *p) {
         } else if (kind == TOKEN_COMMA) {
             return true;
         } else if (kind == TOKEN_RBRACKET) {
-            // A token follows: the last one is TOKEN_EOF.
-            return !starts_a_type(p->tokens[i + 1].kind);
+            // A token follows: the last one is TOKEN_EOF. A TOKEN_ERROR there
+            // was the lexer's to report, and the type's parse says nothing
+            // more about it.
+            Token_Kind after = p->tokens[i + 1].kind;
+            return after != TOKEN_ERROR && !starts_a_type(after);
         } else if (kind == TOKEN_RPAREN || kind == TOKEN_RBRACE) {
             return false;
         }
