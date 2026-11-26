@@ -3532,6 +3532,25 @@ TEST(broken_struct_in_an_instance_says_nothing_more) {
     arena_free(&a);
 }
 
+TEST(an_instance_made_in_one_whose_binding_lost_its_type) {
+    // An instance whose T lost its type (made again) still has a body that
+    // makes another instance; an error in that one names the chain through
+    // it as the instance was made, T = Bad.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a,
+                                 "V := f(cast(*Bad) null);\n"
+                                 "Bad :: struct { a: Bad; }\n"
+                                 "f :: (p: *$T) -> int { return g(1); }\n"
+                                 "g :: (v: $U) -> int { x: int = \"s\"; return v; }\n"
+                                 "main :: () { }\n"),
+              "1:6: a global's value must be known while compiling, for now\n"
+              "2:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n"
+              "4:32: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "    in 'g' with U = int, called at test.rig:3:31\n"
+              "    in 'f' with T = Bad, called at test.rig:1:6\n");
+    arena_free(&a);
+}
+
 TEST(array_count_rules) {
     // [N]T: N an integer known while compiling, from 0 up; the type at most
     // 2^40 bytes.
@@ -12944,7 +12963,7 @@ TEST(untyped_arguments_take_the_type_another_fixes) {
 TEST(inference_reads_through_types) {
     // A pattern binds T where it stands in it: []$T the elements of an
     // array, a view or a resizable array, *$T a pointer's target, ($T) -> T
-    // a procedure's parameter.
+    // a procedure's parameter, (..$T) -> T the elements of its '..' one.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
@@ -12953,6 +12972,8 @@ TEST(inference_reads_through_types) {
                                  "deref :: (p: *$T) -> T { return p.*; }\n"
                                  "apply :: (f: ($T) -> T, x: T) -> T { return f(x); }\n"
                                  "twice :: (n: int) -> int { return n * 2; }\n"
+                                 "app :: (f: (..$T) -> T, x: T) -> T { return f(x, x); }\n"
+                                 "total :: (v: ..int) -> int { return v[0] + v[1]; }\n"
                                  "main :: () {\n"
                                  "    a: [3]int;\n"
                                  "    r: [..]float;\n"
@@ -12963,13 +12984,14 @@ TEST(inference_reads_through_types) {
                                  "    fs := first(s);\n"
                                  "    dv := deref(*v);\n"
                                  "    ap := apply(twice, 4);\n"
+                                 "    at := app(total, 4);\n"
                                  "}\n",
                                  &tree),
               "");
     Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
-    const char *names[] = {"fa", "fr", "fs", "dv", "ap"};
-    const char *types[] = {"int", "float32", "u8", "Vec2", "int"};
-    for (s64 k = 0; k < 5; k++) {
+    const char *names[] = {"fa", "fr", "fs", "dv", "ap", "at"};
+    const char *types[] = {"int", "float32", "u8", "Vec2", "int", "int"};
+    for (s64 k = 0; k < 6; k++) {
         Type *t = find_local(body, names[k])->type;
         CHECK_STR(t ? type_name(&a, t) : str("?"), types[k]);
     }
@@ -13190,6 +13212,14 @@ TEST(generic_refusals) {
               "(values: ..int)\n"
               "2:14: only a foreign procedure can take C's '..'; a Rig procedure takes more arguments as '..T', as in "
               "(values: ..int)\n");
+    // A generic the parser gave up on is a broken entry: its calls say
+    // nothing more, a type given for its $T: Type included, while an
+    // argument's own mistake is still one.
+    CHECK_STR(check_source(&a,
+                           "get :: ($T: Type) -> int { x := 1 return 0; }\n"
+                           "main :: () { a := get(int); b := get([]int); c := get(nope); }\n"),
+              "1:35: expected ';', found 'return'\n"
+              "2:55: unknown identifier 'nope'\n");
     // An instance whose own signature has a mistake, a default that doesn't
     // convert to its T, says it once, where it's made, and stays cached:
     // every call with its bindings, the first too, gets no type and says

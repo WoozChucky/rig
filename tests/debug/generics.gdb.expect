@@ -10,4 +10,6 @@ pick(T = Vec2) (result$=
 20	    chosen := b;
 #0  pick(T = Vec2) (result$=
 {x = 1, y = 2}
+static void pick(T = Vec2);
+static int pick(T = int);
 !.debug_names not created by gdb

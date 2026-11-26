@@ -9,9 +9,9 @@
 // line whose code is in several places, as on a deferred line's
 // ("Ambiguous symbol error", spec 10.7), so its script sets one on each
 // instance by name instead, `bm generics!pick*`, which stops at the
-// instance's first instruction, and steps to the line. ring's N and T are
-// no parameters of its instance, which takes only its result's address and
-// the context.
+// instance's first instruction, and steps to the line; gdb's `rbreak ^pick(`
+// sets one on each too. ring's N and T are no parameters of its instance,
+// which takes only its result's address and the context.
 printf :: (format: *u8, ..) -> s32 #foreign libc;
 
 Vec2 :: struct { x: int; y: int; }

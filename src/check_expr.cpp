@@ -1634,10 +1634,13 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
 // are given to no parameter. The call's type is its first result's, void
 // when there's none. A call of a generic procedure (spec 7.11) checks its
 // arguments itself, and finds the instance they make, which it then calls
-// (check_generic_call).
+// (check_generic_call). A broken callee may have been a generic, whose $T:
+// Type parameter takes a type: an argument that names one is checked as a
+// type value (check_type_value), so it says nothing more.
 static Type *check_call(Checker *c, Ast_Call *call) {
     bool known = check_callee(c, call);
     bool generic = known && call->proc && call->proc->is_generic;
+    bool broken = known && call->proc && call->proc->is_broken;
     if (generic) {
         if (!check_generic_call(c, call)) {
             call->proc = nullptr;
@@ -1648,6 +1651,8 @@ static Type *check_call(Checker *c, Ast_Call *call) {
             Ast *arg = call->args[i];
             if (arg->kind == AST_SPREAD) {
                 check_spread_argument(c, (Ast_Spread *)arg);
+            } else if (broken && expr_names_type(c, arg)) {
+                check_type_value(c, arg);
             } else {
                 check_value(c, arg);
             }

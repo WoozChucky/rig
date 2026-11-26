@@ -16,8 +16,11 @@
 // bumps a global of the #runs' world once for tag's instance for int,
 // called from the top-level #run and from main, and once for its instance
 // for u8, so the top-level #run sees two runs, and each call of tag for int
-// gets the one value its instance baked. The same compiled, interpreted and
-// in #runs, a constant's and a top-level one.
+// gets the one value its instance baked. A binding hides a top-level name
+// of its own in the signature and the defaults, as in the body: nth's
+// default N is the call's 5, not the top-level 2, and widen's default
+// converts to its W, an int, not to the top-level struct W. The same
+// compiled, interpreted and in #runs, a constant's and a top-level one.
 #import "Basic";
 
 Vec2 :: struct { x: float; y: float; }
@@ -69,6 +72,14 @@ doubled :: ($N: int) -> int { return #run twice(N); }
 
 mixed :: ($N: int, v: $T) -> int { return #run twice(N + size_of(T)); }
 
+N :: 2;
+
+W :: struct { x: int; }
+
+nth :: ($N: int, x: int = N) -> int { return x; }
+
+widen :: (a: $W, b: W = 1) -> W { return a + b; }
+
 K :: #run kind(Mode.A);
 
 #run {
@@ -93,4 +104,5 @@ main :: () {
     print("{}\n", K);
     print("{} {}\n", tag(3), tag(4));
     print("{} {} {}\n", doubled(5), mixed(3, cast(u8) 1), mixed(4, 1));
+    print("{} {}\n", nth(5), widen(1));
 }

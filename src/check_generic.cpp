@@ -945,11 +945,17 @@ static const s64 INSTANCES_SHOWN = 10;
 
 // The line of instance inst in a chain: "    in 'max' with T = Vec2,
 // called at main.rig:12:5\n", the call's path as diagnostics name its file.
+// Its bindings are written as its name, max(T = Vec2), has them, as it was
+// made: since then a type binding may have lost its type (made again to
+// null, check()'s made_again), while its body still makes instances whose
+// chains pass through it.
 static String instance_line(Checker *c, Ast_Instance *inst) {
     Position at = inst->called_at;
+    s64 skip = inst->generic->name.count + 1;  // "max("
+    String bindings = {inst->name.data + skip, inst->name.count - skip - 1};  // and not the ')'
     return string_printf(c->arena, "    in '" STR_FMT "' with " STR_FMT ", called at " STR_FMT ":%d:%d\n",
-                         STR_ARG(inst->generic->name), STR_ARG(bindings_text(c->arena, inst->bindings)),
-                         STR_ARG(c->diag->files[at.file].path), at.line, at.col);
+                         STR_ARG(inst->generic->name), STR_ARG(bindings), STR_ARG(c->diag->files[at.file].path),
+                         at.line, at.col);
 }
 
 String instance_context(Checker *c, Ast_Instance *inst) {

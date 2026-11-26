@@ -3922,7 +3922,8 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // 7.11), their type bindings with their signatures: a global's value or
     // a type's count may have called one. A binding that has no type now
     // (null) leaves every use of T in its body silent, as a parameter's
-    // does. A constant binding's type, a number's, a bool's, an enum's or
+    // does; an instance its body makes names it in its chain as it was
+    // made (check_generic.cpp's instance_line). A constant binding's type, a number's, a bool's, an enum's or
     // string, is never made again.
     for (s64 i = 0; i < file->instances.count; i++) {
         Ast_Instance *inst = file->instances[i];
