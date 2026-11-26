@@ -4594,20 +4594,28 @@ TEST(parses_types_where_values_go) {
     CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
     body_dump(&a, "x := [a[0], 1];", &errors);
     CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
-    // A ',' nested in the count is no literal's, and a type after the ']'
-    // makes it a type, whichever token starts it: a name, '*', '[', '(' or
-    // '$'. [..] and a '[' where a type goes are always a type's, with their
-    // own messages.
+    // A ',' nested in the count, in '( )', '[ ]' or '{ }', is no literal's,
+    // and a type after the ']' makes it a type, whichever token starts it: a
+    // name, '*', '[', '(' or '$'. [..] and a '[' where a type goes are always
+    // a type's, with their own messages.
     body_dump(&a, "x := [f(1, 2)]int == [g(.[1, 2])]u8;", &errors);
     CHECK_STR(errors, "");
+    body_dump(&a, "x := [Vec2.{1, 2}.x]int == [.{1, 2}.n]u8;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [Vec2.{1}.x, 2];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
     body_dump(&a, "x := []*u8 == [2][3]int;", &errors);
     CHECK_STR(errors, "");
     body_dump(&a, "x := [3](int) -> int == [3](int) -> int;", &errors);
     CHECK_STR(errors, "");
-    // So is a '[' whose look-ahead meets a ';' or a ')' or '}' it didn't
-    // open before its ']'.
+    // So is a '[' whose look-ahead meets a ';', the end, or a ')' or '}' it
+    // didn't open before its ']'.
     body_dump(&a, "x := [1;", &errors);
     CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    parse_src(&a, "f :: () {\n    x := [1", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found end of file\n");
+    parse_src(&a, "f :: () {\n    x := [(1", &errors);
+    CHECK_STR(errors, "2:13: expected ')', found end of file\n");
     body_dump(&a, "x := [3; ];", &errors);
     CHECK_STR(errors, "2:12: expected ']', found ';'\n");
     body_dump(&a, "x := [1; y := 1, 2;", &errors);
