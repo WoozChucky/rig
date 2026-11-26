@@ -78,8 +78,11 @@ static bool is_type_parameter(Array<Generic_Binding> declared, String name) {
     return false;
 }
 
-// Whether `name` is one of the constant parameters among `declared`.
+// Whether `name` is one of the constant parameters among `declared`. A
+// built-in type's name never is, as it always means the type (spec 3.1): a
+// $int: int is refused (check_generic_signature), and its int is the type.
 static bool is_constant_parameter(Array<Generic_Binding> declared, String name) {
+    if (type_from_name(name)) return false;
     for (s64 i = 0; i < declared.count; i++) {
         if (!declared[i].is_type && string_eq(declared[i].name, name)) return true;
     }
@@ -103,7 +106,11 @@ static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Bind
     case AST_TYPE_NAME:
         if (is_type_parameter(declared, written->name)) return;
         if (is_constant_parameter(declared, written->name)) {
-            diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+            // A $N, a second $ of its name, is that mistake, said already
+            // (check_signature_names).
+            if (!written->declares) {
+                diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+            }
             return;
         }
         if (resolve_written(c, written, true) == &type_void && !pointee) {
@@ -165,12 +172,50 @@ static bool dollar_declared(Array<Signature_Name> *names, String name) {
     return false;
 }
 
+// The names an array's count `e`, in a generic's parameter, uses: a
+// constant parameter's written before the $ that declares it is "'N' is
+// used before '$N' declares it", at the use, as a type parameter's is
+// (check_signature_names). The rest of the count is each instance's to
+// check.
+static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names) {
+    if (!e) return;
+    switch (e->kind) {
+    case AST_NAME: {
+        String name = ((Ast_Name *)e)->name;
+        if (is_constant_parameter(declared, name) && !dollar_declared(names, name)) {
+            diag_error(c->diag, e->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it", STR_ARG(name),
+                       STR_ARG(name));
+        }
+        return;
+    }
+    case AST_CALL: {
+        Ast_Call *call = (Ast_Call *)e;
+        check_count_names(c, call->callee, declared, names);
+        for (s64 i = 0; i < call->args.count; i++) check_count_names(c, call->args[i], declared, names);
+        return;
+    }
+    case AST_UNARY: check_count_names(c, ((Ast_Unary *)e)->operand, declared, names); return;
+    case AST_RUN: check_count_names(c, ((Ast_Run *)e)->operand, declared, names); return;
+    case AST_MEMBER: check_count_names(c, ((Ast_Member *)e)->operand, declared, names); return;
+    case AST_CAST: check_count_names(c, ((Ast_Cast *)e)->value, declared, names); return;
+    case AST_BINARY:
+        check_count_names(c, ((Ast_Binary *)e)->left, declared, names);
+        check_count_names(c, ((Ast_Binary *)e)->right, declared, names);
+        return;
+    case AST_INDEX:
+        check_count_names(c, ((Ast_Index *)e)->operand, declared, names);
+        check_count_names(c, ((Ast_Index *)e)->index, declared, names);
+        return;
+    default: return;  // a literal, or one with a type in it (size_of's), not looked into
+    }
+}
+
 // The names written type `written`, a parameter's of a generic, declares
 // and uses, in the order they're written (depth first, left to right, an
-// array's count apart), against what the parameters and the parts before
-// them declared (*names, which this adds to), and the type parameters the
-// whole signature declares (`declared`), said once, at the generic (spec
-// 7.11):
+// array's count before its elements), against what the parameters and the
+// parts before them declared (*names, which this adds to), and the type
+// parameters the whole signature declares (`declared`), said once, at the
+// generic (spec 7.11):
 // - a $T where an earlier $T declared the name: "'T' is declared twice; '$'
 //   goes on its first use only, as in (a: $T, b: T)", at the second $;
 // - a $T of a parameter's name: "'T' is already declared at PATH:L:C", at
@@ -180,7 +225,8 @@ static bool dollar_declared(Array<Signature_Name> *names, String name) {
 //   type";
 // - a use of a type parameter written before the $ that declares it: "'T'
 //   is used before '$T' declares it", at the use; never of a built-in
-//   type's name, which always means the built-in type (spec 3.1).
+//   type's name, which always means the built-in type (spec 3.1); so, too,
+//   of a constant parameter in an array's count (check_count_names).
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
 static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
@@ -211,6 +257,9 @@ static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_B
     }
     case AST_TYPE_POINTER: check_signature_names(c, written->pointee, declared, names); return;
     case AST_TYPE_ARRAY:
+        check_count_names(c, written->count, declared, names);
+        check_signature_names(c, written->element, declared, names);
+        return;
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE: check_signature_names(c, written->element, declared, names); return;
     case AST_TYPE_PROC:
@@ -244,6 +293,10 @@ static bool constant_parameter_type(Type *t) {
 // - a default value would need a call to work out its instance, so it has
 //   none, for now: "a parameter that declares '$N' can't have a default
 //   value, for now", at its '=';
+// - having none, it can't come after a parameter that has one, as every
+//   parameter after that needs one (spec 7.2), which its instance, without
+//   it, wouldn't say: "a '$' parameter can't come after one with a default
+//   value, since each parameter after that needs one", at its '$';
 // - a constant one's type is a number's, a bool's, an enum's or string:
 //   anything else, a type parameter or a constant one too, is "a '$'
 //   parameter is a type, '$T: Type', or a constant of a number, bool, enum
@@ -274,6 +327,13 @@ static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Arra
                    STR_ARG(param->name));
         return;
     }
+    for (s64 i = 0; i < index; i++) {
+        if (!generic->params[i]->default_value) continue;
+        diag_error(c->diag, param->dollar,
+                   "a '$' parameter can't come after one with a default value, since each parameter after that "
+                   "needs one");
+        return;
+    }
     Ast_Type *written = param->type_expr;
     Type *t = &type_type;
     if (!takes_a_type(param)) {
@@ -300,7 +360,8 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
     // "'a' is already declared at PATH:L:C", at the later one, as its body
     // would say it of each instance, once here instead. A baked parameter's
     // name is a $'s, so a use of it before is said as a $T's would be, and
-    // a $T: Type's is said if it's a built-in type's, as a $T's is.
+    // is said if it's a built-in type's, as a $T's is, that name always
+    // meaning the type (spec 3.1), a $T: Type's or a $N: int's.
     Array<Signature_Name> names = {};
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
@@ -308,7 +369,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
         if (earlier) {
             report_declared_again(c, param->name, param->pos, earlier->pos);
         } else {
-            if (takes_a_type(param) && type_from_name(param->name)) {
+            if (param->is_baked && type_from_name(param->name)) {
                 diag_error(c->diag, param->pos, "'" STR_FMT "' is a built-in type", STR_ARG(param->name));
             }
             array_add(&names, {param->name, param->pos, param->is_baked});
@@ -712,14 +773,29 @@ static String constant_string(Ast *value) {
 }
 
 // Float `value` of type t as its shortest decimal that reads back as it, in
-// t's precision (a float32's 0.1 is 0.1, not 0.100000001), with a ".0" when
-// it would read as an integer, as Basic's print writes one.
+// t's precision (a float32's 0.1 is 0.1, not 0.100000001, compared through
+// round_to, which C++'s cast to f32 isn't for a text rounded past float32's
+// range), with a ".0" when it would read as an integer, as Basic's print
+// writes one. %g writes an exponent once it's as many as the digits, 1e+02:
+// a whole number below 10^15, which a double holds exactly, is written out
+// instead, 100.0. A NaN or an infinity, which C's runtimes each spell their
+// own way (-nan(ind), -nan), is a division that makes one, as the program
+// would write it: 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0.
 static String float_text(Arena *a, f64 value, Type *t) {
+    if (__builtin_isnan(value)) return str("0.0 / 0.0");
+    if (__builtin_isinf(value)) return str(value < 0 ? "-1.0 / 0.0" : "1.0 / 0.0");
     char text[64];
+    f64 back = 0;
     for (int digits = 1; digits <= 17; digits++) {
         snprintf(text, sizeof text, "%.*g", digits, value);
-        f64 back = strtod(text, nullptr);
-        if (t->size == 4 ? (f32)back == (f32)value : back == value) break;
+        back = strtod(text, nullptr);
+        if (round_to(back, t) == value) break;
+    }
+    const char *e = text;
+    while (*e && *e != 'e') e++;
+    if (*e) {
+        long exponent = strtol(e + 1, nullptr, 10);
+        if (exponent >= 0 && exponent < 15) snprintf(text, sizeof text, "%.0f", back);
     }
     bool integral = true;
     for (const char *p = text; *p; p++) integral &= (*p >= '0' && *p <= '9') || *p == '-';

@@ -278,16 +278,16 @@
 // is no operator: a range's '..' ends the expression before it.
 //
 // At the top level, after '::', a procedure's parameter list starts with
-// '(' ')', '(' IDENT ':', '(' IDENT ':=', '(' '..' or '(' '$' (a baked
-// parameter, spec 7.11); any other '(' begins
-// a constant's value, so `N :: (1 + 2);` is a constant. A name followed by
-// ':' or ':=' and then a signature with a body or a directive other than
-// #load, #run and #if after it (`greet : () {`) is a procedure with its
-// '::' mistyped: "expected '::', found ':'"; a name, ':' and a procedure
-// type followed by '=' or ';', or by a #load, a #run or an #if (which
-// begins the next declaration, so the variable is then missing its ';'), is
-// a variable of that type: `op : (int) -> int = add;`. Anything else after
-// a top-level name is "expected '::', found ...".
+// '(' ')', '(' IDENT ':', '(' IDENT ':=', '(' '..', '(' 'using' or '(' '$'
+// (a baked parameter, spec 7.11); any other '(' begins a constant's value,
+// so `N :: (1 + 2);` is a constant. A name followed by ':' or ':=' and then
+// a signature with a body or a directive other than #load, #run and #if
+// after it (`greet : () {`) is a procedure with its '::' mistyped:
+// "expected '::', found ':'"; a name, ':' and a procedure type followed by
+// '=' or ';', or by a #load, a #run or an #if (which begins the next
+// declaration, so the variable is then missing its ';'), is a variable of
+// that type: `op : (int) -> int = add;`. Anything else after a top-level
+// name is "expected '::', found ...".
 //
 // The bodies of if, else, while and for are always blocks in braces (spec
 // 6.1), and a condition needs no parentheses: the body's '{' ends it, or

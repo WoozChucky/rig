@@ -2,8 +2,8 @@
 // spec 7.11): a $T: Type's argument that's no type, a $N's that isn't
 // known while compiling or is a type, a constant that doesn't fit its
 // type; a '$' parameter of a type no constant has, one that's '..', one
-// with a default value; and Type as a variable's type, which only a '$'
-// parameter takes.
+// with a default value, one after a parameter with a default value; and
+// Type as a variable's type, which only a '$' parameter takes.
 World :: struct { p: Position; }
 Position :: struct { x: int; }
 
@@ -15,6 +15,7 @@ bad :: ($V: []int) { }
 many :: ($T: ..Type) { }
 nums :: ($N: ..int) { }
 dflt :: ($N: int = 4) { }
+after :: (x: int = 1, $N: int) -> int { return x * 10 + N; }
 
 v : Type;
 

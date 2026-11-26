@@ -13653,10 +13653,15 @@ TEST(baked_parameters_bind_types_and_constants) {
     // A $T: Type takes a type, a $N: int a constant: each is bound in the
     // instance, named by it, and no parameter of it, its argument dropped
     // from the call, which has no code for it. One instance per set of
-    // values: ring(3, int) twice makes one.
+    // values: ring(3, int) twice makes one, and a string is compared by its
+    // bytes, so "hi" from two literals and from a constant is one, "ho"
+    // another. A parameter's type may name N after it: take's *[N]$T.
     Arena a = arena_make();
     Checked c = check_src(&a, string_cstr(&a, string_printf(&a,
                                                             "%s"
+                                                            "HI :: \"hi\";\n"
+                                                            "take :: ($N: int, items: *[N]$T) -> T "
+                                                            "{ return items.*[0]; }\n"
                                                             "main :: () {\n"
                                                             "    w: World;\n"
                                                             "    g := get(*w, Position);\n"
@@ -13664,13 +13669,25 @@ TEST(baked_parameters_bind_types_and_constants) {
                                                             "    r2 := ring(3, int);\n"
                                                             "    f := flag(.B);\n"
                                                             "    s := say(\"hi\");\n"
+                                                            "    s2 := say(\"ho\");\n"
+                                                            "    s3 := say(\"hi\");\n"
+                                                            "    s4 := say(HI);\n"
                                                             "    n := get_then(*w, Position, 4);\n"
+                                                            "    a: [3]int;\n"
+                                                            "    t := take(3, *a);\n"
                                                             "}\n",
                                                             GENERIC_BAKED)));
     CHECK_STR(messages(&a, &c.list->diag), "");
-    const char *names[] = {"g", "r", "r2", "f", "s", "n"};
-    const char *types[] = {"*Position", "[3]int", "[3]int", "int", "string", "int"};
-    for (s64 k = 0; k < 6; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    const char *names[] = {"g", "r", "r2", "f", "s", "s2", "s3", "s4", "n", "t"};
+    const char *types[] = {"*Position", "[3]int", "[3]int", "int", "string",
+                           "string",    "string", "string", "int", "int"};
+    for (s64 k = 0; k < 10; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Proc *say = (Ast_Proc *)global_named(&c, "say");
+    CHECK_EQ(say->instances.count, 2);
+    if (say->instances.count == 2) {
+        CHECK_STR(say->instances[0]->name, "say(S = \"hi\")");
+        CHECK_STR(say->instances[1]->name, "say(S = \"ho\")");
+    }
     Ast_Proc *ring = (Ast_Proc *)global_named(&c, "ring");
     CHECK_EQ(ring->instances.count, 1);
     if (ring->instances.count == 1) {
@@ -13690,9 +13707,9 @@ TEST(baked_parameters_bind_types_and_constants) {
     };
     const Named named[] = {
         {"flag", "flag(M = Mode.B)", 0},
-        {"say", "say(S = \"hi\")", 0},
         {"get", "get(T = Position)", 1},
         {"get_then", "get_then(T = Position)", 2},
+        {"take", "take(N = 3, T = int)", 1},
     };
     for (const Named &k : named) {
         Ast_Proc *generic = (Ast_Proc *)global_named(&c, k.generic);
@@ -13709,8 +13726,9 @@ TEST(baked_parameters_bind_types_and_constants) {
 
     // A constant's name is its value's, as the program would write it: a
     // negative or an unsigned integer, a bool, a float the shortest that
-    // reads back as it, an enum's value with no member as a cast, a string
-    // with its escapes.
+    // reads back as it (a whole one written out, with a .0, below 10^15; a
+    // NaN or an infinity as a division that makes one), an enum's value with
+    // no member as a cast, a string with its escapes.
     c = check_src(&a,
                   "Mode :: enum { A; B; }\n"
                   "si :: ($N: s8) { }\n"
@@ -13728,13 +13746,37 @@ TEST(baked_parameters_bind_types_and_constants) {
                   "    db(0.1);\n"
                   "    md(cast(Mode) 7);\n"
                   "    st(\"a\\tb\\\"c\");\n"
+                  "    fl(2.0);\n"
+                  "    fl(100.0);\n"
+                  "    db(-3.0);\n"
+                  "    db(123456789012345.0);\n"
+                  "    db(1e15);\n"
+                  "    db(0.00001);\n"
+                  "    fl(3.4028234e38);\n"
+                  "    db(0.0 / 0.0);\n"
+                  "    db(1.0 / 0.0);\n"
+                  "    fl(-1.0 / 0.0);\n"
                   "}\n");
     CHECK_STR(messages(&a, &c.list->diag), "");
-    const char *values[] = {"si(N = -3)",   "un(N = 18446744073709551615)", "yes(B = true)",
-                            "fl(F = 0.1)",  "db(F = 0.1)",                  "md(M = cast(Mode) 7)",
-                            "st(S = \"a\\tb\\\"c\")"};
-    CHECK_EQ(c.file->instances.count, 7);
-    for (s64 k = 0; k < 7 && k < c.file->instances.count; k++) CHECK_STR(c.file->instances[k]->name, values[k]);
+    const char *values[] = {"si(N = -3)",
+                            "un(N = 18446744073709551615)",
+                            "yes(B = true)",
+                            "fl(F = 0.1)",
+                            "db(F = 0.1)",
+                            "md(M = cast(Mode) 7)",
+                            "st(S = \"a\\tb\\\"c\")",
+                            "fl(F = 2.0)",
+                            "fl(F = 100.0)",
+                            "db(F = -3.0)",
+                            "db(F = 123456789012345.0)",
+                            "db(F = 1e+15)",
+                            "db(F = 1e-05)",
+                            "fl(F = 3.4028235e+38)",
+                            "db(F = 0.0 / 0.0)",
+                            "db(F = 1.0 / 0.0)",
+                            "fl(F = -1.0 / 0.0)"};
+    CHECK_EQ(c.file->instances.count, 17);
+    for (s64 k = 0; k < 17 && k < c.file->instances.count; k++) CHECK_STR(c.file->instances[k]->name, values[k]);
     token_list_free(c.list);
     arena_free(&a);
 }
@@ -13764,6 +13806,11 @@ TEST(baked_parameter_mistakes) {
         // The arguments after a dropped one are counted as written.
         {"main :: () { w: World; get_then(*w, Position, \"x\"); }",
          "10:47: argument 3 of 'get_then' has type 'string', which can't be converted to 'int'\n"},
+        {"main :: () { rest(3, 1, \"x\"); }\nrest :: ($N: int, values: ..int) -> int { return N; }",
+         "10:25: argument 3 of 'rest' has type 'string', which can't be converted to 'int'\n"},
+        // A parameter's type naming N is N's array type in the instance.
+        {"main :: () { a: [3]int; take(4, *a); }\ntake :: ($N: int, items: *[N]$T) -> T { return items.*[0]; }",
+         "10:33: argument 2 of 'take' has type '*[3]int', which can't be converted to '*[4]int'\n"},
         {"bad :: ($V: []int) { }",
          "10:13: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
          "'[]int'\n"},
@@ -13778,14 +13825,31 @@ TEST(baked_parameter_mistakes) {
          "10:14: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
          "..$T\n"},
         {"dflt :: ($N: int = 4) { }", "10:18: a parameter that declares '$N' can't have a default value, for now\n"},
+        // A '$' parameter, having no default value, can't come after one
+        // that has: each parameter after that needs one.
+        {"after :: (x: int = 1, $N: int) -> int { return x * 10 + N; }",
+         "10:23: a '$' parameter can't come after one with a default value, since each parameter after that needs "
+         "one\n"},
+        {"after :: (x: int = 1, $T: Type) { }",
+         "10:23: a '$' parameter can't come after one with a default value, since each parameter after that needs "
+         "one\n"},
         {"late :: (r: ..int, $N: int) { }",
          "10:20: a '$' parameter can't come after a '..' parameter, which takes every argument left\n"},
         {"twice :: ($N: int, $N: int) { }", "10:21: 'N' is already declared at test.rig:10:12\n"},
         {"twice :: ($T: Type, a: $T) { }",
          "10:24: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
         {"early :: (a: T, $T: Type) { }", "10:14: 'T' is used before '$T' declares it\n"},
+        {"early :: (a: *[N + 1]int, $N: int) { }", "10:16: 'N' is used before '$N' declares it\n"},
         {"count :: ($N: int, a: N) { }", "10:23: 'N' is not a type\n"},
-        {"used :: (using $N: int) { }", "10:20: 'using' needs a struct or a pointer to one, not 'int'\n"},
+        // A second $N is the one mistake, said once.
+        {"count :: ($N: int, a: $N) { }",
+         "10:23: 'N' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        // A built-in type's name always means the type (spec 3.1).
+        {"mk :: ($int: Type) { }", "10:9: 'int' is a built-in type\n"},
+        {"k :: ($int: int) -> int { return 0; }", "10:8: 'int' is a built-in type\n"},
+        // A refused using $N reaches no fields, so names are still checked.
+        {"used :: (using $N: int) { x; }",
+         "10:20: 'using' needs a struct or a pointer to one, not 'int'\n10:27: unknown identifier 'x'\n"},
         {"v : Type;", "10:5: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
     };
     for (const Case &k : cases) {
