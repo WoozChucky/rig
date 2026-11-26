@@ -13266,6 +13266,11 @@ TEST(generic_declaration_mistakes) {
          "1:17: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
         {"g :: (a: T, b: $T) -> int { return 1; }", "g(1, 2)", "1:10: 'T' is used before '$T' declares it\n"},
         {"p :: (f: (T) -> $T) -> int { return 1; }", "p(null)", "1:11: 'T' is used before '$T' declares it\n"},
+        // So is one inside an array's count, before the $ or in its own
+        // parameter's element type after the count.
+        {"s :: (a: [size_of(T)]int, b: $T) -> int { return 1; }", "s(1, 2)",
+         "1:19: 'T' is used before '$T' declares it\n"},
+        {"u :: (a: [size_of(T)]$T) -> int { return 1; }", "u(1)", "1:19: 'T' is used before '$T' declares it\n"},
         {"h :: (T: int, b: $T) -> int { return 1; }", "h(1, 2)", "1:18: 'T' is already declared at test.rig:1:7\n"},
         {"q :: (a: $T, T: int) -> int { return 1; }", "q(1, 2)", "1:14: 'T' is already declared at test.rig:1:10\n"},
         {"r :: (a: $T, a: int) -> int { return 1; }", "r(1, 2)", "1:14: 'a' is already declared at test.rig:1:7\n"},
@@ -13924,6 +13929,10 @@ TEST(baked_parameter_mistakes) {
         // So is one in a literal, or in a type in the count.
         {"e1 :: (a: *[int.[N, 1][0]]int, $N: int) { }", "10:18: 'N' is used before '$N' declares it\n"},
         {"e2 :: (a: *[size_of([N]int)]int, $N: int) { }", "10:22: 'N' is used before '$N' declares it\n"},
+        // A type parameter in a count is one too, as a type or as a value.
+        {"e3 :: (a: *[cast(int) (T == int)]int, $T: Type) { }", "10:24: 'T' is used before '$T' declares it\n"},
+        {"e4 :: (a: *[#run size_of(T)]int, $T: Type) { }", "10:26: 'T' is used before '$T' declares it\n"},
+        {"e5 :: (a: *[T.[1, 2].count]int, $T: Type) { }", "10:13: 'T' is used before '$T' declares it\n"},
         {"count :: ($N: int, a: N) { }", "10:23: 'N' is not a type\n"},
         // A second $N is the one mistake, said once.
         {"count :: ($N: int, a: $N) { }",

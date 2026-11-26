@@ -172,15 +172,33 @@ static bool dollar_declared(Array<Signature_Name> *names, String name) {
     return false;
 }
 
+// Says "'T' is used before '$T' declares it", at pos, when `name`, a use
+// in an array's count, is a type or constant parameter's that no $ among
+// `names` has declared yet. A built-in type's name never is: it always
+// means the type (spec 3.1).
+static void check_count_name(Checker *c, String name, Position pos, Array<Generic_Binding> declared,
+                             Array<Signature_Name> *names) {
+    bool parameter =
+        is_constant_parameter(declared, name) || (is_type_parameter(declared, name) && !type_from_name(name));
+    if (parameter && !dollar_declared(names, name)) {
+        diag_error(c->diag, pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it", STR_ARG(name),
+                   STR_ARG(name));
+    }
+}
+
 static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names);
 
-// The array counts in written type `written`, itself in an array's count
-// (a size_of's type, a literal's), each walked by check_count_names.
+// The names written type `written`, itself in an array's count (a
+// size_of's type, a cast's, a literal's), uses, each checked by
+// check_count_name, and its own array counts, each walked by
+// check_count_names.
 static void check_count_type_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
                                    Array<Signature_Name> *names) {
     if (!written) return;
     switch (written->kind) {
-    case AST_TYPE_NAME: return;
+    case AST_TYPE_NAME:
+        if (!written->declares) check_count_name(c, written->name, written->pos, declared, names);
+        return;
     case AST_TYPE_POINTER: check_count_type_names(c, written->pointee, declared, names); return;
     case AST_TYPE_ARRAY:
         check_count_names(c, written->count, declared, names);
@@ -199,21 +217,15 @@ static void check_count_type_names(Checker *c, Ast_Type *written, Array<Generic_
 }
 
 // The names an array's count `e`, in a generic's parameter, uses, the
-// counts of the types written in it too: a constant parameter's written
-// before the $ that declares it is "'N' is used before '$N' declares it",
-// at the use, as a type parameter's is (check_signature_names). The rest
+// types written in it too: a type or constant parameter's written before
+// the $ that declares it, [N]int or [size_of(T)]int before $N or $T, is
+// "'N' is used before '$N' declares it", at the use (check_count_name), as
+// a type parameter's is outside a count (check_signature_names). The rest
 // of the count is each instance's to check.
 static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names) {
     if (!e) return;
     switch (e->kind) {
-    case AST_NAME: {
-        String name = ((Ast_Name *)e)->name;
-        if (is_constant_parameter(declared, name) && !dollar_declared(names, name)) {
-            diag_error(c->diag, e->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it", STR_ARG(name),
-                       STR_ARG(name));
-        }
-        return;
-    }
+    case AST_NAME: check_count_name(c, ((Ast_Name *)e)->name, e->pos, declared, names); return;
     case AST_CALL: {
         Ast_Call *call = (Ast_Call *)e;
         check_count_names(c, call->callee, declared, names);
@@ -266,7 +278,8 @@ static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declare
 // - a use of a type parameter written before the $ that declares it: "'T'
 //   is used before '$T' declares it", at the use; never of a built-in
 //   type's name, which always means the built-in type (spec 3.1); so, too,
-//   of a constant parameter in an array's count (check_count_names).
+//   of one in an array's count, or of a constant parameter there
+//   (check_count_names).
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
 static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
