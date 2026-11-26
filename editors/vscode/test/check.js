@@ -1167,6 +1167,12 @@ check('the grammar colours #type and the type after it', () => {
     });
     assertScopes('same := #type (Vec2) -> Vec2 == #type (Vec2) -> Vec2;', { Vec2: [TYPE, TYPE, TYPE, TYPE] });
     assertScopes('x := Type;', { Type: PRIMITIVE });
+    // The type ends where a value would: what follows it is no type.
+    assertScopes('f(#type *u8, count);', { u8: PRIMITIVE, count: null });
+    assertScopes('ok := g(#type int) + n;', { int: PRIMITIVE, n: null });
+    assertScopes('b := #type (int) -> int != x;', { x: null });
+    assertScopes('#if A == #type (int) -> int && N == 3 {}', { N: null });
+    assertScopes('#if A == #type (int) -> int || N == 3 {}', { N: null });
 });
 
 // Every program of tests/run and tests/build (the build programs and the

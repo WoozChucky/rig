@@ -3,7 +3,8 @@
 // type's name can't be; then in a body a type value as a variable's value,
 // a procedure type's under #type too, a type compared with a value on
 // either side, a variable and size_of of Type, which is written nowhere,
-// and Type itself as a value.
+// Type itself as a value, types under '<' and '>=', which give types no
+// order, and a type value of Type and one holding it.
 Type :: struct { }
 
 main :: () {
@@ -14,4 +15,8 @@ main :: () {
     v : Type;
     u := size_of(Type);
     t := Type;
+    a := int < s64;
+    b := []int >= [..]int;
+    i := Type == int;
+    j := #type []Type;
 }

@@ -1249,17 +1249,18 @@
 //   int there, `int == 5` comparing the local. A type in parentheses is
 //   none, as for a literal's type: `(int) == int` is "'int' is a type, not
 //   a value". Any type but void, which is no value's ("'void' is only a
-//   pointer's target, as in *void", at it), and resolved for its Type *
-//   only (checker.cpp's resolve_type_value): a struct named there needs no
-//   layout, so `Node == Node` may be in Node's own array count.
+//   pointer's target, as in *void", at it) and Type, written nowhere
+//   (below); resolved for its Type * only (checker.cpp's
+//   resolve_type_value): a struct named there needs no layout, so
+//   `Node == Node` may be in Node's own array count.
 // - Type (type_type, TYPE_TYPE) is the type of types, a built-in type's
 //   name, so no struct, union or enum takes it ("'Type' is a built-in
 //   type"), while a variable, a constant, a parameter or a procedure may,
 //   hiding it where a value goes, as `int := 5;` hides int. It's written
-//   nowhere: a variable, a parameter, a field, a cast, size_of and
-//   type_info of it are "'Type' only names types while compiling; a
-//   *Type_Info describes one at run time", at the type (checker.cpp's
-//   resolve_written).
+//   nowhere: a variable, a parameter, a field, a cast, size_of,
+//   type_info and a type value of it are "'Type' only names types while
+//   compiling; a *Type_Info describes one at run time", at the type
+//   (checker.cpp's resolve_written).
 // - Only == and != take type values for now (check_type_comparison): with
 //   either operand naming a type, both must ("'==' compares a type only
 //   with a type, as in T == int", at the operator), and the result is a

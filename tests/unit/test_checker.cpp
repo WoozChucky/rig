@@ -12412,14 +12412,22 @@ TEST(types_compare_before_their_layout) {
               "");
     CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Node"))->declared->size, 16);
     CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Leaf"))->declared->size, 16);
+    // An array's elements are still laid out, so an array of Node in Node's
+    // own count is the circle it is anywhere.
+    CHECK_STR(check_source(&a,
+                           "Node :: struct { a: [cast(int) ([2]Node == [2]Node) + 1]int; }\n"
+                           "main :: () { }\n"),
+              "1:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n");
     arena_free(&a);
 }
 
 TEST(types_are_no_values_elsewhere) {
     // A type where a value goes is refused but for a comparison of types:
     // a type value at its start, naming its type; a type against a value
-    // at the operator. Type, the type of types, is written nowhere, and no
-    // struct, union or enum takes its name.
+    // at the operator. A type has no order, so '<' and the others say each
+    // type operand's own message. Type, the type of types, is written
+    // nowhere, a type value of it or holding it included, and no struct,
+    // union or enum takes its name.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "Type :: struct { }\n"
@@ -12431,6 +12439,10 @@ TEST(types_are_no_values_elsewhere) {
                            "    v : Type;\n"
                            "    u := size_of(Type);\n"
                            "    t := Type;\n"
+                           "    a := int < s64;\n"
+                           "    b := []int >= [2]int;\n"
+                           "    i := Type == int;\n"
+                           "    j := #type []Type;\n"
                            "}\n"),
               "1:1: 'Type' is a built-in type\n"
               "3:10: '[]int' is a type, not a value\n"
@@ -12439,7 +12451,13 @@ TEST(types_are_no_values_elsewhere) {
               "6:12: '!=' compares a type only with a type, as in T == int\n"
               "7:9: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
               "8:18: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
-              "9:10: 'Type' is a type, not a value\n");
+              "9:10: 'Type' is a type, not a value\n"
+              "10:10: 'int' is a type, not a value\n"
+              "10:16: 's64' is a type, not a value\n"
+              "11:10: '[]int' is a type, not a value\n"
+              "11:19: '[2]int' is a type, not a value\n"
+              "12:10: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"
+              "13:18: 'Type' only names types while compiling; a *Type_Info describes one at run time\n");
     // A type in parentheses is none, as a literal's type never is: a value.
     CHECK_STR(check_source(&a, "main :: () { x := (int) == int; y := ([]int) != []int; }\n"),
               "1:20: 'int' is a type, not a value\n"
