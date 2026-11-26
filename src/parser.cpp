@@ -187,6 +187,7 @@ static Ast_Type *parse_type(Parser *p);
 static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start);
 static bool parameters_follow(Parser *p, s64 open);
 static bool starts_global(Parser *p);
+static bool c_style_literal_follows(Parser *p);
 
 // "this expression is nested too deeply (more than 1000 levels)", at the
 // start of the outermost expression being read. Every parse_ function then
@@ -345,6 +346,10 @@ static Ast *parse_type_value(Parser *p, Token *at) {
 // goes (parse_type_value, spec 5.20): []int == [..]int, #type (int) -> int.
 // Which types may be values, and where, is the checker's to say; a type
 // that is a name, or *X, parses as the name and the address it would be.
+// A '[' that can't start a type, with a ',' in its brackets or no type
+// after its ']' (c_style_literal_follows), is an array literal written as
+// C writes one, [1, 2, 3] or [], and is refused at the '[': "an array
+// literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]".
 //
 // A '.' starting an expression is a literal without its type, .{1, 2} or
 // .[1, 2], which takes the type it meets (parse_literal); or, before a
@@ -421,7 +426,13 @@ static Ast *parse_primary(Parser *p) {
         return nullptr;
     case TOKEN_LBRACKET:
         // No expression starts with a '[', so one here is a type's: [N]T,
-        // []T or [..]T, read from the '[' itself.
+        // []T or [..]T, read from the '[' itself; unless it can't be one,
+        // [1, 2, 3] or [] (c_style_literal_follows): that's an array
+        // literal written as C writes one, which Rig starts with a '.'.
+        if (c_style_literal_follows(p)) {
+            diag_error(p->diag, t->pos, "an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]");
+            return nullptr;
+        }
         return parse_type_value(p, t);
     case TOKEN_DOT:
         if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
@@ -1691,6 +1702,42 @@ static bool proc_type_follows(Parser *p) {
         if (kind == TOKEN_LPAREN) depth++;
         // A token follows: the last one is TOKEN_EOF.
         if (kind == TOKEN_RPAREN && --depth == 0) return p->tokens[i + 1].kind == TOKEN_ARROW;
+    }
+    return false;
+}
+
+// Whether a type can start with a token of `kind`: a name, '*', '[', '('
+// or '$', parse_type_level's alternatives.
+static bool starts_a_type(Token_Kind kind) {
+    return kind == TOKEN_IDENT || kind == TOKEN_STAR || kind == TOKEN_LBRACKET || kind == TOKEN_LPAREN ||
+           kind == TOKEN_DOLLAR;
+}
+
+// Whether the '[' the parser is at, where an expression starts, is an array
+// literal written as C writes one, [1, 2, 3] or [], rather than a type's
+// start (spec 5.20): its brackets hold a ',' of their own (not one nested in
+// '( )', '[ ]' or '{ }', as [f(1, 2)]int's), or its ']' has no type after
+// it. [..] is always a type's, and so is a '[' whose look-ahead meets a ';',
+// the end, or a ')' or '}' it didn't open before its ']': the type's own
+// messages say what's wrong there. Scans tokens only, as proc_type_follows
+// does.
+static bool c_style_literal_follows(Parser *p) {
+    if (peek(p, 1)->kind == TOKEN_DOT_DOT) return false;
+    s64 depth = 0;
+    for (s64 i = p->next + 1; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
+        Token_Kind kind = p->tokens[i].kind;
+        if (kind == TOKEN_LPAREN || kind == TOKEN_LBRACKET || kind == TOKEN_LBRACE) {
+            depth++;
+        } else if (depth > 0) {
+            if (kind == TOKEN_RPAREN || kind == TOKEN_RBRACKET || kind == TOKEN_RBRACE) depth--;
+        } else if (kind == TOKEN_COMMA) {
+            return true;
+        } else if (kind == TOKEN_RBRACKET) {
+            // A token follows: the last one is TOKEN_EOF.
+            return !starts_a_type(p->tokens[i + 1].kind);
+        } else if (kind == TOKEN_RPAREN || kind == TOKEN_RBRACE) {
+            return false;
+        }
     }
     return false;
 }

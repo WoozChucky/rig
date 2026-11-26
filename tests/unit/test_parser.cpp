@@ -4575,13 +4575,33 @@ TEST(parses_types_where_values_go) {
     // No literal follows a type value: only a name is a literal's type.
     body_dump(&a, "e := []int.{1};", &errors);
     CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
-    // So an array literal written as C writes one, not .[1, 2, 3] or
-    // int.[1, 2, 3] (spec 5.17), is a type's start: the count stops at its
-    // first ',', and [] needs its element type.
+    // An array literal written as C writes one, not .[1, 2, 3] or
+    // int.[1, 2, 3] (spec 5.17), is refused at its '[': a ',' in its
+    // brackets, or a ']' with no type after it.
     body_dump(&a, "x := [1, 2, 3];", &errors);
-    CHECK_STR(errors, "2:12: expected ']', found ','\n");
-    body_dump(&a, "y := [];", &errors);
-    CHECK_STR(errors, "2:12: expected a type, found ';'\n");
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := [];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := [1];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := f([1, 2]);", &errors);
+    CHECK_STR(errors, "2:12: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := .[[1, 2], [3]];", &errors);
+    CHECK_STR(errors, "2:12: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    // A ',' nested in the count is no literal's, and a type after the ']'
+    // makes it a type; [..] and a '[' where a type goes are always a type's,
+    // with their own messages.
+    body_dump(&a, "x := [f(1, 2)]int == [g(.[1, 2])]u8;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [..];", &errors);
+    CHECK_STR(errors, "2:14: expected a type, found ';'\n");
+    body_dump(&a, "x := []$T;", &errors);
+    CHECK_STR(errors, "2:12: '$' declares a type parameter only in a procedure's parameter, as in "
+                      "max :: (a: $T, b: T) -> T\n");
+    body_dump(&a, "x := #type [1, 2];", &errors);
+    CHECK_STR(errors, "2:18: expected ']', found ','\n");
+    body_dump(&a, "x : [1, 2]int;", &errors);
+    CHECK_STR(errors, "2:11: expected ']', found ','\n");
     // The node is at its '[' or its '#type'.
     Token_List *list = src("f :: () { x := []int; y := #type *u8; }\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
