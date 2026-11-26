@@ -12660,7 +12660,7 @@ static bool same_places(Ast *to, Ast *from) {
     case AST_PARAM: {
         Ast_Param *t = (Ast_Param *)to, *f = (Ast_Param *)from;
         return same_place(t->dots, f->dots) && same_place(t->equals, f->equals) &&
-               t->default_levels == f->default_levels;
+               same_place(t->dollar, f->dollar) && t->default_levels == f->default_levels;
     }
     case AST_TYPE_NAME:
     case AST_TYPE_POINTER:
@@ -12703,8 +12703,9 @@ TEST(clones_are_deep_and_unchecked) {
     // every node and every Array new, nothing the checker writes copied,
     // its body's block pointing at the copy. A procedure holding every
     // statement and every expression, and a generic one holding the kinds
-    // of parameter and type it doesn't (using, '..int', $T, a procedure
-    // type with '..' and one #c_call, #no_abc, a #complete switch), are
+    // of parameter and type it doesn't (using, '..int', $T, $N: int, a
+    // procedure type with '..' and one #c_call, #no_abc, a #complete
+    // switch), are
     // each copied before the program is checked: the copy dumps as the
     // original does, shares no node and no Array's buffer with it, keeps
     // every place the parser gave each node (same_places), and checking the
@@ -12714,7 +12715,8 @@ TEST(clones_are_deep_and_unchecked) {
     const char *text =
         "Vec2 :: struct { x: float; y: float; }\n"
         "Pair :: struct { a: int; b: int; }\n"
-        "parts :: (using pair: Pair, v: $T, f: (int, ..int) -> int, g: () #c_call, rest: ..int) -> int #no_abc {\n"
+        "parts :: (using pair: Pair, v: $T, $N: int, f: (int, ..int) -> int, g: () #c_call, rest: ..int) -> int "
+        "#no_abc {\n"
         "    m: Mode = .A;\n"
         "    if #complete m == { case .A; case .B; }\n"
         "    return a + f(1, 2, 3) + rest[0];\n"
@@ -13629,5 +13631,168 @@ TEST(instances_have_a_depth_limit) {
     CHECK_STR(type_of(&a, &c, "x"), "?");
     CHECK_STR(type_of(&a, &c, "y"), "?");
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+// Issue #226: types and constants as generic parameters (spec 7.11).
+
+// The declarations every test of baked parameters starts with: a $T: Type
+// after a value, a constant and a type, a constant of an enum and of a
+// string, and one a number must fit.
+static const char *GENERIC_BAKED = "World :: struct { p: Position; }\n"
+                                   "Position :: struct { x: int; }\n"
+                                   "get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }\n"
+                                   "ring :: ($N: int, $T: Type) -> [N]T { r: [N]T; return r; }\n"
+                                   "Mode :: enum { A; B; }\n"
+                                   "flag :: ($M: Mode) -> int { return cast(int) M; }\n"
+                                   "say :: ($S: string) -> string { return S; }\n"
+                                   "small :: ($N: u8) -> u8 { return N; }\n"
+                                   "get_then :: (w: *World, $T: Type, n: int) -> int { return n; }\n";
+
+TEST(baked_parameters_bind_types_and_constants) {
+    // A $T: Type takes a type, a $N: int a constant: each is bound in the
+    // instance, named by it, and no parameter of it, its argument dropped
+    // from the call, which has no code for it. One instance per set of
+    // values: ring(3, int) twice makes one.
+    Arena a = arena_make();
+    Checked c = check_src(&a, string_cstr(&a, string_printf(&a,
+                                                            "%s"
+                                                            "main :: () {\n"
+                                                            "    w: World;\n"
+                                                            "    g := get(*w, Position);\n"
+                                                            "    r := ring(3, int);\n"
+                                                            "    r2 := ring(3, int);\n"
+                                                            "    f := flag(.B);\n"
+                                                            "    s := say(\"hi\");\n"
+                                                            "    n := get_then(*w, Position, 4);\n"
+                                                            "}\n",
+                                                            GENERIC_BAKED)));
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *names[] = {"g", "r", "r2", "f", "s", "n"};
+    const char *types[] = {"*Position", "[3]int", "[3]int", "int", "string", "int"};
+    for (s64 k = 0; k < 6; k++) CHECK_STR(type_of(&a, &c, names[k]), types[k]);
+    Ast_Proc *ring = (Ast_Proc *)global_named(&c, "ring");
+    CHECK_EQ(ring->instances.count, 1);
+    if (ring->instances.count == 1) {
+        CHECK_STR(ring->instances[0]->name, "ring(N = 3, T = int)");
+        CHECK_STR(ring->instances[0]->symbol, "ring$N$3$T$int");
+        CHECK_EQ(ring->instances[0]->proc->params.count, 0);
+    }
+    const char *calls[] = {"r", "r2"};
+    for (const char *call : calls) {
+        Ast_Call *made = (Ast_Call *)((Ast_Var *)local_named(&c, call))->value;
+        CHECK_EQ(made->args.count, 0);
+    }
+    struct Named {
+        const char *generic;
+        const char *name;
+        s64 params;
+    };
+    const Named named[] = {
+        {"flag", "flag(M = Mode.B)", 0},
+        {"say", "say(S = \"hi\")", 0},
+        {"get", "get(T = Position)", 1},
+        {"get_then", "get_then(T = Position)", 2},
+    };
+    for (const Named &k : named) {
+        Ast_Proc *generic = (Ast_Proc *)global_named(&c, k.generic);
+        CHECK_EQ(generic->instances.count, 1);
+        if (generic->instances.count != 1) continue;
+        CHECK_STR(generic->instances[0]->name, k.name);
+        CHECK_EQ(generic->instances[0]->proc->params.count, k.params);
+    }
+    // get_then's dropped argument leaves the others in order: w, then n.
+    Ast_Call *then = (Ast_Call *)((Ast_Var *)local_named(&c, "n"))->value;
+    CHECK_EQ(then->args.count, 2);
+    if (then->args.count == 2) CHECK_EQ(then->args[1]->constant, 4);
+    token_list_free(c.list);
+
+    // A constant's name is its value's, as the program would write it: a
+    // negative or an unsigned integer, a bool, a float the shortest that
+    // reads back as it, an enum's value with no member as a cast, a string
+    // with its escapes.
+    c = check_src(&a,
+                  "Mode :: enum { A; B; }\n"
+                  "si :: ($N: s8) { }\n"
+                  "un :: ($N: u64) { }\n"
+                  "yes :: ($B: bool) { }\n"
+                  "fl :: ($F: float32) { }\n"
+                  "db :: ($F: float64) { }\n"
+                  "md :: ($M: Mode) { }\n"
+                  "st :: ($S: string) { }\n"
+                  "main :: () {\n"
+                  "    si(-3);\n"
+                  "    un(18446744073709551615);\n"
+                  "    yes(true);\n"
+                  "    fl(0.1);\n"
+                  "    db(0.1);\n"
+                  "    md(cast(Mode) 7);\n"
+                  "    st(\"a\\tb\\\"c\");\n"
+                  "}\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    const char *values[] = {"si(N = -3)",   "un(N = 18446744073709551615)", "yes(B = true)",
+                            "fl(F = 0.1)",  "db(F = 0.1)",                  "md(M = cast(Mode) 7)",
+                            "st(S = \"a\\tb\\\"c\")"};
+    CHECK_EQ(c.file->instances.count, 7);
+    for (s64 k = 0; k < 7 && k < c.file->instances.count; k++) CHECK_STR(c.file->instances[k]->name, values[k]);
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(baked_parameter_mistakes) {
+    // A $T: Type's argument must be a type, a $N's must be known while
+    // compiling, and convert to N's type as any argument does. A '$'
+    // parameter is a type or a constant of a number, bool, enum or string
+    // type, never '..', with no default value for now, and before any '..'
+    // parameter, which would leave it no argument. Type stays refused as a
+    // variable's type.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"main :: () { w: World; get(*w, 3); }", "10:32: argument 2 of 'get' must be a type, for '$T: Type'\n"},
+        {"main :: () { w: World; get(*w, nope); }", "10:32: unknown identifier 'nope'\n"},
+        {"main :: () { n := 3; ring(n, int); }",
+         "10:27: argument 1 of 'ring' must be known while compiling, for '$N: int'\n"},
+        {"main :: () { s := \"x\"; say(s); }",
+         "10:28: argument 1 of 'say' must be known while compiling, for '$S: string'\n"},
+        {"main :: () { ring(int, int); }", "10:19: 'int' is a type, not a value\n"},
+        {"main :: () { small(300); }", "10:20: 300 doesn't fit in 'u8'\n"},
+        {"main :: () { flag(1); }", "10:19: argument 1 of 'flag' has type 'int', which can't be converted to 'Mode'\n"},
+        // The arguments after a dropped one are counted as written.
+        {"main :: () { w: World; get_then(*w, Position, \"x\"); }",
+         "10:47: argument 3 of 'get_then' has type 'string', which can't be converted to 'int'\n"},
+        {"bad :: ($V: []int) { }",
+         "10:13: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'[]int'\n"},
+        {"bad :: ($V: World) { }",
+         "10:13: a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not "
+         "'World'\n"},
+        {"bad :: ($V: Nope) { }", "10:13: unknown type 'Nope'\n"},
+        {"many :: ($T: ..Type) { }",
+         "10:14: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
+         "..$T\n"},
+        {"nums :: ($N: ..int) { }",
+         "10:14: a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
+         "..$T\n"},
+        {"dflt :: ($N: int = 4) { }", "10:18: a parameter that declares '$N' can't have a default value, for now\n"},
+        {"late :: (r: ..int, $N: int) { }",
+         "10:20: a '$' parameter can't come after a '..' parameter, which takes every argument left\n"},
+        {"twice :: ($N: int, $N: int) { }", "10:21: 'N' is already declared at test.rig:10:12\n"},
+        {"twice :: ($T: Type, a: $T) { }",
+         "10:24: 'T' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)\n"},
+        {"early :: (a: T, $T: Type) { }", "10:14: 'T' is used before '$T' declares it\n"},
+        {"count :: ($N: int, a: N) { }", "10:23: 'N' is not a type\n"},
+        {"used :: (using $N: int) { }", "10:20: 'using' needs a struct or a pointer to one, not 'int'\n"},
+        {"v : Type;", "10:5: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
+    };
+    for (const Case &k : cases) {
+        // A declaration on its own needs a main after it.
+        bool main = strncmp(k.text, "main", 4) == 0;
+        String text = string_printf(&a, "%s%s\n%s", GENERIC_BAKED, k.text, main ? "" : "main :: () { }\n");
+        CHECK_STR(check_source(&a, string_cstr(&a, text)), k.message);
+    }
     arena_free(&a);
 }

@@ -1193,6 +1193,19 @@ check('the grammar colours a type parameter', () => {
     });
 });
 
+check('the grammar colours a signature that starts with a type parameter', () => {
+    assertScopes('make :: ($T: Type) -> T {', {
+        make: 'entity.name.function.rig',
+        $: 'storage.modifier.type-parameter.rig',
+        Type: PRIMITIVE,
+    });
+    assertScopes('fill :: ($N: int, items: *[N]$T) {', {
+        fill: 'entity.name.function.rig',
+        $: ['storage.modifier.type-parameter.rig', 'storage.modifier.type-parameter.rig'],
+        int: PRIMITIVE,
+    });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and

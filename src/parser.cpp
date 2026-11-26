@@ -47,8 +47,9 @@ struct Parser {
     // at any depth in it but an array's count: where '$T' may declare a type
     // parameter (spec 7.11, parse_type_level).
     bool in_param_type;
-    // A '$T' was read in the parameters of the procedure being read: it's
-    // generic (Ast_Proc.is_generic, parse_procedure).
+    // A '$T' was read in the parameters of the procedure being read, or a
+    // '$' before a parameter's name: it's generic (Ast_Proc.is_generic,
+    // parse_procedure).
     bool declared_type_parameter;
 };
 
@@ -765,20 +766,21 @@ static Ast *parse_expression(Parser *p, int min_precedence) {
 }
 
 // Whether a procedure's parameter list starts `ahead` tokens on: '(' ')',
-// '(' IDENT ':', '(' IDENT ':=', '(' '..' or '(' 'using'. Any other '('
-// after '::' begins a constant's value in parentheses (N :: (1 + 2);). A
-// spread starts with '..' too, but a constant's value can't be one (only a
-// call's argument can), so (..) is a signature, if a wrong one:
+// '(' IDENT ':', '(' IDENT ':=', '(' '..', '(' 'using' or '(' '$'. Any
+// other '(' after '::' begins a constant's value in parentheses (N :: (1 +
+// 2);). A spread starts with '..' too, but a constant's value can't be one
+// (only a call's argument can), so (..) is a signature, if a wrong one:
 // parse_procedure says what's wrong with it, rather than refusing a
 // spread. No expression has a ':=' either, so (n := 0) is a signature too,
 // whose parameter parse_param says is missing its type; nor does one start
 // with 'using', which only a field or a parameter takes (spec 3.21), so
-// (using e: *Entity) is a signature.
+// (using e: *Entity) is a signature; nor with '$', which starts no
+// expression (spec 7.11), so ($T: Type) is a signature too.
 static bool procedure_follows(Parser *p, s64 ahead) {
     Token_Kind next = peek(p, ahead + 1)->kind;
     Token_Kind after = peek(p, ahead + 2)->kind;
     return peek(p, ahead)->kind == TOKEN_LPAREN &&
-           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT || next == TOKEN_USING ||
+           (next == TOKEN_RPAREN || next == TOKEN_DOT_DOT || next == TOKEN_USING || next == TOKEN_DOLLAR ||
             (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)));
 }
 
@@ -1868,11 +1870,16 @@ static Ast_Type *parse_whole_type(Parser *p) {
     return type;
 }
 
-// param = ['using'] IDENT ':' ['..'] type ['=' expression]
+// param = ['using'] ['$'] IDENT ':' ['..'] type ['=' expression]
 //
 // 'using' before the name marks it (Ast_Param.is_using): the body names
 // the fields of the struct it is, or points at, directly (spec 3.21),
 // which the checker says it may be.
+//
+// '$' before the name bakes it (Ast_Param.is_baked, at its '$'; spec
+// 7.11): each call gives a type, `$T: Type`, or a constant, `$N: int`,
+// which its instance is made for, and the procedure is generic
+// (Parser.declared_type_parameter). What it may be is the checker's to say.
 //
 // A '..' before the type makes the parameter a '..T' one (spec 7.2), which
 // takes the call's other arguments: its type as written is T, and the
@@ -1895,6 +1902,7 @@ static Ast_Type *parse_whole_type(Parser *p) {
 static Ast_Param *parse_param(Parser *p) {
     bool is_using = peek(p)->kind == TOKEN_USING;
     if (is_using) advance(p);
+    Token *dollar = peek(p)->kind == TOKEN_DOLLAR ? advance(p) : nullptr;
     Token *name = expect(p, TOKEN_IDENT);
     if (!name) return nullptr;
     if (peek(p)->kind == TOKEN_COLON_EQUAL) {
@@ -1905,6 +1913,11 @@ static Ast_Param *parse_param(Parser *p) {
     Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
     param->name = name->text;
     param->is_using = is_using;
+    if (dollar) {
+        param->is_baked = true;
+        param->dollar = dollar->pos;
+        p->declared_type_parameter = true;
+    }
     if (peek(p)->kind == TOKEN_DOT_DOT) {
         param->is_variadic = true;
         param->dots = advance(p)->pos;
@@ -1988,10 +2001,11 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // (`times: int = 2`, spec 7.2), read with it (parse_param) before the body,
 // so its levels aren't the body's; which parameters may have one is the
 // checker's to say. A parameter's type that declares a type parameter, `a:
-// $T` (spec 7.11), makes the procedure generic (Ast_Proc.is_generic); what
-// a generic may be (not #foreign, #c_call nor #compiler) is the checker's to
-// say too, so the #foreign's place is kept (Ast_Proc.foreign_pos), as
-// #c_call's and #compiler's are.
+// $T` (spec 7.11), or a '$' before a parameter's name, `$N: int`, makes the
+// procedure generic (Ast_Proc.is_generic); what a generic may be (not
+// #foreign, #c_call nor #compiler) is the checker's to say too, so the
+// #foreign's place is kept (Ast_Proc.foreign_pos), as #c_call's and
+// #compiler's are.
 static Ast_Proc *parse_procedure(Parser *p, Token *name) {
     Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, name->pos);
     proc->name = name->text;

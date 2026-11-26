@@ -164,9 +164,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_PARAM: {
         // (rest int), or (rest (.. int)) for rest: ..int; a default value
         // follows the type, (times int (default (int 2))) for times: int = 2.
-        // A using one says so first: (using e (ptr Entity)).
+        // A using one says so first: (using e (ptr Entity)). A baked one's
+        // name keeps its '$': ($N int), ($T Type).
         Ast_Param *param = (Ast_Param *)node;
         out(buffer, param->is_using ? "(using " : "(");
+        if (param->is_baked) out(buffer, "$");
         out(buffer, param->name);
         out(buffer, param->is_variadic ? " (.. " : " ");
         dump_type(buffer, param->type_expr);
@@ -715,6 +717,8 @@ Ast *ast_clone(Arena *a, Ast *node) {
         to->equals = from->equals;
         to->default_levels = from->default_levels;
         to->is_using = from->is_using;
+        to->is_baked = from->is_baked;
+        to->dollar = from->dollar;
         return to;
     }
     case AST_TYPE_NAME:

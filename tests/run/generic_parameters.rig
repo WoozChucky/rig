@@ -1,0 +1,60 @@
+// Types and constants as generic parameters (issue #226, spec 7.11): a '$'
+// before a parameter's name bakes it into the instance, a type for
+// $T: Type, called get(w, Position), a constant for $N: int, so [N]T is an
+// array type in the signature and the body. Each set of values makes one
+// instance, ring(N = 3, T = int); the type or constant has no code, so its
+// argument is no argument of the instance, and the others keep their order
+// and run once each: get_then's next() between w and nothing else. A
+// constant may be an enum's member or a string. The same compiled,
+// interpreted and in #runs, a constant's and a top-level one.
+#import "Basic";
+
+World :: struct { p: Position; }
+
+Position :: struct { x: int; }
+
+Mode :: enum { A; B; }
+
+get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }
+
+ring :: ($N: int, $T: Type) -> [N]T {
+    r: [N]T;
+    return r;
+}
+
+fill :: ($N: int, $T: Type, value: T) -> [N]T {
+    r: [N]T;
+    for * r { it.* = value; }
+    return r;
+}
+
+flag :: ($M: Mode) -> int { return cast(int) M; }
+
+say :: ($S: string) -> string { return S; }
+
+get_then :: (w: *World, $T: Type, n: int) -> int { return get(w, T).x + n; }
+
+next :: () -> int {
+    print("next\n");
+    return 2;
+}
+
+R :: #run ring(2, int).count;
+
+#run { print("{}\n", fill(2, string, "x")); }
+
+main :: () {
+    world: World;
+    get(*world, Position).x = 7;
+    print("{}\n", get(*world, Position).x);
+    print("{}\n", ring(3, int).count);
+    names := ring(2, string);
+    names[0] = "a";
+    names[1] = "b";
+    print("{}\n", names);
+    print("{}\n", fill(4, int, 5));
+    print("{}\n", flag(.B));
+    print("{}\n", say("hi"));
+    print("{}\n", get_then(*world, Position, next()));
+    print("{}\n", R);
+}

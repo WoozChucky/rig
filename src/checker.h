@@ -1280,8 +1280,9 @@
 //   (check_run.cpp's walk_expression).
 //
 // Generic procedures (issue #226, spec 7.11).
-// - A procedure whose parameters' types declare a type parameter, $T
-//   (Ast_Proc.is_generic), is checked as none of its instances: its own
+// - A procedure whose parameters' types declare a type parameter, $T, or
+//   that bakes a parameter, $T: Type or $N: int (Ast_Proc.is_generic), is
+//   checked as none of its instances: its own
 //   signature check (check_generic.cpp's check_generic_signature) takes
 //   its type parameters as types still to be known, resolves its other
 //   type names once, so "unknown type 'Nope'" is said at the generic and
@@ -1332,7 +1333,7 @@
 //   call with its bindings gets no type and says nothing more.
 // - Each distinct set of bindings (a type by its Type *) makes one
 //   instance, program-wide: the generic's tree copied (ast_clone), its
-//   bindings Ast_Aliases, named max(T = int), its symbol max$T$int (with
+//   type bindings Ast_Aliases, named max(T = int), its symbol max$T$int (with
 //   $N after it when an earlier instance of the generic has that symbol),
 //   kept in the generic's cache (Ast_Proc.instances) and the program's list
 //   (Ast_File.instances). Its signature is checked where the call needs it,
@@ -1371,9 +1372,35 @@
 //   each one's default values meet the limit on declarations first
 //   (open_declaration): said once, with the chain, the instance too deep
 //   having errors, never checked later.
+// - A '$' before a parameter's name bakes it (Ast_Param.is_baked): $T:
+//   Type takes a type, $N: X a constant, and the procedure is generic. Its
+//   own check (check_baked_parameter) keeps a constant's type on the
+//   parameter, a number's, a bool's, an enum's or string ("a '$' parameter
+//   is a type, '$T: Type', or a constant of a number, bool, enum or string
+//   type, not '[]int'", at the type), and refuses '..' ("a '$' parameter
+//   can't be '..': ...", at the '..'), a place after a '..T' parameter ("a
+//   '$' parameter can't come after a '..' parameter, which takes every
+//   argument left", at the '$'), a default value ("a parameter that
+//   declares '$N' can't have a default value, for now") and using. A
+//   constant parameter's name in a type is "'N' is not a type".
+// - A call checks a $T: Type's argument as a type value (check_type_value)
+//   when it names a type, as a value otherwise: "argument 2 of 'get' must
+//   be a type, for '$T: Type'". A $N's converts to N's type as any
+//   argument does (its messages), and must then be known while compiling,
+//   folded or constant data: "argument 1 of 'ring' must be known while
+//   compiling, for '$N: int'". These bind first (check_generic.cpp's
+//   bake_argument), the $T's in the parameters' types after. A constant
+//   binds as an Ast_Const of its value (constant_binding), compared in the
+//   cache by its type and value, a string's by its bytes, and named as the
+//   program would write it, ring(N = 3, T = int), flag(M = Mode.B),
+//   say(S = "hi"). The instance has no parameter for a baked one, and once
+//   it's known the call drops their arguments: a type or a constant has no
+//   code. Messages about the arguments left count them as written
+//   (check_expr.cpp's written_index).
 // - What lowering may rely on: no generic procedure is lowered, and no
 //   call's proc is one; each instance is a procedure, keyed by its symbol
-//   (lower.cpp's proc_symbol), after the program's own procedures.
+//   (lower.cpp's proc_symbol), after the program's own procedures; no
+//   call holds an argument for a baked parameter.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

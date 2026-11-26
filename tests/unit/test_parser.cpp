@@ -4649,3 +4649,31 @@ TEST(dollar_mistakes) {
     CHECK_STR(errors, "1:19: expected an expression, found '$'\n");
     arena_free(&a);
 }
+
+TEST(parses_baked_parameters) {
+    // A '$' before a parameter's name bakes it (spec 7.11): a type, $T:
+    // Type, or a constant, $N: int, dumped with its '$'. Either makes the
+    // procedure generic, and '(' '$' after '::' begins a signature. A later
+    // parameter's type may name N in an array's count.
+    Arena a = arena_make();
+    Token_List *list = src("get :: (w: *World, $T: Type) -> *T { return null; }\n"
+                           "fill :: ($N: int, items: *[N]$T) { }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_EQ(list->diag.error_count, 0);
+    CHECK_STR(ast_dump(&a, file),
+              "(proc get (params (w (ptr World)) ($T Type)) (returns (ptr T)) (block (return (null))))\n"
+              "(proc fill (params ($N int) (items (ptr (array (name N) $T)))) (block))\n");
+    CHECK_EQ(file->procs.count, 2);
+    if (file->procs.count == 2) {
+        CHECK(file->procs[0]->is_generic);
+        CHECK(file->procs[1]->is_generic);
+        Ast_Param *t = file->procs[0]->params[1];
+        CHECK(t->is_baked);
+        CHECK_EQ(t->dollar.col, 20);
+        CHECK_EQ(t->pos.col, 21);
+        CHECK(!file->procs[0]->params[0]->is_baked);
+        CHECK(file->procs[1]->params[0]->is_baked);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}

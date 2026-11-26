@@ -2855,10 +2855,10 @@ ProcDecl  = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#fore
 Signature = "(" [ Params ] ")" [ "->" Results ] .
 Results   = Type { "," Type } | "(" Type { "," Type } ")" .
 Params    = Param { "," Param } [ "," ".." ] .
-Param     = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
+Param     = [ "using" ] [ "$" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 ```
 
-A parameter's `Type` may declare a type parameter, `"$" identifier`, which makes the procedure generic (section 7.11); no other type may.
+A parameter's `Type` may declare a type parameter, `"$" identifier`, which makes the procedure generic (section 7.11); no other type may. So does a `$` before a parameter's name, which makes each call give it a type, `$T: Type`, or a constant, `$N: int` (section 7.11).
 
 A procedure is declared at the top level with its name, its signature and its body. The signature lists the parameters in parentheses, each a name and a type, which may be followed by `=` and the parameter's default value, passed by a call that leaves the parameter out (section 7.2), and after `->` the types of its results, separated by commas, with or without parentheses around them: `-> int, int` and `-> (int, int)` are the same. A procedure with no `->` returns nothing. A result that is a procedure type (section 3.15) is written as in any other place: `-> (int) -> int` returns a `(int) -> int`, since parentheses followed by `->` are a procedure type's. Before the body, `#c_call` makes the procedure one that C can call (section 7.6) and `#no_abc` turns off its bounds checks (section 7.7): each at most once (`'#c_call' is written twice`), in either order. One parameter may be written `name: ..T`, which takes the rest of a call's arguments as a view, `[]T`, and the parameters after it, if any, have default values (section 7.2). A parameter written `using e: *Entity` lets the body name the fields of the struct it is, or points at, directly (section 3.21). A foreign procedure's list may instead end with C's bare `..`, after at least one parameter: it takes more arguments, as a C function declared with `...` does (section 7.6). In place of the body, a foreign procedure has `#foreign`, its library and, when the C function's name is not the procedure's own, that name in a string (section 7.6), and a procedure the compiler does itself has `#compiler` and a `;`, which only a module that ships with rig may declare (section 7.9).
 
@@ -3711,7 +3711,8 @@ hello, Ada
 ### 7.11 Generic procedures
 
 ```ebnf
-Type = ... | "$" identifier .   (only in a Param's Type)
+Param = [ "using" ] [ "$" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
+Type  = ... | "$" identifier .   (only in a Param's Type)
 ```
 
 A **generic procedure**, Jai's, is written once and compiled once for each set of types its calls need. A `$` before a name in a parameter's type declares a **type parameter**, a name the type stands for, at its first use: `max :: (a: $T, b: T) -> T` takes two values of any one type `T` and returns one. The `$T` may be anywhere in a parameter's type, at any depth: `items: []$T`, `p: *$T`, `f: ($T) -> T`. Every other use of the name, in the parameters' types, the results' and the body, is the type. Only a procedure declaration's parameter's type may declare one, never its array count (`[N]$T`'s `N`): in any other type, a result's, a field's, a variable's, a cast's, `size_of`'s, a type written where a value goes (section 5.20) or a procedure type outside a parameter, the `$` is `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T`, at it, and a `$` where an expression starts is `expected an expression, found '$'`.
@@ -3719,6 +3720,59 @@ A **generic procedure**, Jai's, is written once and compiled once for each set o
 **Inference.** Each call works out its type parameters from its arguments, after checking them as any call's (section 5.10) and counting them against the parameters, with the same messages (`'max' takes 2 arguments, but 1 was given`). Each type parameter is bound from the arguments whose parameter's type names it, in parameter order, the first typed one fixing it. A name alone, `$T` or `T`, is the argument's type; the rest of a parameter's type is read through, as far as it holds the name: a pointer's target, `*$T` taking `Vec2` from a `*Vec2`; an array's, a view's or a resizable array's elements, `[]$T` taking `int` from a `[3]int`, a `[]int` or a `[..]int`, all of which convert to a `[]int` (sections 3.7, 3.17); a procedure type's parameters and results, `($T) -> T` taking `int` from a `(int) -> int`. A part that can't match is `argument 1 of 'first' has type 'int', which doesn't fit '[]$T'`, at the argument, the parameter's type written as messages write types, its `$` kept and an array's count as the program wrote it. A `..$T` parameter's arguments each give `T`, a spread among them its elements' type (section 7.2), so a spread of anything else is `'..' spreads a 'int' into 'rest', which needs a '[]$T'`, at the `..`; a spread no `..T` parameter takes is refused before inference, as any call's, and gives nothing. An untyped constant (section 3.12) takes the type another argument fixes: `max(1, x)`, with `x` a `u8`, is `max` for `u8`. When every argument at a type parameter's places is an untyped number, the type they meet at, a float if any is one, gives it its default type, `int` or `float32`: `max(1, 2)` is `max` for `int`, `max(1, 2.5)` for `float32`. An argument with no type of its own, `null`, `.{...}`, `.[...]` or `.FREE`, takes the type another fixes (`pick(v, .{1, 2})`), and when none does it's `can't work out 'T' for 'max': argument 1 has no type of its own`, at the first such argument. Once the type parameters are known, the call is checked as a call of that instance (below): each argument converts to its parameter's type as any argument does (section 3.13), so `max(x_s32, y_int)` is `argument 2 of 'max' has type 'int', which can't be converted to 's32'`, while `max(y_int, x_s32)` is `max` for `int`, the `s32` widening.
 
 **Instances.** Each distinct set of types makes one **instance** of the generic procedure: its signature and body with each type parameter bound, checked and compiled on their own, as any procedure is. Every call with that set calls the same instance, wherever it is, in any file, in a `#run` or in another instance's body: the program has one `max` for `int`, and one for `s64`, a different type, while `float` and `float32` are one type, so one instance (section 3.1). An instance's signature is checked where its first call needs it, its body after every other body and top-level `#run`, or where a `#run` reaches it first (section 7.8). A mistake in an instance's signature, a default value that doesn't convert to its `T`, is said once: every call with its types, the first one too, has no type and says nothing more. Its type parameters are in its parameters' scope (section 4.7): a local may not take `T`'s name in the body's block, as it may not a parameter's. An instance is named by its procedure and its bindings, `max(T = int)`, in the debugger (section 10.7) and in a failed `#run`'s frames (section 10.8); its symbol, the name the object file gives it, is that name with its spaces and last `)` left out and every other character that isn't a letter, a digit or `_` made `$`, `max$T$int`, which no name a program writes can be, and, when an earlier instance of the same procedure has that symbol already, `$` and the instance's number among them after it (`f$T$$$$int` for `f(T = *[]int)`, then `f$T$$$$int$2` for `f(T = []*int)`). Messages about a call name the procedure as it's written, `'max'`.
+
+**Types and constants as parameters.** A `$` before a parameter's name bakes the parameter into each instance: each call gives it a type or a constant, known while compiling, and it is no parameter of the instance. A `$T: Type` takes a type, `Type` being the type of types (section 5.20), which only such a parameter and a comparison of types take: `get :: (w: *World, $T: Type) -> *T` is called `get(w, Position)`, its argument a type written where a value goes (section 5.20), and declares `T` as a `$T` in a parameter's type does, so the types after it and the body name it. Any other argument is `argument 2 of 'get' must be a type, for '$T: Type'`, at it. A `$N: int` takes a constant of a number, `bool`, enum or `string` type: its argument converts to that type as any argument does (`300 doesn't fit in 'u8'`, section 3.13), and must be known while compiling (section 5.9), or it's `argument 1 of 'ring' must be known while compiling, for '$N: int'`, at it; a type there is `'int' is a type, not a value`. In the instance, `N` is a constant of that value, as a local constant is (section 4.2): a type after it in the signature and the body may use it where a constant goes, an array's count included, `ring :: ($N: int, $T: Type) -> [N]T`. Each distinct set of types and constants makes one instance, a constant compared by its type and value, a string's by its bytes: `ring(3, int)` called twice is one instance, `ring(N = 3, T = int)`, its symbol `ring$N$3$T$int`. A constant is named as the program would write it: an integer in decimal, `true` or `false`, a float as the shortest decimal that reads back as it (with a `.0` when it would read as an integer), an enum's value as its first member of that value, `flag(M = Mode.B)`, or as a cast where none is, `cast(Mode) 7`, a string in quotes, its quotes, backslashes and control characters escaped, `say(S = "hi")`. A type or a constant has no code, so the call passes only the other arguments, each run once, in order, and the messages about them count the arguments as written. A `$` parameter of any other type is `a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not '[]int'`, at its type: a struct or an array of constant data isn't one, for now. A `$` parameter is never `..`, `a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: ..$T`, at the `..`; it comes before any `..T` parameter, which takes every argument left, `a '$' parameter can't come after a '..' parameter, which takes every argument left`, at the `$`; it has no default value, for now, `a parameter that declares '$N' can't have a default value, for now`, at the `=`; and `using` takes none, a type or a constant having no fields to reach (section 3.21). A constant parameter's name is no type, `'N' is not a type`, and a type parameter's is no value.
+
+```rig
+#import "Basic";
+
+World :: struct { p: Position; }
+
+Position :: struct { x: int; }
+
+get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }
+
+fill :: ($N: int, $T: Type, value: T) -> [N]T {
+    r: [N]T;
+    for * r { it.* = value; }
+    return r;
+}
+
+say :: ($S: string) -> string { return S; }
+
+main :: () {
+    world: World;
+    get(*world, Position).x = 7;
+    print("{}\n", world.p.x);
+    print("{}\n", fill(3, int, 5));
+    print("{}\n", say("hi"));
+}
+```
+
+```text
+7
+[5, 5, 5]
+hi
+```
+
+```rig error
+ring :: ($N: int, $T: Type) -> [N]T { r: [N]T; return r; }
+
+main :: () {
+    n := 3;
+    a := ring(n, int);
+    b := ring(3, 4);
+}
+```
+
+```text
+example.rig:5:15: error: argument 1 of 'ring' must be known while compiling, for '$N: int'
+        a := ring(n, int);
+                  ^
+example.rig:6:18: error: argument 2 of 'ring' must be a type, for '$T: Type'
+        b := ring(3, 4);
+                     ^
+```
 
 **The type parameters in an instance.** In an instance, a type parameter is the type it's bound to wherever a type goes: a variable's, a cast's, a literal's, `size_of(T)` and `type_info(T)` (sections 5.16, 5.19), and as a type where a value goes, so `T == int` is a constant `bool` of that instance (section 5.20), which `#if` decides on: the branch it doesn't take is never checked for that instance, so `#if T == string` may pick code that only a `string` takes. Bound to an enum, its name reaches the members, `T.A`; to a struct, `T.{...}` is a literal of it (section 5.17). It is no value, as no type is (section 5.20): `'T' is a type, not a value`, and no procedure, `'T' isn't a procedure, so it can't be called`.
 
@@ -4027,6 +4081,10 @@ The sections defining each construct give its messages. Some of those met most o
 | `'T' is used before '$T' declares it` | 7.11 |
 | `'grow' is instantiated more than 1000 levels deep, each instance's body making the next` | 7.11, 9.4 |
 | `a parameter that declares '$T' can't have a default value, for now` | 7.11 |
+| `argument 2 of 'get' must be a type, for '$T: Type'` | 7.11 |
+| `argument 1 of 'ring' must be known while compiling, for '$N: int'` | 7.11 |
+| `a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not '[]int'` | 7.11 |
+| `a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: ..$T` | 7.11 |
 | `can't assign to 'a': it's a parameter` | 6.4 |
 | `'f' must return a value on every path, and this one reaches its end` | 6.11 |
 | `'A' is defined in terms of itself` | 4.8 |
@@ -4561,7 +4619,7 @@ ProcDecl      = identifier "::" Signature ( { "#c_call" | "#no_abc" } Block | "#
 Signature     = "(" [ Params ] ")" [ "->" Results ] .
 Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
-Param         = [ "using" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
+Param         = [ "using" ] [ "$" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 
 StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
 FieldDecl     = [ "using" ] identifier ":" Type ";"
@@ -4588,7 +4646,7 @@ ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
-After `::`, a `(` followed by `)`, by `..`, by `using`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). A `"$" identifier` `Type`, a type parameter's declaration, is part of a `Param`'s `Type` only, at any depth in it but an array's count, a `ProcType`'s `ProcParam`s and results inside it included: in any other `Type` it is `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T`, at the `$` (section 7.11). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+After `::`, a `(` followed by `)`, by `..`, by `using`, by `$`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). A `"$" identifier` `Type`, a type parameter's declaration, is part of a `Param`'s `Type` only, at any depth in it but an array's count, a `ProcType`'s `ProcParam`s and results inside it included: in any other `Type` it is `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T`, at the `$` (section 7.11). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 
@@ -4727,4 +4785,4 @@ Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; t
 | `---` | uninitialised variable | 4.3 |
 | `,` | separator; `cast,trunc` | 3.14, 5.10 |
 | `;` | end of a statement or declaration | 6 |
-| `$` | a generic procedure's type parameter, `$T`, declared in a parameter's type | 7.11 |
+| `$` | a generic procedure's type parameter, `$T`, declared in a parameter's type; before a parameter's name, a type or constant parameter, `$T: Type`, `$N: int` | 7.11 |

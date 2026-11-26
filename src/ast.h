@@ -156,6 +156,11 @@ struct Ast_Param : Ast {
                                  // #c_call body outside a push_context can't leave it out (spec 7.6)
     bool is_using;  // using e: *Entity (spec 3.21): the body names e's fields directly; cleared by the
                     // checker when its type is one using doesn't take (check_signature)
+    bool is_baked;  // $T: Type or $N: int (spec 7.11): a type or a constant each call gives, baked into
+                    // the instance, which has no parameter for it (check_generic.cpp's make_instance).
+                    // A $N's Ast.type is its constant's type, the one thing the generic's own check
+                    // writes into it (check_generic_signature), which no instance copies (ast_clone)
+    Position dollar;  // where that '$' is written
 };
 
 struct Ast_Proc;
@@ -243,8 +248,9 @@ struct Ast_Proc : Ast {
                                 // 0 without defaults, when a default is past MAX_DEPTH (said there, so
                                 // a chain is said once per 1000 levels), and for a procedure refused
                                 // defaults ('..T', C's '..', #compiler), whose defaults go unchecked
-    bool is_generic;                  // a parameter declares a type parameter, $T (spec 7.11): set by the
-                                      // parser; cleared on an instance's copy, whose T is bound
+    bool is_generic;                  // a parameter declares a type parameter, $T, or is baked, $T: Type or
+                                      // $N: int (spec 7.11): set by the parser; cleared on an instance's
+                                      // copy, whose T and N are bound
     Array<Ast_Instance *> instances;  // a generic's instances, the program's one cache of them, in the
                                       // order made (check_generic.cpp's find_instance)
     Ast_Instance *instance;           // an instance's record; null for any other procedure
@@ -269,7 +275,9 @@ struct Ast_Alias : Ast {
 struct Ast_Instance {
     Ast_Proc *generic;
     Ast_Proc *proc;            // the copy that is checked and compiled
-    Array<Ast *> bindings;     // an Ast_Alias per type parameter, in the order the generic declares them
+    Array<Ast *> bindings;     // an Ast_Alias per type parameter, an Ast_Const per constant one ($N: int,
+                               // its value folded, a string's its data), in the order the generic
+                               // declares them
     String name;               // max(T = int): its name in the debugger and the interpreter's frames
     String symbol;             // max$T$int: its procedure's symbol, unique in the program
     Position called_at;        // the start of the call that made it

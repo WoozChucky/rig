@@ -96,8 +96,9 @@ struct Checker {
                                  // walk's, which have none (check_generic_names)
 };
 
-// A type parameter of a generic procedure (spec 7.11) while a call of it is
-// matched against its arguments (check_generic.cpp's check_instance).
+// A type or constant parameter of a generic procedure (spec 7.11), $T or
+// $N: int, while a call of it is matched against its arguments
+// (check_generic.cpp's check_instance).
 struct Generic_Binding {
     String name;
     Position declared;  // its '$'
@@ -491,10 +492,17 @@ bool has_failed_run(Ast *e);
 // declares a type parameter, of C's '..', of #foreign, #c_call and
 // #compiler; and the mistakes in the names its parameters declare: a $T
 // twice, a type parameter used before its $T, a name two of them declare,
-// a $T of a built-in type's name. Its type stays null: a generic is no
-// value. Its default values are each instance's, checked with its
-// signature.
+// a $T of a built-in type's name. A baked parameter's own (spec 7.11):
+// $T: Type, or a constant of a number, bool, enum or string type, whose
+// type this keeps on the parameter (Ast_Param.is_baked), never '..', with
+// no default value, before any '..' parameter. Its type stays null: a
+// generic is no value. Its default values are each instance's, checked
+// with its signature.
 void check_generic_signature(Checker *c, Ast_Proc *generic);
+
+// Whether param is a $T: Type (spec 7.11), which takes a type: known by
+// its type's written name, Type, before any type is resolved.
+bool takes_a_type(Ast_Param *param);
 
 // The walk over a generic procedure's body (spec 7.11), which is
 // type-checked only as each instance's: the names it uses that are
@@ -520,7 +528,8 @@ void check_generic_names(Checker *c, Ast_Proc *generic);
 String instance_context(Checker *c, Ast_Instance *inst);
 
 // The instance of generic a call with arguments `args`, checked already,
-// makes (spec 7.11): its type parameters inferred from the arguments (their
+// makes (spec 7.11): its baked parameters' types and constants taken from
+// their arguments, its type parameters inferred from the others (their
 // messages at an argument, or at `callee` when no argument names one), then
 // the program's one instance for those bindings, found in generic's cache
 // or made (ast_clone) where the call starting at `called_at` needs it, its
@@ -531,11 +540,16 @@ String instance_context(Checker *c, Ast_Instance *inst);
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at);
 
 // The binding of instance inst called `name`, an Ast_Alias for a type
-// parameter; null when it has none.
+// parameter, an Ast_Const for a constant one; null when it has none.
 Ast *instance_binding(Ast_Instance *inst, String name);
 
+// The name binding b of an instance binds, T or N: its Ast_Alias's or its
+// Ast_Const's.
+String binding_name(Ast *b);
+
 // How messages and names write an instance's bindings: "T = int", ", "
-// between several, in the order the generic declares them.
+// between several, in the order the generic declares them; a constant's
+// value as the program would write it, "N = 3", "M = Mode.B", "S = \"hi\"".
 String bindings_text(Arena *a, Array<Ast *> bindings);
 
 // Makes inst the instance being checked (Checker.instance), and its chain

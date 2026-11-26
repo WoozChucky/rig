@@ -2887,7 +2887,7 @@ static void check_body(Checker *c, Ast_Proc *proc) {
     for (s64 i = 0; i < proc->params.count; i++) declare(c, proc->params[i]->name, proc->params[i]);
     if (proc->instance) {
         Array<Ast *> &bindings = proc->instance->bindings;
-        for (s64 i = 0; i < bindings.count; i++) declare(c, ((Ast_Alias *)bindings[i])->name, bindings[i]);
+        for (s64 i = 0; i < bindings.count; i++) declare(c, binding_name(bindings[i]), bindings[i]);
     }
     add_using_params(c, proc);
     check_block(c, proc->body);
@@ -3904,13 +3904,15 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     }
     array_free(&declarations);
     // And so are the instances of generic procedures made so far (spec
-    // 7.11), their bindings with their signatures: a global's value or a
-    // type's count may have called one. A binding that has no type now
+    // 7.11), their type bindings with their signatures: a global's value or
+    // a type's count may have called one. A binding that has no type now
     // (null) leaves every use of T in its body silent, as a parameter's
-    // does.
+    // does. A constant binding's type, a number's, a bool's, an enum's or
+    // string, is never made again.
     for (s64 i = 0; i < file->instances.count; i++) {
         Ast_Instance *inst = file->instances[i];
         for (s64 k = 0; k < inst->bindings.count; k++) {
+            if (inst->bindings[k]->kind != AST_ALIAS) continue;
             Ast_Alias *binding = (Ast_Alias *)inst->bindings[k];
             binding->aliased = made_again(binding->aliased);
         }

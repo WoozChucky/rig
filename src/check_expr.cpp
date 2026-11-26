@@ -1210,6 +1210,23 @@ static void refuse_spread(Checker *c, Ast *spread) {
     spread->type = nullptr;
 }
 
+// The index, from 0, argument i of a call of proc had as the program wrote
+// it, for a message: an instance's call lost the arguments of its
+// generic's baked parameters (spec 7.11, check_generic_call), so its i-th
+// comes after those of them before it. Every baked parameter is before any
+// '..' one, so a '..' argument past the parameters comes after them all.
+static s64 written_index(Ast_Proc *proc, s64 i) {
+    if (!proc || !proc->instance) return i;
+    Array<Ast_Param *> &params = proc->instance->generic->params;
+    s64 kept = 0;
+    for (s64 k = 0; k < params.count; k++) {
+        if (params[k]->is_baked) continue;
+        if (kept == i) return k;
+        kept++;
+    }
+    return i + (params.count - kept);
+}
+
 // Argument `index` (from 0) of a call of `name`, checked already
 // (check_value), converted to `to`, its parameter's type: "argument 2 of
 // 'f' has type 'string', which can't be converted to 'int'", at it, with a
@@ -1259,7 +1276,7 @@ static void check_variadic_arguments(Checker *c, Ast_Call *call, s64 fixed, s64 
     }
     if (!view) return;
     Type *t = view->element;
-    for (s64 i = fixed; i < given; i++) check_argument(c, call->args[i], t, i, name);
+    for (s64 i = fixed; i < given; i++) check_argument(c, call->args[i], t, written_index(call->proc, i), name);
     Position at = fixed < given ? call->args[fixed]->start : call->pos;
     call->gathered = check_array_type(c, t, (u64)(given - fixed), at);
 }
@@ -1529,18 +1546,29 @@ static void report_argument_count(Checker *c, Ast_Call *call, String name, s64 r
 // inference that fails (said), or when the generic's signature isn't known
 // (a circle, said) or had errors, said already: it makes no instance; and
 // when the instance's own signature had errors (check_instance), said once.
+//
+// A $T: Type parameter's argument (spec 7.11) is checked as a type value
+// (check_type_value) when it names a type, and as a value otherwise, which
+// check_instance refuses. Once the instance is known, the arguments of the
+// baked parameters, $T: Type and $N: int, are dropped from the call: the
+// instance has no parameter for them, and a type or a constant has no code.
+// Each such parameter is before any '..' one (check_generic_signature), so
+// argument i is parameter i's. The messages about the arguments left count
+// them as written (written_index).
 static bool check_generic_call(Checker *c, Ast_Call *call) {
     Ast_Proc *generic = call->proc;
-    for (s64 i = 0; i < call->args.count; i++) {
+    s64 n = generic->params.count, given = call->args.count;
+    for (s64 i = 0; i < given; i++) {
         Ast *arg = call->args[i];
         if (arg->kind == AST_SPREAD) {
             check_spread_argument(c, (Ast_Spread *)arg);
+        } else if (i < n && takes_a_type(generic->params[i]) && expr_names_type(c, arg)) {
+            check_type_value(c, arg);
         } else {
             check_value(c, arg);
         }
     }
     if (!check_proc_signature(c, generic) || generic->had_errors) return false;
-    s64 n = generic->params.count, given = call->args.count;
     s64 dots = variadic_index(generic);
     // A spread is kept as the last argument, or among the '..' arguments of
     // a generic with parameters after its '..T' one, which check_call says
@@ -1561,6 +1589,12 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
     Ast_Proc *instance = check_instance(c, generic, call->args, call->callee, call->start);
     if (!instance) return false;
     call->proc = instance;
+    s64 kept = 0;
+    for (s64 i = 0; i < given; i++) {
+        bool baked = i < n && (dots < 0 || i < dots) && generic->params[i]->is_baked;
+        if (!baked) call->args[kept++] = call->args[i];
+    }
+    call->args.count = kept;
     return true;
 }
 
@@ -1682,7 +1716,8 @@ static Type *check_call(Checker *c, Ast_Call *call) {
         // converted with the signature.
         s64 converted = more ? fixed : given;
         for (s64 i = 0; i < converted; i++) {
-            check_argument(c, call->args[i], proc ? proc->params[i]->type : callee->params[i], i, name);
+            check_argument(c, call->args[i], proc ? proc->params[i]->type : callee->params[i],
+                           written_index(proc, i), name);
         }
         // The parameters left out: those after the arguments given, or after
         // the '..T' one, whose arguments are all the others. Lowering puts

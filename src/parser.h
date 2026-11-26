@@ -28,9 +28,11 @@
 //                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 //                                                                  (the STRING: the C function's name)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
-//   param       = ['using'] IDENT ':' ['..'] type ['=' expression]
+//   param       = ['using'] ['$'] IDENT ':' ['..'] type ['=' expression]
 //                                                                  'using': its struct's fields named
 //                                                                  directly in the body (spec 3.21);
+//                                                                  '$': a type or a constant each call
+//                                                                  gives, $T: Type, $N: int (spec 7.11);
 //                                                                  '..': a '..T' parameter, one at most;
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
@@ -262,7 +264,11 @@
 // "'$' declares a type parameter only in a procedure's parameter, as in max
 // :: (a: $T, b: T) -> T", at the '$', and the declaration is given up. A
 // '$' where an expression starts is no expression: "expected an expression,
-// found '$'".
+// found '$'". A '$' before a parameter's name bakes the parameter into each
+// instance (Ast_Param.is_baked, at its '$'): `get :: (w: *World, $T:
+// Type)` takes a type, `fill :: ($N: int, items: *[N]$T)` a constant, and
+// makes the procedure generic too. Which types such a parameter may have is
+// the checker's to say.
 //
 // A spread, ..e (spec 5.10), passes a view's or an array's elements as a
 // call's '..' arguments: `sum(0, ..values)`. It's a prefix operator, as -
@@ -272,7 +278,8 @@
 // is no operator: a range's '..' ends the expression before it.
 //
 // At the top level, after '::', a procedure's parameter list starts with
-// '(' ')', '(' IDENT ':', '(' IDENT ':=' or '(' '..'; any other '(' begins
+// '(' ')', '(' IDENT ':', '(' IDENT ':=', '(' '..' or '(' '$' (a baked
+// parameter, spec 7.11); any other '(' begins
 // a constant's value, so `N :: (1 + 2);` is a constant. A name followed by
 // ':' or ':=' and then a signature with a body or a directive other than
 // #load, #run and #if after it (`greet : () {`) is a procedure with its

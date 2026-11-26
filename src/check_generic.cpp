@@ -1,28 +1,41 @@
 // check_generic.cpp: generic procedures (spec 7.11; checker.h's "Generic
 // procedures"). A generic's own signature, checked without its type
 // parameters being any type; the inference of those from a call's
-// arguments; and the instances, one per set of bindings, program-wide:
-// found again, or made, named and their signatures checked, at most
-// MAX_DEPTH deep. The names a generic's parameters declare; the walk over
-// its body for names declared nowhere; and the chain of instances an error
-// inside one is followed by.
+// arguments, and the types and constants its baked parameters ($T: Type,
+// $N: int) take from them; and the instances, one per set of bindings,
+// program-wide: found again, or made, named and their signatures checked,
+// at most MAX_DEPTH deep. The names a generic's parameters declare; the
+// walk over its body for names declared nowhere; and the chain of
+// instances an error inside one is followed by.
 
 #include "check.h"
 
+// Adds the parameter `name`, declared at `at`, a type one or a constant
+// one, to *declared, unless one of its name is there already: a second of
+// a name declares nothing more (its mistake is said at the generic,
+// check_generic_signature).
+static void add_generic_parameter(Array<Generic_Binding> *declared, String name, Position at, bool is_type,
+                                  Type *type) {
+    for (s64 i = 0; i < declared->count; i++) {
+        if (string_eq((*declared)[i].name, name)) return;
+    }
+    Generic_Binding b = {};
+    b.name = name;
+    b.declared = at;
+    b.is_type = is_type;
+    b.type = type;
+    b.from = -1;
+    array_add(declared, b);
+}
+
 // The type parameters written type `written` declares, $T, added to
-// *declared in the order they're written (depth first, left to right), each
-// name once: a second $T of a name declares nothing more.
-static void collect_type_parameters(Ast_Type *written, Array<Ast_Type *> *declared) {
+// *declared in the order they're written (depth first, left to right).
+static void collect_type_parameters(Ast_Type *written, Array<Generic_Binding> *declared) {
     if (!written) return;
     switch (written->kind) {
-    case AST_TYPE_NAME: {
-        if (!written->declares) return;
-        for (s64 i = 0; i < declared->count; i++) {
-            if (string_eq((*declared)[i]->name, written->name)) return;
-        }
-        array_add(declared, written);
+    case AST_TYPE_NAME:
+        if (written->declares) add_generic_parameter(declared, written->name, written->pos, true, nullptr);
         return;
-    }
     case AST_TYPE_POINTER: collect_type_parameters(written->pointee, declared); return;
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
@@ -35,18 +48,40 @@ static void collect_type_parameters(Ast_Type *written, Array<Ast_Type *> *declar
     }
 }
 
-// The type parameters generic declares, in the order its parameters'
-// types declare them. The caller frees the Array.
-static Array<Ast_Type *> type_parameters(Ast_Proc *generic) {
-    Array<Ast_Type *> declared = {};
-    for (s64 i = 0; i < generic->params.count; i++) collect_type_parameters(generic->params[i]->type_expr, &declared);
+bool takes_a_type(Ast_Param *param) {
+    return param->is_baked && param->type_expr->kind == AST_TYPE_NAME && string_eq(param->type_expr->name, str("Type"));
+}
+
+// The type and constant parameters generic declares, in the order it
+// declares them: each parameter's own, when it's baked ($T: Type, a type
+// one; $N: int, a constant one of the type its signature's check gave it,
+// null before), then those its type declares ($T). Each name once. The
+// caller frees the Array.
+static Array<Generic_Binding> generic_parameters(Ast_Proc *generic) {
+    Array<Generic_Binding> declared = {};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        Ast_Param *param = generic->params[i];
+        if (param->is_baked) {
+            bool is_type = takes_a_type(param);
+            add_generic_parameter(&declared, param->name, param->dollar, is_type, is_type ? nullptr : param->type);
+        }
+        collect_type_parameters(param->type_expr, &declared);
+    }
     return declared;
 }
 
-// Whether `name` is one of the type parameters `declared`.
-static bool is_type_parameter(Array<Ast_Type *> declared, String name) {
+// Whether `name` is one of the type parameters among `declared`.
+static bool is_type_parameter(Array<Generic_Binding> declared, String name) {
     for (s64 i = 0; i < declared.count; i++) {
-        if (string_eq(declared[i]->name, name)) return true;
+        if (declared[i].is_type && string_eq(declared[i].name, name)) return true;
+    }
+    return false;
+}
+
+// Whether `name` is one of the constant parameters among `declared`.
+static bool is_constant_parameter(Array<Generic_Binding> declared, String name) {
+    for (s64 i = 0; i < declared.count; i++) {
+        if (!declared[i].is_type && string_eq(declared[i].name, name)) return true;
     }
     return false;
 }
@@ -60,11 +95,17 @@ static bool is_type_parameter(Array<Ast_Type *> declared, String name) {
 // are said once, here, not once per instance. Nothing is written into the
 // generic's nodes, which every instance copies unchecked: an array's count
 // is an expression, checked by writing its types into it, so it's each
-// instance's to check, its mistakes said once per instance.
-static void check_generic_type(Checker *c, Ast_Type *written, Array<Ast_Type *> declared, bool pointee) {
+// instance's to check, its mistakes said once per instance. A constant
+// parameter's name is no type: "'N' is not a type", as resolve_written says
+// of a constant's.
+static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared, bool pointee) {
     switch (written->kind) {
     case AST_TYPE_NAME:
         if (is_type_parameter(declared, written->name)) return;
+        if (is_constant_parameter(declared, written->name)) {
+            diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+            return;
+        }
         if (resolve_written(c, written, true) == &type_void && !pointee) {
             diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
         }
@@ -81,11 +122,12 @@ static void check_generic_type(Checker *c, Ast_Type *written, Array<Ast_Type *> 
     }
 }
 
-// The first type parameter written type `written` declares, or null.
-static Ast_Type *first_declared(Ast_Type *written) {
-    Array<Ast_Type *> declared = {};
+// The name of the first type parameter written type `written` declares, or
+// an empty one.
+static String first_declared(Ast_Type *written) {
+    Array<Generic_Binding> declared = {};
     collect_type_parameters(written, &declared);
-    Ast_Type *first = declared.count ? declared[0] : nullptr;
+    String first = declared.count ? declared[0].name : String{};
     array_free(&declared);
     return first;
 }
@@ -96,7 +138,7 @@ static Ast_Type *first_declared(Ast_Type *written) {
 struct Signature_Name {
     String name;
     Position pos;
-    bool dollar;  // a type parameter's: its $
+    bool dollar;  // a type parameter's, or a baked parameter's ($N: int): a $ declared it
 };
 
 // Says "'T' is already declared at PATH:L:C", at pos, of a name declared
@@ -141,7 +183,7 @@ static bool dollar_declared(Array<Signature_Name> *names, String name) {
 //   type's name, which always means the built-in type (spec 3.1).
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
-static void check_signature_names(Checker *c, Ast_Type *written, Array<Ast_Type *> declared,
+static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
                                   Array<Signature_Name> *names) {
     switch (written->kind) {
     case AST_TYPE_NAME: {
@@ -179,12 +221,86 @@ static void check_signature_names(Checker *c, Ast_Type *written, Array<Ast_Type 
     }
 }
 
+static String written_type_text(Checker *c, Ast_Type *written);
+
+// Whether a constant parameter, $N: X, may have type t (spec 7.11): a
+// number, a bool, an enum or a string, whose values the instance's name
+// writes and its cache compares, byte by byte for a string. A struct or an
+// array of constant data isn't one, for now.
+static bool constant_parameter_type(Type *t) {
+    return t->kind == TYPE_INTEGER || t->kind == TYPE_FLOAT || t->kind == TYPE_BOOL || t->kind == TYPE_ENUM ||
+           t->kind == TYPE_STRING;
+}
+
+// A baked parameter of a generic (spec 7.11), $T: Type or $N: X, which each
+// call gives a type or a constant its instance is made for, and which is no
+// parameter of that instance:
+// - a '..' one would take every argument left, each its own type or
+//   constant: "a '$' parameter can't be '..': a generic procedure's '..'
+//   parameter has one type, as in values: ..$T", at the '..';
+// - after a '..T' parameter no argument is left for it, nor can a default
+//   value fill it: "a '$' parameter can't come after a '..' parameter,
+//   which takes every argument left", at its '$';
+// - a default value would need a call to work out its instance, so it has
+//   none, for now: "a parameter that declares '$N' can't have a default
+//   value, for now", at its '=';
+// - a constant one's type is a number's, a bool's, an enum's or string:
+//   anything else, a type parameter or a constant one too, is "a '$'
+//   parameter is a type, '$T: Type', or a constant of a number, bool, enum
+//   or string type, not '[]int'", at its type, as written. It's resolved as
+//   any written type, its mistakes said, and kept on the parameter (Ast.type)
+//   for each call to convert its argument to;
+// - using is refused, as for any parameter of a type it can't reach into
+//   (checker.cpp's using_takes): "'using' needs a struct or a pointer to one,
+//   not 'int'" ('Type' for a $T: Type).
+// Once one is refused, nothing more is said of it.
+static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Array<Generic_Binding> declared) {
+    Ast_Param *param = generic->params[index];
+    if (param->is_variadic) {
+        diag_error(c->diag, param->dots,
+                   "a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: "
+                   "..$T");
+        return;
+    }
+    s64 dots = variadic_index(generic);
+    if (dots >= 0 && index > dots) {
+        diag_error(c->diag, param->dollar,
+                   "a '$' parameter can't come after a '..' parameter, which takes every argument left");
+        return;
+    }
+    if (param->default_value) {
+        diag_error(c->diag, param->equals,
+                   "a parameter that declares '$" STR_FMT "' can't have a default value, for now",
+                   STR_ARG(param->name));
+        return;
+    }
+    Ast_Type *written = param->type_expr;
+    Type *t = &type_type;
+    if (!takes_a_type(param)) {
+        bool named = written->kind == AST_TYPE_NAME && !is_type_parameter(declared, written->name) &&
+                     !is_constant_parameter(declared, written->name);
+        t = named ? resolve_written(c, written, true) : nullptr;
+        if (named && !t) return;  // its own mistake, said
+        if (!t || !constant_parameter_type(t)) {
+            diag_error(c->diag, written->pos,
+                       "a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, "
+                       "not '" STR_FMT "'",
+                       STR_ARG(t ? type_name(c->arena, t) : written_type_text(c, written)));
+            return;
+        }
+        param->type = t;
+    }
+    if (param->is_using) using_takes(c, written->pos, t);
+}
+
 void check_generic_signature(Checker *c, Ast_Proc *generic) {
-    Array<Ast_Type *> declared = type_parameters(generic);
+    Array<Generic_Binding> declared = generic_parameters(generic);
     // The names the parameters declare, in the order they're written: each
     // parameter's, then its type's. A parameter's name another has is
     // "'a' is already declared at PATH:L:C", at the later one, as its body
-    // would say it of each instance, once here instead.
+    // would say it of each instance, once here instead. A baked parameter's
+    // name is a $'s, so a use of it before is said as a $T's would be, and
+    // a $T: Type's is said if it's a built-in type's, as a $T's is.
     Array<Signature_Name> names = {};
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
@@ -192,22 +308,29 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
         if (earlier) {
             report_declared_again(c, param->name, param->pos, earlier->pos);
         } else {
-            array_add(&names, {param->name, param->pos, false});
+            if (takes_a_type(param) && type_from_name(param->name)) {
+                diag_error(c->diag, param->pos, "'" STR_FMT "' is a built-in type", STR_ARG(param->name));
+            }
+            array_add(&names, {param->name, param->pos, param->is_baked});
         }
         check_signature_names(c, param->type_expr, declared, &names);
     }
     array_free(&names);
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
+        if (param->is_baked) {
+            check_baked_parameter(c, generic, i, declared);
+            continue;
+        }
         check_generic_type(c, param->type_expr, declared, false);
         // A default value that would fix T has no call to give it a type
         // yet, so a parameter whose type declares one takes none, for now
         // (spec 7.11).
-        Ast_Type *declares = first_declared(param->type_expr);
-        if (param->default_value && declares) {
+        String declares = first_declared(param->type_expr);
+        if (param->default_value && declares.count) {
             diag_error(c->diag, param->equals,
                        "a parameter that declares '$" STR_FMT "' can't have a default value, for now",
-                       STR_ARG(declares->name));
+                       STR_ARG(declares));
         }
     }
     for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared, false);
@@ -387,11 +510,13 @@ static bool has_type_of_its_own(Type *t) {
 }
 
 // The pattern argument i of a call of generic meets: its parameter's type
-// as written, a '..T' parameter's T for each of its arguments.
+// as written, a '..T' parameter's T for each of its arguments. None for a
+// baked parameter's (bake_argument's), whose type binds nothing.
 static Ast_Type *pattern_of_argument(Ast_Proc *generic, s64 i) {
     s64 dots = variadic_index(generic);
     if (dots >= 0 && i >= dots) return generic->params[dots]->type_expr;
-    return i < generic->params.count ? generic->params[i]->type_expr : nullptr;
+    if (i >= generic->params.count || generic->params[i]->is_baked) return nullptr;
+    return generic->params[i]->type_expr;
 }
 
 // Whether argument i of a call of generic is a spread among its '..T'
@@ -416,8 +541,58 @@ static Type *argument_type(Ast_Proc *generic, Array<Ast *> args, s64 i) {
     return spreads_no_sequence(generic, args, i) ? nullptr : t->element;
 }
 
+// The text of baked parameter `param` as written, for a message: "$N:
+// int", "$T: Type".
+static String baked_text(Checker *c, Ast_Param *param) {
+    return string_printf(c->arena, "$" STR_FMT ": " STR_FMT, STR_ARG(param->name),
+                         STR_ARG(written_type_text(c, param->type_expr)));
+}
+
+// Binds baked parameter `param` of generic (spec 7.11), its binding b, to
+// argument `arg`, the call's index-th, checked already; false after saying
+// why it can't be, or when the argument's own check failed (said):
+// - a $T: Type takes a type, checked as a type value (check_expr.cpp's
+//   check_generic_call): anything else is "argument 2 of 'get' must be a
+//   type, for '$T: Type'", at it;
+// - a $N: int takes a constant: the argument converts to N's type as any
+//   argument does (check_argument, its messages: "300 doesn't fit in
+//   'u8'"), and must then be known while compiling, a number's, a bool's
+//   or an enum's value folded (Ast.is_constant), a string's its constant
+//   data (constant_data), or it's "argument 1 of 'fill' must be known while
+//   compiling, for '$N: int'", at it.
+static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *arg, s64 index, Generic_Binding *b) {
+    if (!arg->type) return false;
+    if (b->is_type) {
+        if (arg->type != &type_type) {
+            diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must be a type, for '" STR_FMT "'",
+                       (long long)(index + 1), STR_ARG(generic->name), STR_ARG(baked_text(c, param)));
+            return false;
+        }
+        b->type = type_value(arg);
+        b->from = (s32)index;
+        return true;
+    }
+    s64 errors = c->diag->error_count;
+    check_argument(c, arg, b->type, index, generic->name);
+    if (c->diag->error_count != errors || !arg->type) return false;
+    Ast *data;
+    bool known = b->type->kind == TYPE_STRING ? constant_data(arg, &data) : arg->is_constant;
+    if (!known) {
+        diag_error(c->diag, arg->start,
+                   "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
+                   (long long)(index + 1), STR_ARG(generic->name), STR_ARG(baked_text(c, param)));
+        return false;
+    }
+    b->value = arg;
+    b->from = (s32)index;
+    return true;
+}
+
 // Binds generic's type parameters (in `bindings`) from args, checked
 // already, as spec 7.11 says, saying why when one can't be: false then.
+// - Each baked parameter's argument, first, gives its type or constant
+//   (bake_argument). They're all before any '..' parameter, so argument i
+//   is parameter i's.
 // - Each argument, in order, typed and of a type of its own, is matched
 //   against its pattern (match_type): one that can't match is "argument 1
 //   of 'first' has type 'int', which doesn't fit '[]$T'", at it. An untyped
@@ -439,6 +614,12 @@ static Type *argument_type(Ast_Proc *generic, Array<Ast *> args, s64 i) {
 // its places says nothing more; so does a refused spread.
 static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee,
                            Array<Generic_Binding> *bindings) {
+    for (s64 i = 0; i < generic->params.count && i < args.count; i++) {
+        Ast_Param *param = generic->params[i];
+        if (param->is_baked && !bake_argument(c, generic, param, args[i], i, binding_named(bindings, param->name))) {
+            return false;
+        }
+    }
     for (s64 i = 0; i < args.count; i++) {
         Ast_Type *pattern = pattern_of_argument(generic, i);
         Type *t = argument_type(generic, args, i);
@@ -509,24 +690,86 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
 
 // Instances.
 
+String binding_name(Ast *b) {
+    if (b->kind == AST_ALIAS) return ((Ast_Alias *)b)->name;
+    RIG_ASSERT(b->kind == AST_CONST);
+    return ((Ast_Const *)b)->name;
+}
+
 Ast *instance_binding(Ast_Instance *inst, String name) {
     for (s64 i = 0; i < inst->bindings.count; i++) {
-        Ast *b = inst->bindings[i];
-        RIG_ASSERT(b->kind == AST_ALIAS);
-        if (string_eq(((Ast_Alias *)b)->name, name)) return b;
+        if (string_eq(binding_name(inst->bindings[i]), name)) return inst->bindings[i];
     }
     return nullptr;
+}
+
+// The bytes of a string constant's value, `value` being constant data
+// (constant_data): its literal's, through a constant, a field or a cast;
+// none when it's a field a literal leaves out, the empty string.
+static String constant_string(Ast *value) {
+    Ast_String *literal = literal_address(value);
+    return literal ? literal->value : String{};
+}
+
+// Float `value` of type t as its shortest decimal that reads back as it, in
+// t's precision (a float32's 0.1 is 0.1, not 0.100000001), with a ".0" when
+// it would read as an integer, as Basic's print writes one.
+static String float_text(Arena *a, f64 value, Type *t) {
+    char text[64];
+    for (int digits = 1; digits <= 17; digits++) {
+        snprintf(text, sizeof text, "%.*g", digits, value);
+        f64 back = strtod(text, nullptr);
+        if (t->size == 4 ? (f32)back == (f32)value : back == value) break;
+    }
+    bool integral = true;
+    for (const char *p = text; *p; p++) integral &= (*p >= '0' && *p <= '9') || *p == '-';
+    return string_printf(a, "%s%s", text, integral ? ".0" : "");
+}
+
+// Constant binding `constant`'s value as the program would write it, for an
+// instance's name (spec 7.11): an integer in decimal, by its type's sign; a
+// bool true or false; a float the shortest that reads back (float_text); an
+// enum's value its first member of it, Mode.B, or else a cast, cast(Mode) 7
+// (an enum_flags' set of several members, say); a string in quotes, its
+// bytes escaped as a message shows a C name (checker.cpp's shown_c_name).
+static String constant_text(Arena *a, Ast_Const *constant) {
+    Type *t = constant->type;
+    u64 bits = constant->constant;
+    switch (t->kind) {
+    case TYPE_BOOL: return str(bits ? "true" : "false");
+    case TYPE_INTEGER:
+        if (t->is_signed) return string_printf(a, "%lld", (long long)bits);
+        return string_printf(a, "%llu", (unsigned long long)bits);
+    case TYPE_FLOAT: return float_text(a, f64_from_bits(bits), t);
+    case TYPE_ENUM: {
+        Ast_Enum *e = t->enum_decl;
+        for (s64 i = 0; i < e->members.count; i++) {
+            Ast_Const *member = e->members[i];
+            if (member->is_constant && member->constant == bits) {
+                return string_printf(a, STR_FMT "." STR_FMT, STR_ARG(type_name(a, t)), STR_ARG(member->name));
+            }
+        }
+        if (t->is_signed) return string_printf(a, "cast(" STR_FMT ") %lld", STR_ARG(type_name(a, t)), (long long)bits);
+        return string_printf(a, "cast(" STR_FMT ") %llu", STR_ARG(type_name(a, t)), (unsigned long long)bits);
+    }
+    case TYPE_STRING:
+        return string_printf(a, "\"" STR_FMT "\"", STR_ARG(shown_c_name(a, constant_string(constant->value))));
+    default: RIG_ASSERT(!"not a constant parameter's type"); return {};
+    }
 }
 
 String bindings_text(Arena *a, Array<Ast *> bindings) {
     Array<u8> text = {};
     for (s64 i = 0; i < bindings.count; i++) {
-        Ast_Alias *alias = (Ast_Alias *)bindings[i];
-        RIG_ASSERT(alias->kind == AST_ALIAS);
+        Ast *b = bindings[i];
         if (i > 0) add_generic_text(&text, str(", "));
-        add_generic_text(&text, alias->name);
+        add_generic_text(&text, binding_name(b));
         add_generic_text(&text, str(" = "));
-        add_generic_text(&text, type_name(a, alias->aliased));
+        if (b->kind == AST_ALIAS) {
+            add_generic_text(&text, type_name(a, ((Ast_Alias *)b)->aliased));
+        } else {
+            add_generic_text(&text, constant_text(a, (Ast_Const *)b));
+        }
     }
     String result = string_copy(a, {text.data, text.count});
     array_free(&text);
@@ -577,19 +820,50 @@ void enter_instance(Checker *c, Ast_Instance *inst) {
     c->diag->context = inst ? inst->context : String{};
 }
 
+// Whether instance binding `made` binds what `b` would: the same type, or
+// the same constant, of one type and one value (its bits, as Ast.constant
+// keeps them; a string's bytes).
+static bool same_binding(Ast *made, Generic_Binding *b) {
+    if (b->is_type) return ((Ast_Alias *)made)->aliased == b->type;
+    Ast_Const *constant = (Ast_Const *)made;
+    if (constant->type != b->type) return false;
+    if (b->type->kind == TYPE_STRING) return string_eq(constant_string(constant->value), constant_string(b->value));
+    return constant->constant == b->value->constant;
+}
+
 // The instance of generic whose bindings are `bindings`, made already, or
 // null: its cache (Ast_Proc.instances), compared binding by binding, a type
-// by its Type * (every type exists once).
+// by its Type * (every type exists once), a constant by its type and value
+// (same_binding).
 static Ast_Instance *find_instance(Ast_Proc *generic, Array<Generic_Binding> bindings) {
     for (s64 i = 0; i < generic->instances.count; i++) {
         Ast_Instance *inst = generic->instances[i];
         bool same = true;
-        for (s64 k = 0; k < bindings.count && same; k++) {
-            same = ((Ast_Alias *)inst->bindings[k])->aliased == bindings[k].type;
-        }
+        for (s64 k = 0; k < bindings.count && same; k++) same = same_binding(inst->bindings[k], &bindings[k]);
         if (same) return inst;
     }
     return nullptr;
+}
+
+// The binding a constant parameter's argument, b->value, makes in an
+// instance (spec 7.11): an Ast_Const at its '$', worked out already, as a
+// local constant of its value would be (checker.cpp's check_const_value):
+// a number's, a bool's or an enum's folded (is_constant), a string's its
+// data (is_data), which lowering reads where the body uses it.
+static Ast_Const *constant_binding(Checker *c, Generic_Binding *b) {
+    Ast_Const *constant = ast_new<Ast_Const>(c->arena, AST_CONST, b->declared);
+    constant->name = b->name;
+    constant->value = b->value;
+    constant->type = b->type;
+    constant->resolve = RESOLVE_DONE;
+    if (b->type->kind == TYPE_STRING) {
+        constant->is_data = true;
+        constant_data(b->value, &constant->data);
+    } else {
+        constant->is_constant = true;
+        constant->constant = b->value->constant;
+    }
+    return constant;
 }
 
 // An instance's symbol (spec 10.7): its name without its spaces and its
@@ -623,11 +897,13 @@ static String instance_symbol(Arena *a, Ast_Proc *generic, String name) {
 
 // A new instance of generic for `bindings`, made where the call at
 // `called_at` needs it: the generic's tree copied (ast_clone), no longer
-// generic, its bindings an Ast_Alias each at the $T it binds, named
-// max(T = int) and given its symbol, added to the generic's cache and the
-// program's list, and its signature checked now, its bindings in sight
-// (checker.cpp's resolve_signature). Its body waits for check()'s last
-// pass, or a #run that reaches it first.
+// generic, without its baked parameters, whose arguments each call drops
+// (check_expr.cpp's check_generic_call), its bindings an Ast_Alias each at
+// the $T it binds, an Ast_Const each at the $N (constant_binding), named
+// max(T = int) or ring(N = 3, T = int) and given its symbol, added to the
+// generic's cache and the program's list, and its signature checked now,
+// its bindings in sight (checker.cpp's resolve_signature). Its body waits
+// for check()'s last pass, or a #run that reaches it first.
 //
 // Instances nest at most MAX_DEPTH deep (spec 9.4): a generic whose
 // instances' bodies each call it with a new type, *T say, would make them
@@ -648,10 +924,22 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
     inst->proc = (Ast_Proc *)ast_clone(c->arena, generic);
     inst->proc->is_generic = false;
     inst->proc->instance = inst;
+    Array<Ast_Param *> &params = inst->proc->params;
+    s64 kept = 0;
+    for (s64 i = 0; i < params.count; i++) {
+        if (!params[i]->is_baked) params[kept++] = params[i];
+    }
+    params.count = kept;
     for (s64 i = 0; i < bindings.count; i++) {
-        Ast_Alias *alias = ast_new<Ast_Alias>(c->arena, AST_ALIAS, bindings[i].declared);
-        alias->name = bindings[i].name;
-        alias->aliased = bindings[i].type;
+        Generic_Binding *b = &bindings[i];
+        if (!b->is_type) {
+            if (b->type->kind == TYPE_ENUM) check_enum_values(c, b->type);  // its members, to name it by
+            array_add(&inst->bindings, (Ast *)constant_binding(c, b));
+            continue;
+        }
+        Ast_Alias *alias = ast_new<Ast_Alias>(c->arena, AST_ALIAS, b->declared);
+        alias->name = b->name;
+        alias->aliased = b->type;
         array_add(&inst->bindings, (Ast *)alias);
     }
     inst->name = string_printf(c->arena, STR_FMT "(" STR_FMT ")", STR_ARG(generic->name),
@@ -667,17 +955,7 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
 }
 
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at) {
-    Array<Ast_Type *> declared = type_parameters(generic);
-    Array<Generic_Binding> bindings = {};
-    for (s64 i = 0; i < declared.count; i++) {
-        Generic_Binding b = {};
-        b.name = declared[i]->name;
-        b.declared = declared[i]->pos;
-        b.is_type = true;
-        b.from = -1;
-        array_add(&bindings, b);
-    }
-    array_free(&declared);
+    Array<Generic_Binding> bindings = generic_parameters(generic);
     Ast_Proc *proc = nullptr;
     if (infer_bindings(c, generic, args, callee, &bindings)) {
         Ast_Instance *inst = find_instance(generic, bindings);
@@ -948,10 +1226,10 @@ void check_generic_names(Checker *c, Ast_Proc *generic) {
     Name_Walk w = {c, {}, false};
     for (s64 i = 0; i < generic->params.count; i++) {
         array_add(&w.names, generic->params[i]->name);
-        w.any_field |= generic->params[i]->is_using;
+        w.any_field |= generic->params[i]->is_using && !generic->params[i]->is_baked;
     }
-    Array<Ast_Type *> declared = type_parameters(generic);
-    for (s64 i = 0; i < declared.count; i++) array_add(&w.names, declared[i]->name);
+    Array<Generic_Binding> declared = generic_parameters(generic);
+    for (s64 i = 0; i < declared.count; i++) array_add(&w.names, declared[i].name);
     array_free(&declared);
     names_statements(&w, generic->body);
     array_free(&w.names);

@@ -7794,6 +7794,44 @@ TEST(instances_are_procedures_of_their_own) {
     arena_free(&a);
 }
 
+// The line of `ir` from `start` to its end, without the newline; "" when
+// `start` isn't in it.
+static String line_from(String ir, const char *start) {
+    s64 at = index_of(ir, start);
+    if (at < 0) return {};
+    String rest = string_slice(ir, at, ir.count - at);
+    s64 end = index_of(rest, "\n");
+    return end < 0 ? rest : string_slice(rest, 0, end);
+}
+
+TEST(baked_arguments_have_no_code) {
+    // A type or a constant given to a '$' parameter is no argument of the
+    // instance, which has no parameter for it: ring's call passes only its
+    // result's place, get's only w's address, and get_then's w's and n's,
+    // in order. The constant is the instance's own, folded into its body.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "World :: struct { p: Position; }\n"
+                                "Position :: struct { x: int; }\n"
+                                "get :: (w: *World, $T: Type) -> *T { return cast(*T) *w.p; }\n"
+                                "ring :: ($N: int, $T: Type) -> [N]T { r: [N]T; r[0] = N; return r; }\n"
+                                "get_then :: (w: *World, $T: Type, n: int) -> int { return n; }\n"
+                                "main :: () {\n"
+                                "    w: World;\n"
+                                "    r := ring(3, int);\n"
+                                "    g := get(*w, Position);\n"
+                                "    n := get_then(*w, Position, 9);\n"
+                                "}\n");
+    String ir = ir_print(&a, m);
+    String main = proc_ir(ir, "main");
+    CHECK_STR(line_from(main, "call @ring$N$3$T$int("), "call @ring$N$3$T$int(%2)");
+    CHECK_STR(line_from(main, "call @get$T$Position("), "call @get$T$Position(%0)");
+    CHECK_STR(line_from(main, "call @get_then$T$Position("), "call @get_then$T$Position(%0, %6)");
+    CHECK_STR(line_from(ir, "proc @ring$N$3$T$int("), "proc @ring$N$3$T$int(ptr) {");
+    CHECK(contains(proc_ir(ir, "ring$N$3$T$int"), "const i64 3"));
+    arena_free(&a);
+}
+
 TEST(instance_symbols_are_unique) {
     // f(T = *[]int) and f(T = []*int) make the same symbol of their names,
     // f$T$$$$int: the second instance's has its number among f's after it,
