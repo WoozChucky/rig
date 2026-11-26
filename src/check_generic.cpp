@@ -6,7 +6,12 @@
 // program-wide: found again, or made, named and their signatures checked,
 // at most MAX_DEPTH deep. The names a generic's parameters declare; the
 // walk over its body for names declared nowhere; and the chain of
-// instances an error inside one is followed by.
+// instances an error inside one is followed by. The checks here that only
+// look at each name in a written type or an expression, the signature's,
+// the inference's, the parameters' and the body's, go through that type
+// or expression with one walk (walk_names), each saying what it does at a
+// name in an action of its own; match_type and add_written_type, which
+// pair a pattern with a type or write one out, walk the type themselves.
 
 #include "check.h"
 
@@ -27,24 +32,151 @@ static void add_generic_parameter(Array<Generic_Binding> *declared, String name,
     array_add(declared, b);
 }
 
+// Where a name walk_names meets is.
+struct Name_Place {
+    bool in_count;  // inside an array's count, at any depth: an expression, each instance's to check
+    bool pointee;   // a type name that is a pointer's target, *T's T (not *[]T's)
+};
+
+// The text of `name`, an Ast_Name or an AST_TYPE_NAME Ast_Type.
+static String name_text(Ast *name) {
+    if (name->kind == AST_NAME) return ((Ast_Name *)name)->name;
+    RIG_ASSERT(name->kind == AST_TYPE_NAME);
+    return ((Ast_Type *)name)->name;
+}
+
+// Walks expression or written type `node` (null: nothing), depth first,
+// left to right: an array's count before its element, a cast's, a
+// literal's type before its values. At each Ast_Name (a value's, a
+// callee's) and each AST_TYPE_NAME (a $T's too) it calls action(data,
+// name, place). What follows a '.', a .NAME and a literal's field names
+// are no names here.
+//
+// Every kind has its case, and there's no default, as in ast.cpp's
+// ast_clone: a new kind is a warning (-Wswitch) until this says what to do
+// with it. The kinds that only break never reach it. A statement or a
+// declaration is none of what it walks: a generic's body hands it each
+// expression and written type (names_statement, which takes a switch's
+// cases apart too); the body declares no procedure, struct, union or enum
+// (parser.cpp's parse_local_declaration refuses them), so no parameter or
+// field of one either, and holds no #load or #import (parse_statements
+// skips each, with skip_misplaced_load). AST_BUILTIN and AST_ALIAS are
+// the checker's own declarations, in a scope and in no tree.
+static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, Ast *name, Name_Place place),
+                       void *data) {
+    if (!node) return;
+    // A name below this node is a pointer's target only when this node is
+    // that pointer (AST_TYPE_POINTER's case); one in a count is in it at
+    // any depth.
+    Name_Place below = place;
+    below.pointee = false;
+    switch (node->kind) {
+    case AST_NAME:
+    case AST_TYPE_NAME: action(data, node, place); return;
+    case AST_TYPE_POINTER: {
+        Name_Place target = below;
+        target.pointee = true;
+        walk_names(((Ast_Type *)node)->pointee, target, action, data);
+        return;
+    }
+    case AST_TYPE_ARRAY: {
+        Name_Place count = below;
+        count.in_count = true;
+        walk_names(((Ast_Type *)node)->count, count, action, data);
+        walk_names(((Ast_Type *)node)->element, below, action, data);
+        return;
+    }
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE: walk_names(((Ast_Type *)node)->element, below, action, data); return;
+    case AST_TYPE_PROC: {
+        Ast_Type *written = (Ast_Type *)node;
+        for (s64 i = 0; i < written->params.count; i++) walk_names(written->params[i], below, action, data);
+        for (s64 i = 0; i < written->results.count; i++) walk_names(written->results[i], below, action, data);
+        return;
+    }
+    case AST_CALL: {
+        Ast_Call *call = (Ast_Call *)node;
+        walk_names(call->callee, below, action, data);
+        for (s64 i = 0; i < call->args.count; i++) walk_names(call->args[i], below, action, data);
+        return;
+    }
+    case AST_UNARY: walk_names(((Ast_Unary *)node)->operand, below, action, data); return;
+    case AST_SPREAD: walk_names(((Ast_Spread *)node)->operand, below, action, data); return;
+    case AST_DEREF: walk_names(((Ast_Deref *)node)->operand, below, action, data); return;
+    case AST_RUN: walk_names(((Ast_Run *)node)->operand, below, action, data); return;
+    case AST_MEMBER: walk_names(((Ast_Member *)node)->operand, below, action, data); return;
+    case AST_BINARY:
+        walk_names(((Ast_Binary *)node)->left, below, action, data);
+        walk_names(((Ast_Binary *)node)->right, below, action, data);
+        return;
+    case AST_INDEX:
+        walk_names(((Ast_Index *)node)->operand, below, action, data);
+        walk_names(((Ast_Index *)node)->index, below, action, data);
+        return;
+    case AST_CAST:
+        walk_names(((Ast_Cast *)node)->type_expr, below, action, data);
+        walk_names(((Ast_Cast *)node)->value, below, action, data);
+        return;
+    case AST_SIZE_OF: walk_names(((Ast_Size_Of *)node)->type_expr, below, action, data); return;
+    case AST_TYPE_INFO: walk_names(((Ast_Type_Info *)node)->type_expr, below, action, data); return;
+    case AST_TYPE_VALUE: walk_names(((Ast_Type_Value *)node)->type_expr, below, action, data); return;
+    case AST_LITERAL: {
+        Ast_Literal *literal = (Ast_Literal *)node;
+        walk_names(literal->type_expr, below, action, data);
+        for (s64 i = 0; i < literal->values.count; i++) walk_names(literal->values[i], below, action, data);
+        return;
+    }
+    case AST_STRING:
+    case AST_INT:
+    case AST_FLOAT:
+    case AST_BOOL:
+    case AST_NULL:
+    case AST_CONTEXT:
+    case AST_CALLER_LOCATION:
+    case AST_DOT_NAME: return;  // no name
+    case AST_PROC:
+    case AST_PARAM:
+    case AST_BLOCK:
+    case AST_VAR:
+    case AST_CONST:
+    case AST_ASSIGN:
+    case AST_RETURN:
+    case AST_IF:
+    case AST_WHILE:
+    case AST_FOR:
+    case AST_BREAK:
+    case AST_CONTINUE:
+    case AST_MULTI_VAR:
+    case AST_STRUCT:
+    case AST_FIELD:
+    case AST_LOAD:
+    case AST_IF_DIRECTIVE:
+    case AST_DEFER:
+    case AST_PUSH_CONTEXT:
+    case AST_BUILTIN:
+    case AST_ENUM:
+    case AST_SWITCH:
+    case AST_CASE:
+    case AST_ALIAS: break;
+    }
+    RIG_ASSERT(!"not an expression or a written type");
+}
+
+// At a type parameter a written type declares, $T: adds it to the
+// Array<Generic_Binding> `data` is (collect_type_parameters). An array's
+// count declares none.
+static void at_declared_type(void *data, Ast *name, Name_Place place) {
+    if (name->kind != AST_TYPE_NAME || place.in_count) return;
+    Ast_Type *written = (Ast_Type *)name;
+    if (written->declares) {
+        add_generic_parameter((Array<Generic_Binding> *)data, written->name, written->pos, true, nullptr);
+    }
+}
+
 // The type parameters written type `written` declares, $T, added to
 // *declared in the order they're written (depth first, left to right).
 static void collect_type_parameters(Ast_Type *written, Array<Generic_Binding> *declared) {
-    if (!written) return;
-    switch (written->kind) {
-    case AST_TYPE_NAME:
-        if (written->declares) add_generic_parameter(declared, written->name, written->pos, true, nullptr);
-        return;
-    case AST_TYPE_POINTER: collect_type_parameters(written->pointee, declared); return;
-    case AST_TYPE_ARRAY:
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: collect_type_parameters(written->element, declared); return;
-    case AST_TYPE_PROC:
-        for (s64 i = 0; i < written->params.count; i++) collect_type_parameters(written->params[i], declared);
-        for (s64 i = 0; i < written->results.count; i++) collect_type_parameters(written->results[i], declared);
-        return;
-    default: RIG_ASSERT(!"not a written type"); return;
-    }
+    walk_names(written, Name_Place{}, at_declared_type, declared);
 }
 
 bool takes_a_type(Ast_Param *param) {
@@ -88,44 +220,51 @@ static bool is_constant_parameter(Array<Generic_Binding> declared, String name) 
     return false;
 }
 
-// A written type of a generic's signature, its type parameters taken as
-// types still to be known: every other type name in it resolved as where
-// it's written anywhere (checker.cpp's resolve_written, behind a pointer, so
-// a struct's layout isn't needed), and void refused but as a pointer's
-// target (`pointee`), as resolve_type and resolve_element refuse it, so
-// "unknown type 'Foo'" and "'void' is only a pointer's target, as in *void"
-// are said once, here, not once per instance. Nothing is written into the
-// generic's nodes, which every instance copies unchecked: an array's count
-// is an expression, checked by writing its types into it, so it's each
-// instance's to check, its mistakes said once per instance. A constant
-// parameter's name is no type: "'N' is not a type", as resolve_written says
-// of a constant's.
-static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared, bool pointee) {
-    switch (written->kind) {
-    case AST_TYPE_NAME:
-        if (is_type_parameter(declared, written->name)) return;
-        if (is_constant_parameter(declared, written->name)) {
-            // A $N, a second $ of its name, is that mistake, said already
-            // (check_signature_names).
-            if (!written->declares) {
-                diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
-            }
-            return;
-        }
-        if (resolve_written(c, written, true) == &type_void && !pointee) {
-            diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
+// What check_generic_type's action needs: the checker, and the type and
+// constant parameters the generic declares.
+struct Generic_Type_Check {
+    Checker *c;
+    Array<Generic_Binding> declared;
+};
+
+// At a type name in a written type of a generic's signature, its type
+// parameters taken as types still to be known: every other type name
+// resolved as where it's written anywhere (checker.cpp's resolve_written,
+// behind a pointer, so a struct's layout isn't needed), and void refused
+// but as a pointer's target (`place.pointee`), as resolve_type and
+// resolve_element refuse it, so "unknown type 'Foo'" and "'void' is only a
+// pointer's target, as in *void" are said once, here, not once per
+// instance. Nothing is written into the generic's nodes, which every
+// instance copies unchecked: an array's count is an expression, checked by
+// writing its types into it, so it's each instance's to check, its
+// mistakes said once per instance, and nothing in it is looked at here. A
+// constant parameter's name is no type: "'N' is not a type", as
+// resolve_written says of a constant's.
+static void at_generic_type_name(void *data, Ast *name, Name_Place place) {
+    if (name->kind != AST_TYPE_NAME || place.in_count) return;
+    Generic_Type_Check *check = (Generic_Type_Check *)data;
+    Checker *c = check->c;
+    Ast_Type *written = (Ast_Type *)name;
+    if (is_type_parameter(check->declared, written->name)) return;
+    if (is_constant_parameter(check->declared, written->name)) {
+        // A $N, a second $ of its name, is that mistake, said already
+        // (check_signature_names).
+        if (!written->declares) {
+            diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
         }
         return;
-    case AST_TYPE_POINTER: check_generic_type(c, written->pointee, declared, true); return;
-    case AST_TYPE_ARRAY:
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: check_generic_type(c, written->element, declared, false); return;
-    case AST_TYPE_PROC:
-        for (s64 i = 0; i < written->params.count; i++) check_generic_type(c, written->params[i], declared, false);
-        for (s64 i = 0; i < written->results.count; i++) check_generic_type(c, written->results[i], declared, false);
-        return;
-    default: RIG_ASSERT(!"not a written type"); return;
     }
+    if (resolve_written(c, written, true) == &type_void && !place.pointee) {
+        diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
+    }
+}
+
+// Checks written type `written` of a generic's signature against the type
+// and constant parameters the generic declares, `declared`
+// (at_generic_type_name).
+static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared) {
+    Generic_Type_Check check = {c, declared};
+    walk_names(written, Name_Place{}, at_generic_type_name, &check);
 }
 
 // The name of the first type parameter written type `written` declares, or
@@ -185,88 +324,21 @@ static void check_count_name(Checker *c, String name, Position pos, Array<Generi
     }
 }
 
-static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names);
+// What check_signature_names' action needs: the checker, the type and
+// constant parameters the whole signature declares, and the names the
+// parameters and the parts before declared so far, which it adds to.
+struct Signature_Check {
+    Checker *c;
+    Array<Generic_Binding> declared;
+    Array<Signature_Name> *names;
+};
 
-// The names written type `written`, itself in an array's count (a
-// size_of's type, a cast's, a literal's), uses, each checked by
-// check_count_name, and its own array counts, each walked by
-// check_count_names.
-static void check_count_type_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
-                                   Array<Signature_Name> *names) {
-    if (!written) return;
-    switch (written->kind) {
-    case AST_TYPE_NAME:
-        if (!written->declares) check_count_name(c, written->name, written->pos, declared, names);
-        return;
-    case AST_TYPE_POINTER: check_count_type_names(c, written->pointee, declared, names); return;
-    case AST_TYPE_ARRAY:
-        check_count_names(c, written->count, declared, names);
-        check_count_type_names(c, written->element, declared, names);
-        return;
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: check_count_type_names(c, written->element, declared, names); return;
-    case AST_TYPE_PROC:
-        for (s64 i = 0; i < written->params.count; i++) check_count_type_names(c, written->params[i], declared, names);
-        for (s64 i = 0; i < written->results.count; i++) {
-            check_count_type_names(c, written->results[i], declared, names);
-        }
-        return;
-    default: RIG_ASSERT(!"not a written type"); return;
-    }
-}
-
-// The names an array's count `e`, in a generic's parameter, uses, the
-// types written in it too: a type or constant parameter's written before
-// the $ that declares it, [N]int or [size_of(T)]int before $N or $T, is
-// "'N' is used before '$N' declares it", at the use (check_count_name), as
-// a type parameter's is outside a count (check_signature_names). The rest
-// of the count is each instance's to check.
-static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declared, Array<Signature_Name> *names) {
-    if (!e) return;
-    switch (e->kind) {
-    case AST_NAME: check_count_name(c, ((Ast_Name *)e)->name, e->pos, declared, names); return;
-    case AST_CALL: {
-        Ast_Call *call = (Ast_Call *)e;
-        check_count_names(c, call->callee, declared, names);
-        for (s64 i = 0; i < call->args.count; i++) check_count_names(c, call->args[i], declared, names);
-        return;
-    }
-    case AST_UNARY: check_count_names(c, ((Ast_Unary *)e)->operand, declared, names); return;
-    case AST_SPREAD: check_count_names(c, ((Ast_Spread *)e)->operand, declared, names); return;
-    case AST_DEREF: check_count_names(c, ((Ast_Deref *)e)->operand, declared, names); return;
-    case AST_RUN: check_count_names(c, ((Ast_Run *)e)->operand, declared, names); return;
-    case AST_MEMBER: check_count_names(c, ((Ast_Member *)e)->operand, declared, names); return;
-    case AST_CAST:
-        check_count_type_names(c, ((Ast_Cast *)e)->type_expr, declared, names);
-        check_count_names(c, ((Ast_Cast *)e)->value, declared, names);
-        return;
-    case AST_SIZE_OF: check_count_type_names(c, ((Ast_Size_Of *)e)->type_expr, declared, names); return;
-    case AST_TYPE_INFO: check_count_type_names(c, ((Ast_Type_Info *)e)->type_expr, declared, names); return;
-    case AST_TYPE_VALUE: check_count_type_names(c, ((Ast_Type_Value *)e)->type_expr, declared, names); return;
-    case AST_LITERAL: {
-        Ast_Literal *literal = (Ast_Literal *)e;
-        check_count_type_names(c, literal->type_expr, declared, names);
-        for (s64 i = 0; i < literal->values.count; i++) check_count_names(c, literal->values[i], declared, names);
-        return;
-    }
-    case AST_BINARY:
-        check_count_names(c, ((Ast_Binary *)e)->left, declared, names);
-        check_count_names(c, ((Ast_Binary *)e)->right, declared, names);
-        return;
-    case AST_INDEX:
-        check_count_names(c, ((Ast_Index *)e)->operand, declared, names);
-        check_count_names(c, ((Ast_Index *)e)->index, declared, names);
-        return;
-    default: return;  // a literal number, string or bool, null, context, a .NAME: no name
-    }
-}
-
-// The names written type `written`, a parameter's of a generic, declares
-// and uses, in the order they're written (depth first, left to right, an
-// array's count before its elements), against what the parameters and the
-// parts before them declared (*names, which this adds to), and the type
-// and constant parameters the whole signature declares (`declared`), said
-// once, at the generic (spec 7.11):
+// At a name in a written type, a parameter's of a generic, met in the
+// order it's written (walk_names: depth first, left to right, an array's
+// count before its elements), against what the parameters and the
+// parts before it declared (check->names, which this adds to), and the
+// type and constant parameters the whole signature declares
+// (check->declared), said once, at the generic (spec 7.11):
 // - a $T where an earlier $T declared the name: "'T' is declared twice; '$'
 //   goes on its first use only, as in (a: $T, b: T)", at the second $;
 // - a $T of a parameter's name: "'T' is already declared at PATH:L:C", at
@@ -276,50 +348,59 @@ static void check_count_names(Checker *c, Ast *e, Array<Generic_Binding> declare
 //   type";
 // - a use of a type parameter written before the $ that declares it: "'T'
 //   is used before '$T' declares it", at the use; never of a built-in
-//   type's name, which always means the built-in type (spec 3.1); so, too,
-//   of one in an array's count, or of a constant parameter there
-//   (check_count_names).
+//   type's name, which always means the built-in type (spec 3.1).
+// In an array's count, an expression, every name a value's or a type's
+// that declares nothing is a use, the types written in it too: a type or
+// constant parameter's written before the $ that declares it, [N]int or
+// [size_of(T)]int before $N or $T, is "'N' is used before '$N' declares
+// it", at the use (check_count_name). The rest of the count is each
+// instance's to check.
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
-static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
-                                  Array<Signature_Name> *names) {
-    switch (written->kind) {
-    case AST_TYPE_NAME: {
-        Signature_Name *earlier = signature_name(names, written->name);
-        if (!written->declares) {
-            if (is_type_parameter(declared, written->name) && !type_from_name(written->name) &&
-                !dollar_declared(names, written->name)) {
-                diag_error(c->diag, written->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it",
-                           STR_ARG(written->name), STR_ARG(written->name));
-            }
-        } else if (earlier && earlier->dollar) {
-            diag_error(c->diag, written->pos,
-                       "'" STR_FMT "' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)",
-                       STR_ARG(written->name));
-        } else if (earlier) {
-            report_declared_again(c, written->name, written->pos, earlier->pos);
-            array_add(names, {written->name, written->pos, true});
-        } else {
-            if (type_from_name(written->name)) {
-                diag_error(c->diag, written->pos, "'" STR_FMT "' is a built-in type", STR_ARG(written->name));
-            }
-            array_add(names, {written->name, written->pos, true});
+static void at_signature_name(void *data, Ast *name, Name_Place place) {
+    Signature_Check *check = (Signature_Check *)data;
+    Checker *c = check->c;
+    Array<Signature_Name> *names = check->names;
+    if (place.in_count) {
+        // A $T never sits in a count: the parser declares none there
+        // (parse_type_level). Checking `declares` anyway doesn't lean on
+        // that: one there would be no use of its name.
+        if (name->kind == AST_NAME || !((Ast_Type *)name)->declares) {
+            check_count_name(c, name_text(name), name->pos, check->declared, names);
         }
         return;
     }
-    case AST_TYPE_POINTER: check_signature_names(c, written->pointee, declared, names); return;
-    case AST_TYPE_ARRAY:
-        check_count_names(c, written->count, declared, names);
-        check_signature_names(c, written->element, declared, names);
-        return;
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: check_signature_names(c, written->element, declared, names); return;
-    case AST_TYPE_PROC:
-        for (s64 i = 0; i < written->params.count; i++) check_signature_names(c, written->params[i], declared, names);
-        for (s64 i = 0; i < written->results.count; i++) check_signature_names(c, written->results[i], declared, names);
-        return;
-    default: RIG_ASSERT(!"not a written type"); return;
+    RIG_ASSERT(name->kind == AST_TYPE_NAME);  // outside a count, a written type holds only types
+    Ast_Type *written = (Ast_Type *)name;
+    Signature_Name *earlier = signature_name(names, written->name);
+    if (!written->declares) {
+        if (is_type_parameter(check->declared, written->name) && !type_from_name(written->name) &&
+            !dollar_declared(names, written->name)) {
+            diag_error(c->diag, written->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it",
+                       STR_ARG(written->name), STR_ARG(written->name));
+        }
+    } else if (earlier && earlier->dollar) {
+        diag_error(c->diag, written->pos,
+                   "'" STR_FMT "' is declared twice; '$' goes on its first use only, as in (a: $T, b: T)",
+                   STR_ARG(written->name));
+    } else if (earlier) {
+        report_declared_again(c, written->name, written->pos, earlier->pos);
+        array_add(names, {written->name, written->pos, true});
+    } else {
+        if (type_from_name(written->name)) {
+            diag_error(c->diag, written->pos, "'" STR_FMT "' is a built-in type", STR_ARG(written->name));
+        }
+        array_add(names, {written->name, written->pos, true});
     }
+}
+
+// The names written type `written`, a parameter's of a generic, declares
+// and uses, each checked as at_signature_name says, those it declares
+// added to *names.
+static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_Binding> declared,
+                                  Array<Signature_Name> *names) {
+    Signature_Check check = {c, declared, names};
+    walk_names(written, Name_Place{}, at_signature_name, &check);
 }
 
 static String written_type_text(Checker *c, Ast_Type *written);
@@ -474,7 +555,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
             check_baked_parameter(c, generic, i, declared, settled.data);
             continue;
         }
-        check_generic_type(c, param->type_expr, declared, false);
+        check_generic_type(c, param->type_expr, declared);
         // A default value that would fix T has no call to give it a type
         // yet, so a parameter whose type declares one takes none, for now
         // (spec 7.11).
@@ -491,7 +572,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
     // instance checks only its defaults' values.
     check_default_places(c, generic, settled.data);
     array_free(&settled);
-    for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared, false);
+    for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared);
     // C's '..' is a foreign procedure's, as check_signature says; a foreign
     // generic is refused below.
     if (generic->is_c_variadic && !generic->is_foreign) refuse_c_dots(c, generic);
@@ -529,29 +610,30 @@ static Generic_Binding *binding_named(Array<Generic_Binding> *bindings, String n
     return nullptr;
 }
 
+// What names_unbound's action looks for, and whether it found it.
+struct Unbound_Search {
+    Array<Generic_Binding> *bindings;
+    Generic_Binding *only;  // the one binding looked for, or null for any
+    bool found;
+};
+
+// At a name in a pattern: found when it's a type name that names a type
+// parameter not bound yet, or, with `only`, that one. A name in an array's
+// count is passed over, as match_type passes over the count: it binds
+// nothing.
+static void at_unbound_name(void *data, Ast *name, Name_Place place) {
+    Unbound_Search *search = (Unbound_Search *)data;
+    if (search->found || name->kind != AST_TYPE_NAME || place.in_count) return;
+    Generic_Binding *b = binding_named(search->bindings, name_text(name));
+    search->found = b && !b->type && (!search->only || b == search->only);
+}
+
 // Whether written type `pattern` names a type parameter not bound yet, or,
-// with `only`, that one. Each part is looked at, an array's count apart.
+// with `only`, that one (at_unbound_name).
 static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, Generic_Binding *only) {
-    if (!pattern) return false;
-    switch (pattern->kind) {
-    case AST_TYPE_NAME: {
-        Generic_Binding *b = binding_named(bindings, pattern->name);
-        return b && !b->type && (!only || b == only);
-    }
-    case AST_TYPE_POINTER: return names_unbound(pattern->pointee, bindings, only);
-    case AST_TYPE_ARRAY:
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: return names_unbound(pattern->element, bindings, only);
-    case AST_TYPE_PROC:
-        for (s64 i = 0; i < pattern->params.count; i++) {
-            if (names_unbound(pattern->params[i], bindings, only)) return true;
-        }
-        for (s64 i = 0; i < pattern->results.count; i++) {
-            if (names_unbound(pattern->results[i], bindings, only)) return true;
-        }
-        return false;
-    default: RIG_ASSERT(!"not a written type"); return false;
-    }
+    Unbound_Search search = {bindings, only, false};
+    walk_names(pattern, Name_Place{}, at_unbound_name, &search);
+    return search.found;
 }
 
 // Binds the type parameters written type `pattern` names to the parts of
@@ -1182,74 +1264,28 @@ static void names_value(Name_Walk *w, Ast_Name *name) {
     diag_error(w->c->diag, name->pos, "unknown identifier '" STR_FMT "'", STR_ARG(name->name));
 }
 
-static void names_expression(Name_Walk *w, Ast *e);
-
-// A written type's names, as resolve_written says them: "unknown type
-// 'Foo'" for one declared nowhere (a field is no type, so a using parameter
-// doesn't keep it silent), and an array's count as an expression.
-static void names_type(Name_Walk *w, Ast_Type *written) {
-    if (!written) return;
-    switch (written->kind) {
-    case AST_TYPE_NAME:
-        if (!name_known(w, written->name) && !w->c->lost_a_file) {
-            diag_error(w->c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
-        }
+// At a name in a generic's body, in an expression or a written type (an
+// array's count is an expression too, so where it is doesn't matter): a
+// value's or a callee's as names_value says it; a type's as
+// resolve_written says it, "unknown type 'Foo'" for one declared nowhere (a
+// field is no type, so a using parameter doesn't keep it silent).
+static void at_body_name(void *data, Ast *name, Name_Place place) {
+    (void)place;
+    Name_Walk *w = (Name_Walk *)data;
+    if (name->kind == AST_NAME) {
+        names_value(w, (Ast_Name *)name);
         return;
-    case AST_TYPE_POINTER: names_type(w, written->pointee); return;
-    case AST_TYPE_ARRAY:
-        names_expression(w, written->count);
-        names_type(w, written->element);
-        return;
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE: names_type(w, written->element); return;
-    case AST_TYPE_PROC:
-        for (s64 i = 0; i < written->params.count; i++) names_type(w, written->params[i]);
-        for (s64 i = 0; i < written->results.count; i++) names_type(w, written->results[i]);
-        return;
-    default: RIG_ASSERT(!"not a written type"); return;
+    }
+    if (!name_known(w, name_text(name)) && !w->c->lost_a_file) {
+        diag_error(w->c->diag, name->pos, "unknown type '" STR_FMT "'", STR_ARG(name_text(name)));
     }
 }
 
-// An expression's names. What follows a '.', a .NAME's name and a
-// literal's field names are its type's, so T's: never looked at.
-static void names_expression(Name_Walk *w, Ast *e) {
-    if (!e) return;
-    switch (e->kind) {
-    case AST_NAME: names_value(w, (Ast_Name *)e); return;
-    case AST_CALL: {
-        Ast_Call *call = (Ast_Call *)e;
-        names_expression(w, call->callee);
-        for (s64 i = 0; i < call->args.count; i++) names_expression(w, call->args[i]);
-        return;
-    }
-    case AST_UNARY: names_expression(w, ((Ast_Unary *)e)->operand); return;
-    case AST_SPREAD: names_expression(w, ((Ast_Spread *)e)->operand); return;
-    case AST_DEREF: names_expression(w, ((Ast_Deref *)e)->operand); return;
-    case AST_RUN: names_expression(w, ((Ast_Run *)e)->operand); return;
-    case AST_MEMBER: names_expression(w, ((Ast_Member *)e)->operand); return;
-    case AST_BINARY:
-        names_expression(w, ((Ast_Binary *)e)->left);
-        names_expression(w, ((Ast_Binary *)e)->right);
-        return;
-    case AST_CAST:
-        names_type(w, ((Ast_Cast *)e)->type_expr);
-        names_expression(w, ((Ast_Cast *)e)->value);
-        return;
-    case AST_SIZE_OF: names_type(w, ((Ast_Size_Of *)e)->type_expr); return;
-    case AST_TYPE_INFO: names_type(w, ((Ast_Type_Info *)e)->type_expr); return;
-    case AST_TYPE_VALUE: names_type(w, ((Ast_Type_Value *)e)->type_expr); return;
-    case AST_LITERAL: {
-        Ast_Literal *literal = (Ast_Literal *)e;
-        names_type(w, literal->type_expr);
-        for (s64 i = 0; i < literal->values.count; i++) names_expression(w, literal->values[i]);
-        return;
-    }
-    case AST_INDEX:
-        names_expression(w, ((Ast_Index *)e)->operand);
-        names_expression(w, ((Ast_Index *)e)->index);
-        return;
-    default: return;  // a literal number, string or bool, null, context, a .NAME: no name
-    }
+// An expression's names, or a written type's (at_body_name). What follows
+// a '.', a .NAME's name and a literal's field names are its type's, so
+// T's: never looked at.
+static void names_expression(Name_Walk *w, Ast *node) {
+    walk_names(node, Name_Place{}, at_body_name, w);
 }
 
 // The statements of `block`, in the scope the caller is in.
@@ -1299,7 +1335,7 @@ static void names_statement(Name_Walk *w, Ast *statement) {
     switch (statement->kind) {
     case AST_VAR: {
         Ast_Var *var = (Ast_Var *)statement;
-        names_type(w, var->type_expr);
+        names_expression(w, var->type_expr);
         names_expression(w, var->value);
         array_add(&w->names, var->name);
         return;

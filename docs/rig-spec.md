@@ -2232,7 +2232,7 @@ ArrayLiteral  = [ identifier ] "." "[" [ Expression { "," Expression } [ "," ] ]
 
 **Tagged union literals.** A tagged union's literal gives exactly one member, by name, `Shape.{circle = c}`, and the union holds it: values in order and `Shape.{}` are `a tagged union's literal names its one member, as in Shape.{circle = c}`, a second member `a tagged union's literal gives one member; 'circle' is given already`, and a `void` member `'Shape.empty' holds nothing; write Shape.empty`, since that member's value is `Shape.empty`, or `.empty` where the type is known (section 3.20).
 
-**Array literals.** `int.[1, 2, 3]` makes a `[3]int`: the name before the `.` is the elements' type, and each value converts implicitly to it. An array literal's values are always in order.
+**Array literals.** `int.[1, 2, 3]` makes a `[3]int`: the name before the `.` is the elements' type, and each value converts implicitly to it. An array literal's values are always in order. The `.` is part of an array literal: one written as C writes it, `x := [1, 2, 3];` or `x := [];`, is `an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]`, at the `[` (section 5.20 says which `[` begin a type).
 
 The type before the `.` is a name written directly before it, never a name in parentheses: `(Vec2).{1}` is not a literal. A comma may follow the last value.
 
@@ -2312,7 +2312,7 @@ A type may be written where a value goes, in the places that take one: for now, 
 
 - a type's name, `int`, `Vec2`, written as a name is;
 - `*X`, a pointer type, written as an address is, `X` naming a type;
-- `[N]T`, `[]T` and `[..]T`: no expression starts with `[`, so one there begins a type;
+- `[N]T`, `[]T` and `[..]T`: no expression starts with `[`, so one there begins a type. Where it can't be one, because its brackets hold a `,` of their own (not one inside parentheses, brackets or braces, as `[f(1, 2)]int`'s is) or the token after its `]` can't start a type, being none of a name, `*`, `[`, `(` and `$` (`[1, 2, 3]`, `[]`, `[1]`), it's taken for an array literal written as C writes one: `an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]`, at the `[` (section 5.17). `[..]` is always a type's;
 - `#type T`, Jai's directive, which a procedure type needs: its `(int)` would read as parentheses, so `#type (int) -> int`.
 
 ```ebnf
@@ -4109,6 +4109,7 @@ The sections defining each construct give its messages. Some of those met most o
 | `a procedure type can't have default values` | 3.15 |
 | `'#caller_location' can only be a parameter's default value, as in loc: Source_Code_Location = #caller_location` | 2.7, 7.2 |
 | `'#caller_location' needs a parameter of type 'Source_Code_Location', not 'Any'` | 7.2 |
+| `an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]` | 5.17, 5.20 |
 | `'[]int' is a type, not a value` | 5.20 |
 | `'==' compares a type only with a type, as in T == int` | 5.6, 5.20 |
 | `'Type' only names types while compiling; a *Type_Info describes one at run time` | 3.1 |
@@ -4756,7 +4757,7 @@ Field         = [ identifier "=" ] Expression .
 ArrayBody     = "[" [ Expression { "," Expression } [ "," ] ] "]" .
 ```
 
-Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. An `"=="` followed by `"{"` is never a `BinaryOp`: it ends the `Expression`, however deep, since no `Unary` starts with `"{"`, and only a switch's `IfStmt` reads it (section 6.14). A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named. A `"." identifier` `Primary` is a member without its enum, `.FREE`; after a `Primary`, `"." identifier` is a member access, an enum's member when the `Primary` is the enum's name (sections 3.18, 5.12). A `"["` starting a `Primary` begins a `TypeValue`, since no expression starts with one, and so does `#type`: a type written where a value goes, which the checker takes only where section 5.20 says; no `TypedLiteral` follows one, as it isn't an identifier.
+Binary operators bind by the levels of section 5.2, loosest first: `||`; `&&`; the comparisons; `+ - | ^`; `* / % << >> &`. Each level associates to the left. An `"=="` followed by `"{"` is never a `BinaryOp`: it ends the `Expression`, however deep, since no `Unary` starts with `"{"`, and only a switch's `IfStmt` reads it (section 6.14). A `TypedLiteral` follows only a `Primary` that is an identifier not in parentheses, which names the literal's type (section 5.17). In `Primary`, `size_of` and `type_info` are each an identifier followed by `(`, and `trunc` in `Cast` is an identifier, not a keyword. `#caller_location` is a directive (section 2.7), which the grammar allows wherever a `Primary` goes, and the checker only as a `Param`'s whole default value (section 7.2). A `#run` in `Unary` takes an expression only, never a `Block`, which only a `RunDecl` has (section 7.8). A `..` in `Unary` is a spread, a prefix operator as `-` is, so `..a + b` is `(..a) + b`; the grammar allows it wherever a `Unary` goes, and the checker only as a call's last argument for a `..T` parameter (section 5.10). In a `StructBody` the fields are all named or all unnamed; an `ArrayBody`'s values are never named. A `"." identifier` `Primary` is a member without its enum, `.FREE`; after a `Primary`, `"." identifier` is a member access, an enum's member when the `Primary` is the enum's name (sections 3.18, 5.12). A `"["` starting a `Primary` begins a `TypeValue`, since no expression starts with one (unless section 5.20 refuses it as a C-style array literal), and so does `#type`: a type written where a value goes, which the checker takes only where section 5.20 says; no `TypedLiteral` follows one, as it isn't an identifier.
 
 ## Appendix B: Index of keywords and operators
 

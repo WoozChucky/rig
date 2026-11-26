@@ -4555,6 +4555,20 @@ TEST(parses_using_parameters) {
 
 // Issue #226: types where a value goes (spec 5.20).
 
+// The messages of lexing and parsing `body`, as body_dump places it, for a
+// body the lexer refuses part of: src wants text that lexes cleanly.
+static String lex_and_parse_messages(Arena *a, const char *body) {
+    String text = string_printf(a, "f :: () {\n    %s\n}\n", body);
+    Diagnostics d = {};
+    s32 file = diag_add_file(&d, str("test.rig"), text);
+    Array<Token> tokens = lex(&d, file, a);
+    parse(tokens, a, &d);
+    String result = messages(a, &d);
+    array_free(&tokens);
+    diag_free(&d);
+    return result;
+}
+
 TEST(parses_types_where_values_go) {
     // A '[' starting an expression begins a type, [N]T, []T or [..]T, and
     // #type any type, a procedure type's too: each an Ast_Type_Value,
@@ -4575,13 +4589,75 @@ TEST(parses_types_where_values_go) {
     // No literal follows a type value: only a name is a literal's type.
     body_dump(&a, "e := []int.{1};", &errors);
     CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
-    // So an array literal written as C writes one, not .[1, 2, 3] or
-    // int.[1, 2, 3] (spec 5.17), is a type's start: the count stops at its
-    // first ',', and [] needs its element type.
+    // An array literal written as C writes one, not .[1, 2, 3] or
+    // int.[1, 2, 3] (spec 5.17), is refused at its '[': a ',' in its
+    // brackets, or a ']' with no type after it.
     body_dump(&a, "x := [1, 2, 3];", &errors);
-    CHECK_STR(errors, "2:12: expected ']', found ','\n");
-    body_dump(&a, "y := [];", &errors);
-    CHECK_STR(errors, "2:12: expected a type, found ';'\n");
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := [];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := [1];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := f([1, 2]);", &errors);
+    CHECK_STR(errors, "2:12: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := .[[1, 2], [3]];", &errors);
+    CHECK_STR(errors, "2:12: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    // The brackets a '[' opens inside close again: f(1)'s ')' and a[0]'s
+    // ']' are not the literal's own.
+    body_dump(&a, "x := [f(1)];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := [a[0], 1];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    // A ',' nested in the count, in '( )', '[ ]' or '{ }', is no literal's,
+    // and a type after the ']' makes it a type, whichever token starts it: a
+    // name, '*', '[', '(' or '$'.
+    body_dump(&a, "x := [f(1, 2)]int == [g(.[1, 2])]u8;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [Vec2.{1, 2}.x]int == [.{1, 2}.n]u8;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [.[1, 2].count]int == [.[1, 2][0]]u8;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [Vec2.{1}.x, 2];", &errors);
+    CHECK_STR(errors, "2:10: an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]\n");
+    body_dump(&a, "x := []*u8 == [2][3]int;", &errors);
+    CHECK_STR(errors, "");
+    body_dump(&a, "x := [3](int) -> int == [3](int) -> int;", &errors);
+    CHECK_STR(errors, "");
+    // So is a '[' whose look-ahead meets a ';', the end, or a ')' or '}' it
+    // didn't open before its ']'.
+    body_dump(&a, "x := [1;", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    parse_src(&a, "f :: () {\n    x := [1", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found end of file\n");
+    parse_src(&a, "f :: () {\n    x := [(1", &errors);
+    CHECK_STR(errors, "2:13: expected ')', found end of file\n");
+    body_dump(&a, "x := [(1; y := 1), 2;", &errors);
+    CHECK_STR(errors, "2:13: expected ')', found ';'\n");
+    body_dump(&a, "x := [3; ];", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    body_dump(&a, "x := [1; y := 1, 2;", &errors);
+    CHECK_STR(errors, "2:12: expected ']', found ';'\n");
+    body_dump(&a, "x := f([1), 2);", &errors);
+    CHECK_STR(errors, "2:14: expected ']', found ')'\n");
+    body_dump(&a, "x := .{[1}, 2};", &errors);
+    CHECK_STR(errors, "2:14: expected ']', found '}'\n");
+    // A token the lexer refused, between the '[' and its ']' or after the
+    // ']', was its to report, and the type's parse says nothing more about
+    // it.
+    CHECK_STR(lex_and_parse_messages(&a, "x := [] @int;"), "2:13: unexpected character '@'\n");
+    CHECK_STR(lex_and_parse_messages(&a, "x := [1 @ 2];"), "2:13: unexpected character '@'\n");
+    CHECK_STR(lex_and_parse_messages(&a, "x := [@];"), "2:11: unexpected character '@'\n");
+    // [..], a ']' with '$' after it, and a '[' where a type goes are always
+    // a type's, with the type's own messages.
+    body_dump(&a, "x := [..];", &errors);
+    CHECK_STR(errors, "2:14: expected a type, found ';'\n");
+    body_dump(&a, "x := []$T;", &errors);
+    CHECK_STR(errors, "2:12: '$' declares a type parameter only in a procedure's parameter, as in "
+                      "max :: (a: $T, b: T) -> T\n");
+    body_dump(&a, "x := #type [1, 2];", &errors);
+    CHECK_STR(errors, "2:18: expected ']', found ','\n");
+    body_dump(&a, "x : [1, 2]int;", &errors);
+    CHECK_STR(errors, "2:11: expected ']', found ','\n");
     // The node is at its '[' or its '#type'.
     Token_List *list = src("f :: () { x := []int; y := #type *u8; }\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
