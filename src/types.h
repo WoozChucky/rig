@@ -461,7 +461,9 @@ extern Type type_untyped_member;
 
 // Type (spec 5.20), the type of types: of a type written where a value
 // goes, while compiling only. Its name is a built-in type's, in
-// NAMED_TYPES, so no declaration takes it and the editor colours it, but
+// NAMED_TYPES, so no struct, union or enum takes it (a variable, a
+// constant, a parameter or a procedure may, hiding it where a value goes)
+// and the editor colours it, but
 // it's never a type written: a variable, a field, a cast or size_of of it
 // is "'Type' only names types while compiling; a *Type_Info describes one
 // at run time" (checker.cpp's resolve_written). Only the places that take

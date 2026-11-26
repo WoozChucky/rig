@@ -2338,7 +2338,7 @@ static Ast_Type *written_type_of(Checker *c, Ast *e) {
 }
 
 Type *check_type_value(Checker *c, Ast *e) {
-    Type *t = resolve_type(c, written_type_of(c, e));
+    Type *t = resolve_type_value(c, written_type_of(c, e));
     e->type = t ? &type_type : nullptr;
     e->constant = (u64)(uintptr_t)t;
     return t;
@@ -2355,7 +2355,7 @@ Type *type_value(Ast *e) {
 // (report_type_as_value). A mistake in the type itself is said instead.
 // It has no type: only check_type_value gives one.
 static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
-    Type *t = resolve_type(c, value->type_expr);
+    Type *t = resolve_type_value(c, value->type_expr);
     if (t) {
         diag_error(c->diag, value->start, "'" STR_FMT "' is a type, not a value", STR_ARG(type_name(c->arena, t)));
     }
@@ -2368,8 +2368,10 @@ static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
 // are: float and float32 are one, int and s64 two). The result is a
 // constant bool, so `#if T == int` decides and lowering sees only the
 // constant. A type against a value is "'==' compares a type only with a
-// type, as in T == int", at the operator, once the value's own mistakes,
-// if any, are said; a type's are said as a written type's are.
+// type, as in T == int", at the operator, unless either operand had a
+// mistake of its own, said instead: a type's as a written type's are, a
+// value's as ever (one whose check still gives a type, a call with too
+// many arguments, is compared too, both said).
 static Type *check_type_comparison(Checker *c, Ast_Binary *b) {
     bool left_names = expr_names_type(c, b->left);
     bool right_names = expr_names_type(c, b->right);

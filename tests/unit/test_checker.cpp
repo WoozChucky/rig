@@ -6470,6 +6470,12 @@ TEST(a_top_level_condition_uses_constants_outside_every_if) {
     CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
     CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if size_of(S) == 8 {}", SYSTEM_NONE, &file), "");
     CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    // A comparison of types (spec 5.20), the struct's among them.
+    CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if *S == *S && int != s64 {} else {}", SYSTEM_NONE, &file),
+              "");
+    CHECK(file->ifs[0]->taken == file->ifs[0]->then_block);
+    CHECK_STR(decide_source(&a, "S :: struct { x: int; }\n#if S == int {} else {}", SYSTEM_NONE, &file), "");
+    CHECK(file->ifs[0]->taken == (Ast_Block *)file->ifs[0]->else_part);
     arena_free(&a);
 }
 
@@ -6489,6 +6495,11 @@ TEST(a_top_level_condition_cant_use_a_name_from_another_if) {
     CHECK(file->ifs[0]->failed);
     CHECK_STR(decide_source(&a, "#if true { T :: struct { x: int; } }\n#if size_of(T) == 8 {}", SYSTEM_NONE, &file),
               "2:13: 'T' is declared in a top-level #if, so it can't decide another top-level #if\n");
+    CHECK(file->ifs[1]->failed);
+    // Compared as a type too, where it names none, the decider seeing only
+    // the base (spec 5.20).
+    CHECK_STR(decide_source(&a, "#if true { T :: struct { x: int; } }\n#if T == int {}", SYSTEM_NONE, &file),
+              "2:5: 'T' is declared in a top-level #if, so it can't decide another top-level #if\n");
     CHECK(file->ifs[1]->failed);
     // In a branch of a nested #if, or of a later arm, too.
     CHECK_STR(decide_source(&a, "#if false {} else #if true { #if true {} else { DEEP :: 1; } }\n#if DEEP == 1 {}",
@@ -12323,15 +12334,19 @@ TEST(value_using_parameters_are_read_only) {
 // Issue #226: types as values (spec 5.20).
 
 TEST(types_compare_where_they_name_types) {
-    // == and != between two types are constant bools, true when they're
-    // the same type: int and s64 are two, float and float32 one. Each
-    // operand has type Type and keeps the type it denotes. A local of a
-    // built-in type's name hides the type, so int == 5 compares the local,
-    // and *p with p a pointer is an address, not a type: values compared.
+    // == and != between two types are constant bools, true for == when
+    // they're the same type and for != when they aren't: int and s64 are
+    // two, float and float32 one, *Vec2 and Vec2 two. An enum's and a
+    // union's names name types as a struct's does. Each operand has type
+    // Type and keeps the type it denotes. A local of a built-in type's name
+    // hides the type, so int == 5 compares the local, and *p with p a
+    // pointer is an address, not a type: values compared.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  "Vec2 :: struct { x: float; }\n"
+                                 "Mode :: enum { A; }\n"
+                                 "Value :: union { i: int; f: float; }\n"
                                  "SAME :: int == s64;\n"
                                  "main :: () {\n"
                                  "    a := int == int;\n"
@@ -12339,6 +12354,11 @@ TEST(types_compare_where_they_name_types) {
                                  "    c := *Vec2 == *Vec2;\n"
                                  "    d := #type (int) -> int == #type (int) -> int;\n"
                                  "    e := float == float32;\n"
+                                 "    m := Mode == Mode;\n"
+                                 "    n := Mode != int;\n"
+                                 "    o := Value == Value;\n"
+                                 "    h := int != int;\n"
+                                 "    i := *Vec2 == Vec2;\n"
                                  "    int := 5;\n"
                                  "    f := int == 5;\n"
                                  "    p: *int;\n"
@@ -12347,12 +12367,12 @@ TEST(types_compare_where_they_name_types) {
                                  &tree),
               "");
     Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
-    const char *constants[] = {"a", "b", "c", "d", "e"};
-    for (const char *name : constants) {
-        Ast_Var *var = (Ast_Var *)find_local(body, name);
+    const char *constants[] = {"a", "b", "c", "d", "e", "m", "n", "o", "h", "i"};
+    for (s64 k = 0; k < 10; k++) {
+        Ast_Var *var = (Ast_Var *)find_local(body, constants[k]);
         CHECK(var->type == &type_bool);
         CHECK(var->value->is_constant);
-        CHECK_EQ(var->value->constant, 1);
+        CHECK_EQ(var->value->constant, k < 8 ? 1 : 0);  // h and i false
     }
     Ast_Const *same = (Ast_Const *)top_level_named(tree, "SAME");
     CHECK(same->type == &type_bool);
@@ -12369,6 +12389,29 @@ TEST(types_compare_where_they_name_types) {
     CHECK(first->right->type == &type_type);
     CHECK(!first->left->is_constant);
     CHECK(type_value(first->left) == &type_int);
+    // *Vec2 is a pointer type, not Vec2's.
+    Ast_Binary *pointers = (Ast_Binary *)((Ast_Var *)find_local(body, "c"))->value;
+    Type *pointer = type_value(pointers->left);
+    CHECK(pointer->kind == TYPE_POINTER);
+    CHECK(pointer->pointee == ((Ast_Struct *)top_level_named(tree, "Vec2"))->declared);
+    arena_free(&a);
+}
+
+TEST(types_compare_before_their_layout) {
+    // A comparison of types needs only which types they are, not a struct's
+    // layout, so one in a struct's own array count, directly or through a
+    // constant, is no circle: Node holds a [2]int.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "G :: Node == Node;\n"
+                                 "Node :: struct { a: [cast(int) G + 1]int; }\n"
+                                 "Leaf :: struct { a: [cast(int) (Leaf == Leaf) + 1]int; }\n"
+                                 "main :: () { }\n",
+                                 &tree),
+              "");
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Node"))->declared->size, 16);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Leaf"))->declared->size, 16);
     arena_free(&a);
 }
 
@@ -12376,7 +12419,7 @@ TEST(types_are_no_values_elsewhere) {
     // A type where a value goes is refused but for a comparison of types:
     // a type value at its start, naming its type; a type against a value
     // at the operator. Type, the type of types, is written nowhere, and no
-    // declaration takes its name.
+    // struct, union or enum takes its name.
     Arena a = arena_make();
     CHECK_STR(check_source(&a,
                            "Type :: struct { }\n"
@@ -12401,5 +12444,24 @@ TEST(types_are_no_values_elsewhere) {
     CHECK_STR(check_source(&a, "main :: () { x := (int) == int; y := ([]int) != []int; }\n"),
               "1:20: 'int' is a type, not a value\n"
               "1:38: '[]int' is a type, not a value\n");
+    // A mistake in a type value is a written type's, said instead; a value
+    // operand's own mistake is said, and the comparison then says nothing;
+    // a name declared nowhere is no type, so an unknown identifier. void is
+    // no type value, as it's no variable's type.
+    CHECK_STR(check_source(&a,
+                           "main :: () {\n"
+                           "    a := []Nope;\n"
+                           "    b := []Nope == int;\n"
+                           "    c := int == nope;\n"
+                           "    d := Nope == int;\n"
+                           "    e := void == int;\n"
+                           "    f := #type void;\n"
+                           "}\n"),
+              "2:12: unknown type 'Nope'\n"
+              "3:12: unknown type 'Nope'\n"
+              "4:17: unknown identifier 'nope'\n"
+              "5:10: unknown identifier 'Nope'\n"
+              "6:10: 'void' is only a pointer's target, as in *void\n"
+              "7:16: 'void' is only a pointer's target, as in *void\n");
     arena_free(&a);
 }

@@ -126,6 +126,13 @@ Type *resolve_type(Checker *c, Ast_Type *written);
 // points at).
 Type *resolve_type_or_void(Checker *c, Ast_Type *written);
 
+// resolve_type for a type written where a value goes (spec 5.20), which
+// needs only its Type *, not its layout: a struct named right there is
+// taken as a pointer's target is, so `Node == Node` may be in Node's own
+// array count. An array's elements are laid out still, its Type holding
+// its size. void is refused as resolve_type refuses it.
+Type *resolve_type_value(Checker *c, Ast_Type *written);
+
 // Makes sure the type of field `index` of struct t is known: a late field's
 // (one holding a pointer or a view, checker.cpp's lay_out) is made here if
 // it isn't yet, as a literal or a field access in a global's value or an
@@ -412,8 +419,9 @@ bool expr_names_type(Checker *c, Ast *e);
 
 // The type e, which expr_names_type holds for, denotes, resolved as a
 // written type is, with its messages ("unknown type 'Foo'", "'Type' only
-// names types while compiling; ..."); e->type then Type (type_type), and
-// the type kept for type_value. Null after a mistake, said. For a place
+// names types while compiling; ..."), but needing no layout
+// (resolve_type_value); e->type then Type (type_type), and the type kept
+// for type_value. Null after a mistake, said. For a place
 // that takes a type value: for now == and != between types.
 Type *check_type_value(Checker *c, Ast *e);
 

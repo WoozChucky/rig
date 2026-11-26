@@ -290,6 +290,12 @@ Type *resolve_type(Checker *c, Ast_Type *written) {
     return resolve_element(c, written, false);
 }
 
+// A type value only says which type it is, so a struct named right there is
+// resolved as behind a pointer, needing no layout (spec 5.20).
+Type *resolve_type_value(Checker *c, Ast_Type *written) {
+    return resolve_element(c, written, true);
+}
+
 // Scopes. Each block being checked has a table of the names declared in it
 // so far, innermost last, so a name is looked up from the inside out: a
 // declaration in an inner block hides one of the same name outside it
