@@ -1,0 +1,13 @@
+type = void (int (*)[2], struct Context *)
+generics.rig:20. (2 locations)
+pick(T = int) (context=
+20	    chosen := b;
+#0  pick(T = int) (context=
+a = 3
+b = 4
+first = true
+pick(T = Vec2) (result$=
+20	    chosen := b;
+#0  pick(T = Vec2) (result$=
+{x = 1, y = 2}
+!.debug_names not created by gdb

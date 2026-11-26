@@ -13894,3 +13894,46 @@ TEST(baked_parameter_mistakes) {
     token_list_free(list);
     arena_free(&a);
 }
+
+// Issue #226: '..$T', defaults and #run in generics (spec 7.11).
+
+TEST(rest_arguments_fix_t_by_the_first_typed_one) {
+    // Each of a '..$T' parameter's arguments gives T, the first typed one
+    // fixing it, an untyped constant then converting to it; with none typed,
+    // they meet at a type whose default T is, an untyped float if any is
+    // one. A spread gives its elements' type. With no argument, nothing
+    // gives T.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "sum :: (values: ..$T) -> T { t: T; for values { t += it; } return t; }\n"
+                                 "main :: () {\n"
+                                 "    x: s16;\n"
+                                 "    a: [3]float;\n"
+                                 "    r: [..]int;\n"
+                                 "    s1 := sum(1, 2, x);\n"
+                                 "    s2 := sum(1, 2);\n"
+                                 "    s3 := sum(1.5, 2);\n"
+                                 "    s4 := sum(..a);\n"
+                                 "    s5 := sum(..r);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    const char *names[] = {"s1", "s2", "s3", "s4", "s5"};
+    const char *types[] = {"s16", "int", "float32", "float32", "int"};
+    for (s64 k = 0; k < 5; k++) CHECK_STR(type_of_main_local(&a, tree, names[k]), types[k]);
+    const char *sum = "sum :: (values: ..$T) -> T { t: T; for values { t += it; } return t; }\n";
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { s := sum(); }\n", sum))),
+              "2:19: can't work out 'T' for 'sum': no argument gives it\n");
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { n: int; s := sum(n, \"a\"); }\n",
+                                                             sum))),
+              "2:34: argument 2 of 'sum' has type 'string', which can't be converted to 'int'\n");
+    // An untyped constant fixes nothing while a typed argument is there:
+    // "a" makes T a string, and 1 doesn't convert to it. The instance for
+    // string is made, its own mistake said inside it.
+    CHECK_STR(check_source(&a, string_cstr(&a, string_printf(&a, "%smain :: () { s := sum(1, \"a\"); }\n", sum))),
+              "1:51: '+=' needs numbers, not 'string'\n"
+              "    in 'sum' with T = string, called at test.rig:2:19\n"
+              "2:23: argument 1 of 'sum' has type 'int', which can't be converted to 'string'\n");
+    arena_free(&a);
+}

@@ -1,0 +1,14 @@
+generics!ring(N = 2, T = int) (int64 (*)[2], struct Context *)
+Matched: generics!pick(T = int)
+Matched: generics!pick(T = Vec2)
+Ambiguous symbol error at '`generics.rig:20`'
+20:     chosen := b;
+generics!pick(T = int)
+int64 a = 0n3
+int64 b = 0n4
+bool first = true
+20:     chosen := b;
+generics!pick(T = Vec2)
+struct Vec2 * 0x
+x                : 0n1
+y                : 0n2

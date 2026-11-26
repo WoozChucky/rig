@@ -1,0 +1,26 @@
+// A #run that fails inside an instance of a generic procedure, and one
+// that fails in an instance it calls (issue #226, spec 7.8, 7.11). limit's
+// #run sees its instance's T, so the one for Big, whose size is 32, fails
+// Basic's assert, while the one for int runs: the failure is said at the
+// #run, its frames follow, as any failed #run's do, then the instance it's
+// in and the call that made it. X's #run calls at's instance for int,
+// whose index is out of bounds: its frame names the instance, at(T = int).
+#import "Basic";
+
+Big :: struct { a: [4]int; }
+
+check_size :: (n: int) -> int {
+    assert(n <= 8, "too big");
+    return n;
+}
+
+limit :: (v: $T) -> int { return #run check_size(size_of(T)); }
+
+at :: (items: []$T, i: int) -> T { return items[i]; }
+
+X :: #run at(int.[1, 2], 3);
+
+main :: () {
+    a := limit(1);
+    b := limit(Big.{});
+}
