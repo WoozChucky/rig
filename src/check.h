@@ -445,8 +445,9 @@ bool check_both_numbers(Checker *c, Type *left, Type *right, Position at, const 
 Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const char *op_name);
 
 // Whether e denotes a type (spec 5.20): an Ast_Type_Value, a name whose
-// lookup finds a struct, an enum or an instance's type parameter (an
-// Ast_Alias, spec 7.11), or none while type_from_name knows it
+// lookup finds a struct, an enum, an instance's type parameter (an
+// Ast_Alias, spec 7.11) or a type alias's (spec 3.22, `V :: Vec2;`), or
+// none while type_from_name knows it
 // (a local `int := 5;` hides the type int), or *X of such an X; never one
 // in parentheses, which is a value, as (Vec2).{1} is no literal. Looks only:
 // nothing is checked or said (a global the lookup finds is worked out, as

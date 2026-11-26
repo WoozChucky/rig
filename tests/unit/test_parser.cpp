@@ -4803,6 +4803,12 @@ TEST(parses_type_aliases) {
               "(proc main (params) (block (var x _ (int 1)) (#if (bool true) (block (const Cb (type (proc-type "
               "(params int) (returns int))))))))\n");
     CHECK_STR(errors, "");
+    // After the ')', a directive or a '{' inside brackets or parentheses,
+    // an array's count's, is the signature's, not one that ends the look.
+    CHECK_STR(parse_src(&a, "Cb :: () -> [#run n()]u8;\nCc :: () -> [(S.{n = 2}).n]u8;\n", &errors),
+              "(const Cb (type (proc-type (params) (returns (array (run (call n)) u8)))))\n"
+              "(const Cc (type (proc-type (params) (returns (array (member (literal S (n (int 2))) n) u8)))))\n");
+    CHECK_STR(errors, "");
     arena_free(&a);
 }
 
@@ -4820,12 +4826,16 @@ TEST(alias_syntax_mistakes) {
     // The look for the ';' stops at the next declaration, an identifier
     // starting a line, then '::': a procedure whose body is missing keeps
     // being one, said where its '{' should be, whatever ends the next
-    // declaration; a '(' never closed before it is no alias either.
+    // declaration; a '(' not closed before it is no alias either, even
+    // when a ')' after it closes it, so a default value there is no
+    // procedure type's: the procedure's own messages.
     parse_src(&a, "f :: () -> int\nN :: 5;\nmain :: () {}\n", &errors);
     CHECK_STR(errors, "2:1: expected '{', found identifier 'N'\n");
     parse_src(&a, "f :: () -> int\ng :: () {}\n", &errors);
     CHECK_STR(errors, "2:1: expected '{', found identifier 'g'\n");
     parse_src(&a, "f :: (a: int\nN :: 5;\n", &errors);
     CHECK_STR(errors, "2:1: expected ')', found identifier 'N'\n");
+    parse_src(&a, "f :: (a: int = 1\nN :: 5);\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'N'\n2:7: expected ';', found ')'\n");
     arena_free(&a);
 }

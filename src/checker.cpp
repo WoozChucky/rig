@@ -4,6 +4,7 @@
 #include "check.h"
 
 static Ast *find_name(Checker *c, String name);
+static bool may_be_alias(Checker *c, Ast_Const *constant);
 static Type *resolve_struct(Checker *c, Ast_Struct *s);
 static bool resolve_enum(Checker *c, Ast_Enum *e);
 
@@ -289,11 +290,14 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
             return resolve_struct(c, bound->decl);
         }
         return bound;
-    } else if (decl->kind == AST_CONST && !decl->type && written_as_type(((Ast_Const *)decl)->value)) {
+    } else if (decl->kind == AST_CONST && !decl->type && written_as_type(((Ast_Const *)decl)->value) &&
+               (((Ast_Const *)decl)->resolve != RESOLVE_NOT_YET || may_be_alias(c, (Ast_Const *)decl))) {
         // A constant whose value is written as a type may be, but which has
         // no type, had its own mistake said (`V :: []Nope;`), or is in the
-        // circle being said (`S :: *S;`, resolve_global): its uses say
-        // nothing more.
+        // circle being said (`S :: *S;`, resolve_global), or couldn't be
+        // worked out, nested too deeply, said: its uses say nothing more.
+        // One find_name left as it is, which is no alias (may_be_alias,
+        // `K :: g;` with g a variable), is no type.
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
@@ -415,16 +419,42 @@ static Ast *alias_in_place(Ast *decl) {
     return decl;
 }
 
+// Whether the top-level constant `constant` may be an alias (spec 3.22),
+// told by lookup alone, nothing worked out: its value, past any '*', is a
+// type written as a value, or a name that is a struct's, an enum's, a
+// built-in type's, none's (an unknown identifier, said when the constant is
+// worked out), or a constant's that is an alias, is under way (a circle,
+// which working it out says), had its own mistake said, or may be an alias
+// in turn. A name of a variable, a procedure or a constant that is no alias
+// makes it none. Its value is looked up at the top level only, as
+// resolve_global checks it, no scopes open. A chain longer than the top
+// level has names goes round a circle, which working it out says.
+static bool may_be_alias(Checker *c, Ast_Const *constant) {
+    for (s64 steps = 0; steps <= c->top_level.count; steps++) {
+        if (constant->resolve == RESOLVE_DONE) return constant->alias || !constant->type;
+        if (!written_as_type(constant->value)) return false;
+        if (constant->resolve != RESOLVE_NOT_YET) return true;
+        Ast *value = constant->value;
+        while (value->kind == AST_UNARY) value = ((Ast_Unary *)value)->operand;
+        if (value->kind == AST_TYPE_VALUE) return true;
+        Ast **found = table_get(&c->top_level, ((Ast_Name *)value)->name);
+        if (!found || (*found)->kind == AST_STRUCT || (*found)->kind == AST_ENUM) return true;
+        if ((*found)->kind != AST_CONST) return false;
+        constant = (Ast_Const *)*found;
+    }
+    return true;
+}
+
 // The declaration `name` means where the checker is, the innermost block's
 // first, else the binding of the instance being checked (spec 7.11), else
 // the top level's; null when there's none. Only looked up, but a top-level
-// constant whose value is written as a type may be (written_as_type) is
-// worked out first (resolve_global), as check_lookup does: whether it's
-// an alias, which is found in its place (alias_in_place), is known only
-// then, so an alias can be used before its declaration, in a struct's
-// field or a global's type too. Any other
-// constant is never an alias, so its value isn't worked out here: `S ::
-// struct { a: C; } C :: size_of(S);` is "'C' is not a type", no circle.
+// constant that may be an alias (may_be_alias) is worked out first
+// (resolve_global), as check_lookup does: whether it's an alias, which is
+// found in its place (alias_in_place), is known only then, so an alias can
+// be used before its declaration, in a struct's field or a global's type
+// too. Any other constant is never an alias, so its value isn't worked out
+// here: `S :: struct { a: C; } C :: size_of(S);` and `S :: struct { a: C; }
+// C :: D; D :: size_of(S);` are "'C' is not a type", no circle.
 static Ast *find_name(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
@@ -436,7 +466,7 @@ static Ast *find_name(Checker *c, String name) {
     }
     Ast **found = table_get(&c->top_level, name);
     if (!found) return nullptr;
-    if ((*found)->kind == AST_CONST && written_as_type(((Ast_Const *)*found)->value)) resolve_global(c, *found);
+    if ((*found)->kind == AST_CONST && may_be_alias(c, (Ast_Const *)*found)) resolve_global(c, *found);
     return alias_in_place(*found);
 }
 
@@ -936,12 +966,16 @@ static void check_const_value(Checker *c, Ast_Const *constant) {
 // A local constant, declared from here to the end of its block. Its value
 // is worked out while compiling, never with the caller's context, so a
 // #c_call body's having none (Checker.contextless) is nothing to it: one
-// that needs a context isn't known while compiling, as in any body.
+// that needs a context isn't known while compiling, as in any body. It is
+// worked out (RESOLVE_DONE) before any use finds it, as a top-level one is
+// once resolve_global is done with it, so resolve_written takes one with no
+// type as having had its mistake said.
 static void check_const(Checker *c, Ast_Const *constant) {
     bool outer_contextless = c->contextless;
     c->contextless = false;
     check_const_value(c, constant);
     c->contextless = outer_contextless;
+    constant->resolve = RESOLVE_DONE;
     declare(c, constant->name, constant);
 }
 

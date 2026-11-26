@@ -90,7 +90,8 @@ enum Ast_Kind : u8 {
     AST_SWITCH,        // Ast_Switch: if x == { case 1; ... }  if #complete m == { ... } (spec 6.14)
     AST_CASE,          // Ast_Case: case 1; statements  case; statements
     AST_TYPE_VALUE,    // Ast_Type_Value: a type written where a value goes, [N]T []T [..]T #type T (spec 5.20)
-    AST_ALIAS,         // Ast_Alias: a name for a type: an instance's type parameter (spec 7.11)
+    AST_ALIAS,         // Ast_Alias: a name for a type: an instance's type parameter (spec 7.11), or a
+                       // type alias, V :: Vec2; (spec 3.22, Ast_Const.alias)
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -623,8 +624,8 @@ struct Ast_Call : Ast {
 struct Ast_Name : Ast {
     String name;
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
-                // or an Ast_Struct, an Ast_Enum or an instance's Ast_Alias (spec 7.11), whose name
-                // is a type, not a value (reported),
+                // or an Ast_Struct, an Ast_Enum, an instance's Ast_Alias (spec 7.11) or a type
+                // alias's (spec 3.22), whose name is a type, not a value (reported),
                 // or an Ast_Builtin, which only a call's callee may name (spec 3.17)
     Ast *through;  // a using parameter's field (spec 3.21): the chain it means, e.position, whose innermost
                    // operand is an Ast_Name naming the parameter; decl is the parameter. Null otherwise

@@ -14115,7 +14115,8 @@ TEST(aliases_are_the_types_they_name) {
     // alias's too (P :: *V;), a procedure type's written as a signature. At
     // the top level one may be used before its declaration, in a struct's
     // field, in a global's type and in an array's count there; in a body in
-    // order, a local one hiding the top level's of its name. An enum's
+    // order, a local one hiding the top level's of its name, and used where
+    // a value goes as a top-level one is. An enum's
     // members are named through one (M.B). One in a generic's body is each
     // instance's, naming its T. The constant keeps the alias, of type Type.
     Arena a = arena_make();
@@ -14136,6 +14137,7 @@ TEST(aliases_are_the_types_they_name) {
                                  "Mode :: enum { A; B; }\n"
                                  "M :: Mode;\n"
                                  "twice :: (n: int) -> int { return n * 2; }\n"
+                                 "size_in :: ($T: Type) -> int { return size_of(T); }\n"
                                  "first_two :: (xs: []$T) -> [2]T {\n"
                                  "    Two :: [2]T;\n"
                                  "    r: Two;\n"
@@ -14151,6 +14153,12 @@ TEST(aliases_are_the_types_they_name) {
                                  "    n: My_Int = 3;\n"
                                  "    Local :: [2]V;\n"
                                  "    arr: Local;\n"
+                                 "    lsame := Local == [2]Vec2;\n"
+                                 "    L2 :: Local;\n"
+                                 "    w: L2;\n"
+                                 "    LM :: Mode;\n"
+                                 "    lm := LM.B;\n"
+                                 "    ls := size_in(Local);\n"
                                  "    same := V == Vec2;\n"
                                  "    also := My_Int == int;\n"
                                  "    differ := My_Int == s64;\n"
@@ -14172,12 +14180,21 @@ TEST(aliases_are_the_types_they_name) {
     CHECK_STR(type_name(&a, find_local(body, "f")->type), "(int) -> int");
     CHECK(find_local(body, "n")->type == &type_int);
     CHECK_STR(type_name(&a, find_local(body, "arr")->type), "[2]Vec2");
-    const char *compared[] = {"same", "also", "differ"};
-    for (s64 k = 0; k < 3; k++) {
+    // A local alias where a value goes, as the top level's is: compared,
+    // named by another alias, an enum's members named through it, and a
+    // $T argument.
+    CHECK_STR(type_name(&a, find_local(body, "w")->type), "[2]Vec2");
+    CHECK(find_local(body, "lm")->type == ((Ast_Enum *)top_level_named(tree, "Mode"))->declared);
+    CHECK(find_local(body, "ls")->type == &type_int);
+    Ast_Proc *size_in = (Ast_Proc *)top_level_named(tree, "size_in");
+    CHECK_EQ(size_in->instances.count, 1);
+    if (size_in->instances.count == 1) CHECK_STR(size_in->instances[0]->name, "size_in(T = [2]Vec2)");
+    const char *compared[] = {"lsame", "same", "also", "differ"};
+    for (s64 k = 0; k < 4; k++) {
         Ast_Var *var = (Ast_Var *)find_local(body, compared[k]);
         CHECK(var->type == &type_bool);
         CHECK(var->value->is_constant);
-        CHECK_EQ(var->value->constant, k < 2 ? 1 : 0);
+        CHECK_EQ(var->value->constant, k < 3 ? 1 : 0);
     }
     Ast_Const *s = (Ast_Const *)find_local(body, "s");
     CHECK(s->is_constant);
@@ -14265,6 +14282,19 @@ TEST(alias_mistakes) {
         // written, its value not worked out there: the struct it needs is
         // in no circle.
         {"S :: struct { a: C; }\nC :: size_of(S);\nmain :: () { }\n", "1:18: 'C' is not a type\n"},
+        // Nor is one whose value names a value, a procedure or a constant
+        // that is no alias: the name is followed by lookup alone, so a
+        // struct, a procedure or a global its value needs is in no circle.
+        {"S :: struct { f: K; }\nK :: N;\nN :: size_of(S);\nmain :: () { }\n", "1:18: 'K' is not a type\n"},
+        {"S :: struct { f: [2]C; }\nC :: D;\nD :: size_of(S);\nmain :: () { }\n", "1:21: 'C' is not a type\n"},
+        {"S :: struct { f: OP; }\nOP :: make;\nmake :: () -> S { s: S; return s; }\nmain :: () { }\n",
+         "1:18: 'OP' is not a type\n"},
+        {"S :: struct { f: OP; }\nOP :: add;\nadd :: (s: S) -> int { return 0; }\nmain :: () { }\n",
+         "1:18: 'OP' is not a type\n"},
+        {"f :: (a: K) {}\nK :: f;\nmain :: () { }\n", "1:10: 'K' is not a type\n"},
+        {"g: K;\nK :: g;\nmain :: () { }\n", "1:4: 'K' is not a type\n"},
+        // A local alias is no value either.
+        {"main :: () { L :: [2]int; x := L; }\n", "1:32: 'L' is a type, not a value\n"},
     };
     for (const Case &k : cases) CHECK_STR(check_source(&a, k.text), k.message);
     // A chain of aliases too deep is said once, at the one too many: the

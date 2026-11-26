@@ -628,9 +628,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
         break;
     }
     case AST_ALIAS:
-        // (alias T): an instance's type parameter, which the checker makes
-        // and no tree holds, as a built-in procedure isn't in one either:
-        // the case is here so the switch covers every Ast_Kind.
+        // (alias T): an instance's type parameter (spec 7.11) or a type
+        // alias, V :: Vec2; (spec 3.22, Ast_Const.alias), which the checker
+        // makes and no tree's statements hold (a constant's dump shows its
+        // value, not its alias), as a built-in procedure isn't in one
+        // either: the case is here so the switch covers every Ast_Kind.
         out(buffer, "(alias ");
         out(buffer, ((Ast_Alias *)node)->name);
         out(buffer, ")");
