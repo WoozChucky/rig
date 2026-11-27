@@ -2485,7 +2485,8 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 // nowhere else is one: (int) is a value. Only the places that take a type
 // check one as such (check_type_value), for now == and != between two
 // types (check_binary), a $T: Type parameter's argument
-// (check_generic_call), and a constant's value, which makes it an alias
+// (check_generic_call), a generic struct's type argument (check_generic.cpp's
+// bind_struct_argument), and a constant's value, which makes it an alias
 // (checker.cpp's check_const_value). A type value is never a value
 // at run time: it has type Type, never a constant (Ast.is_constant stays
 // false, so nothing folds or lowers it), the type it denotes kept in

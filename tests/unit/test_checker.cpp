@@ -15062,13 +15062,19 @@ TEST(struct_instances_have_a_depth_limit) {
 TEST(instances_are_one_type_however_written) {
     // An instance written where a value goes, as a call of the generic
     // struct, is the one written where a type goes: compared with ==, named
-    // by an alias, at the top level or in a body, in a generic procedure's
-    // instance naming its T, and in a top-level #run, one type per set of
-    // arguments however each is written.
+    // by an alias, at the top level or in a body, the top level's used
+    // before its declaration too (a struct's field, a global's type, a
+    // parameter's), in a generic procedure's instance naming its T, and in
+    // a top-level #run, one type per set of arguments however each is
+    // written.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+                                 "S :: struct { r: Early; }\n"
+                                 "g: Early;\n"
+                                 "use :: (x: Early) { }\n"
+                                 "Early :: Ring(int, 4);\n"
                                  "R4 :: Ring(int, 4);\n"
                                  "same_ring :: ($T: Type) -> bool { return Ring(T, 4) == Ring(int, 4); }\n"
                                  "RUN :: #run same_ring(int);\n"
@@ -15111,6 +15117,9 @@ TEST(instances_are_one_type_however_written) {
     CHECK_STR(type_name(&a, m), "Ring(int, 4)");
     CHECK(local_type(tree, "main", "h") == m);
     CHECK(local_type(tree, "main", "k") == m);
+    CHECK(((Ast_Struct *)top_level_named(tree, "S"))->declared->fields[0].type == m);
+    CHECK(((Ast_Var *)top_level_named(tree, "g"))->type == m);
+    CHECK(((Ast_Proc *)top_level_named(tree, "use"))->params[0]->type == m);
     Ast_Const *r4 = (Ast_Const *)top_level_named(tree, "R4");
     CHECK(r4->alias && r4->alias->aliased == m);
     CHECK(r4->type == &type_type);
@@ -15163,6 +15172,30 @@ TEST(instance_value_mistakes) {
         // nothing more.
         {"Int_Pair :: Pair(int, Nope);\nmain :: () { x: Int_Pair; y := Int_Pair.{}; }\n",
          "3:23: unknown identifier 'Nope'\n"},
+        // A constant whose value calls a name that is none may be an
+        // instance: it had its own mistake said, so its uses say nothing
+        // more, before its declaration or after. A call of a procedure is a
+        // value, so its uses are no type, whether it's worked out yet or
+        // not, and no circle.
+        {"K :: nope(1);\nmain :: () { x: K; }\n", "3:6: unknown identifier 'nope'\n"},
+        {"S :: struct { a: K; }\nK :: nope(1);\nmain :: () { }\n", "4:6: unknown identifier 'nope'\n"},
+        {"S :: struct { a: K; }\nK :: f(1);\nf :: (n: int) -> int { return n; }\nmain :: () { x: K; }\n",
+         "3:18: 'K' is not a type\n"
+         "4:6: the value of constant 'K' isn't known while compiling\n"
+         "6:17: 'K' is not a type\n"},
+        {"K :: f(v);\nv: K;\nf :: (n: int) -> int { return n; }\nmain :: () { }\n",
+         "3:6: the value of constant 'K' isn't known while compiling\n"
+         "4:4: 'K' is not a type\n"},
+        // In parentheses an instance is a value, compared or as a
+        // constant's value too.
+        {"main :: () { x := (Pair(int, int)) == Pair(int, int); }\n",
+         "3:20: 'Pair(int, int)' is a type, not a value\n"},
+        {"P :: (Pair(int, int));\nmain :: () { }\n", "3:7: 'Pair(int, int)' is a type, not a value\n"},
+        // A local of the generic's name hides it, as a callee.
+        {"main :: () { Pair := 1; x := Pair(int, int); }\n",
+         "3:30: 'Pair' isn't a procedure, so it can't be called\n"
+         "3:35: 'int' is a type, not a value\n"
+         "3:40: 'int' is a type, not a value\n"},
     };
     for (const Case &k : cases) {
         CHECK_STR(check_with_preload(&a, joined(&a,

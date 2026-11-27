@@ -2476,7 +2476,7 @@ A type may be written where a value goes, in the places that take one: for now, 
 
 - a type's name, `int`, `Vec2`, written as a name is;
 - `*X`, a pointer type, written as an address is, `X` naming a type;
-- a generic struct's instance, `Map(string, int)` (section 3.23), written as a call of the generic is, its arguments read as an instance's are where a type goes: one that names a type, in any of these forms, is a type, any other a value, which a constant parameter takes, so `Ring(T, N + 1)` and `Ring(int, SIZE)` are instances there too;
+- a generic struct's instance, `Map(string, int)` (section 3.23), written as a call of the generic is, its arguments expressions: one that names a type, in any of these forms, is a type, any other a value, which a constant parameter takes, so `Ring(T, N + 1)` and `Ring(int, SIZE)` are instances there too, and a name that names nothing is read as a value, as for any type value, so `Pair(string, Nope) == int` is `unknown identifier 'Nope'`;
 - `[N]T`, `[]T` and `[..]T`: no expression starts with `[`, so one there begins a type. Where it can't be one, because its brackets hold a `,` of their own (not one inside parentheses, brackets or braces, as `[f(1, 2)]int`'s is) or the token after its `]` can't start a type, being none of a name, `*`, `[`, `(` and `$` (`[1, 2, 3]`, `[]`, `[1]`), it's taken for an array literal written as C writes one: `an array literal starts with '.', as in .[1, 2, 3] or int.[1, 2, 3]`, at the `[` (section 5.17). `[..]` is always a type's;
 - `#type T`, Jai's directive, which a procedure type needs: its `(int)` would read as parentheses, so `#type (int) -> int`.
 

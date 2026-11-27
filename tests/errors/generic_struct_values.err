@@ -19,3 +19,14 @@ tests/errors/generic_struct_values.rig:14:18: error: argument 2 of 'Pair' must b
 tests/errors/generic_struct_values.rig:15:10: error: 'Vec2' isn't a procedure, so it can't be called
         u := Vec2(1);
              ^
+tests/errors/generic_struct_values.rig:17:10: error: 'Ring(int, -2)' is a type, not a value
+        r := Ring(int, -2);
+             ^
+tests/errors/generic_struct_values.rig:20:44: error: an array's count can't be negative (-1)
+    Ring :: struct (T: Type, N: int) { items: [N]T; }
+                                               ^
+    in 'Ring' with T = int, N = -1, used at tests/errors/generic_struct_values.rig:16:10
+tests/errors/generic_struct_values.rig:20:44: error: an array's count can't be negative (-2)
+    Ring :: struct (T: Type, N: int) { items: [N]T; }
+                                               ^
+    in 'Ring' with T = int, N = -2, used at tests/errors/generic_struct_values.rig:17:10

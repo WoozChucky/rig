@@ -1457,8 +1457,8 @@
 //   name of a type, or of a constant that may be one in turn: checker.cpp's
 //   may_be_alias), out first (resolve_global), as check_lookup does, so an
 //   alias can be used before its declaration, in a struct's field or a
-//   global's type; any other,
-//   `C :: size_of(S);` or `C :: D;` with D no alias, is "'C' is not a type"
+//   global's type; any other, `C :: size_of(S);`, `C :: f(1);` with f a
+//   procedure, or `C :: D;` with D no alias, is "'C' is not a type"
 //   there, its value not worked out, so no circle. A local one is declared in order, as
 //   any local constant. A circle is a constant's, "'A' is defined in terms
 //   of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias dropped.

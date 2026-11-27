@@ -5,6 +5,7 @@
 
 static Ast *find_name(Checker *c, String name);
 static bool may_be_alias(Checker *c, Ast_Const *constant);
+static bool may_call_instance(Checker *c, Ast *value);
 static Type *resolve_struct(Checker *c, Ast_Struct *s);
 static bool resolve_enum(Checker *c, Ast_Enum *e);
 
@@ -312,14 +313,17 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
         }
         return bound;
     } else if (decl->kind == AST_CONST && !decl->type && written_as_type(((Ast_Const *)decl)->value) &&
+               may_call_instance(c, ((Ast_Const *)decl)->value) &&
                (((Ast_Const *)decl)->resolve != RESOLVE_NOT_YET || may_be_alias(c, (Ast_Const *)decl))) {
         // A constant whose value is written as a type may be, but which has
         // no type, had its own mistake said (`V :: []Nope;`, `P ::
-        // Pair(int, Nope);`, or a call's, `K :: nope(1);`), or is in the
-        // circle being said (`S :: *S;`, resolve_global), or couldn't be
-        // worked out, nested too deeply, said: its uses say nothing more.
-        // One find_name left as it is, which is no alias (may_be_alias,
-        // `K :: g;` with g a variable), is no type.
+        // Pair(int, Nope);`, or an unknown callee's, `K :: nope(1);`), or
+        // is in the circle being said (`S :: *S;`, resolve_global), or
+        // couldn't be worked out, nested too deeply, said: its uses say
+        // nothing more. One find_name left as it is, which is no alias
+        // (may_be_alias, `K :: g;` with g a variable), is no type, as is a
+        // call of anything but a generic struct, `K :: f(1);` with f a
+        // procedure (may_call_instance), whether worked out yet or not.
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
     }
@@ -441,10 +445,25 @@ static Ast *alias_in_place(Ast *decl) {
     return decl;
 }
 
+// Whether `value`, a top-level constant's, may be an instance (spec 3.23)
+// if it's a call of a name, past any '*': it is when the callee, looked
+// up at the top level as resolve_global checks it, is a generic struct's
+// name, or none's (an unknown identifier, said when the constant is worked
+// out). A call of anything else is a value, never an alias; any other
+// value is no call, so this says nothing of it.
+static bool may_call_instance(Checker *c, Ast *value) {
+    while (value->kind == AST_UNARY) value = ((Ast_Unary *)value)->operand;
+    if (value->kind != AST_CALL) return true;
+    Ast *callee = ((Ast_Call *)value)->callee;
+    if (callee->kind != AST_NAME) return true;
+    Ast **found = table_get(&c->top_level, ((Ast_Name *)callee)->name);
+    return !found || ((*found)->kind == AST_STRUCT && ((Ast_Struct *)*found)->is_generic);
+}
+
 // Whether the top-level constant `constant` may be an alias (spec 3.22),
 // told by lookup alone, nothing worked out: its value, past any '*', is a
-// type written as a value, a call of a generic struct, its instance (spec
-// 3.23), or a name that is a struct's, an enum's, a built-in type's,
+// type written as a value, a call of a generic struct or of none, its
+// instance (spec 3.23, may_call_instance), or a name that is a struct's, an enum's, a built-in type's,
 // none's (an unknown identifier, said when the constant is
 // worked out), or a constant's that is an alias, is under way (a circle,
 // which working it out says), had its own mistake said, or may be an alias
@@ -454,18 +473,15 @@ static Ast *alias_in_place(Ast *decl) {
 // level has names goes round a circle, which working it out says.
 static bool may_be_alias(Checker *c, Ast_Const *constant) {
     for (s64 steps = 0; steps <= c->top_level.count; steps++) {
+        // A call of anything but a generic struct is a value, worked out
+        // or not, so whether it's no alias never hangs on the order.
+        if (!may_call_instance(c, constant->value)) return false;
         if (constant->resolve == RESOLVE_DONE) return constant->alias || !constant->type;
         if (!written_as_type(constant->value)) return false;
         if (constant->resolve != RESOLVE_NOT_YET) return true;
         Ast *value = constant->value;
         while (value->kind == AST_UNARY) value = ((Ast_Unary *)value)->operand;
-        if (value->kind == AST_TYPE_VALUE) return true;
-        if (value->kind == AST_CALL) {
-            // An instance, Pair(int, int), when the callee is a generic
-            // struct's name (spec 3.23); any other call is a value.
-            Ast **callee = table_get(&c->top_level, ((Ast_Name *)((Ast_Call *)value)->callee)->name);
-            return callee && (*callee)->kind == AST_STRUCT && ((Ast_Struct *)*callee)->is_generic;
-        }
+        if (value->kind == AST_TYPE_VALUE || value->kind == AST_CALL) return true;
         Ast **found = table_get(&c->top_level, ((Ast_Name *)value)->name);
         if (!found || (*found)->kind == AST_STRUCT || (*found)->kind == AST_ENUM) return true;
         if ((*found)->kind != AST_CONST) return false;
