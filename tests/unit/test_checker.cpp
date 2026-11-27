@@ -14981,6 +14981,46 @@ TEST(generic_struct_fields_reach_its_instances) {
     arena_free(&a);
 }
 
+TEST(aliases_of_instances_come_before_their_generics) {
+    // An alias of an instance declared before its generic checks the
+    // generic while it's worked out, and a field naming the alias is no
+    // circle, in either order (spec 4.8): the generic's own check passes
+    // over the alias (alias_under_way), each instance's layout resolving
+    // it. So is one first needed by a global, a plain struct's field or a
+    // parameter, or reached through a second generic.
+    Arena a = arena_make();
+    const char *fine[] = {
+        "Ptr :: *Node(int);\nNode :: struct (T: Type) { v: T; kids: [..]Ptr; }\nmain :: () { x: Node(int); }\n",
+        "Node :: struct (T: Type) { v: T; kids: [..]Ptr; }\nPtr :: *Node(int);\nmain :: () { x: Node(int); }\n",
+        "Al :: *S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n",
+        "Al :: S(int); S :: struct (T: Type) { a: *Al; t: T; }\nmain :: () { x: Al; }\n",
+        "Al :: []S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n",
+        "g: Ptr;\nPtr :: *Node(int);\nNode :: struct (T: Type) { v: T; kids: [..]Ptr; }\nmain :: () { }\n",
+        "Holder :: struct { p: Ptr; }\nPtr :: *Node(int);\nNode :: struct (T: Type) { kids: [..]Ptr; }\n"
+        "main :: () { }\n",
+        "f :: (p: Ptr) { }\nPtr :: *Node(int);\nNode :: struct (T: Type) { kids: [..]Ptr; }\nmain :: () { }\n",
+        "Al :: *A(int); A :: struct (T: Type) { b: B(T); } B :: struct (T: Type) { p: Al; }\n"
+        "main :: () { x: A(int); }\n",
+        "BI :: B(int); AI :: A(int); A :: struct (T: Type) { b: *BI; } B :: struct (T: Type) { a: *AI; }\n"
+        "main :: () { x: A(int); y: B(int); }\n",
+    };
+    for (s64 i = 0; i < (s64)(sizeof(fine) / sizeof(fine[0])); i++) CHECK_STR(check_with_preload(&a, fine[i]), "");
+    // A real circle is still said, once: a value that needs itself, and a
+    // layout that needs the alias's value while it's worked out, in either
+    // order, with the instance whose layout needed it.
+    CHECK_STR(check_source(&a, "Box :: struct (T: Type) { v: T; }\nA :: *Box(A);\nmain :: () { }\n"),
+              "2:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "Box :: struct (T: Type) { v: T; }\nA :: Box(B); B :: Box(A);\nmain :: () { }\n"),
+              "2:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "Al :: [2]S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n"),
+              "1:1: 'Al' is defined in terms of itself\n"
+              "    in 'S' with T = int, used at test.rig:1:10\n");
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { a: Al; t: T; } Al :: [2]S(int);\nmain :: () { }\n"),
+              "1:40: 'Al' is defined in terms of itself\n"
+              "    in 'S' with T = int, used at test.rig:1:49\n");
+    arena_free(&a);
+}
+
 TEST(struct_instance_errors_name_their_chain) {
     // A mistake that depends on an instance's arguments, a negative count
     // or a layout that holds itself, is that instance's, followed by its

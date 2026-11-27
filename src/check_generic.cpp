@@ -1734,6 +1734,30 @@ static void field_steps(Ast_Struct *s, Array<Generic_Field_Step> *steps) {
     }
 }
 
+// Whether step name `written`, a type name or an instance's name in a
+// generic struct's field, none of its parameters `declared`, is a top-level
+// constant that may be an alias (checker.cpp's may_be_alias) whose value is
+// being worked out. That value needs an instance of the generic, so it
+// checked the generic: Ptr :: *Node(int); with a field kids: [..]Ptr. No
+// circle, as an instance needs only the generic's parameters
+// (check_struct_instance), but looking the name up would work the constant
+// out again and say it's defined in terms of itself, which the other order
+// never says (spec 4.8). So the generic's own check passes over it, and
+// each instance's layout resolves it, the alias worked out by then. A
+// layout that needs the alias's value while it's worked out still says the
+// circle, as in Al :: [2]S(int); with a field a: Al, and so does a value
+// that needs itself, A :: *Box(A); (resolve_global).
+static bool alias_under_way(Checker *c, Array<Generic_Binding> declared, Ast_Type *written) {
+    if (type_from_name(written->name) || is_type_parameter(declared, written->name) ||
+        is_constant_parameter(declared, written->name)) {
+        return false;
+    }
+    Ast **found = table_get(&c->top_level, written->name);
+    if (!found || (*found)->kind != AST_CONST) return false;
+    Ast_Const *constant = (Ast_Const *)*found;
+    return constant->resolve == RESOLVE_UNDER_WAY && may_be_alias(c, constant);
+}
+
 // The steps of generic struct generic's check of its fields not checked
 // yet, its own and its anonymous members', checked as the generic's own
 // (spec 3.23), against its parameters and the named fields so far across
@@ -1751,7 +1775,8 @@ static void field_steps(Ast_Struct *s, Array<Generic_Field_Step> *steps) {
 //   generic, so it takes no arguments", its count right, "'Map' takes 2
 //   arguments, but 1 was given", and a written type where it takes a
 //   constant no value (at_generic_instance). An array's count and an
-//   instance's other arguments are each instance's to check.
+//   instance's other arguments are each instance's to check, and so is a
+//   name of an alias being worked out (alias_under_way).
 // A field said to clash has its type checked, for its own mistakes, only
 // when it holds a pointer or a view, as lay_out makes only a late one's.
 // Each mistake marks the generic as it's said (Ast_Struct.had_errors); a
@@ -1765,7 +1790,7 @@ static void check_generic_fields(Checker *c, Ast_Struct *generic) {
         Generic_Field_Step step = check->steps[check->checked++];
         Ast_Field *field = step.field;
         if (step.name) {
-            if (field == check->unchecked) continue;
+            if (field == check->unchecked || alias_under_way(c, check->declared, step.name)) continue;
             Generic_Type_Check name_check = {c, check->declared, false};
             at_generic_type_name(&name_check, step.name, step.place);
             generic->had_errors |= name_check.said;

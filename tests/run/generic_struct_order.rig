@@ -1,0 +1,61 @@
+// Aliases of generic structs' instances in any order (issue #227, spec
+// 3.22, 3.23, 4.8): an alias declared before its generic, whose field
+// names the alias (Ptr and Node), works as the other order does (Twig and
+// Twig_Ptr); so does one first needed by a global (Leaf_Ptr), and one
+// reached through a second generic (Fwd_Ptr, Fwd and Back), or two aliases
+// of two generics that point at each other's instances (Pb and Pa, Chain
+// and Branch). The same compiled and interpreted.
+#import "Basic";
+
+Ptr :: *Node(int);
+Node :: struct (T: Type) { v: T; kids: [..]Ptr; }
+
+Twig :: struct (T: Type) { v: T; kids: [..]Twig_Ptr; }
+Twig_Ptr :: *Twig(int);
+
+leaf: Leaf_Ptr;
+Leaf_Ptr :: *Leaf(int);
+Leaf :: struct (T: Type) { v: T; next: Leaf_Ptr; }
+
+Fwd_Ptr :: *Fwd(int);
+Fwd :: struct (T: Type) { back: Back(T); }
+Back :: struct (T: Type) { p: Fwd_Ptr; v: T; }
+
+Pb :: Branch(int);
+Pa :: Chain(int);
+Chain :: struct (T: Type) { b: *Pb; v: T; }
+Branch :: struct (T: Type) { a: *Pa; v: T; }
+
+main :: () {
+    root: Node(int);
+    root.v = 1;
+    kid: Node(int);
+    kid.v = 2;
+    array_add(*root.kids, *kid);
+    print("{} {}\n", root.v, root.kids[0].v);
+    array_free(*root.kids);
+
+    twig: Twig(int);
+    twig.v = 3;
+    array_add(*twig.kids, *twig);
+    print("{}\n", twig.kids[0].kids[0].v);
+    array_free(*twig.kids);
+
+    l: Leaf(int);
+    l.v = 4;
+    leaf = *l;
+    print("{} {}\n", leaf.v, leaf.next == null);
+
+    f: Fwd(int);
+    f.back.v = 5;
+    f.back.p = *f;
+    print("{}\n", f.back.p.back.v);
+
+    c: Pa;
+    b: Pb;
+    c.v = 6;
+    b.v = 7;
+    c.b = *b;
+    b.a = *c;
+    print("{} {}\n", c.b.a.v, b.a.b.v);
+}
