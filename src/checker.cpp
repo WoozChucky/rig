@@ -201,11 +201,16 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // Type has its size from the start (declare_top_level), its members' values
 // worked out only where they're needed (resolve_enum). Any other name
 // declared where the type is written isn't a type ("'foo' is not a type"):
-// a constant's is taken back at the end of check() when the constant's own
+// a constant's is taken back at the end of check(), or as a #run's exit()
+// ends the process inside it (withdraw_at_exit), when the constant's own
 // declaration said a mistake and left it with no type, which it would only
-// repeat. That's decided there, not at the use, which may come before the
-// constant is worked out, so a use before the declaration and one after it
-// get the same (withdraw_repeated_not_a_type). A name declared nowhere is
+// repeat. A "'Y' is not a type" said there of a constant that has a type,
+// `X :: cast(Y) 1;` with `Y :: 5;`, is X's own mistake; one said of a
+// constant with no type isn't, nor is a mistake in another declaration X's
+// value names, `X :: K + 1;` with `K :: 1 + "a";`. That's decided then,
+// not at the use, which may come before the constant is worked out, so a
+// use before the declaration and one after it get the same answer
+// (withdraw_repeated_not_a_type). A name declared nowhere is
 // "unknown type 'foo'", unless a #load or a top-level #if's condition
 // failed: the missing file, or the branches never decided, may declare it
 // (Checker.lost_a_file). A decider says instead, of a name a top-level

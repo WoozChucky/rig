@@ -1481,10 +1481,14 @@
 //   left it with no type, `C :: 1 + "a";` or `C :: f(1);` with f a
 //   procedure ("the value of constant 'C' isn't known while compiling"):
 //   its "'C' is not a type" only repeats it, so it's withdrawn at the end
-//   of check() (checker.cpp's withdraw_repeated_not_a_type). One whose
-//   failure no mistake of its own explains, `C :: K + 1;` with K's value
-//   the mistake, still says it, as does one that keeps its type, a value,
-//   `C :: 300 + cast(u8) 0;`.
+//   of check(), or as a #run's exit() ends the process inside it
+//   (checker.cpp's withdraw_repeated_not_a_type, withdraw_at_exit). A
+//   "'Y' is not a type" said in C's declaration of a constant that has a
+//   type, `C :: cast(Y) 1;` with `Y :: 5;`, is such a mistake; one said of
+//   a constant with no type, `C :: cast(Y) 1;` with `Y :: 1 + "a";`, isn't.
+//   One whose failure no mistake of its own explains, that or `C :: K + 1;`
+//   with K's value the mistake, still says it, as does one that keeps its
+//   type, a value, `C :: 300 + cast(u8) 0;`.
 // - Refused: an alias named as a built-in type, `u8 :: s32;`, which
 //   resolve_written would never find, "'u8' is a built-in type", at its
 //   name, at the top level and in a body; `X :: Type;`, as any type value
