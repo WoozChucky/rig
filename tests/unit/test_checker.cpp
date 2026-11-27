@@ -14342,6 +14342,9 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
         {"main :: () { X :: 1 + \"a\"; x: X; }\n", "1:21: '+' needs numbers, not 'string'\n"},
         {"X :: #run 1 + \"a\";\nmain :: () { x: X; }\n", "1:13: '+' needs numbers, not 'string'\n"},
         {"X :: 1 +\n    \"a\";\nmain :: () { x: X; }\n", "1:8: '+' needs numbers, not 'string'\n"},
+        {"X :: 1\n    + \"a\";\nmain :: () { x: X; }\n", "2:5: '+' needs numbers, not 'string'\n"},
+        // A circle's message is said at its name.
+        {"X :: X + 1;\nmain :: () { x: X; }\n", "1:1: 'X' is defined in terms of itself\n"},
         {"S :: struct { a: C; b: int; }\nC :: size_of(S) + \"a\";\nmain :: () { }\n",
          "2:17: '+' needs numbers, not 'string'\n"},
         {"X :: 1 + \"a\";\nf :: (a: X) -> X { return a; }\ng: X;\n"
@@ -14370,6 +14373,26 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
         {"K :: 1 + \"a\";\nX :: K + 1;\nmain :: () { x: X; }\n",
          "1:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
         {"X :: 5;\nmain :: () { x: X; }\n", "2:17: 'X' is not a type\n"},
+        // A mistake on the line of X's declaration, before its name or
+        // after its ';', isn't X's own.
+        {"Y :: 5;\nmain :: () { a := 1 + \"a\"; X :: cast(Y) 1; x: X; }\n",
+         "2:21: '+' needs numbers, not 'string'\n2:38: 'Y' is not a type\n2:47: 'X' is not a type\n"},
+        {"X :: K + 1; K :: 1 + \"a\";\nmain :: () { x: X; }\n",
+         "1:20: '+' needs numbers, not 'string'\n2:17: 'X' is not a type\n"},
+        // Nor is another instance's: each instance of f has its own X, at
+        // the same place. The T = string one's fails by its own cast, the
+        // T = int one's only through K, so its note stays.
+        {"f :: (a: $T) { X :: cast(T) 1 + K; x: X; }\nK :: 1 + \"a\";\nmain :: () { f(1); f(\"s\"); }\n",
+         "1:21: can't cast 'int' to 'string'\n    in 'f' with T = string, called at test.rig:3:20\n"
+         "1:39: 'X' is not a type\n    in 'f' with T = int, called at test.rig:3:14\n"
+         "2:8: '+' needs numbers, not 'string'\n"},
+        // A circle's message is said once, at its first constant (spec
+        // 4.8): only that one's declaration holds a mistake, so only its
+        // uses say nothing more.
+        {"A :: B + 1;\nB :: A + 1;\nmain :: () { x: B; y: A; }\n",
+         "1:1: 'A' is defined in terms of itself\n3:17: 'B' is not a type\n"},
+        {"B :: A + 1;\nA :: B + 1;\nmain :: () { x: B; y: A; }\n",
+         "1:1: 'B' is defined in terms of itself\n3:23: 'A' is not a type\n"},
     };
     for (const Case &k : kept) CHECK_STR(check_source(&a, k.text), k.message);
     // A top-level #if's decider lays S out before X is worked out, and says
@@ -14382,6 +14405,16 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
     CHECK(!check(file, &a, &list->diag));
     diag_sort(&list->diag);
     CHECK_STR(messages(&a, &list->diag), "3:8: '+' needs numbers, not 'string'\n");
+    token_list_free(list);
+    // A decider that works out X itself says X's mistake, and check() only
+    // the note, which it withdraws: it said no error of its own, so it
+    // returns true.
+    list = src("#if X > 1 { }\nX :: 1 + \"a\";\nmain :: () { x: X; }\n");
+    file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK(check(file, &a, &list->diag));
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag), "2:8: '+' needs numbers, not 'string'\n");
     token_list_free(list);
     arena_free(&a);
 }

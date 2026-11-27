@@ -204,7 +204,7 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // a constant's is taken back at the end of check() when the constant's own
 // declaration said a mistake, which it would only repeat. That's decided
 // there, not at the use, which may come before the constant is worked out,
-// so the order of the declarations changes nothing
+// so a use before the declaration and one after it get the same
 // (withdraw_repeated_not_a_type). A name declared nowhere is "unknown type
 // 'foo'", unless a #load or a top-level #if's condition failed: the missing
 // file, or the branches never decided, may declare it (Checker.lost_a_file).
@@ -4117,14 +4117,20 @@ static bool inside_declaration(Position at, Ast_Const *k) {
 // constant has no type and whose declaration holds an error that is no
 // recorded note: X's own mistake, said there, which the note only repeats
 // (`X :: 1 + "a";`, `X :: (int);`). It's decided here, from the final
-// state alone, so the outcome never depends on the order of the
-// declarations, and nothing the checker did between the note and here
-// changes (had_errors, a generic struct's refusals). A note is no
-// constant's own mistake, said of itself, `X :: cast(X) 1;`, or of
-// another, `X :: cast(Y) 1;`; nor is a mistake in another declaration its
-// value names, `X :: K + 1;` with `K :: 1 + "a";`; and a constant that
-// fails only through its use, a circle through a struct's field, `S ::
-// struct { a: C; } g: S; C :: g.a;`, has none: their notes stay. The notes
+// state alone, so a use before X's declaration and one after it get the
+// same, and nothing the checker did between the note and here changes
+// (had_errors, a generic struct's refusals). A note is no constant's own
+// mistake, said of itself, `X :: cast(X) 1;`, or of another, `X ::
+// cast(Y) 1;`; nor is a mistake in another declaration its value names,
+// `X :: K + 1;` with `K :: 1 + "a";`; and a constant that fails only
+// through its use, a circle through a struct's field, `S :: struct { a: C;
+// } g: S; C :: g.a;`, has none: their notes stay. A circle of constants is
+// said once, at its first (spec 4.8), so only that one's notes go. Each
+// instance of a generic procedure clones its local constants at the same
+// places, so a message said in an instance (Diagnostic.context) is X's own
+// only when said in the note's: another instance's X is another constant.
+// One said in none, a top-level constant's (resolve_global enters no
+// instance) or the generic's own (check_generic_names), may be. The notes
 // are withdrawn from the last down, so each one's index holds
 // (diag_withdraw); nothing sorts the messages before (the driver prints
 // them only once check() is done). Frees the list. Returns how many of the
@@ -4143,9 +4149,12 @@ static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
     array_reserve(&withdraw, file->constants_not_types.count);
     for (s64 i = 0; i < file->constants_not_types.count; i++) {
         Ast_Const *constant = file->constants_not_types[i].constant;
+        String instance = d->messages[file->constants_not_types[i].message].context;
         bool own_mistake = false;
         for (s64 m = 0; m < d->messages.count && !constant->type && !own_mistake; m++) {
-            own_mistake = !is_note[m] && inside_declaration(d->messages[m].pos, constant);
+            Diagnostic *said = &d->messages[m];
+            bool same_instance = !said->context.count || string_eq(said->context, instance);
+            own_mistake = !is_note[m] && same_instance && inside_declaration(said->pos, constant);
         }
         array_add(&withdraw, own_mistake);
     }

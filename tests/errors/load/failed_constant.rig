@@ -1,0 +1,4 @@
+K :: 1 + "a";
+
+// Loaded by tests/errors/failed_constant_in_another_file.rig, whose X is
+// defined with this file's K, on the same line and the same columns.

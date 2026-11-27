@@ -375,8 +375,10 @@ struct Ast_Const : Ast {
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
     Ast_Alias *alias;     // its value names a type (spec 3.22): the alias the checker made of it, at its
                           // name, which every lookup finds in its place; null for any other constant
-    Position end;         // its ';': the messages from its name to here are its declaration's own
-                          // (checker.cpp's withdraw_repeated_not_a_type); {} for one parse_constant
+    Position end;         // its ';': the messages from its name to here are its declaration's own,
+                          // but in a generic procedure's instance only those said in no instance or
+                          // in its own: every instance's clone has the same places (checker.cpp's
+                          // withdraw_repeated_not_a_type); {} for one parse_constant
                           // doesn't make: an enum's member, which no type name finds, and a constant
                           // parameter's binding or OS, whose type is set, so no note of theirs is
                           // withdrawn

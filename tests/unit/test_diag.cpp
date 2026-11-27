@@ -71,16 +71,18 @@ TEST(a_withdrawn_error_is_gone) {
     // diag_withdraw takes an error back: it isn't printed, nor counted, and
     // the ones after it keep their order.
     Diagnostics d = {};
-    s32 f = diag_add_file(&d, str("w.rig"), str("a\nb\nc\n"));
+    s32 f = diag_add_file(&d, str("w.rig"), str("a\nb\nc\nd\n"));
     diag_error(&d, {f, 1, 1}, "first");
     diag_error(&d, {f, 2, 1}, "withdrawn");
     diag_error(&d, {f, 3, 1}, "third");
+    diag_error(&d, {f, 4, 1}, "fourth");
     diag_withdraw(&d, 1);
-    CHECK_EQ(d.error_count, 2);
-    CHECK_EQ(d.messages.count, 2);
+    CHECK_EQ(d.error_count, 3);
+    CHECK_EQ(d.messages.count, 3);
     Arena a = arena_make();
     CHECK_STR(diag_render(&a, &d), "w.rig:1:1: error: first\n    a\n    ^\n"
-                                   "w.rig:3:1: error: third\n    c\n    ^\n");
+                                   "w.rig:3:1: error: third\n    c\n    ^\n"
+                                   "w.rig:4:1: error: fourth\n    d\n    ^\n");
     arena_free(&a);
     diag_free(&d);
 }

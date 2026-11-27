@@ -1,0 +1,8 @@
+X :: K + 1;
+#load "load/failed_constant.rig";
+main :: () { x: X; }
+
+// A mistake in another declaration a constant's value names is not its own
+// (spec 3.22), even where it's at a place inside the constant's
+// declaration, in another file: load/failed_constant.rig's K fails at 1:8,
+// which here is inside X's declaration. X's use still says it's no type.
