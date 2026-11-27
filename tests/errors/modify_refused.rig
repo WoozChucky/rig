@@ -5,8 +5,11 @@
 // from wrap's instance, its block run once; only's bool, with no message.
 // When it fails while it runs, the failure is said once for each set given,
 // at the #modify, with its frames, the outermost the block's own, then the
-// instance those bindings would have made: bad's int, given twice, then
-// its bool. Nothing more is said at those uses.
+// instance those bindings would have made, and that use's chain: bad's
+// int, given twice, then its bool, then its float32, from wrap_bad's
+// instance. Nothing more is said at those uses. A result that can't be
+// baked fails the run too, said in #modify's words: neg's string, whose
+// count it makes negative, and quiet's message.
 
 sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } {
     t: T;
@@ -25,6 +28,16 @@ bad :: (v: $T) #modify {
     return true;
 } { }
 
+wrap_bad :: (v: $T) { bad(v); }
+
+neg :: ($S: string) -> string #modify { S.count = -1; return true; } { return S; }
+
+quiet :: (v: $T) #modify {
+    m := "abc";
+    m.count = -2;
+    return false, m;
+} { }
+
 main :: () {
     sum(string.["a"]);
     sum(string.["b"]);
@@ -33,4 +46,7 @@ main :: () {
     bad(1);
     bad(1);
     bad(true);
+    wrap_bad(cast(float32) 2.5);
+    neg("x");
+    quiet(1);
 }

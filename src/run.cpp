@@ -90,7 +90,8 @@ struct Compile_Time {
     Ir_Module *module;   // the code the runs reach, lowered on demand
     Lowering *lowering;  // lowering into it, as long as the world
     Interp *interp;      // running it: the compile-time globals, every run's
-    Arena arena;         // the module's nodes, and what lowering puts in them
+    Arena arena;         // the module's nodes, what lowering puts in them, and the bytes of
+                         // the strings given #modify blocks (write_constant)
     s64 run_time;        // nanoseconds, the runs' (compile_time_nanoseconds)
     s32 running;         // how many runs are under way: a guard, as none nests today
 };
@@ -146,8 +147,9 @@ struct Baking {
     String refusal;   // the message, in the checker's arena; empty for none
 };
 
-// A new node of the baked value, of type t: at the #run, as every node of
-// it is, so a message about the value points there.
+// A new node of the baked value, of type t: at the #run or the #modify
+// (Baking.at), as every node of it is, so a message about the value points
+// there.
 template<typename T>
 static T *baked_node(Baking *b, Ast_Kind kind, Type *t) {
     T *node = ast_new<T>(b->c->arena, kind, b->at);
@@ -561,14 +563,15 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
 // its slot as it lies in memory: a number's, a bool's or an enum's
 // canonical bits (interp.h), t->size of them, little-endian, as both of
 // Rig's targets are, a float32's narrowed from the double Ast.constant
-// keeps; a string's count and data, its bytes first copied into the run's
-// `scratch` memory, so the block, which may write through its data, never
-// writes into the program's literal.
-static void write_constant(Arena *scratch, Type *t, Ast *value, u8 *slot) {
+// keeps; a string's count and data, its bytes first copied into `world`,
+// memory as long as the world, so the block, which may write through its
+// data, never writes into the program's literal, and a global it keeps the
+// string in still holds it in every later run.
+static void write_constant(Arena *world, Type *t, Ast *value, u8 *slot) {
     if (t->kind == TYPE_STRING) {
         Ast_String *literal = literal_address(value);
         String text = literal ? literal->value : String{};
-        u8 *bytes = (u8 *)arena_alloc(scratch, (u64)text.count + 1, 1);
+        u8 *bytes = (u8 *)arena_alloc(world, (u64)text.count + 1, 1);
         if (text.count) memcpy(bytes, text.data, (size_t)text.count);
         s64 count = text.count;
         u64 data = (u64)(uintptr_t)bytes;
@@ -609,7 +612,8 @@ static void write_constant(Arena *scratch, Type *t, Ast *value, u8 *slot) {
 //    its type), a constant baked as any value of its type is. A part
 //    refused, a string with a negative count, is said at the #modify, and
 //    the run has failed.
-// 6. The memory is freed, as compile_time_run frees its own.
+// 6. The memory is freed, as compile_time_run frees its own: the given
+//    strings' bytes stay, in the world's arena (write_constant).
 bool compile_time_modify(Compile_Time *ct, Checker *c, Ast_Modify *modify, Array<Generic_Binding> *bindings,
                          bool *accepted, String *message) {
     Array<Generic_Binding> &given = *bindings;
@@ -642,7 +646,7 @@ bool compile_time_modify(Compile_Time *ct, Checker *c, Ast_Modify *modify, Array
         for (s64 i = 0; i < given.count; i++) {
             u8 *slot = block + i * MODIFY_SLOT_SIZE;
             if (!given[i].is_type) {
-                write_constant(&scratch, given[i].type, given[i].value, slot);
+                write_constant(&ct->arena, given[i].type, given[i].value, slot);
                 continue;
             }
             u64 handle = descriptions[i] >= 0 ? (u64)(uintptr_t)interp_global(ct->interp, descriptions[i])

@@ -16205,13 +16205,16 @@ static const char *MODIFY_GENERICS =
 TEST(modify_maps_given_bindings_to_one_instance) {
     // A block runs once for each set of bindings given, and the instance a
     // use makes is the one for the bindings it leaves: u8 and u16 widen to
-    // int, so every call shares widen(T = int), and u8's second call runs
-    // nothing.
+    // int, so every call shares widen(T = int), and u8, given first by a
+    // constant's #run in the declarations pass, runs nothing again: not at
+    // main's two calls, nor in twice's instance's body.
     Arena a = arena_make();
     Ast_File *file = nullptr;
     CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
                                             "main :: () { a := widen(cast(u8) 1); b := widen(cast(u16) 2); "
-                                            "c := widen(3); d := widen(cast(u8) 4); }\n"),
+                                            "c := widen(3); d := widen(cast(u8) 4); e := twice(1); }\n"
+                                            "twice :: (v: $T) -> int { return widen(cast(u8) 5) * 2; }\n"
+                                            "R :: #run widen(cast(u8) 6);\n"),
                                  &file),
               "");
     Ast_Proc *widen = (Ast_Proc *)top_level_named(file, "widen");
@@ -16259,6 +16262,27 @@ TEST(modify_changes_the_instance_a_call_makes) {
         CHECK_STR(pick->instances[1]->name, "pick(T = float32)");
     }
     CHECK_STR(type_of_main_local(&a, file, "q"), "int");
+    // A constant is given as it lies in memory, and read back so: a float32
+    // narrowed from the double the constant keeps, a signed integer of one
+    // byte, an enum's member and a bool, each changed by the block.
+    CHECK_STR(check_with_preload(&a,
+                                 "Mode :: enum { A; B; C; }\n"
+                                 "fl :: ($F: float32) -> float32 #modify { if F < 1.0 { F = F + 1.5; } return true; } "
+                                 "{ return F; }\n"
+                                 "neg :: ($N: s8) -> s8 #modify { N = N * 2; return true; } { return N; }\n"
+                                 "md :: ($M: Mode) -> Mode #modify { if M == .A { M = .C; } return true; } "
+                                 "{ return M; }\n"
+                                 "bb :: ($B: bool) -> bool #modify { B = !B; return true; } { return B; }\n"
+                                 "main :: () { f := fl(0.25); n := neg(-3); m := md(.A); b := bb(true); }\n",
+                                 &file),
+              "");
+    const char *constants[][2] = {{"fl", "fl(F = 1.75)"}, {"neg", "neg(N = -6)"}, {"md", "md(M = Mode.C)"},
+                                  {"bb", "bb(B = false)"}};
+    for (s64 i = 0; i < 4; i++) {
+        Ast_Proc *generic = (Ast_Proc *)top_level_named(file, constants[i][0]);
+        CHECK_EQ(generic->instances.count, 1);
+        if (generic->instances.count == 1) CHECK_STR(generic->instances[0]->name, constants[i][1]);
+    }
     CHECK_STR(check_with_preload(&a, "sum :: (values: []$T) -> T #modify { if T == u8 { T = int; } return true; } "
                                      "{ t: T; for values { t += it; } return t; }\n"
                                      "main :: () { u: [2]u8; t := sum(u); }\n"),
@@ -16313,6 +16337,15 @@ TEST(modify_failures_name_their_bindings) {
               "2:16: #modify failed: runtime error: index 3 is out of bounds (count 1)\n"
               "    in #modify (test.rig:2:65)\n"
               "    in 'bad' with T = *Box(int), called at test.rig:3:28\n");
+    // A block first given its bindings in an instance's body fails with
+    // that use's chain under the would-be instance's line.
+    CHECK_STR(check_with_preload(&a, "bad :: (v: $T) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { }\n"
+                                     "wrap :: (v: $T) { bad(v); }\n"
+                                     "main :: () { wrap(1); }\n"),
+              "1:16: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:46)\n"
+              "    in 'bad' with T = int, called at test.rig:2:19\n"
+              "    in 'wrap' with T = int, called at test.rig:3:14\n");
     arena_free(&a);
 }
 
@@ -16369,13 +16402,19 @@ TEST(modify_runs_wherever_it_is_needed) {
     CHECK_EQ(((Ast_Proc *)top_level_named(file, "widen"))->modify->runs.count, 1);
     CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
                                             "V :: #run widen_twice();\n"
-                                            "widen_twice :: () -> int { return widen(cast(u16) 2) * 2; }\n"
+                                            "widen_twice :: () -> int { return widen(cast(u16) 40000) * 2; }\n"
                                             "main :: () { }\n"),
                                  &file),
               "");
+    // 80000 only when the block has made the call widen(T = int) by then: as
+    // a u16, it would wrap.
     Ast_Const *v = (Ast_Const *)top_level_named(file, "V");
     CHECK(v->is_constant);
-    CHECK_EQ(v->constant, 4);
+    CHECK_EQ(v->constant, 80000);
+    Ast_Proc *widen = (Ast_Proc *)top_level_named(file, "widen");
+    CHECK_EQ(widen->modify->runs.count, 1);
+    CHECK_EQ(widen->instances.count, 1);
+    if (widen->instances.count == 1) CHECK_STR(widen->instances[0]->name, "widen(T = int)");
     CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
                                             "#if widen(cast(u8) 1) == 1 { X :: 1; }\n"
                                             "main :: () { }\n")),

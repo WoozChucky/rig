@@ -12,7 +12,7 @@ struct Checker;  // check.h: the checker, whose arena a baked value lives in
 // module, its on-demand lowering, and the interpreter running it, whose
 // globals every #run shares. Made before check(), kept for the top-level
 // runs, freed before the program is lowered. Its parts are made the first
-// time a #run runs.
+// time a #run, or a #modify block, runs.
 struct Compile_Time;
 
 // A world for the program whose files d holds: their paths are what a

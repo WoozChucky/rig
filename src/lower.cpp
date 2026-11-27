@@ -5211,7 +5211,8 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     // (ir_lower_modify): each in a slot of MODIFY_SLOT_SIZE bytes there, in
     // order, which the run fills with the bindings given and reads back
     // once the block returns (run.cpp's compile_time_modify). Each is a
-    // variable at its address, as an aggregate parameter is.
+    // variable at its address, as an aggregate parameter is, but a local
+    // one, arg 0: none is a parameter of the procedure.
     if (source->modify_of) {
         RIG_ASSERT(from != CONTEXT_PARAM && hidden == 1);
         Array<Ast_Var *> &vars = source->modify_of->vars;
@@ -5219,7 +5220,7 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
             Ast_Var *var = vars[k];
             s32 address = emit_field_address(l, hidden, k * MODIFY_SLOT_SIZE);
             array_add(&l->locals, {(Ast *)var, address});
-            array_add(&l->proc->vars, Ir_Var{var->name, var->type, var->pos, 0, IR_VAR_ADDRESS, address, 1, 0, false});
+            array_add(&l->proc->vars, Ir_Var{var->name, var->type, var->pos, 0, IR_VAR_ADDRESS, address, 0, 0, false});
         }
     }
     if (from == CONTEXT_STARTUP) emit_startup_context(l, !is_run && takes_command_line(l, source), source->pos);
