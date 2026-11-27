@@ -14107,6 +14107,10 @@ TEST(generic_default_places_are_said_once) {
          "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
         {"t :: ($M: int = 1, $N: int) -> int { return N; }",
          "1:15: a parameter that declares '$M' can't have a default value, for now\n"},
+        // A constant parameter declared through an instance takes none
+        // either.
+        {"u :: (r: Ring(int, $N) = .{}) -> int { return N; }\nRing :: struct (T: Type, N: int) { items: [N]T; }",
+         "1:24: a parameter that declares '$N' can't have a default value, for now\n"},
     };
     for (const Case &k : cases) {
         // Called with two types, and not called at all.
@@ -15226,6 +15230,23 @@ TEST(instances_are_one_type_however_written) {
     CHECK(r4->alias && r4->alias->aliased == m);
     CHECK(r4->type == &type_type);
     CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Ring"))->instances.count, 3);
+    // A float argument is compared by its bits, as a generic procedure's
+    // is (same_binding): -0.0 and 0.0 are two instances, though -0.0 ==
+    // 0.0, and 0.5 written two ways is one.
+    CHECK_STR(check_with_preload(&a,
+                                 "F :: struct (V: float64) { n: int; }\n"
+                                 "main :: () {\n"
+                                 "    a := F(-0.0) == F(0.0);\n"
+                                 "    b := F(0.5) == F(1.0 / 2.0);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    Ast_Var *zeros = (Ast_Var *)find_local(body, "a");
+    Ast_Var *halves = (Ast_Var *)find_local(body, "b");
+    CHECK(zeros->value->is_constant && zeros->value->constant == 0);
+    CHECK(halves->value->is_constant && halves->value->constant == 1);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "F"))->instances.count, 3);
     arena_free(&a);
 }
 
