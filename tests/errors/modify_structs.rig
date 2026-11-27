@@ -1,10 +1,15 @@
-// #modify blocks on generic structs that refuse an instance, or use their
-// own struct (issue #228, spec 7.12, 3.23). Box's block refuses strings:
-// each written type that gives it a string is refused at its name, a
-// local's type, a literal's and a field's in Pair's instance, followed by
-// that instance's line, `used at`; the block runs once for them, and no
-// instance is made. Grow's block names its own struct, whose instances it
-// decides: said once, at the inner use, however often Grow is used.
+// #modify blocks on generic structs that refuse an instance, fail as they
+// run, or use their own struct (issue #228, spec 7.12, 3.23). Box's block
+// refuses strings: each written type that gives it a string is refused at
+// its name, a local's type, a literal's and a field's in Pair's instance,
+// followed by that instance's line, `used at`; the block runs once for
+// them, and no instance is made. Bad's block fails as it runs: said once
+// for each set of arguments given, at the #modify, with its frames, then
+// the line of the instance they would have made, `used at`, and its chain,
+// once for v's Bad(int), which w's and Hold(int)'s field say nothing more
+// of, and once for Hold(bool)'s field's Bad(bool). Grow's block names its
+// own struct, whose instances it decides: said once, at the inner use,
+// however often Grow is used.
 
 Box :: struct (T: Type) #modify {
     if T == u8 { T = int; }
@@ -13,14 +18,22 @@ Box :: struct (T: Type) #modify {
     v: T;
 }
 
+Bad :: struct (T: Type) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { v: T; }
+
 Grow :: struct (T: Type) #modify { return Grow(int) != T; } { v: T; }
 
 Pair :: struct (A: Type) { b: Box(A); }
+
+Hold :: struct (A: Type) { b: Bad(A); }
 
 main :: () {
     x: Box(string);
     y := Box(string).{"a"};
     p: Pair(string);
+    v: Bad(int);
+    w: Bad(int);
+    h: Hold(int);
+    k: Hold(bool);
     g: Grow(u8);
-    h: Grow(u8);
+    gg: Grow(u8);
 }

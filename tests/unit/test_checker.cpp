@@ -16442,16 +16442,16 @@ static const char *MODIFY_STRUCTS =
 TEST(modify_makes_one_struct_type) {
     // A struct's block runs once for each set of arguments given, and the
     // instance a written type names is the one for the bindings it leaves:
-    // Box(u8) and Box(int) are one type, Box(int), wherever written, in an
-    // alias, a global's type in the declarations pass, a local's, a
-    // literal's, and inferred through, so unbox's T is int; Ring(int, 0) is
-    // Ring(int, 1), one int of 8 bytes. Comparing the two written types is
-    // constant, and true.
+    // Box(u8) and Box(int) are one type, Box(int), wherever written, in a
+    // global's type in the declarations pass, where Box(u8)'s run is first
+    // needed, an alias, a local's, a literal's, and inferred through, so
+    // unbox's T is int; Ring(int, 0) is Ring(int, 1), one int of 8 bytes.
+    // Comparing the two written types is constant, and true.
     Arena a = arena_make();
     Ast_File *file = nullptr;
     CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
-                                            "B :: Box(u8);\n"
                                             "g: Box(u8);\n"
+                                            "B :: Box(u8);\n"
                                             "unbox :: (b: Box($T)) -> T { return b.v; }\n"
                                             "main :: () { a: Box(u8); b: Box(int); c: B; d := Box(u8).{3}; "
                                             "e := unbox(a); r: Ring(int, 0); same := Box(u8) == Box(int); }\n"),
@@ -16500,6 +16500,27 @@ TEST(modify_struct_mistakes) {
     CHECK_EQ(box->modify->runs.count, 1);
     CHECK_EQ(box->instances.count, 0);
     CHECK_EQ(((Ast_Struct *)top_level_named(file, "Grow"))->instances.count, 0);
+    // A struct's block that fails as it runs is said once for each set of
+    // arguments given, at the #modify, with its frames, then the line of
+    // the instance they would have made, `used at`, and its chain: x's
+    // Bad(string), which y's and Pair(string)'s field say nothing more of,
+    // and Pair(bool)'s field's Bad(bool).
+    CHECK_STR(check_with_preload(&a,
+                                 "Bad :: struct (T: Type) #modify { a: [2]int; i := 5; a[i] = 1; return true; } "
+                                 "{ v: T; }\n"
+                                 "Pair :: struct (A: Type) { b: Bad(A); }\n"
+                                 "main :: () { x: Bad(string); y: Bad(string); p: Pair(string); q: Pair(bool); }\n",
+                                 &file),
+              "1:25: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:55)\n"
+              "    in 'Bad' with T = string, used at test.rig:3:17\n"
+              "1:25: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:55)\n"
+              "    in 'Bad' with T = bool, used at test.rig:2:31\n"
+              "    in 'Pair' with A = bool, used at test.rig:3:66\n");
+    Ast_Struct *bad = (Ast_Struct *)top_level_named(file, "Bad");
+    CHECK_EQ(bad->modify->runs.count, 2);
+    CHECK_EQ(bad->instances.count, 0);
     arena_free(&a);
 }
 

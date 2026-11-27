@@ -619,12 +619,15 @@ String instance_context(Checker *c, Ast_Instance *inst);
 // makes (spec 7.11): its baked parameters' types and constants taken from
 // their arguments, its type parameters inferred from the others (their
 // messages at an argument, or at `callee` when no argument names one), then
-// the program's one instance for those bindings, found in generic's cache
-// or made (ast_clone) where the call starting at `called_at` needs it, its
-// signature checked then. Its procedure, or null after saying why, or when
-// the instance's signature had errors (Ast_Instance.had_errors, said once,
-// where it was made). Takes no Ast_Call, so any construct that calls a
-// generic may.
+// the generic's #modify block, if it has one (spec 7.12, modify_bindings),
+// which may refuse the bindings (said at `called_at`), fail (said once, at
+// the #modify), or change them; then the program's one instance for the
+// bindings it leaves, found in generic's cache or made (ast_clone) where
+// the call starting at `called_at` needs it, its signature checked then.
+// Its procedure, or null after saying why, or when the block has a mistake
+// (said once, as the generic's), or when the instance's signature had
+// errors (Ast_Instance.had_errors, said once, where it was made). Takes no
+// Ast_Call, so any construct that calls a generic may.
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at);
 
 // The binding of instance inst called `name`, an Ast_Alias for a type
@@ -684,10 +687,14 @@ void finish_generic_fields(Checker *c, Ast_Struct *generic);
 // takes 2 arguments, but 1 was given", at `at`), then each argument bound
 // to its parameter in order, a type to a type parameter, a constant known
 // while compiling, converted to its type, to a constant one, with their
-// messages at the argument; then the program's one instance for those
-// bindings, found in generic's cache or made (ast_clone), not laid out:
-// its Type, or null after saying why. Takes the arguments alone, no
-// written type, so any construct that names an instance may.
+// messages at the argument; then the generic's #modify block, if it has
+// one (spec 7.12, check_generic.cpp's modify_bindings), which may refuse
+// the bindings (said at `at`), fail (said once, at the #modify), or change
+// them; then the program's one instance for the bindings it leaves, found
+// in generic's cache or made (ast_clone), not laid out, so Box(u8) may
+// give Box(int)'s: its Type, or null after saying why, or when the block
+// has a mistake (said once, as the generic's). Takes the arguments alone,
+// no written type, so any construct that names an instance may.
 Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, Position at, Position used_at);
 
 // Whether struct instance inst may be laid out (spec 3.23): its generic's

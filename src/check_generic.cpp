@@ -1755,10 +1755,11 @@ void check_generic_modify(Checker *c, Ast *generic) {
 
 // Which bindings a use of generic `name` makes its instance of, when the
 // generic has #modify block `modify` (spec 7.12): *bindings, the ones the
-// use's arguments bound, at `at`, the use; `of_struct` for a generic
-// struct's, whose use is a written type, `used at` in a chain. True with
-// *bindings the block's result; false after saying why there's no
-// instance. In order:
+// use's arguments bound, at `at`, where its messages point, used at
+// `used_at`, where the would-be instance's chain line says it was used;
+// `of_struct` for a generic struct's, whose use is a written type, `used
+// at` in a chain. True with *bindings the block's result; false after
+// saying why there's no instance. In order:
 // 1. The block's check (check_modify), whose declared parameters' names,
 //    places, kinds and constant types are those of *bindings: false when it
 //    refuses a use while a top-level #if's condition is decided, when the
@@ -1784,7 +1785,7 @@ void check_generic_modify(Checker *c, Ast *generic) {
 //    bindings given written as an instance's are (bindings_text). False.
 // 5. A run that accepted rewrites *bindings to the bindings it left: true.
 static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<Generic_Binding> *bindings,
-                            Position at, bool of_struct) {
+                            Position at, Position used_at, bool of_struct) {
     if (!check_modify(c, modify, name, at, *bindings)) return false;
     Array<Generic_Binding> &given = *bindings;
     Modify_Run *run = nullptr;
@@ -1800,7 +1801,7 @@ static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<G
         for (s64 k = 0; k < given.count; k++) array_add(&run->result, given[k]);
         array_add(&modify->runs, run);
         String outer = c->diag->context;
-        String line = chain_line(c, name, bindings_text(c->arena, run->given), of_struct, at);
+        String line = chain_line(c, name, bindings_text(c->arena, run->given), of_struct, used_at);
         c->diag->context = string_printf(c->arena, STR_FMT STR_FMT, STR_ARG(line), STR_ARG(outer));
         run->ran = compile_time_modify(c->world, c, modify, &run->result, &run->accepted, &run->message);
         c->diag->context = outer;
@@ -1831,7 +1832,7 @@ Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *
     // other, named and chained by them.
     bool inferred = infer_bindings(c, generic, args, callee, &bindings);
     if (inferred && generic->modify &&
-        !modify_bindings(c, generic->modify, generic->name, &bindings, called_at, false)) {
+        !modify_bindings(c, generic->modify, generic->name, &bindings, called_at, called_at, false)) {
         generic->had_errors |= generic->modify->had_errors;
         inferred = false;
     }
@@ -2317,10 +2318,10 @@ static void set_instance(Ast_Struct *s, Ast_Instance *inst) {
     }
 }
 
-// A new instance of generic struct `generic` for `bindings`, made where
-// the written type at `used_at` needs it, kept apart from find_instance so
-// the generic's #modify block, which decides the bindings (modify_bindings,
-// spec 7.12), comes before both: its tree copied (ast_clone), no longer generic, its bindings made
+// A new instance of generic struct `generic` for `bindings`, the ones its
+// #modify block left if it has one (modify_bindings, spec 7.12), made
+// where the written type at `used_at` needs it, once find_instance found
+// none: its tree copied (ast_clone), no longer generic, its bindings made
 // as a procedure instance's are (make_bindings), named Map(string, int)
 // (each binding's value as the program would write it: a type as type_name
 // writes it, a constant as constant_text does), its copy named so and
@@ -2395,7 +2396,8 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
     // said once, makes none. The instance is then the one of the bindings
     // the block left, found or made as any other, and named by them, so
     // Box(u8) and Box(int) may be one type, Box(int), wherever written.
-    if (bound && generic->modify && !modify_bindings(c, generic->modify, generic->name, &bindings, at, true)) {
+    if (bound && generic->modify &&
+        !modify_bindings(c, generic->modify, generic->name, &bindings, at, used_at, true)) {
         generic->had_errors |= generic->modify->had_errors;
         bound = false;
     }
