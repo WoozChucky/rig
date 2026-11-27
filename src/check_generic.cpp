@@ -2088,15 +2088,17 @@ static void set_instance(Ast_Struct *s, Ast_Instance *inst) {
 // instantiated more than 1000 levels deep, each instance's fields making
 // the next", followed by the chain it's in (Diagnostics.context), and none
 // is made: null, and the written type has no type. In a procedure
-// instance that deep, whose instances' code each called the next, grow ::
-// (v: $T) { b: Box(T); p: *T; grow(p); }, it's "'Box' is instantiated more
-// than 1000 levels deep, each instance's code making the next".
+// instance that deep, whose instances' bodies each called the next, grow
+// :: (v: $T) { b: Box(T); p: *T; grow(p); }, in its signature or its body,
+// it's "'Box' is instantiated more than 1000 levels deep, each instance's
+// body making the next", as make_instance says of the call that would
+// make the next procedure instance: the words name what made the chain.
 static Ast_Instance *make_struct_instance(Checker *c, Ast_Struct *generic, Array<Generic_Binding> bindings,
                                           Position used_at) {
     if (c->instance && c->instance->depth >= MAX_DEPTH) {
         diag_error(c->diag, used_at,
                    "'" STR_FMT "' is instantiated more than %d levels deep, each instance's %s making the next",
-                   STR_ARG(generic->name), MAX_DEPTH, c->instance->generic_struct ? "fields" : "code");
+                   STR_ARG(generic->name), MAX_DEPTH, c->instance->generic_struct ? "fields" : "body");
         return nullptr;
     }
     Ast_Instance *inst = arena_new<Ast_Instance>(c->arena);

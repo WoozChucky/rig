@@ -15101,10 +15101,9 @@ TEST(struct_instances_have_a_depth_limit) {
     // Struct instances count with procedure instances: written in the code
     // of a procedure instance MAX_DEPTH deep, whose instances' bodies each
     // called the next, the struct's is refused where it's written, its
-    // signature's and its body's each, with that chain, as the call it
-    // makes is.
+    // signature's and its body's each, with that chain and the words the
+    // call it makes has.
     String chain = pointer_chain(&a, "grow", 1000, "2:47", "3:14");
-    String code = str("is instantiated more than 1000 levels deep, each instance's code making the next\n");
     String body = str("is instantiated more than 1000 levels deep, each instance's body making the next\n");
     CHECK_STR(check_source(&a,
                            "Box :: struct (T: Type) { v: T; }\n"
@@ -15113,7 +15112,7 @@ TEST(struct_instances_have_a_depth_limit) {
               string_cstr(&a, string_printf(&a,
                                             "2:20: 'Box' " STR_FMT STR_FMT "2:32: 'Box' " STR_FMT STR_FMT
                                             "2:47: 'grow' " STR_FMT STR_FMT,
-                                            STR_ARG(code), STR_ARG(chain), STR_ARG(code), STR_ARG(chain),
+                                            STR_ARG(body), STR_ARG(chain), STR_ARG(body), STR_ARG(chain),
                                             STR_ARG(body), STR_ARG(chain))));
     // Held by value, the instances are laid out inside one another, as
     // declarations nest, and meet that limit first: one message, naming the

@@ -1573,7 +1573,9 @@
 //   procedure instances in one chain (spec 9.4): a struct instance to be
 //   made inside one MAX_DEPTH deep is refused where it's written, "'Grow'
 //   is instantiated more than 1000 levels deep, each instance's fields
-//   making the next", with the chain, and the written type has no type
+//   making the next" when the one that deep is a struct instance, "...
+//   each instance's body making the next" when it's a procedure instance,
+//   with the chain, and the written type has no type
 //   (make_struct_instance). Instances held by value are laid out inside one
 //   another, so they meet the declarations' nesting limit first
 //   (open_declaration), said once, naming the innermost; that copy is then
