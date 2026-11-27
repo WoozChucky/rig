@@ -7854,3 +7854,35 @@ TEST(instance_symbols_are_unique) {
     CHECK(!contains(text, "@\"f$T$$$$int.1\"("));
     arena_free(&a);
 }
+
+// Issue #227: generic procedures over generic structs (spec 7.11).
+
+TEST(procedures_over_instances_are_named_by_them) {
+    // A generic procedure's instance bound through a struct instance, or to
+    // one, is named by it, its symbol made of that name as any instance's
+    // is: every byte that isn't a letter, a digit or '_' made '$', its last
+    // ')' dropped, so an instance's own ')' is a '$'.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }\n"
+                                      "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n"
+                                      "size_of_map :: (m: *Map($K, $V)) -> int { return m.count; }\n"
+                                      "ident :: (v: $T) -> T { return v; }\n"
+                                      "main :: () {\n"
+                                      "    a: Map(string, int);\n"
+                                      "    b: Map(int, *u8);\n"
+                                      "    x := size_of_map(*a);\n"
+                                      "    y := size_of_map(*b);\n"
+                                      "    p: Pair(int, int);\n"
+                                      "    q := ident(p);\n"
+                                      "}\n");
+    const char *symbols[] = {"size_of_map$K$string$V$int", "size_of_map$K$int$V$$u8", "ident$T$Pair$int$int$"};
+    const char *names[] = {"size_of_map(K = string, V = int)", "size_of_map(K = int, V = *u8)",
+                           "ident(T = Pair(int, int))"};
+    for (s64 i = 0; i < 3; i++) {
+        Ir_Proc *proc = ir_proc_named(m, symbols[i]);
+        CHECK(proc);
+        if (proc) CHECK_STR(proc->source_name, names[i]);
+    }
+    arena_free(&a);
+}

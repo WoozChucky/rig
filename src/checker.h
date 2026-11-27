@@ -1328,7 +1328,8 @@
 //   (check_generic.cpp's check_instance): each from the arguments whose
 //   parameter's type names it, in order, the first typed one fixing it, a
 //   pattern read through pointers, arrays' views' and resizable arrays'
-//   elements and procedure types' parts ("argument 1 of 'first' has type
+//   elements, procedure types' parts and generic structs' instances'
+//   arguments (below, "Generic structs") ("argument 1 of 'first' has type
 //   'int', which doesn't fit '[]$T'" where it can't match); untyped
 //   numbers alone give the default type of the type they meet at; an
 //   argument with no type of its own alone is "can't work out 'T' for
@@ -1582,6 +1583,35 @@
 //   again. The last pass lays out each struct instance the bodies and the
 //   #runs made, and checks the procedure instances' bodies, until neither
 //   list grows.
+// - A generic procedure takes any instance of a generic struct (spec
+//   7.11): a parameter's type that writes one, Map($K, $V), takes the
+//   instance of that struct its argument is (check_generic.cpp's
+//   match_type: t's copy is an instance's own, Ast_Struct.instance's
+//   structure, of the generic the pattern names), each argument read
+//   against the instance's binding at its index, a written type against a
+//   type binding's type at any depth, and a name that is all of an
+//   argument where the struct takes a constant against the constant. A $N
+//   there declares a constant parameter of the procedure, of that struct
+//   parameter's type (Generic_Binding.is_type false, its type from the
+//   start: bound once its value is set, is_bound), Ring($T, $N); a later
+//   N, Vec(N), is that constant. An argument that is an expression, or a
+//   name bound already, isn't read: the call's conversion says a mismatch
+//   ("argument 2 of 'dot' has type 'Vec(4)', which can't be converted to
+//   'Vec(3)'"). An argument that is no instance of that struct doesn't fit
+//   ("argument 1 of 'map_add' has type '*Vec2', which doesn't fit
+//   '*Map($K, $V)'"). The names walk_names meets in an instance carry
+//   where they are (Name_Place.of_instance, argument, in_instance).
+// - An instance in a generic procedure's signature is checked once, at the
+//   generic (at_generic_instance): its name a generic struct's ("'Vec2'
+//   isn't generic, so it takes no arguments", "unknown type 'Nope'"), its
+//   count ("'Map' takes 2 arguments, but 1 was given"), and the type names
+//   of its arguments where the struct takes a type; one where it takes a
+//   constant is each instance's to check, as an array's count is. A name
+//   used before the $ that declares it, in an instance's argument too, is
+//   "'K' is used before '$K' declares it". In a generic's body an
+//   instance's name declared nowhere is "unknown type 'Mapp'". A generic
+//   struct's own check leaves its fields' instances' arguments and names
+//   to each instance still (add_type_name_step).
 // - What lowering may rely on: no generic struct is reached from any
 //   type; an instance is a struct as any other, laid out, its late fields
 //   made, its Type named as the instance. Nothing goes through the

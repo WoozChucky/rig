@@ -1,0 +1,79 @@
+// Generic procedures over generic structs (issue #227, spec 7.11, 3.23): a
+// pattern binds its parameters through an instance, *Map($K, $V) taking K
+// and V from a *Map(string, int), so a typed map is a struct and the
+// procedures over it, each compiled once per instance; a $N where the
+// struct takes a constant declares a constant parameter of the procedure,
+// Ring($T, $N) and Vec($N), which a later Vec(N) uses; a using parameter
+// of an instance reaches its fields. The same compiled, interpreted and in
+// a top-level #run.
+#import "Basic";
+
+Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+Pair :: struct (A: Type, B: Type) { first: A; second: B; }
+Vec :: struct (N: int) { v: [N]float; }
+
+// Sets key's value, replacing the one it has, if any.
+map_set :: (m: *Map($K, $V), key: K, value: V) {
+    for m.keys {
+        if it == key {
+            m.values[it_index] = value;
+            return;
+        }
+    }
+    array_add(*m.keys, key);
+    array_add(*m.values, value);
+    m.count += 1;
+}
+
+// Where key's value is, or null when it has none.
+map_find :: (m: *Map($K, $V), key: K) -> *V {
+    for m.keys {
+        if it == key { return *m.values[it_index]; }
+    }
+    return null;
+}
+
+map_count :: (using m: *Map($K, $V)) -> int { return count; }
+
+ring_sum :: (r: Ring($T, $N)) -> T {
+    t: T;
+    for r.items { t += it; }
+    return t;
+}
+
+swap :: (p: Pair($A, $B)) -> Pair(B, A) { return .{p.second, p.first}; }
+
+dot :: (a: Vec($N), b: Vec(N)) -> float {
+    t: float;
+    for 0..N-1 { t += a.v[it] * b.v[it]; }
+    return t;
+}
+
+#run {
+    m: Map(string, int);
+    map_set(*m, "r", 7);
+    print("{}\n", map_find(*m, "r").*);
+}
+
+main :: () {
+    m: Map(string, int);
+    map_set(*m, "ann", 36);
+    print("{} {}\n", "ann", map_find(*m, "ann").*);
+    print("{}\n", map_find(*m, "x") == null);
+    fresh: Map(string, int);
+    map_set(*fresh, "a", 1);
+    map_set(*fresh, "b", 2);
+    map_set(*fresh, "a", 3);
+    print("{}\n", map_count(*fresh));
+    names: Map(int, string);
+    map_set(*names, 7, "seven");
+    print("{} {}\n", 7, map_find(*names, 7).*);
+    r: Ring(u8, 3);
+    r.items[0] = 10;
+    r.items[1] = 20;
+    r.items[2] = 30;
+    print("{}\n", ring_sum(r));
+    print("{}\n", swap(Pair(int, bool).{1, true}));
+    print("{}\n", dot(Vec(3).{.[1, 2, 3]}, Vec(3).{.[4, 5, 6]}));
+}

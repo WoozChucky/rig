@@ -15210,3 +15210,109 @@ TEST(instance_value_mistakes) {
     }
     arena_free(&a);
 }
+
+// Issue #227: generic procedures over generic structs (spec 7.11, 3.23).
+
+// The source every test of inference through instances starts with: [..]
+// needs Preload (check_with_preload).
+static const char *STRUCT_PROCEDURES =
+    "Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }\n"
+    "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+    "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n"
+    "Vec :: struct (N: int) { v: [N]float; }\n"
+    "Vec2 :: struct { x: float; y: float; }\n"
+    "map_add :: (m: *Map($K, $V), key: K, value: V) { array_add(*m.keys, key); array_add(*m.values, value); "
+    "m.count += 1; }\n"
+    "ring_sum :: (r: Ring($T, $N)) -> T { t: T; for r.items { t += it; } return t; }\n"
+    "ring_size :: (r: *Ring($T, $N)) -> int { a: [N]T; return a.count; }\n"
+    "firsts :: (ps: []Pair($A, $B)) -> A { return ps[0].first; }\n"
+    "swap :: (p: Pair($A, $B)) -> Pair(B, A) { return .{p.second, p.first}; }\n"
+    "dot :: (a: Vec($N), b: Vec(N)) -> float { t: float; for 0..N-1 { t += a.v[it] * b.v[it]; } return t; }\n"
+    "map_count :: (using m: *Map($K, $V)) -> int { return count; }\n";
+
+TEST(inference_reads_through_instances) {
+    // A pattern binds its parameters through an instance of a generic
+    // struct: *Map($K, $V) takes K and V from a *Map(string, int), a view
+    // of Pair($A, $B) from an array of Pair(int, string)'s; a $N written
+    // where the struct takes a constant declares a constant parameter of
+    // the procedure, of that parameter's type, bound to the instance's
+    // value, which its body uses as any constant, an array's count too, and
+    // which a later Vec(N) uses. A using parameter of one reaches its
+    // fields.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 joined(&a, STRUCT_PROCEDURES,
+                                        "main :: () {\n"
+                                        "    m: Map(string, int);\n"
+                                        "    r: Ring(u8, 3);\n"
+                                        "    ps: [2]Pair(int, string);\n"
+                                        "    q: Pair(int, bool);\n"
+                                        "    a: Vec(3);\n"
+                                        "    b: Vec(3);\n"
+                                        "    map_add(*m, \"a\", 1);\n"
+                                        "    map_add(*m, \"b\", 2);\n"
+                                        "    s := ring_sum(r);\n"
+                                        "    n := ring_size(*r);\n"
+                                        "    f := firsts(ps);\n"
+                                        "    w := swap(q);\n"
+                                        "    d := dot(a, b);\n"
+                                        "    k := map_count(*m);\n"
+                                        "}\n"),
+                                 &tree),
+              "");
+    Ast_Proc *map_add = (Ast_Proc *)top_level_named(tree, "map_add");
+    CHECK_EQ(map_add->instances.count, 1);
+    if (map_add->instances.count == 1) CHECK_STR(map_add->instances[0]->name, "map_add(K = string, V = int)");
+    Ast_Proc *ring_sum = (Ast_Proc *)top_level_named(tree, "ring_sum");
+    CHECK_EQ(ring_sum->instances.count, 1);
+    if (ring_sum->instances.count == 1) CHECK_STR(ring_sum->instances[0]->name, "ring_sum(T = u8, N = 3)");
+    Ast_Proc *dot = (Ast_Proc *)top_level_named(tree, "dot");
+    CHECK_EQ(dot->instances.count, 1);
+    if (dot->instances.count == 1) CHECK_STR(dot->instances[0]->name, "dot(N = 3)");
+    const char *names[] = {"s", "n", "f", "w", "d", "k"};
+    const char *types[] = {"u8", "int", "int", "Pair(bool, int)", "float32", "int"};
+    for (s64 i = 0; i < 6; i++) {
+        Type *t = local_type(tree, "main", names[i]);
+        CHECK_STR(t ? type_name(&a, t) : str("?"), types[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(inference_through_instances_mistakes) {
+    // An argument that isn't the instance its pattern names doesn't fit
+    // it, the pattern as written; once the instance is known, an argument
+    // converts to its parameter's type as any does. The instances a
+    // generic's signature names are checked once, at the generic, called
+    // or not, twice too: the name a generic struct's, the count right,
+    // each argument's type name known; a name used before the $ that
+    // declares it, in an instance's argument too. An instance in a
+    // generic's body naming nothing is said by the walk over its names.
+    Arena a = arena_make();
+    struct Case {
+        const char *body;
+        const char *declarations;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"map_add(*v, 1, 2);", "",
+         "13:74: argument 1 of 'map_add' has type '*Vec2', which doesn't fit '*Map($K, $V)'\n"},
+        {"map_add(*m, 1, 2);", "",
+         "13:78: argument 2 of 'map_add' has type 'int', which can't be converted to 'string'\n"},
+        {"ring_sum(m);", "",
+         "13:75: argument 1 of 'ring_sum' has type 'Map(string, int)', which doesn't fit 'Ring($T, $N)'\n"},
+        {"dot(a, c);", "", "13:73: argument 2 of 'dot' has type 'Vec(4)', which can't be converted to 'Vec(3)'\n"},
+        {"bad(*m); bad(*m);", "bad :: (m: *Map($K)) { }\n", "14:13: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"bad2(*v);", "bad2 :: (p: *Vec2($T)) { }\n", "14:14: 'Vec2' isn't generic, so it takes no arguments\n"},
+        {"bad3(m); bad3(m);", "bad3 :: (m: Map($K, Nope)) { }\n", "14:21: unknown type 'Nope'\n"},
+        {"", "bad4 :: (m: Map(K, $V), k: $K) { }\n", "14:17: 'K' is used before '$K' declares it\n"},
+        {"", "bad5 :: (v: $T) { x: Mapp(T, T); }\n", "14:22: unknown type 'Mapp'\n"},
+    };
+    for (const Case &k : cases) {
+        String text = string_printf(&a,
+                                    "%smain :: () { m: Map(string, int); v: Vec2; a: Vec(3); c: Vec(4); %s }\n%s",
+                                    STRUCT_PROCEDURES, k.body, k.declarations);
+        CHECK_STR(check_with_preload(&a, string_cstr(&a, text)), k.message);
+    }
+    arena_free(&a);
+}

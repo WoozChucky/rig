@@ -39,14 +39,37 @@ static void add_generic_parameter(Array<Generic_Binding> *declared, String name,
 
 // Where a name walk_names meets is.
 struct Name_Place {
-    bool in_count;  // inside an array's count or an instance's argument, at any depth: each instance's to check
-    bool pointee;   // a type name that is a pointer's target, *T's T (not *[]T's)
+    bool in_count;          // inside an array's count or an instance's argument that is an expression, at
+                            // any depth: each instance's to check
+    bool pointee;           // a type name that is a pointer's target, *T's T (not *[]T's)
+    bool in_instance;       // inside an instance's argument, at any depth: a generic struct's own check
+                            // leaves it to each instance (add_type_name_step)
+    Ast_Type *of_instance;  // the AST_TYPE_INSTANCE a name is a whole argument of, Map($K, V)'s K and V;
+                            // null otherwise, below that argument too (*K's K)
+    s64 argument;           // ... which argument it is, from 0
 };
 
-// The text of `name`, an Ast_Name or an AST_TYPE_NAME Ast_Type.
+// Whether node is a written type (an Ast_Type), not an expression: what an
+// instance's argument is when the parser read it as one
+// (parse_instance_argument).
+static bool is_written_type(Ast *node) {
+    switch (node->kind) {
+    case AST_TYPE_NAME:
+    case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: return true;
+    default: return false;
+    }
+}
+
+// The text of `name`, an Ast_Name, an AST_TYPE_NAME Ast_Type, or an
+// AST_TYPE_INSTANCE's, Map in Map(K, V).
 static String name_text(Ast *name) {
     if (name->kind == AST_NAME) return ((Ast_Name *)name)->name;
-    RIG_ASSERT(name->kind == AST_TYPE_NAME);
+    RIG_ASSERT(name->kind == AST_TYPE_NAME || name->kind == AST_TYPE_INSTANCE);
     return ((Ast_Type *)name)->name;
 }
 
@@ -67,16 +90,24 @@ static String name_text(Ast *name) {
 // field of one either, and holds no #load or #import (parse_statements
 // skips each, with skip_misplaced_load). AST_BUILTIN and AST_ALIAS are
 // the checker's own declarations, in a scope and in no tree. An instance of
-// a generic struct, Map(K, V), is given to no action, for now: its
-// arguments are walked as an array's count is, each instance's to check.
+// a generic struct, Map(K, V), is given to the action itself, its name the
+// struct's, then its arguments are walked, each with `in_instance` set: one
+// that is a written type as a type is, a name that is all of it with
+// `of_instance` and `argument` saying whose and which (spec 7.11: Map($K,
+// $V)'s K and V are bound from an instance's arguments); one that is an
+// expression, Ring(T, N + 1)'s N + 1, as an array's count is, each
+// instance's to check.
 static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, Ast *name, Name_Place place),
                        void *data) {
     if (!node) return;
     // A name below this node is a pointer's target only when this node is
-    // that pointer (AST_TYPE_POINTER's case); one in a count is in it at
-    // any depth.
+    // that pointer (AST_TYPE_POINTER's case), and a whole argument of an
+    // instance only when this node is that instance (AST_TYPE_INSTANCE's);
+    // one in a count, or in an instance's argument, is in it at any depth.
     Name_Place below = place;
     below.pointee = false;
+    below.of_instance = nullptr;
+    below.argument = 0;
     switch (node->kind) {
     case AST_NAME:
     case AST_TYPE_NAME: action(data, node, place); return;
@@ -96,10 +127,20 @@ static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, A
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE: walk_names(((Ast_Type *)node)->element, below, action, data); return;
     case AST_TYPE_INSTANCE: {
-        Name_Place argument = below;
-        argument.in_count = true;
         Ast_Type *written = (Ast_Type *)node;
-        for (s64 i = 0; i < written->args.count; i++) walk_names(written->args[i], argument, action, data);
+        action(data, node, place);
+        for (s64 i = 0; i < written->args.count; i++) {
+            Ast *arg = written->args[i];
+            Name_Place argument = below;
+            argument.in_instance = true;
+            if (!is_written_type(arg)) {
+                argument.in_count = true;
+            } else if (arg->kind == AST_TYPE_NAME) {
+                argument.of_instance = written;
+                argument.argument = i;
+            }
+            walk_names(arg, argument, action, data);
+        }
         return;
     }
     case AST_TYPE_PROC: {
@@ -176,24 +217,82 @@ static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, A
     RIG_ASSERT(!"not an expression or a written type");
 }
 
-// At a type parameter a written type declares, $T: adds it to the
-// Array<Generic_Binding> `data` is (collect_type_parameters). An array's
-// count declares none, and nor, for now, does an instance's argument,
-// though the parser reads a $T there in a parameter's type (parser.cpp's
-// parse_instance_argument): no type parameter is inferred through an
-// instance yet.
-static void at_declared_type(void *data, Ast *name, Name_Place place) {
-    if (name->kind != AST_TYPE_NAME || place.in_count) return;
-    Ast_Type *written = (Ast_Type *)name;
-    if (written->declares) {
-        add_generic_parameter((Array<Generic_Binding> *)data, written->name, written->pos, true, nullptr);
-    }
+// Whether struct parameter `param` is a type parameter, `K: Type`: known
+// by its type's written name, as takes_a_type knows a procedure's $T:
+// Type. Any other is a constant parameter.
+static bool struct_takes_a_type(Ast_Param *param) {
+    return param->type_expr->kind == AST_TYPE_NAME && string_eq(param->type_expr->name, str("Type"));
 }
 
-// The type parameters written type `written` declares, $T, added to
-// *declared in the order they're written (depth first, left to right).
-static void collect_type_parameters(Ast_Type *written, Array<Generic_Binding> *declared) {
-    walk_names(written, Name_Place{}, at_declared_type, declared);
+// The generic struct written instance `written` names, Map in Map($K, $V),
+// its own check done (check_generic_struct), so its constant parameters
+// have their types; null when the name is no generic struct's. A generic
+// struct is only ever a top-level declaration, so it's looked for there,
+// wherever the walk is, as a signature's names are the top level's
+// (checker.cpp's resolve_signature sets the scopes aside); a built-in
+// type's name always means the type (spec 3.1).
+static Ast_Struct *instance_generic(Checker *c, Ast_Type *written) {
+    if (type_from_name(written->name)) return nullptr;
+    Ast **found = table_get(&c->top_level, written->name);
+    if (!found || (*found)->kind != AST_STRUCT || !((Ast_Struct *)*found)->is_generic) return nullptr;
+    Ast_Struct *generic = (Ast_Struct *)*found;
+    check_generic_struct(c, generic);
+    return generic;
+}
+
+// Whether an instance of generic struct `generic` written with `given`
+// arguments gives one per parameter; if not, says "'Map' takes 2
+// arguments, but 1 was given" ("1 argument" when it takes one), at `at`,
+// the instance's name.
+static bool count_struct_arguments(Checker *c, Ast_Struct *generic, s64 given, Position at) {
+    s64 count = generic->params.count;
+    if (given == count) return true;
+    diag_error(c->diag, at, "'" STR_FMT "' takes %lld argument%s, but %lld %s given", STR_ARG(generic->name),
+               (long long)count, count == 1 ? "" : "s", (long long)given, given == 1 ? "was" : "were");
+    return false;
+}
+
+// The parameter of a generic struct a name at `place` stands for when it's
+// a whole argument of an instance, K in Map(K, V); null when it's none, or
+// the instance names no generic struct, or gives it more arguments than it
+// has parameters (a mistake at_generic_instance says).
+static Ast_Param *argument_parameter(Checker *c, Name_Place place) {
+    if (!place.of_instance) return nullptr;
+    Ast_Struct *generic = instance_generic(c, place.of_instance);
+    if (!generic || place.argument >= generic->params.count) return nullptr;
+    return generic->params[place.argument];
+}
+
+// What at_declared_type needs: the checker, to know an instance's struct,
+// and the parameters declared so far, which it adds to.
+struct Declared_Search {
+    Checker *c;
+    Array<Generic_Binding> *declared;
+};
+
+// At a parameter a written type declares, $T, added to the parameters
+// declared so far (collect_type_parameters, `data` a Declared_Search): a
+// type parameter, but where it's all of an instance's argument whose
+// parameter is a constant one, Ring($T, $N)'s $N: a constant parameter
+// then, of that parameter's type (spec 7.11), null when the struct's own
+// check refused it (check_generic_struct). An array's count, or an
+// instance's argument that is an expression, declares none.
+static void at_declared_type(void *data, Ast *name, Name_Place place) {
+    if (name->kind != AST_TYPE_NAME || place.in_count) return;
+    Declared_Search *search = (Declared_Search *)data;
+    Ast_Type *written = (Ast_Type *)name;
+    if (!written->declares) return;
+    Ast_Param *param = argument_parameter(search->c, place);
+    bool is_type = !param || struct_takes_a_type(param);
+    add_generic_parameter(search->declared, written->name, written->pos, is_type, is_type ? nullptr : param->type);
+}
+
+// The parameters written type `written` declares, $T, or $N where a struct
+// takes a constant (at_declared_type), added to *declared in the order
+// they're written (depth first, left to right).
+static void collect_type_parameters(Checker *c, Ast_Type *written, Array<Generic_Binding> *declared) {
+    Declared_Search search = {c, declared};
+    walk_names(written, Name_Place{}, at_declared_type, &search);
 }
 
 bool takes_a_type(Ast_Param *param) {
@@ -203,9 +302,10 @@ bool takes_a_type(Ast_Param *param) {
 // The type and constant parameters generic declares, in the order it
 // declares them: each parameter's own, when it's baked ($T: Type, a type
 // one; $N: int, a constant one of the type its signature's check gave it,
-// null before), then those its type declares ($T). Each name once. The
-// caller frees the Array.
-static Array<Generic_Binding> generic_parameters(Ast_Proc *generic) {
+// null before), then those its type declares ($T, and $N in Ring($T, $N),
+// a constant one of the type Ring's N has). Each name once. The caller
+// frees the Array.
+static Array<Generic_Binding> generic_parameters(Checker *c, Ast_Proc *generic) {
     Array<Generic_Binding> declared = {};
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
@@ -213,7 +313,7 @@ static Array<Generic_Binding> generic_parameters(Ast_Proc *generic) {
             bool is_type = takes_a_type(param);
             add_generic_parameter(&declared, param->name, param->dollar, is_type, is_type ? nullptr : param->type);
         }
-        collect_type_parameters(param->type_expr, &declared);
+        collect_type_parameters(c, param->type_expr, &declared);
     }
     return declared;
 }
@@ -246,6 +346,41 @@ struct Generic_Type_Check {
     bool said;
 };
 
+// At an instance in a written type of a generic's signature, Map($K, $V)
+// (spec 7.11): what doesn't depend on the generic's parameters is said
+// once, at the generic, called or not, as each instance would say it
+// (check_written_instance). Its name must be a generic struct's: "'Vec2'
+// isn't generic, so it takes no arguments", or what resolve_type_name says
+// of a name that is no type ("unknown type 'Nope'", "'main' is not a
+// type"), a type parameter's, which is bound to a type, being "'T' isn't
+// generic, ...", and a constant parameter's "'N' is not a type". Then its
+// count: "'Map' takes 2 arguments, but 1 was given". A generic struct
+// whose own check said a mistake says nothing more (check_generic_struct).
+// Its arguments are walked after it (at_generic_type_name).
+static void at_generic_instance(Generic_Type_Check *check, Ast_Type *written) {
+    Checker *c = check->c;
+    s64 errors = c->diag->error_count;
+    if (is_constant_parameter(check->declared, written->name)) {
+        diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+    } else if (is_type_parameter(check->declared, written->name) && !type_from_name(written->name)) {
+        diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
+                   STR_ARG(written->name));
+    } else {
+        Ast *decl = type_from_name(written->name) ? nullptr : find_name(c, written->name);
+        if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
+            Ast_Struct *generic = (Ast_Struct *)decl;
+            check_generic_struct(c, generic);
+            if (!generic->had_errors && generic->resolve == RESOLVE_DONE) {
+                count_struct_arguments(c, generic, written->args.count, written->pos);
+            }
+        } else if (resolve_type_name(c, written, true)) {
+            diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
+                       STR_ARG(written->name));
+        }
+    }
+    check->said |= c->diag->error_count != errors;
+}
+
 // At a type name in a written type of a generic's signature, or of a
 // generic struct's field (check_generic_fields), its type parameters taken
 // as types still to be known: every other type name resolved as where it's
@@ -265,11 +400,26 @@ struct Generic_Type_Check {
 // out: what that says is the alias's own mistake, or an instance's that its
 // value lays out, never the generic's, which are only those said at the
 // name after it (Generic_Type_Check.said).
+//
+// An instance, Map($K, $V), is at_generic_instance's. A name that is all of
+// one of its arguments is a type name as any other where the struct takes
+// a type; where it takes a constant, Ring($T, N)'s N, it's a value, each
+// instance's to check, as an array's count is, and so is any name of an
+// instance at_generic_instance said a mistake of (argument_parameter).
 static void at_generic_type_name(void *data, Ast *name, Name_Place place) {
-    if (name->kind != AST_TYPE_NAME || place.in_count) return;
+    if (place.in_count) return;
     Generic_Type_Check *check = (Generic_Type_Check *)data;
     Checker *c = check->c;
+    if (name->kind == AST_TYPE_INSTANCE) {
+        at_generic_instance(check, (Ast_Type *)name);
+        return;
+    }
+    if (name->kind != AST_TYPE_NAME) return;
     Ast_Type *written = (Ast_Type *)name;
+    if (place.of_instance) {
+        Ast_Param *param = argument_parameter(c, place);
+        if (!param || !struct_takes_a_type(param)) return;
+    }
     if (is_type_parameter(check->declared, written->name)) return;
     if (is_constant_parameter(check->declared, written->name)) {
         // A $N, a second $ of its name, is that mistake, said already
@@ -299,9 +449,9 @@ static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Bind
 
 // The name of the first type parameter written type `written` declares, or
 // an empty one.
-static String first_declared(Ast_Type *written) {
+static String first_declared(Checker *c, Ast_Type *written) {
     Array<Generic_Binding> declared = {};
-    collect_type_parameters(written, &declared);
+    collect_type_parameters(c, written, &declared);
     String first = declared.count ? declared[0].name : String{};
     array_free(&declared);
     return first;
@@ -384,8 +534,11 @@ struct Signature_Check {
 // constant parameter's written before the $ that declares it, [N]int or
 // [size_of(T)]int before $N or $T, is "'N' is used before '$N' declares
 // it", at the use (check_count_name). The rest of the count is each
-// instance's to check. An instance's argument, Box(T), is walked as a
-// count is (walk_names).
+// instance's to check. An instance's argument that is an expression,
+// Ring(T, N + 1)'s, is walked as a count is (walk_names); one that is a
+// written type as any written type is, a name that is all of it, Map(K,
+// V)'s K or Vec(N)'s N, used before the $ that declares it, said as in a
+// count, a constant parameter's too.
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
 static void at_signature_name(void *data, Ast *name, Name_Place place) {
@@ -393,22 +546,29 @@ static void at_signature_name(void *data, Ast *name, Name_Place place) {
     Checker *c = check->c;
     Array<Signature_Name> *names = check->names;
     if (place.in_count) {
-        // A $T never sits in a count: the parser declares none there
-        // (parse_type_level). It may sit in an instance's argument, Box($T)
-        // (parse_instance_argument), where it declares nothing, for now
-        // (at_declared_type): checking `declares` keeps it from being taken
-        // for a use of its name.
+        // A $T never sits in a count, nor in an instance's argument that is
+        // an expression: the parser declares none there (parse_type_level;
+        // parse_instance_argument reads a $T as a written type). Checking
+        // `declares` keeps one from being taken for a use of its name all
+        // the same.
         if (name->kind == AST_NAME || !((Ast_Type *)name)->declares) {
             check_count_name(c, name_text(name), name->pos, check->declared, names);
         }
         return;
     }
+    // An instance's name is a generic struct's, which declares nothing and
+    // is no parameter's use (at_generic_instance says what else it is).
+    if (name->kind == AST_TYPE_INSTANCE) return;
     RIG_ASSERT(name->kind == AST_TYPE_NAME);  // outside a count, a written type holds only types
     Ast_Type *written = (Ast_Type *)name;
     Signature_Name *earlier = signature_name(names, written->name);
     if (!written->declares) {
-        if (is_type_parameter(check->declared, written->name) && !type_from_name(written->name) &&
-            !dollar_declared(names, written->name)) {
+        // All of an instance's argument, a name may be a constant
+        // parameter's too, Vec(N)'s N, as in a count.
+        if (place.of_instance) {
+            check_count_name(c, written->name, written->pos, check->declared, names);
+        } else if (is_type_parameter(check->declared, written->name) && !type_from_name(written->name) &&
+                   !dollar_declared(names, written->name)) {
             diag_error(c->diag, written->pos, "'" STR_FMT "' is used before '$" STR_FMT "' declares it",
                        STR_ARG(written->name), STR_ARG(written->name));
         }
@@ -451,7 +611,7 @@ static bool constant_parameter_type(Type *t) {
 // the name of a type parameter no $ before it declares: "'T' is used before
 // '$T' declares it", said already (check_signature_names), as it is of no
 // built-in type's name.
-static bool used_before_its_dollar(Ast_Proc *generic, s64 index, Array<Generic_Binding> declared) {
+static bool used_before_its_dollar(Checker *c, Ast_Proc *generic, s64 index, Array<Generic_Binding> declared) {
     Ast_Type *written = generic->params[index]->type_expr;
     if (written->kind != AST_TYPE_NAME || written->declares || !is_type_parameter(declared, written->name) ||
         type_from_name(written->name)) {
@@ -461,7 +621,7 @@ static bool used_before_its_dollar(Ast_Proc *generic, s64 index, Array<Generic_B
     for (s64 i = 0; i < index; i++) {
         Ast_Param *param = generic->params[i];
         if (param->is_baked) add_generic_parameter(&before, param->name, param->dollar, false, nullptr);
-        collect_type_parameters(param->type_expr, &before);
+        collect_type_parameters(c, param->type_expr, &before);
     }
     bool used_before = true;
     for (s64 i = 0; i < before.count; i++) used_before &= !string_eq(before[i].name, written->name);
@@ -530,7 +690,7 @@ static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Arra
     Ast_Type *written = param->type_expr;
     Type *t = &type_type;
     if (!takes_a_type(param)) {
-        if (used_before_its_dollar(generic, index, declared)) return;  // that mistake, said
+        if (used_before_its_dollar(c, generic, index, declared)) return;  // that mistake, said
         bool named = written->kind == AST_TYPE_NAME && !is_type_parameter(declared, written->name) &&
                      !is_constant_parameter(declared, written->name);
         t = named ? resolve_written(c, written, true) : nullptr;
@@ -555,7 +715,7 @@ static void check_baked_parameter(Checker *c, Ast_Proc *generic, s64 index, Arra
 }
 
 void check_generic_signature(Checker *c, Ast_Proc *generic) {
-    Array<Generic_Binding> declared = generic_parameters(generic);
+    Array<Generic_Binding> declared = generic_parameters(c, generic);
     // The names the parameters declare, in the order they're written: each
     // parameter's, then its type's. A parameter's name another has is
     // "'a' is already declared at PATH:L:C", at the later one, as its body
@@ -592,7 +752,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
         // A default value that would fix T has no call to give it a type
         // yet, so a parameter whose type declares one takes none, for now
         // (spec 7.11).
-        String declares = first_declared(param->type_expr);
+        String declares = first_declared(c, param->type_expr);
         if (param->default_value && declares.count) {
             diag_error(c->diag, param->equals,
                        "a parameter that declares '$" STR_FMT "' can't have a default value, for now",
@@ -650,19 +810,27 @@ struct Unbound_Search {
     bool found;
 };
 
+// Whether binding b has what it binds: a type parameter its type; a
+// constant one, whose type it has from the start, its value.
+static bool is_bound(Generic_Binding *b) {
+    return b->is_type ? b->type != nullptr : b->value != nullptr;
+}
+
 // At a name in a pattern: found when it's a type name that names a type
-// parameter not bound yet, or, with `only`, that one. A name in an array's
-// count is passed over, as match_type passes over the count: it binds
+// parameter not bound yet, or, all of an instance's argument, Ring($T,
+// $N)'s N, a constant parameter not bound yet; or, with `only`, that one. A
+// name in an array's count, or in an instance's argument that is an
+// expression, is passed over, as match_type passes over them: it binds
 // nothing.
 static void at_unbound_name(void *data, Ast *name, Name_Place place) {
     Unbound_Search *search = (Unbound_Search *)data;
     if (search->found || name->kind != AST_TYPE_NAME || place.in_count) return;
     Generic_Binding *b = binding_named(search->bindings, name_text(name));
-    search->found = b && !b->type && (!search->only || b == search->only);
+    search->found = b && (b->is_type || place.of_instance) && !is_bound(b) && (!search->only || b == search->only);
 }
 
-// Whether written type `pattern` names a type parameter not bound yet, or,
-// with `only`, that one (at_unbound_name).
+// Whether written type `pattern` names a parameter not bound yet, or, with
+// `only`, that one (at_unbound_name).
 static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, Generic_Binding *only) {
     Unbound_Search search = {bindings, only, false};
     walk_names(pattern, Name_Place{}, at_unbound_name, &search);
@@ -680,7 +848,19 @@ static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, G
 // converts is the call's to say (check_call). False when a part can't
 // match: t isn't the kind of type the pattern is, where it names one still
 // to bind.
-static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindings) {
+//
+// An instance, Map($K, $V), takes an instance of the struct it names
+// (spec 3.23), whose copy t is (Ast_Struct.instance: an instance's own
+// copy, not an anonymous member's struct in it): each of its arguments
+// against the instance's binding at its index, a written type against the
+// type a type parameter is bound to, at any depth, and a name that is all
+// of the argument where the struct takes a constant, Ring($T, $N)'s N,
+// one of the generic's constant parameters not bound yet, against the
+// constant, whose value it then has, of its type. An argument that is an
+// expression, or a name of anything else, binds nothing and isn't looked
+// at: the call's conversion says a mismatch, a *Ring(int, 5) to a
+// *Ring(int, 4).
+static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindings) {
     if (!names_unbound(pattern, bindings, nullptr)) return true;
     switch (pattern->kind) {
     case AST_TYPE_NAME: {
@@ -688,13 +868,37 @@ static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindi
         b->type = t;
         return true;
     }
-    case AST_TYPE_POINTER: return t->kind == TYPE_POINTER && match_type(pattern->pointee, t->pointee, bindings);
+    case AST_TYPE_INSTANCE: {
+        Ast_Struct *generic = instance_generic(c, pattern);
+        Ast_Struct *s = t->kind == TYPE_STRUCT ? t->decl : nullptr;
+        Ast_Instance *inst = s ? s->instance : nullptr;
+        if (!generic || !inst || inst->structure != s || inst->generic_struct != generic ||
+            pattern->args.count != inst->bindings.count) {
+            return false;
+        }
+        for (s64 i = 0; i < pattern->args.count; i++) {
+            Ast *arg = pattern->args[i];
+            Ast *bound = inst->bindings[i];
+            if (!is_written_type(arg)) continue;
+            if (bound->kind == AST_ALIAS) {
+                if (!match_type(c, (Ast_Type *)arg, ((Ast_Alias *)bound)->aliased, bindings)) return false;
+                continue;
+            }
+            Generic_Binding *b = arg->kind == AST_TYPE_NAME ? binding_named(bindings, ((Ast_Type *)arg)->name) : nullptr;
+            if (!b || b->is_type || is_bound(b)) continue;
+            Ast_Const *constant = (Ast_Const *)bound;
+            if (constant->type != b->type) return false;
+            b->value = constant->value;
+        }
+        return true;
+    }
+    case AST_TYPE_POINTER: return t->kind == TYPE_POINTER && match_type(c, pattern->pointee, t->pointee, bindings);
     case AST_TYPE_VIEW:
         return (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) &&
-               match_type(pattern->element, t->element, bindings);
-    case AST_TYPE_ARRAY: return t->kind == TYPE_ARRAY && match_type(pattern->element, t->element, bindings);
+               match_type(c, pattern->element, t->element, bindings);
+    case AST_TYPE_ARRAY: return t->kind == TYPE_ARRAY && match_type(c, pattern->element, t->element, bindings);
     case AST_TYPE_RESIZABLE:
-        return t->kind == TYPE_RESIZABLE && match_type(pattern->element, t->element, bindings);
+        return t->kind == TYPE_RESIZABLE && match_type(c, pattern->element, t->element, bindings);
     case AST_TYPE_PROC: {
         if (t->kind != TYPE_PROC || t->param_count != pattern->params.count ||
             t->result_count != pattern->results.count || t->is_variadic != pattern->is_variadic) {
@@ -703,32 +907,16 @@ static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindi
         for (s64 i = 0; i < t->param_count; i++) {
             // A '..T' parameter is a []T, and its pattern T.
             bool dots = t->is_variadic && i == t->param_count - 1;
-            if (!match_type(pattern->params[i], dots ? t->params[i]->element : t->params[i], bindings)) {
+            if (!match_type(c, pattern->params[i], dots ? t->params[i]->element : t->params[i], bindings)) {
                 return false;
             }
         }
         for (s64 i = 0; i < t->result_count; i++) {
-            if (!match_type(pattern->results[i], t->results[i], bindings)) return false;
+            if (!match_type(c, pattern->results[i], t->results[i], bindings)) return false;
         }
         return true;
     }
     default: RIG_ASSERT(!"not a written type"); return false;
-    }
-}
-
-// Whether node is a written type (an Ast_Type), not an expression: what an
-// instance's argument is when the parser read it as one
-// (parse_instance_argument).
-static bool is_written_type(Ast *node) {
-    switch (node->kind) {
-    case AST_TYPE_NAME:
-    case AST_TYPE_POINTER:
-    case AST_TYPE_ARRAY:
-    case AST_TYPE_VIEW:
-    case AST_TYPE_RESIZABLE:
-    case AST_TYPE_PROC:
-    case AST_TYPE_INSTANCE: return true;
-    default: return false;
     }
 }
 
@@ -911,8 +1099,10 @@ static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *
 //   (bake_argument). They're all before any '..' parameter, so argument i
 //   is parameter i's.
 // - Each argument, in order, typed and of a type of its own, is matched
-//   against its pattern (match_type): one that can't match is "argument 1
-//   of 'first' has type 'int', which doesn't fit '[]$T'", at it. An untyped
+//   against its pattern (match_type), which binds a constant parameter
+//   declared in an instance's argument too, Ring($T, $N)'s N, from the
+//   instance the argument is: one that can't match is "argument 1 of
+//   'first' has type 'int', which doesn't fit '[]$T'", at it. An untyped
 //   number meeting a pattern with more to it than a name is matched as its
 //   default type (int, float32): `first(5)` is such a mistake.
 // - A type parameter still unbound then has only untyped numbers, or
@@ -945,7 +1135,7 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
             if (pattern->kind == AST_TYPE_NAME) continue;  // its default only if nothing typed fixes it
             t = t == &type_untyped_float ? &type_float32 : &type_int;
         }
-        if (match_type(pattern, t, bindings)) continue;
+        if (match_type(c, pattern, t, bindings)) continue;
         diag_error(c->diag, args[i]->start,
                    "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which doesn't fit '" STR_FMT "'",
                    (long long)(i + 1), STR_ARG(generic->name), STR_ARG(type_name(c->arena, t)),
@@ -954,7 +1144,7 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
     }
     for (s64 k = 0; k < bindings->count; k++) {
         Generic_Binding *b = &(*bindings)[k];
-        if (b->type) continue;
+        if (is_bound(b)) continue;
         bool any = false, failed = false, untyped_float = false;
         Ast *no_type = nullptr, *no_sequence = nullptr;
         Ast_Type *no_sequence_pattern = nullptr;
@@ -1000,6 +1190,11 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
                        STR_ARG(b->name), STR_ARG(generic->name), (long long)(no_type_index + 1));
             return false;
         }
+        // Only an instance binds a constant parameter of an instance's
+        // argument, Ring($T, $N)'s N: an untyped number at its place met its
+        // pattern as its default type, which is no instance, and didn't fit
+        // (said, above). What's left is a type parameter.
+        RIG_ASSERT(b->is_type);
         b->type = untyped_float ? &type_float32 : &type_int;
     }
     return true;
@@ -1314,7 +1509,7 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
 }
 
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at) {
-    Array<Generic_Binding> bindings = generic_parameters(generic);
+    Array<Generic_Binding> bindings = generic_parameters(c, generic);
     Ast_Proc *proc = nullptr;
     if (infer_bindings(c, generic, args, callee, &bindings)) {
         Ast_Instance *inst = find_instance(generic->instances, bindings);
@@ -1336,13 +1531,6 @@ Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *
 // a procedure instance's are (make_bindings), named Map(string, int), its
 // Type made, and laid out where it's needed, as any struct, its bindings
 // in sight (checker.cpp's resolve_struct enters it).
-
-// Whether struct parameter `param` is a type parameter, `K: Type`: known
-// by its type's written name, as takes_a_type knows a procedure's $T:
-// Type. Any other is a constant parameter.
-static bool struct_takes_a_type(Ast_Param *param) {
-    return param->type_expr->kind == AST_TYPE_NAME && string_eq(param->type_expr->name, str("Type"));
-}
 
 // The type and constant parameters generic struct `generic` declares, in
 // order, none bound yet: a constant one of the type its own check gave it
@@ -1414,7 +1602,7 @@ struct Field_Steps {
 // instance's argument: a step that checks it, added to the Field_Steps
 // `data` is.
 static void add_type_name_step(void *data, Ast *name, Name_Place place) {
-    if (name->kind != AST_TYPE_NAME || place.in_count) return;
+    if (name->kind != AST_TYPE_NAME || place.in_count || place.in_instance) return;
     Field_Steps *steps = (Field_Steps *)data;
     array_add(steps->steps, Generic_Field_Step{steps->field, (Ast_Type *)name, place});
 }
@@ -1790,12 +1978,8 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
     // Its own mistake, said, or its check too deep here (said): its uses
     // say nothing more.
     if (generic->had_errors || generic->resolve != RESOLVE_DONE) return nullptr;
+    if (!count_struct_arguments(c, generic, args.count, at)) return nullptr;
     s64 count = generic->params.count;
-    if (args.count != count) {
-        diag_error(c->diag, at, "'" STR_FMT "' takes %lld argument%s, but %lld %s given", STR_ARG(generic->name),
-                   (long long)count, count == 1 ? "" : "s", (long long)args.count, args.count == 1 ? "was" : "were");
-        return nullptr;
-    }
     // Every argument is bound, its own mistakes said, before any instance.
     Array<Generic_Binding> bindings = struct_parameters(generic);
     bool bound = true;
@@ -1870,9 +2054,10 @@ static void names_value(Name_Walk *w, Ast_Name *name) {
 
 // At a name in a generic's body, in an expression or a written type (an
 // array's count is an expression too, so where it is doesn't matter): a
-// value's or a callee's as names_value says it; a type's as
-// resolve_written says it, "unknown type 'Foo'" for one declared nowhere (a
-// field is no type, so a using parameter doesn't keep it silent).
+// value's or a callee's as names_value says it; a type's, an instance's
+// name too, Map in Map(K, V), as resolve_written says it, "unknown type
+// 'Foo'" for one declared nowhere (a field is no type, so a using parameter
+// doesn't keep it silent).
 static void at_body_name(void *data, Ast *name, Name_Place place) {
     (void)place;
     Name_Walk *w = (Name_Walk *)data;
@@ -2043,7 +2228,7 @@ void check_generic_names(Checker *c, Ast_Proc *generic) {
         array_add(&w.names, generic->params[i]->name);
         w.any_field |= generic->params[i]->is_using && !generic->params[i]->is_baked;
     }
-    Array<Generic_Binding> declared = generic_parameters(generic);
+    Array<Generic_Binding> declared = generic_parameters(c, generic);
     for (s64 i = 0; i < declared.count; i++) array_add(&w.names, declared[i].name);
     array_free(&declared);
     names_statements(&w, generic->body);

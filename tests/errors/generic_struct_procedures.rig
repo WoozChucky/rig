@@ -1,0 +1,39 @@
+// Generic procedures over generic structs (issue #227, spec 7.11): an
+// argument that isn't the instance its pattern names doesn't fit it,
+// written as the pattern is; once the instance is known, an argument
+// converts to its parameter's type as any does, a Vec(4) to a Vec(3) too.
+// The instances a generic's signature names are checked once, at the
+// generic, however often it's called: the name a generic struct's, the
+// count right, each type name known; a name used before the $ that
+// declares it, in an instance's argument too. An instance in a generic's
+// body naming nothing is said though nothing calls it.
+Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+Vec :: struct (N: int) { v: [N]float; }
+Vec2 :: struct { x: float; y: float; }
+
+map_add :: (m: *Map($K, $V), key: K, value: V) { m.count += 1; }
+ring_sum :: (r: Ring($T, $N)) -> T { t: T; for r.items { t += it; } return t; }
+dot :: (a: Vec($N), b: Vec(N)) -> float { return a.v[0] * b.v[0]; }
+
+bad :: (m: *Map($K)) { }
+bad2 :: (p: *Vec2($T)) { }
+bad3 :: (m: Map($K, Nope)) { }
+bad4 :: (m: Map(K, $V), k: $K) { }
+bad5 :: (v: $T) { x: Mapp(T, T); }
+
+main :: () {
+    m: Map(string, int);
+    v: Vec2;
+    a: Vec(3);
+    c: Vec(4);
+    map_add(*v, 1, 2);
+    map_add(*m, 1, 2);
+    ring_sum(m);
+    dot(a, c);
+    bad(*m);
+    bad(*m);
+    bad2(*v);
+    bad3(m);
+    bad3(m);
+}
