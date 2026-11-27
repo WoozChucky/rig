@@ -1,4 +1,4 @@
-generic_structs.rig, line 27.
+generic_structs.rig, line 35.
 type = struct Pair(int, bool)
 {first = 7, second = true}
 type = struct Ring(int, 3)
@@ -7,6 +7,18 @@ type = struct Ring(int, 3)
 type = struct List(int) {
     int value;
     struct List(int) *next;
-16:	struct Pair(int, bool);
+type = struct Box* u8
+type = struct Box(*u8)
+{v = 0x0}
+p = {first = 7, second = true}
+r = {items = {0, 10, 20}}
+b = {v = 0x0}
+21:	struct Pair(int, bool);
+All types matching regular expression "Int_Pair":
+All types matching regular expression "Local_Ring":
 exited normally
 !.debug_names not created by gdb
+!Local_Ring =
+!Int_Pair =
+!Local_Ring;
+!Int_Pair;

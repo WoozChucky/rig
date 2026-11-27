@@ -1,5 +1,10 @@
 struct Pair(int, bool) p
 struct Ring(int, 3) r
 struct List(int) head
+struct Box(*u8) b
 items            : [3]
 0n2
+struct Box(*u8)
+v                : (null)
+!Local_Ring
+!Int_Pair
