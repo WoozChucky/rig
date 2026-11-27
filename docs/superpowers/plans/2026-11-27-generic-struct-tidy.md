@@ -23,7 +23,7 @@
 - **Task 1** changes only which `'X' is not a type` messages are printed. Nothing else changes: other messages, their order, exit codes, or what the checker decides. The only expected outputs that change are the two cases in `instance_value_mistakes` named in Task 1. If anything else changes, that is a bug.
 - **Task 2** changes only the grammar, its checks, the extension's README and its version. The generated `syntaxes/rig.tmLanguage.json` is never edited by hand: edit the template, then bless.
 - **Task 3** is a comment only.
-- Code is study material: each new piece gets a comment in the style around it, saying what it does and why. Comments the change makes wrong are fixed in the same commit: `resolve_written`'s header (checker.cpp:198-226), the `AST_CONST` branch in `resolve_type_name` (:315-326), `find_name`'s comment (:496-506), and the grammar's `#type` alias rule comment ("so it stays a constant, below").
+- Code is study material: each new piece gets a comment in the style around it, saying what it does and why. Comments the change makes wrong are fixed in the same commit: `resolve_written`'s header (checker.cpp:199-230), the `AST_CONST` branch in `resolve_type_name` (:315-326), `find_name`'s comment (:496-506), and the grammar's `#type` alias rule comment ("so it stays a constant, below").
 - Unity builds: no new source file. File-level `static` names stay unique across `src/all.cpp` (`withdraw_repeated_not_a_type` and `inside_declaration` are unused today).
 - `-Wall -Wextra`, no warnings, debug and release, Windows and Linux.
 - Every commit must pass on both hosts: `bin\unit-tests.exe` and `bin\run-tests.exe`. `run-tests` runs the debugger tests last (cdb on Windows, gdb on Linux), and they must PASS, not SKIP. `node editors/vscode/test/check.js` must pass too (run it on Windows; WSL has no node).
@@ -49,7 +49,7 @@
 1. **A silent circle keeps its message.** `S :: struct { a: C; } g: S; C :: g.a;`: C fails without a word, because `g.a` has no type, because of the field `a: C`. So the field's `'C' is not a type` is the program's only error. It must stay, in either order. A rule of "typeless means its mistake was said" would leave this program with no error at all. Task 1 Step 1 pins both orders.
 2. **A note never counts as a constant's own mistake.** In `X :: cast(X) 1;`, the only message is the note itself, which sits inside X's declaration. It must stay. So must the notes that a constant's value says about another constant: in `X :: cast(Y) 1; Y :: 5;` both notes stay. Pinned in Step 1.
 3. **Order independence.** The rule looks only at the final state: X's type and the messages' positions. A use before the declaration, in a struct's field, in a global's type, in a signature, or in a body behaves the same. So do a constant failing only through another constant (`X :: K + 1;`, kept in both orders) and a constant laid out by a top-level `#if`'s decider (the notes live on `Ast_File`, so `check()` sees the decider's). Pinned in Step 1 and in `tests/errors/failed_constant_as_type`.
-4. **Withdrawing keeps the bookkeeping right.** `diag_withdraw` must decrement `error_count` as well as remove the message. The removals run from the highest index down, so each recorded index stays valid. Nothing may sort or clear `d->messages` between the note and the end of `check()`. That holds today: `compilation_print` runs only after `check()` returns. A `#run` that calls `exit()` mid-check prints through `diag_print_at_exit` before any withdrawal. That edge is accepted: it prints what was said so far.
+4. **Withdrawing keeps the bookkeeping right.** `diag_withdraw` must decrement `error_count` as well as remove the message. The removals run from the highest index down, so each recorded index stays valid. Nothing may sort or clear `d->messages` between the note and the end of `check()`. That holds today: `compilation_print` runs only after `check()` returns. (Only a unit test sorts between a decider and `check()`, `deciding_and_checking_say_each_message_once`, whose decider says no note; a new test mustn't.) `check()`'s return leaves out a withdrawn note the decider said (Step 3). A `#run` that calls `exit()` mid-check prints through `diag_print_at_exit` before any withdrawal. That edge is accepted: it prints what was said so far.
 5. **Grammar false positives.** `ADD :: add;`, `SAME :: SQUARES;`, `MINE :: OS;`, `R :: repeat(3);`, `A :: [2]int.[1, 2];`, `M :: Mode.A;` and `N :: (1 + 2);` must stay constants. The corpus check in `check.js` already fails if a name is coloured as a type that no struct, enum, `$T` or alias declares. It must keep passing on every program of `tests/run` and `tests/build`.
 
 ---
@@ -62,10 +62,10 @@
   - `src/parser.cpp`: `parse_constant` :972-980.
   - `src/ast.cpp`: `ast_clone`'s `AST_CONST` case :832-839.
   - `src/diag.h` :96 and `src/diag.cpp` :36: `diag_withdraw`.
-  - `src/checker.cpp`: the comment at :198-226; `resolve_type_name` :315-329; `find_name`'s comment :496-506; the end of `check()` :4236-4243.
+  - `src/checker.cpp`: the comment at :199-230; `resolve_type_name` :315-329; `find_name`'s comment :496-506; the end of `check()` :4236-4243.
   - `docs/rig-spec.md`: 3.22, :1665.
 - Test:
-  - `tests/unit/test_checker.cpp`: a new `TEST` after `alias_mistakes` (:14262-14330); `instance_value_mistakes` :15339-15344.
+  - `tests/unit/test_checker.cpp`: a new `TEST` after `alias_mistakes` (:14262-14325); `instance_value_mistakes` :15340-15346.
   - `tests/unit/test_diag.cpp`: a new `TEST`.
   - `tests/errors/failed_constant_as_type.rig` and `.err`: new files.
 
@@ -73,8 +73,9 @@
 ```cpp
 // ast.h, in Ast_Const:
 Position end;  // its ';': the messages from its name to here are its declaration's own
-               // (checker.cpp's withdraw_repeated_not_a_type); {} for an enum's member, which no
-               // type name finds
+               // (checker.cpp's withdraw_repeated_not_a_type); {} for one parse_constant doesn't
+               // make: an enum's member, which no type name finds, and a constant parameter's
+               // binding or OS, whose type is set, so no note of theirs is withdrawn
 
 // ast.h, before Ast_File:
 // A "'X' is not a type" said of constant X where a type is written: X, and the message's
@@ -98,8 +99,10 @@ void diag_withdraw(Diagnostics *d, s64 index);
 // Whether `at` is inside constant k's declaration: k's file, from k->pos to k->end, both included.
 static bool inside_declaration(Position at, Ast_Const *k);
 // At the end of check(): withdraws each recorded note whose constant has no type and whose
-// declaration holds an error that is no recorded note; then frees the list.
-static void withdraw_repeated_not_a_type(Checker *c);
+// declaration holds an error that is no recorded note; then frees the list. Returns how many
+// of the notes it withdrew were said before check() began (index < said_before, d->messages'
+// count at check()'s start): a decider's, which check()'s return leaves out.
+static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before);
 ```
 
 - [ ] **Step 1: Write the failing tests.**
@@ -133,7 +136,9 @@ static void withdraw_repeated_not_a_type(Checker *c);
     | `K :: 1 + "a";\nX :: K + 1;\nmain :: () { x: X; }\n` | `1:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n` | the same, reversed |
     | `X :: 5;\nmain :: () { x: X; }\n` | `2:17: 'X' is not a type\n` | |
 
-  - In `instance_value_mistakes`, both cases at :15339-15344 drop their `'K' is not a type` lines. They become `"4:6: the value of constant 'K' isn't known while compiling\n"` and `"3:6: the value of constant 'K' isn't known while compiling\n"`. Reword the comment above them (:15333-15337): a call of a procedure is a value, and is no type wherever it's used; its mistake is said once.
+    After the tables, the same test decides the `tests/errors` source below with `decide_all` (as `deciding_leaves_the_rest_for_check` does, no sort in between), then `CHECK(!check(...))`: `check()` said X's mistake, though the decider's note it withdrew leaves `error_count` equal to `errors_before`. Then the messages, sorted, are only `3:8: '+' needs numbers, not 'string'\n`.
+
+  - In `instance_value_mistakes`, both cases at :15340-15346 drop their `'K' is not a type` lines. They become `"4:6: the value of constant 'K' isn't known while compiling\n"` and `"3:6: the value of constant 'K' isn't known while compiling\n"`. Reword the comment above them (:15333-15337): a call of a procedure is a value, and is no type wherever it's used; its mistake is said once.
   - In `test_diag.cpp`, add `TEST(a_withdrawn_error_is_gone)`:
     - Errors at `{f, 1, 1}`, `{f, 2, 1}` and `{f, 3, 1}` of a three-line file, then `diag_withdraw(&d, 1)`.
     - `CHECK_EQ(d.error_count, 2)` and `CHECK_EQ(d.messages.count, 2)`.
@@ -151,8 +156,9 @@ static void withdraw_repeated_not_a_type(Checker *c);
   - `withdraw_repeated_not_a_type`:
     - Mark the recorded indices in a scratch `Array<bool>` the size of `d->messages`.
     - Withdraw a note when its constant has `!constant->type` and some unmarked message is `inside_declaration` of it.
-    - Withdraw from the last index down; free both arrays.
-  - At the end of `check()`, call it, then `array_free(&file->constants_not_types)`, both before `free_checker_fields`. A decider doesn't call it: its notes wait for `check()`.
+    - Withdraw from the last index down; free both arrays (the scratch one and `file->constants_not_types`).
+  - At the end of `check()`, before `free_checker_fields`, call it with `said_before`, `d->messages.count` taken at `check()`'s start next to `errors_before`. A decider doesn't call it: its notes wait for `check()`.
+  - `check()` returns whether it said no error of its own (checker.h; `deciding_leaves_a_struct_in_a_circle_without_a_type` relies on it being true after a decider's errors). A withdrawn note the decider said was counted in `errors_before`, so `return d->error_count == errors_before;` becomes `return d->error_count + withdrawn_before == errors_before;`, `withdrawn_before` being the call's result. Without it, `tests/errors/failed_constant_as_type` (the decider says the note at 2:18, `check()` says X's mistake and the note at 4:17, both notes are withdrawn) would have `check()` return true though it said X's mistake.
   - Fix the comments listed in Global Constraints. `resolve_written`'s header gets one sentence: a constant's "'foo' is not a type" is taken back at the end when the constant's own declaration said a mistake, and why it's decided at the end (order), not at the use.
 - [ ] **Step 4: Update the spec.** In 3.22 (:1665), after "...written where a type goes, is `'C' is not a type`.", add:
 
@@ -172,7 +178,7 @@ static void withdraw_repeated_not_a_type(Checker *c);
 - Modify:
   - `editors/vscode/syntaxes/rig.tmLanguage.template.json`: `declarations` :157-216, a new rule after the `#type` one at :194-205, whose comment changes.
   - `editors/vscode/syntaxes/rig.tmLanguage.json`: regenerated.
-  - `editors/vscode/test/check.js`: after the aliases check at :1216-1235.
+  - `editors/vscode/test/check.js`: after the aliases check at :1216-1236.
   - `editors/vscode/README.md`: the colouring paragraph at :5, the version list at :187.
   - `editors/vscode/package.json` and `editors/vscode/vsix/extension.vsixmanifest`: version `0.11.0` -> `0.12.0`.
 
@@ -226,7 +232,7 @@ static void withdraw_repeated_not_a_type(Checker *c);
 
 ### Task 3: Say why the debug information stays C99 for gdb's names
 
-**Files:** Modify `src/llvm_backend.cpp`: the compile unit's comment in `begin_debug_info`, :718-737.
+**Files:** Modify `src/llvm_backend.cpp`: the compile unit's comment in `begin_debug_info`, :717-736.
 
 **The probe** (on the Linux clone, rig built with the compile unit's DW_LANG read from an environment variable, then `tests/debug/generic_structs.rig` under gdb 17.1). `Box(*u8)` showed as follows:
 
