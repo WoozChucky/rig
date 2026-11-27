@@ -152,12 +152,17 @@ Type_Info_Procedure :: struct {
 // described by pointing back at its own description: the data is cyclic,
 // not infinite. An anonymous member, union { ... }; or struct { ... };, is
 // a member with an empty name, whose type is described as its own union or
-// struct, with an empty name too.
+// struct, with an empty name too. A struct instance (spec 3.23) is named as
+// the instance, Map(string, int), and its parameters hold its arguments, an
+// Any each, in the order its generic declares them: a type's is a
+// *Type_Info, the type's description, a constant's is of the constant's
+// type, its value. Any other struct's parameters are empty.
 Type_Info_Struct :: struct {
     using info: Type_Info;
     name: string;
     members: []Type_Info_Struct_Member;
     is_union: bool;
+    parameters: []Any;
 }
 
 // One field of a struct or a union, or one member of a tagged union

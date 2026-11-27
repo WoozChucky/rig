@@ -1,0 +1,9 @@
+l+t
+l+s
+l+l
+bp `generic_structs.rig:27`
+g
+dv /t
+?? r
+?? head.next->value
+q

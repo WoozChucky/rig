@@ -391,8 +391,8 @@ struct Ir_Reloc {
 // false; printing, the backend and IR_PANIC all ask.
 struct Ir_Global {
     String name;            // "str.0", "const.0", "array.0", "string.0", "type_info.0" (and its arrays,
-                            // "type_info.0.members", ".parameters", ".results", ".names", ".values"), or a
-                            // Rig global's name
+                            // "type_info.0.members", ".parameters", ".results", ".names", ".values", and a
+                            // struct instance's parameters' values, ".parameter.0"), or a Rig global's name
     Ir_Type type;           // IR_VOID: bytes (a variable's, a constant's or a literal's); otherwise a
                             // variable of this type
     String bytes;           // IR_VOID: a literal's bytes, with a terminating zero; a variable's or a

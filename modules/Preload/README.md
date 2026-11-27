@@ -73,9 +73,10 @@ Every description starts with a `Type_Info`. Each kind's struct takes it in as i
   - `is_variadic: bool`: whether its last parameter is a `..T`, whose type is then described as `[]T`.
 - `Type_Info_Struct` (`.STRUCT`, for a struct and a union alike):
   - `using info: Type_Info`.
-  - `name: string`: the struct's or the union's declared name; empty for an anonymous member's type.
+  - `name: string`: the struct's or the union's declared name, a generic struct's instance's its name, `Map(string, int)` (spec 3.23); empty for an anonymous member's type.
   - `members: []Type_Info_Struct_Member`: its fields, in order; none for a struct with none. A struct that holds a pointer to itself points back at its own description.
   - `is_union: bool`: whether it is a union (spec 3.19), whose members are all at offset 0.
+  - `parameters: []Any`: a generic struct's instance's arguments, in the order its generic declares its parameters (spec 3.23): a type's an `Any` of its description, a `*Type_Info`, a constant's an `Any` of its value; none for any other struct.
 - `Type_Info_Struct_Member`, one field of a struct or a union, or one member of a tagged union (`Type_Info_Tagged_Union.members`):
   - `name: string`: the field's name; empty for an anonymous member, `union { ... };` or `struct { ... };`, whose `type` describes its own union or struct.
   - `type: *Type_Info`: its type's description.

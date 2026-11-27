@@ -3902,9 +3902,14 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
         // the conversion to Any need: a struct of that name in a module's
         // file. A program can't declare either, Preload having them, so
         // these are Preload's; without Preload (a test's single file, or
-        // Load_Options.no_preload) they stay null.
+        // Load_Options.no_preload) they stay null. Type_Info is kept on the
+        // tree too, for lowering: a struct instance's description holds a
+        // *Type_Info for each type it was given (spec 3.23).
         if (decl->kind == AST_STRUCT && c->diag->files[decl->pos.file].in_module) {
-            if (string_eq(name, str("Type_Info"))) c->type_info_type = ((Ast_Struct *)decl)->declared;
+            if (string_eq(name, str("Type_Info"))) {
+                c->type_info_type = ((Ast_Struct *)decl)->declared;
+                c->file->type_info_type = c->type_info_type;
+            }
             if (string_eq(name, str("Any"))) c->any_type = ((Ast_Struct *)decl)->declared;
         }
         // And the context's three (spec 7.10), found the same way and kept

@@ -1,0 +1,11 @@
+generic_structs.rig, line 27.
+type = struct Pair(int, bool)
+{first = 7, second = true}
+type = struct Ring(int, 3)
+{0, 10, 20}
+= 2
+type = struct List(int) {
+    int value;
+    struct List(int) *next;
+exited normally
+!.debug_names not created by gdb

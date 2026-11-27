@@ -959,6 +959,8 @@ struct Ast_File {
     Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): a call's place, what
                                       // a default #caller_location is and what a built-in procedure
                                       // passes its helper (lower_builtin_call); null without Preload
+    Type *type_info_type;  // Preload's Type_Info (spec 3.16), for the *Type_Info a parameter's Any holds;
+                           // null without Preload
     // The predeclared enum Operating_System (spec 2.5), OS's type: made once
     // per tree, at 0:0 in the tree's arena, by the first checker to declare
     // the predeclared names (checker.cpp's declare_predeclared), a decider's

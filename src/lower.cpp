@@ -534,6 +534,10 @@ struct Lowering {
     // then: one copy per file, however many places name it.
     Type *source_code_location_type;
     Array<s32> path_globals;
+    // Preload's Type_Info, from the tree (Ast_File's), null without
+    // Preload: a struct instance's description gives each type it was
+    // given as an Any of a *Type_Info (describe_parameters).
+    Type *type_info_type;
     Array<Ast_Proc *> sources;  // by index in module->procs, whole or on demand: the procedure of the
                                 // source each lowers; null, or past its end, for the compiler's own
                                 // and the runs' (set_source, ir_lowering_source)
@@ -3968,8 +3972,9 @@ static void write_bits(u8 *at, u64 bits, s64 size) {
 // own, add_bytes), or a read-only array of its own, type_info.N.members for
 // a struct or a tagged union, type_info.N.parameters and .results for a
 // procedure type, type_info.N.names and .values for an enum, made only
-// when not empty (an empty view is zeros). Names with a '.' are no Rig
-// global's.
+// when not empty (an empty view is zeros), and a struct instance's
+// type_info.N.parameters, each of whose values is a global of its own,
+// type_info.N.parameter.K. Names with a '.' are no Rig global's.
 //
 // Descriptions point at each other, in cycles too (a struct holding a
 // pointer to itself), so a description is made empty first, cached by its
@@ -4113,6 +4118,63 @@ static void describe_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, s6
     array_add(relocs, Ir_Reloc{offset + VIEW_DATA_OFFSET, array, false});
 }
 
+static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value, bool writable);
+
+// A struct instance's parameters (spec 3.16, 3.23), written at
+// TYPE_INFO_STRUCT_PARAMETERS_OFFSET in its description's `bytes`: a view
+// of a read-only array of its own, `name`.parameters, an Any per binding,
+// in the order its generic declares them, each pointing at a read-only
+// global of its own, `name`.parameter.K, that holds its value. A type's
+// Any is a *Type_Info (Preload's Type_Info, kept on the tree), its value
+// the address of the bound type's description; a constant's is of the
+// constant's type, its value as any constant of that type is written
+// (global_value: a float32's 4 bytes, a string's count and a relocation to
+// its bytes). Only an instance's own copy has parameters: any other struct,
+// and an anonymous member's struct in an instance (whose `instance` is set
+// too, for its late fields, but whose structure isn't it), keeps the empty
+// view, zeros, and no array.
+static void describe_parameters(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
+    Ast_Struct *s = t->decl;
+    Ast_Instance *inst = s ? s->instance : nullptr;
+    if (!inst || inst->structure != s) return;
+    RIG_ASSERT(l->type_info_type);  // a description is made only with Preload
+    s64 count = inst->bindings.count;
+    s64 size = count * ANY_SIZE;
+    u8 *anys = (u8 *)arena_alloc(l->arena, (u64)size, 1);  // zeroed: every byte an address
+    Array<Ir_Reloc> any_relocs = {};
+    for (s64 i = 0; i < count; i++) {
+        Ast *bound = inst->bindings[i];
+        Ir_Global value = {};
+        value.name = string_printf(l->arena, STR_FMT ".parameter.%lld", STR_ARG(name), (long long)i);
+        value.type = IR_VOID;
+        value.has_layout = true;
+        value.is_read_only = true;
+        value.align = TYPE_INFO_ALIGN;
+        Type *value_type;
+        if (bound->kind == AST_ALIAS) {
+            Type *aliased = ((Ast_Alias *)bound)->aliased;
+            RIG_ASSERT(aliased);  // an instance with a type left unknown is an error, which stops lowering
+            value_type = type_pointer_to(l->type_info_type);
+            value.size = 8;
+            value.bytes = {(u8 *)arena_alloc(l->arena, 8, 1), 8};  // zeroed: the address
+            array_add(&value.relocs, Ir_Reloc{0, type_info_global(l, aliased), false});
+        } else {
+            Ast_Const *constant = (Ast_Const *)bound;
+            value_type = constant->type;
+            value.size = value_type->size;
+            global_value(l, &value, value_type, constant->value, false);
+        }
+        array_add(&l->module->globals, value);
+        s32 value_global = (s32)(l->module->globals.count - 1);
+        array_add(&any_relocs, Ir_Reloc{i * ANY_SIZE + ANY_TYPE_OFFSET, type_info_global(l, value_type), false});
+        array_add(&any_relocs, Ir_Reloc{i * ANY_SIZE + ANY_VALUE_OFFSET, value_global, false});
+    }
+    s32 array = add_type_info_global(l, string_printf(l->arena, STR_FMT ".parameters", STR_ARG(name)), size,
+                                     {anys, size}, any_relocs);
+    write_bits(bytes + TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_COUNT_OFFSET, (u64)count, 8);
+    array_add(relocs, Ir_Reloc{TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_DATA_OFFSET, array, false});
+}
+
 // An enum's members, written at TYPE_INFO_ENUM_NAMES_OFFSET and
 // TYPE_INFO_ENUM_VALUES_OFFSET in its description's `bytes` (spec 3.18):
 // two views of read-only arrays of their own, type_info.N.names, a string
@@ -4155,8 +4217,10 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // pointer's pointee's description (a *void's, void's); an array's, a view's
 // or a resizable array's element's description, its kind and its count (-1
 // for a view or a resizable array, whose count is its value's); a struct's
-// name and members, and whether it's a union (an anonymous member's type
-// has an empty name, as its member has); a tagged union's name, its tag
+// name and members, whether it's a union (an anonymous member's type has
+// an empty name, as its member has), and an instance's parameters
+// (describe_parameters), an instance's name being its own, Map(string,
+// int); a tagged union's name, its tag
 // type's description, the tag's offset (0) and its members, as a struct's;
 // a procedure type's parameters' and results' descriptions (a ..T
 // parameter's []T), #c_call and whether its last parameter is a ..T; an
@@ -4206,6 +4270,7 @@ static void describe_type(Lowering *l, s32 global, Type *t) {
         describe_members(l, bytes, &relocs, TYPE_INFO_MEMBERS_OFFSET,
                          string_printf(l->arena, STR_FMT ".members", STR_ARG(name)), t);
         bytes[TYPE_INFO_STRUCT_IS_UNION_OFFSET] = t->is_union;
+        describe_parameters(l, bytes, &relocs, name, t);
         break;
     case TYPE_PROC:
         describe_types(l, bytes, &relocs, TYPE_INFO_PARAMETERS_OFFSET,
@@ -5172,6 +5237,7 @@ Ir_Module *ir_lower(Ast_File *f, Diagnostics *d, Arena *a, bool bounds_checks) {
     l.runtime_error = f->runtime_error;
     l.array_procs = f->array_procs;
     l.source_code_location_type = f->source_code_location_type;
+    l.type_info_type = f->type_info_type;
     l.context = -1;
     m->context_type = f->context_type;
     m->allocator_type = allocator_type_of(f);
@@ -5260,8 +5326,8 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->string_equal = -1;
     l->no_case = -1;
     l->block = -1;
-    // The tree's context, and a [..]T's allocator type, as ir_lower takes
-    // them; none without a tree. Not __save_command_line: main, which takes
+    // The tree's context, a [..]T's allocator type and Preload's Type_Info,
+    // as ir_lower takes them; none without a tree. Not __save_command_line: main, which takes
     // C's argc and argv, never runs while compiling (spec 7.8), so a call
     // of __save_command_line here is an ordinary call.
     if (file) {
@@ -5271,6 +5337,7 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
         l->runtime_error = file->runtime_error;
         l->array_procs = file->array_procs;
         l->source_code_location_type = file->source_code_location_type;
+        l->type_info_type = file->type_info_type;
         m->context_type = file->context_type;
         m->allocator_type = allocator_type_of(file);
     }

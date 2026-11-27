@@ -1,0 +1,5 @@
+struct Pair(int, bool) p
+struct Ring(int, 3) r
+struct List(int) head
+items            : [3]
+0n2
