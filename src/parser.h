@@ -7,6 +7,7 @@
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
 //               | IDENT '::' ('struct' | 'union') members           a struct or a union and its fields
+//               | IDENT '::' 'struct' struct_params members         a generic struct (spec 3.23)
 //               | IDENT '::' 'union' '#tagged' [IDENT] '{' {IDENT ':' type ';'} '}'
 //                                                                   a tagged union: its tag's type, its members
 //               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
@@ -19,6 +20,9 @@
 //               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
 //               | if_directive                                      conditional: its blocks hold top_level*
+//   struct_params = '(' IDENT ':' type {',' IDENT ':' type} ')'
+//                                                                  K: Type, a type parameter; any other,
+//                                                                  a constant one
 //   members     = '{' {member} '}'
 //   member      = ['using'] IDENT ':' type ';'                     'using': its struct's fields reached as
 //                                                                  this one's (spec 3.21)
@@ -38,8 +42,12 @@
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)
+//               | IDENT '(' [argument {',' argument}] ')'          an instance of a generic struct
 //               | '$' IDENT                                        a type parameter's declaration, only
 //                                                                  in a param's type (spec 7.11)
+//   argument    = type | expression                                a type when it starts with '*', '[' or
+//                                                                  '$', or is a name, with or without
+//                                                                  its '(...)', before ',' or ')'
 //   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
@@ -100,6 +108,15 @@
 // has no type written, and takes the one it meets. Named and in order don't
 // mix: "a struct literal's fields are all named or all in order, not both",
 // at the first that breaks the pattern.
+//
+// A struct may take parameters (spec 3.23), `Map :: struct (K: Type, V:
+// Type) { ... }`: types, and constants of the types the checker allows,
+// which every instance gives, so none is written with '$', 'using', '..'
+// or a default value, and empty parentheses are none. An instance is
+// written where a type goes as the struct's name and its arguments,
+// `Map(string, int)`, `Ring(int, N + 1)`, each a type or an expression, by
+// how it is written (parser.cpp's parse_instance_argument). A union takes
+// no parameters, for now.
 //
 // Unions (spec 3.19) are declared as structs are, `Value :: union { i: s64;
 // f: float64; }`, at the top level only ("unions can only be declared at the

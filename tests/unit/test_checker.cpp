@@ -12559,15 +12559,26 @@ static void tree_parts(Ast *n, Array<Ast *> *nodes, Array<const void *> *buffers
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE:
-    case AST_TYPE_PROC: {
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: {
         Ast_Type *t = (Ast_Type *)n;
         tree_parts(t->pointee, nodes, buffers);
         tree_parts(t->count, nodes, buffers);
         tree_parts(t->element, nodes, buffers);
         tree_list(t->params, nodes, buffers);
         tree_list(t->results, nodes, buffers);
+        tree_list(t->args, nodes, buffers);
         break;
     }
+    case AST_STRUCT:
+        tree_list(((Ast_Struct *)n)->params, nodes, buffers);
+        tree_list(((Ast_Struct *)n)->fields, nodes, buffers);
+        tree_parts(((Ast_Struct *)n)->tag_expr, nodes, buffers);
+        break;
+    case AST_FIELD:
+        tree_parts(((Ast_Field *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Field *)n)->anonymous, nodes, buffers);
+        break;
     case AST_BLOCK: tree_list(((Ast_Block *)n)->statements, nodes, buffers); break;
     case AST_CALL:
         tree_parts(((Ast_Call *)n)->callee, nodes, buffers);
@@ -12686,9 +12697,10 @@ static bool same_places(Ast *to, Ast *from) {
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE:
-    case AST_TYPE_PROC: {
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: {
         Ast_Type *t = (Ast_Type *)to, *f = (Ast_Type *)from;
-        return same_place(t->dots, f->dots) && t->levels == f->levels;
+        return same_place(t->dots, f->dots) && same_place(t->end, f->end) && t->levels == f->levels;
     }
     case AST_BLOCK: return same_place(((Ast_Block *)to)->end, ((Ast_Block *)from)->end);
     case AST_BINARY: return same_place(((Ast_Binary *)to)->end, ((Ast_Binary *)from)->end);
@@ -14302,5 +14314,259 @@ TEST(alias_mistakes) {
     CHECK_STR(check_source(&a, joined(&a, "main :: () { x: A0; }\n", chain_of(&a, "A%lld :: A%lld;\n", 0, 1000, 1),
                                       "A1001 :: int;\n")),
               needed_too_deeply(&a, 1003, "A1001"));
+    arena_free(&a);
+}
+
+// Issue #227: generic structs (spec 3.23).
+
+// The source every test of struct instances starts with: [..] needs
+// Preload (check_with_preload).
+static const char *GENERIC_STRUCTS = "Mode :: enum { A; B; }\n"
+                                     "Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }\n"
+                                     "Ring :: struct (T: Type, N: int) { items: [N]T; }\n";
+
+// GENERIC_STRUCTS, then `rest`, in the arena.
+static const char *with_generic_structs(Arena *a, const char *rest) {
+    return string_cstr(a, string_printf(a, "%s%s", GENERIC_STRUCTS, rest));
+}
+
+// The type of local `name` of procedure `proc` in tree, or null.
+static Type *local_type(Ast_File *tree, const char *proc, const char *name) {
+    Ast *local = find_local(((Ast_Proc *)top_level_named(tree, proc))->body, name);
+    return local ? local->type : nullptr;
+}
+
+TEST(struct_instances_are_one_per_set_of_arguments) {
+    // Each set of arguments makes one instance, which every use with that
+    // set shares, program-wide: a type by its Type, a constant by its type
+    // and value, however written (2 + 2, cast(u8) 4), so int and s64 are
+    // two, and float and float32 one. Each is named by its arguments, as
+    // the program would write them, and laid out as any struct, its fields
+    // of its parameters' types.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 with_generic_structs(&a, "G: Ring(int, 4);\n"
+                                                          "main :: () {\n"
+                                                          "    a: Map(string, int);\n"
+                                                          "    b: Map(string, int);\n"
+                                                          "    c: Map(int, string);\n"
+                                                          "    r1: Ring(int, 4);\n"
+                                                          "    r2: Ring(int, 2 + 2);\n"
+                                                          "    r3: Ring(int, cast(u8) 4);\n"
+                                                          "    r4: Ring(s64, 4);\n"
+                                                          "    r5: Ring(float, 1);\n"
+                                                          "}\n"
+                                                          "other :: () { m: Map(string, int); }\n"),
+                                 &tree),
+              "");
+    Type *a_type = local_type(tree, "main", "a");
+    CHECK(a_type && a_type->kind == TYPE_STRUCT);
+    CHECK(local_type(tree, "main", "b") == a_type);
+    CHECK(local_type(tree, "main", "c") != a_type);
+    CHECK(local_type(tree, "other", "m") == a_type);
+    Type *r1 = local_type(tree, "main", "r1");
+    CHECK(r1 && local_type(tree, "main", "r2") == r1 && local_type(tree, "main", "r3") == r1);
+    CHECK(top_level_named(tree, "G")->type == r1);
+    Type *r4 = local_type(tree, "main", "r4"), *r5 = local_type(tree, "main", "r5");
+    CHECK(r4 != r1 && r5 != r1 && r5 != r4);
+    CHECK_STR(type_name(&a, a_type), "Map(string, int)");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "c")), "Map(int, string)");
+    CHECK_STR(type_name(&a, r1), "Ring(int, 4)");
+    CHECK_STR(type_name(&a, r4), "Ring(s64, 4)");
+    CHECK_STR(type_name(&a, r5), "Ring(float32, 1)");
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Map"))->instances.count, 2);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Ring"))->instances.count, 3);
+    CHECK_EQ(tree->struct_instances.count, 5);
+    CHECK_EQ(a_type->size, 88);
+    CHECK_EQ(r1->size, 32);
+    CHECK_EQ(r5->size, 4);
+    CHECK_STR(type_name(&a, a_type->fields[0].type), "[..]string");
+    // The generic is no type: only its instances are.
+    CHECK(!((Ast_Struct *)top_level_named(tree, "Map"))->declared);
+    arena_free(&a);
+}
+
+TEST(struct_parameters_are_types_and_constants) {
+    // A parameter is a type, K: Type, or a constant of a number, a bool, an
+    // enum or a string, which the fields' counts may use; a constant
+    // argument converts to its parameter's type, .B meeting the enum.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "Grid :: struct (W: int, H: int, Cell: Type) {\n"
+                                                              "    cells: [W * H]Cell;\n"
+                                                              "    row: [W]u8;\n"
+                                                              "}\n"
+                                                              "Labeled :: struct (L: string) { n: int; }\n"
+                                                              "Tag :: struct (M: Mode) { n: int; }\n"
+                                                              "Flag :: struct (On: bool) { n: int; }\n"
+                                                              "main :: () {\n"
+                                                              "    g: Grid(2, 3, u8);\n"
+                                                              "    l: Labeled(\"hi\");\n"
+                                                              "    t: Tag(.B);\n"
+                                                              "    f: Flag(true);\n"
+                                                              "}\n"),
+                                 &tree),
+              "");
+    Type *g = local_type(tree, "main", "g");
+    CHECK(g && g->size == 8);
+    CHECK_STR(type_name(&a, g), "Grid(2, 3, u8)");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "l")), "Labeled(\"hi\")");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "t")), "Tag(Mode.B)");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "f")), "Flag(true)");
+    arena_free(&a);
+}
+
+TEST(struct_instances_hold_themselves_behind_pointers) {
+    // An instance's field may point at its own instance, hold a resizable
+    // array of it, or hold another instance that points back at it: the
+    // one instance, found in the cache before it is laid out.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "List :: struct (T: Type) { value: T; next: *List(T); }\n"
+                                     "Tree :: struct (T: Type) { value: T; kids: [..]Tree(T); }\n"
+                                     "A :: struct (T: Type) { b: *B(T); }\n"
+                                     "B :: struct (T: Type) { a: A(T); n: T; }\n"
+                                     "main :: () { l: List(int); t: Tree(string); b: B(u8); }\n",
+                                 &tree),
+              "");
+    Type *l = local_type(tree, "main", "l");
+    CHECK(l && l->fields.count == 2);
+    if (l && l->fields.count == 2) {
+        Type *next = l->fields[1].type;
+        CHECK(next && next->kind == TYPE_POINTER && next->pointee == l);
+    }
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "List"))->instances.count, 1);
+    Type *t = local_type(tree, "main", "t");
+    CHECK(t && t->fields.count == 2 && t->fields[1].type && t->fields[1].type->element == t);
+    Type *b = local_type(tree, "main", "b");
+    CHECK(b && b->size == 16);
+    if (b && b->fields.count == 2) {
+        Type *inner = b->fields[0].type;
+        CHECK_STR(type_name(&a, inner), "A(u8)");
+        CHECK(inner && inner->fields.count == 1 && inner->fields[0].type &&
+              inner->fields[0].type->pointee == b);
+    }
+    arena_free(&a);
+}
+
+TEST(struct_instances_see_only_their_bindings) {
+    // An instance's fields see its own parameters, which hide the top
+    // level's names (a struct T, a constant N), and nothing of the
+    // procedure instance that uses it: make_box's Box(u8) is the one Box(u8)
+    // whatever its T. An argument naming a constant is that constant.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "T :: struct { g: int; }\n"
+                                                              "Box :: struct (T: Type) { v: T; }\n"
+                                                              "N :: 100;\n"
+                                                              "Buf :: struct (N: int) { b: [N]u8; }\n"
+                                                              "SIZE :: 3;\n"
+                                                              "make_box :: (v: $T) -> Box(u8) { b: Box(u8); return b; }\n"
+                                                              "main :: () {\n"
+                                                              "    x: Box(u8);\n"
+                                                              "    y: Buf(3);\n"
+                                                              "    r: Ring(int, SIZE);\n"
+                                                              "    p := make_box(\"s\");\n"
+                                                              "    q := make_box(1);\n"
+                                                              "}\n"),
+                                 &tree),
+              "");
+    Type *x = local_type(tree, "main", "x");
+    CHECK(x && x->size == 1);
+    Type *y = local_type(tree, "main", "y");
+    CHECK(y && y->size == 3);
+    Type *r = local_type(tree, "main", "r");
+    CHECK(r && r->size == 24);
+    CHECK_STR(type_name(&a, r), "Ring(int, 3)");
+    CHECK(local_type(tree, "main", "p") == x);
+    CHECK(local_type(tree, "main", "q") == x);
+    Ast_Proc *make_box = (Ast_Proc *)top_level_named(tree, "make_box");
+    CHECK_EQ(make_box->instances.count, 2);
+    for (s64 i = 0; i < make_box->instances.count; i++) CHECK(make_box->instances[i]->proc->results[0]->type == x);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Box"))->instances.count, 1);
+    arena_free(&a);
+}
+
+TEST(struct_argument_mistakes) {
+    // An instance's arguments are counted, and each is bound to its
+    // parameter: a type to a type parameter, a constant known while
+    // compiling, converted, to a constant one. A generic struct's name
+    // alone is no type, and a plain struct takes no arguments.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"main :: () { x: Map(int); }\n", "4:17: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { x: Map; }\n", "4:17: 'Map' is generic; write its arguments, as in Map(K, V)\n"},
+        {"main :: () { x: *Map; }\n", "4:18: 'Map' is generic; write its arguments, as in Map(K, V)\n"},
+        {"Vec2 :: struct { x: float; }\nmain :: () { x: Vec2(int); }\n",
+         "5:17: 'Vec2' isn't generic, so it takes no arguments\n"},
+        {"main :: () { x: Map(3, int); }\n", "4:21: argument 1 of 'Map' must be a type, for 'K: Type'\n"},
+        {"main :: () { n := 4; x: Ring(int, n); }\n",
+         "4:35: argument 2 of 'Ring' must be known while compiling, for 'N: int'\n"},
+        {"main :: () { x: Ring(int, int); }\n", "4:27: 'int' is a type, not a value\n"},
+        {"main :: () { x: Ring(int, *int); }\n", "4:27: '*int' is a type, not a value\n"},
+        {"main :: () { x: Ring(int, \"a\"); }\n",
+         "4:27: argument 2 of 'Ring' has type 'string', which can't be converted to 'int'\n"},
+        {"Small :: struct (N: u8) { }\nmain :: () { x: Small(300); }\n", "5:23: 300 doesn't fit in 'u8'\n"},
+        {"main :: () { x: Nope(int); }\n", "4:17: unknown type 'Nope'\n"},
+        {"main :: () { x: main(int); }\n", "4:17: 'main' is not a type\n"},
+        {"Bad :: struct (V: []int) { }\nmain :: () { }\n",
+         "4:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+    };
+    for (const Case &k : cases) CHECK_STR(check_with_preload(&a, with_generic_structs(&a, k.text)), k.message);
+    arena_free(&a);
+}
+
+TEST(clones_structs_deep_and_unchecked) {
+    // A struct instance is a copy of its generic's tree, as an instance of
+    // a generic procedure is: a struct holding a using field of an
+    // instance, an array counted by a parameter, an anonymous member and a
+    // pointer to its own instance, copied before the program is checked,
+    // dumps as the original does, shares no node and no Array's buffer with
+    // it, keeps every place the parser gave each node, and checking the
+    // program leaves the copy unchecked.
+    Arena a = arena_make();
+    const char *text = "Base :: struct (T: Type) { id: T; }\n"
+                       "S :: struct (T: Type, N: int) { using base: Base(T); a: [N]T; union { i: int; f: float; }; "
+                       "p: *S(T, N); }\n"
+                       "main :: () { s: S(u8, 2); s.id = 1; }\n";
+    Diagnostics d = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"), str(text));
+    CHECK_STR(file->load_failure, "");
+    Ast_Struct *original = (Ast_Struct *)top_level_named(file, "S");
+    Ast_Struct *copy = (Ast_Struct *)ast_clone(&a, original);
+    CHECK_STR(ast_dump_node(&a, copy), string_cstr(&a, ast_dump_node(&a, original)));
+    CHECK(copy->is_generic);
+    Array<Ast *> original_nodes = {}, copy_nodes = {};
+    Array<const void *> original_buffers = {}, copy_buffers = {};
+    tree_parts(original, &original_nodes, &original_buffers);
+    tree_parts(copy, &copy_nodes, &copy_buffers);
+    CHECK_EQ(copy_nodes.count, original_nodes.count);
+    CHECK_EQ(copy_buffers.count, original_buffers.count);
+    CHECK(original_nodes.count > 15);
+    for (s64 i = 0; i < copy_nodes.count && i < original_nodes.count; i++) {
+        Ast *node = copy_nodes[i];
+        CHECK_EQ(node->kind, original_nodes[i]->kind);
+        if (node->kind == original_nodes[i]->kind) CHECK(same_places(node, original_nodes[i]));
+        for (s64 k = 0; k < original_nodes.count; k++) CHECK(node != original_nodes[k]);
+    }
+    for (s64 i = 0; i < copy_buffers.count; i++) {
+        for (s64 k = 0; k < original_buffers.count; k++) CHECK(copy_buffers[i] != original_buffers[k]);
+    }
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(original->instances.count, 1);
+    for (s64 i = 0; i < copy_nodes.count; i++) CHECK(copy_nodes[i]->type == nullptr);
+    CHECK(copy->resolve == RESOLVE_NOT_YET && !copy->declared && !copy->instance);
+    array_free(&original_nodes);
+    array_free(&original_buffers);
+    array_free(&copy_nodes);
+    array_free(&copy_buffers);
+    diag_free(&d);
     arena_free(&a);
 }

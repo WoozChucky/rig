@@ -6,12 +6,17 @@
 // program-wide: found again, or made, named and their signatures checked,
 // at most MAX_DEPTH deep. The names a generic's parameters declare; the
 // walk over its body for names declared nowhere; and the chain of
-// instances an error inside one is followed by. The checks here that only
-// look at each name in a written type or an expression, the signature's,
-// the inference's, the parameters' and the body's, go through that type
-// or expression with one walk (walk_names), each saying what it does at a
-// name in an action of its own; match_type and add_written_type, which
-// pair a pattern with a type or write one out, walk the type themselves.
+// instances an error inside one is followed by. And generic structs (spec
+// 3.23; checker.h's "Generic structs"): a generic struct's own check, and
+// its instances, one per set of arguments, program-wide, each a copy of
+// its tree with its parameters bound, laid out as any struct: found in
+// their cache, bound, named and chained as the procedures' are. The checks
+// here that only look at each name in a written type or an expression, the
+// signature's, the inference's, the parameters' and the body's, go through
+// that type or expression with one walk (walk_names), each saying what it
+// does at a name in an action of its own; match_type and add_written_type,
+// which pair a pattern with a type or write one out, walk the type
+// themselves.
 
 #include "check.h"
 
@@ -61,7 +66,9 @@ static String name_text(Ast *name) {
 // (parser.cpp's parse_local_declaration refuses them), so no parameter or
 // field of one either, and holds no #load or #import (parse_statements
 // skips each, with skip_misplaced_load). AST_BUILTIN and AST_ALIAS are
-// the checker's own declarations, in a scope and in no tree.
+// the checker's own declarations, in a scope and in no tree. An instance of
+// a generic struct, Map(K, V), is given to no action, for now: its
+// arguments are walked as an array's count is, each instance's to check.
 static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, Ast *name, Name_Place place),
                        void *data) {
     if (!node) return;
@@ -88,6 +95,13 @@ static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, A
     }
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE: walk_names(((Ast_Type *)node)->element, below, action, data); return;
+    case AST_TYPE_INSTANCE: {
+        Name_Place argument = below;
+        argument.in_count = true;
+        Ast_Type *written = (Ast_Type *)node;
+        for (s64 i = 0; i < written->args.count; i++) walk_names(written->args[i], argument, action, data);
+        return;
+    }
     case AST_TYPE_PROC: {
         Ast_Type *written = (Ast_Type *)node;
         for (s64 i = 0; i < written->params.count; i++) walk_names(written->params[i], below, action, data);
@@ -683,11 +697,45 @@ static bool match_type(Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindi
     }
 }
 
+// Whether node is a written type (an Ast_Type), not an expression: what an
+// instance's argument is when the parser read it as one
+// (parse_instance_argument).
+static bool is_written_type(Ast *node) {
+    switch (node->kind) {
+    case AST_TYPE_NAME:
+    case AST_TYPE_POINTER:
+    case AST_TYPE_ARRAY:
+    case AST_TYPE_VIEW:
+    case AST_TYPE_RESIZABLE:
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: return true;
+    default: return false;
+    }
+}
+
 // Appends written type `written` to `text` as Rig writes it, for a
 // message: `[]$T`, `*T`, `[N]$T` (its count as the program wrote it),
-// `($T) -> T`.
+// `($T) -> T`, `Map($K, $V)`, `Ring(T, N + 1)` (an argument that is an
+// expression as the program wrote it, up to the ',' or the ')' after it).
 static void add_written_type(Checker *c, Array<u8> *text, Ast_Type *written) {
     switch (written->kind) {
+    case AST_TYPE_INSTANCE: {
+        add_text(text, written->name);
+        array_add(text, (u8)'(');
+        for (s64 i = 0; i < written->args.count; i++) {
+            Ast *arg = written->args[i];
+            bool last = i == written->args.count - 1;
+            if (i > 0) add_text(text, str(", "));
+            if (is_written_type(arg)) {
+                add_written_type(c, text, (Ast_Type *)arg);
+            } else {
+                add_text(text, source_text(c, arg->start, last ? written->end : written->args[i + 1]->start,
+                                           last ? 0 : ','));
+            }
+        }
+        array_add(text, (u8)')');
+        return;
+    }
     case AST_TYPE_NAME:
         if (written->declares) array_add(text, (u8)'$');
         add_text(text, written->name);
@@ -785,18 +833,40 @@ static String baked_text(Checker *c, Ast_Param *param) {
                          STR_ARG(written_type_text(c, param->type_expr)));
 }
 
+// Binds constant parameter b, of type b->type, to argument `arg`, the
+// index-th of `who` (a generic procedure or a generic struct), checked
+// already; false after saying why it can't be, or when the argument's own
+// check failed (said). The argument converts to the parameter's type as
+// any argument does (check_argument, its messages: "300 doesn't fit in
+// 'u8'"), and must then be known while compiling, a number's, a bool's or
+// an enum's value folded (Ast.is_constant), a string's its constant data
+// (constant_data), or it's "argument 1 of 'fill' must be known while
+// compiling, for '$N: int'", at it, `param_text` naming the parameter as
+// written ("$N: int" for a procedure's, "N: int" for a struct's).
+static bool bake_constant(Checker *c, Ast *arg, Generic_Binding *b, s64 index, String who, String param_text) {
+    if (!arg->type) return false;
+    s64 errors = c->diag->error_count;
+    check_argument(c, arg, b->type, index, who);
+    if (c->diag->error_count != errors || !arg->type) return false;
+    Ast *data;
+    bool known = b->type->kind == TYPE_STRING ? constant_data(arg, &data) : arg->is_constant;
+    if (!known) {
+        diag_error(c->diag, arg->start,
+                   "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
+                   (long long)(index + 1), STR_ARG(who), STR_ARG(param_text));
+        return false;
+    }
+    b->value = arg;
+    return true;
+}
+
 // Binds baked parameter `param` of generic (spec 7.11), its binding b, to
 // argument `arg`, the call's index-th, checked already; false after saying
 // why it can't be, or when the argument's own check failed (said):
 // - a $T: Type takes a type, checked as a type value (check_expr.cpp's
 //   check_generic_call): anything else is "argument 2 of 'get' must be a
 //   type, for '$T: Type'", at it;
-// - a $N: int takes a constant: the argument converts to N's type as any
-//   argument does (check_argument, its messages: "300 doesn't fit in
-//   'u8'"), and must then be known while compiling, a number's, a bool's
-//   or an enum's value folded (Ast.is_constant), a string's its constant
-//   data (constant_data), or it's "argument 1 of 'fill' must be known while
-//   compiling, for '$N: int'", at it.
+// - a $N: int takes a constant (bake_constant).
 static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *arg, s64 index, Generic_Binding *b) {
     if (!arg->type) return false;
     if (b->is_type) {
@@ -808,19 +878,7 @@ static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *
         b->type = type_value(arg);
         return true;
     }
-    s64 errors = c->diag->error_count;
-    check_argument(c, arg, b->type, index, generic->name);
-    if (c->diag->error_count != errors || !arg->type) return false;
-    Ast *data;
-    bool known = b->type->kind == TYPE_STRING ? constant_data(arg, &data) : arg->is_constant;
-    if (!known) {
-        diag_error(c->diag, arg->start,
-                   "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
-                   (long long)(index + 1), STR_ARG(generic->name), STR_ARG(baked_text(c, param)));
-        return false;
-    }
-    b->value = arg;
-    return true;
+    return bake_constant(c, arg, b, index, generic->name, baked_text(c, param));
 }
 
 // Binds generic's type and constant parameters (in `bindings`) from args,
@@ -1009,13 +1067,17 @@ static String constant_text(Arena *a, Ast_Const *constant) {
     }
 }
 
-String bindings_text(Arena *a, Array<Ast *> bindings) {
+// The bindings as bindings_text writes them, or, without `named`, their
+// values alone, as a struct instance's name has them: "string, int".
+static String bindings_written(Arena *a, Array<Ast *> bindings, bool named) {
     Array<u8> text = {};
     for (s64 i = 0; i < bindings.count; i++) {
         Ast *b = bindings[i];
         if (i > 0) add_text(&text, str(", "));
-        add_text(&text, binding_name(b));
-        add_text(&text, str(" = "));
+        if (named) {
+            add_text(&text, binding_name(b));
+            add_text(&text, str(" = "));
+        }
         if (b->kind == AST_ALIAS) {
             add_text(&text, type_name(a, ((Ast_Alias *)b)->aliased));
         } else {
@@ -1027,6 +1089,10 @@ String bindings_text(Arena *a, Array<Ast *> bindings) {
     return result;
 }
 
+String bindings_text(Arena *a, Array<Ast *> bindings) {
+    return bindings_written(a, bindings, true);
+}
+
 // How many of an instance chain's innermost instances are shown, and as many
 // of its outermost: a generic whose instances each make a deeper one has up
 // to MAX_DEPTH of them, a line each, as report_failure (run.cpp) shows a
@@ -1034,17 +1100,19 @@ String bindings_text(Arena *a, Array<Ast *> bindings) {
 static const s64 INSTANCES_SHOWN = 10;
 
 // The line of instance inst in a chain: "    in 'max' with T = Vec2,
-// called at main.rig:12:5\n", the call's path as diagnostics name its file.
-// Its bindings are written as its name, max(T = Vec2), has them, as it was
-// made: since then a type binding may have lost its type (made again to
-// null, check()'s made_again), while its body still makes instances whose
+// called at main.rig:12:5\n", the call's path as diagnostics name its file;
+// a struct instance's, "    in 'Ring' with T = int, N = 4, used at
+// main.rig:5:8\n", where its written type was. Its bindings are written as
+// they were when it was made (Ast_Instance.shown): since then a type
+// binding may have lost its type (made again to null, check()'s
+// made_again), while its body or its fields still make instances whose
 // chains pass through it.
 static String instance_line(Checker *c, Ast_Instance *inst) {
     Position at = inst->called_at;
-    s64 skip = inst->generic->name.count + 1;  // "max("
-    String bindings = {inst->name.data + skip, inst->name.count - skip - 1};  // and not the ')'
-    return string_printf(c->arena, "    in '" STR_FMT "' with " STR_FMT ", called at " STR_FMT ":%d:%d\n",
-                         STR_ARG(inst->generic->name), STR_ARG(bindings), STR_ARG(c->diag->files[at.file].path),
+    bool of_struct = inst->generic_struct != nullptr;
+    String generic = of_struct ? inst->generic_struct->name : inst->generic->name;
+    return string_printf(c->arena, "    in '" STR_FMT "' with " STR_FMT ", %s at " STR_FMT ":%d:%d\n", STR_ARG(generic),
+                         STR_ARG(inst->shown), of_struct ? "used" : "called", STR_ARG(c->diag->files[at.file].path),
                          at.line, at.col);
 }
 
@@ -1088,13 +1156,13 @@ static bool same_binding(Ast *made, Generic_Binding *b) {
     return constant->constant == b->value->constant;
 }
 
-// The instance of generic whose bindings are `bindings`, made already, or
-// null: its cache (Ast_Proc.instances), compared binding by binding, a type
-// by its Type * (every type exists once), a constant by its type and value
-// (same_binding).
-static Ast_Instance *find_instance(Ast_Proc *generic, Array<Generic_Binding> bindings) {
-    for (s64 i = 0; i < generic->instances.count; i++) {
-        Ast_Instance *inst = generic->instances[i];
+// The instance whose bindings are `bindings` in `cache`, a generic's
+// instances (Ast_Proc.instances, Ast_Struct.instances), made already, or
+// null: compared binding by binding, a type by its Type * (every type
+// exists once), a constant by its type and value (same_binding).
+static Ast_Instance *find_instance(Array<Ast_Instance *> cache, Array<Generic_Binding> bindings) {
+    for (s64 i = 0; i < cache.count; i++) {
+        Ast_Instance *inst = cache[i];
         bool same = true;
         for (s64 k = 0; k < bindings.count && same; k++) same = same_binding(inst->bindings[k], &bindings[k]);
         if (same) return inst;
@@ -1152,11 +1220,30 @@ static String instance_symbol(Arena *a, Ast_Proc *generic, String name) {
     }
 }
 
+// The bindings an instance makes of `bindings`, into *made, in order: an
+// Ast_Alias for each type parameter, at what declares it, its type the one
+// bound; an Ast_Const for each constant one (constant_binding), an enum's
+// members worked out first, to name its value by.
+static void make_bindings(Checker *c, Array<Generic_Binding> bindings, Array<Ast *> *made) {
+    for (s64 i = 0; i < bindings.count; i++) {
+        Generic_Binding *b = &bindings[i];
+        if (!b->is_type) {
+            if (b->type->kind == TYPE_ENUM) check_enum_values(c, b->type);
+            array_add(made, (Ast *)constant_binding(c, b));
+            continue;
+        }
+        Ast_Alias *alias = ast_new<Ast_Alias>(c->arena, AST_ALIAS, b->declared);
+        alias->name = b->name;
+        alias->aliased = b->type;
+        array_add(made, (Ast *)alias);
+    }
+}
+
 // A new instance of generic for `bindings`, made where the call at
 // `called_at` needs it: the generic's tree copied (ast_clone), no longer
 // generic, without its baked parameters, whose arguments each call drops
 // (check_expr.cpp's check_generic_call), its bindings an Ast_Alias each at
-// the $T it binds, an Ast_Const each at the $N (constant_binding), named
+// the $T it binds, an Ast_Const each at the $N (make_bindings), named
 // max(T = int) or ring(N = 3, T = int) and given its symbol, added to the
 // generic's cache and the program's list, and its signature checked now,
 // its bindings in sight (checker.cpp's resolve_signature). Its body waits
@@ -1187,20 +1274,9 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
         if (!params[i]->is_baked) params[kept++] = params[i];
     }
     params.count = kept;
-    for (s64 i = 0; i < bindings.count; i++) {
-        Generic_Binding *b = &bindings[i];
-        if (!b->is_type) {
-            if (b->type->kind == TYPE_ENUM) check_enum_values(c, b->type);  // its members, to name it by
-            array_add(&inst->bindings, (Ast *)constant_binding(c, b));
-            continue;
-        }
-        Ast_Alias *alias = ast_new<Ast_Alias>(c->arena, AST_ALIAS, b->declared);
-        alias->name = b->name;
-        alias->aliased = b->type;
-        array_add(&inst->bindings, (Ast *)alias);
-    }
-    inst->name = string_printf(c->arena, STR_FMT "(" STR_FMT ")", STR_ARG(generic->name),
-                               STR_ARG(bindings_text(c->arena, inst->bindings)));
+    make_bindings(c, bindings, &inst->bindings);
+    inst->shown = bindings_text(c->arena, inst->bindings);
+    inst->name = string_printf(c->arena, STR_FMT "(" STR_FMT ")", STR_ARG(generic->name), STR_ARG(inst->shown));
     inst->symbol = instance_symbol(c->arena, generic, inst->name);
     inst->called_at = called_at;
     inst->made_in = c->instance;
@@ -1215,7 +1291,7 @@ Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *
     Array<Generic_Binding> bindings = generic_parameters(generic);
     Ast_Proc *proc = nullptr;
     if (infer_bindings(c, generic, args, callee, &bindings)) {
-        Ast_Instance *inst = find_instance(generic, bindings);
+        Ast_Instance *inst = find_instance(generic->instances, bindings);
         if (!inst) inst = make_instance(c, generic, bindings, called_at);
         // An instance whose signature had errors, said where it was made,
         // stays cached, so they're said once; the calls with its bindings
@@ -1225,6 +1301,243 @@ Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *
     }
     array_free(&bindings);
     return proc;
+}
+
+// Generic structs (spec 3.23). A generic struct is checked on its own
+// once, for what doesn't depend on its arguments; each set of arguments a
+// written type gives it makes one instance, program-wide, found again in
+// its cache, or made: its tree copied (ast_clone), its parameters bound as
+// a procedure instance's are (make_bindings), named Map(string, int), its
+// Type made, and laid out where it's needed, as any struct, its bindings
+// in sight (checker.cpp's resolve_struct enters it).
+
+// Whether struct parameter `param` is a type parameter, `K: Type`: known
+// by its type's written name, as takes_a_type knows a procedure's $T:
+// Type. Any other is a constant parameter.
+static bool struct_takes_a_type(Ast_Param *param) {
+    return param->type_expr->kind == AST_TYPE_NAME && string_eq(param->type_expr->name, str("Type"));
+}
+
+void check_generic_struct(Checker *c, Ast_Struct *generic) {
+    if (generic->resolve != RESOLVE_NOT_YET) return;
+    generic->resolve = RESOLVE_UNDER_WAY;
+    // Its parameters' types are the top level's, whatever needed it first,
+    // and its mistakes are its own, with no instance's chain.
+    Outer_Scopes scopes = leave_scopes(c);
+    s64 errors = c->diag->error_count;
+    for (s64 i = 0; i < generic->params.count; i++) {
+        Ast_Param *param = generic->params[i];
+        if (struct_takes_a_type(param)) continue;
+        // Resolved as behind a pointer: a struct named there, no constant's
+        // type, needs no layout to be refused.
+        Type *t = resolve_written(c, param->type_expr, true);
+        if (!t) {
+            // Its own mistake, said, or not at all (a name a lost file may
+            // declare, Checker.lost_a_file): with no type for its argument
+            // to convert to, no use can make an instance.
+            generic->had_errors = true;
+            continue;
+        }
+        if (!constant_parameter_type(t)) {
+            diag_error(c->diag, param->type_expr->pos,
+                       "a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string "
+                       "type, not '" STR_FMT "'",
+                       STR_ARG(type_name(c->arena, t)));
+            continue;
+        }
+        param->type = t;
+    }
+    generic->had_errors |= c->diag->error_count != errors;
+    return_to_scopes(c, scopes);
+    generic->resolve = RESOLVE_DONE;
+}
+
+void report_generic_struct(Checker *c, Ast_Struct *generic, Position at) {
+    Array<u8> example = {};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        if (i > 0) add_text(&example, str(", "));
+        add_text(&example, generic->params[i]->name);
+    }
+    diag_error(c->diag, at, "'" STR_FMT "' is generic; write its arguments, as in " STR_FMT "(%.*s)",
+               STR_ARG(generic->name), STR_ARG(generic->name), (int)example.count, (const char *)example.data);
+    array_free(&example);
+}
+
+// The type and constant parameters generic struct `generic` declares, in
+// order, none bound yet: a constant one of the type its own check gave it
+// (check_generic_struct). The caller frees the Array.
+static Array<Generic_Binding> struct_parameters(Ast_Struct *generic) {
+    Array<Generic_Binding> declared = {};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        Ast_Param *param = generic->params[i];
+        Generic_Binding b = {};
+        b.name = param->name;
+        b.declared = param->pos;
+        b.is_type = struct_takes_a_type(param);
+        b.type = b.is_type ? nullptr : param->type;
+        array_add(&declared, b);
+    }
+    return declared;
+}
+
+// The text of struct parameter `param` as written, for a message: "N:
+// int", "K: Type".
+static String struct_parameter_text(Checker *c, Ast_Param *param) {
+    return string_printf(c->arena, STR_FMT ": " STR_FMT, STR_ARG(param->name),
+                         STR_ARG(written_type_text(c, param->type_expr)));
+}
+
+// Binds the index-th parameter of generic struct `generic`, its binding b,
+// to argument `arg`, as written (parse_instance_argument): true when it's
+// bound; false after saying why it can't be, or when the argument's own
+// check failed (said).
+// - A type parameter takes a written type, resolved behind a pointer (an
+//   instance's Type needs no layout of what it's made of, as a type value
+//   doesn't, resolve_type_value; void refused), or an expression that names
+//   a type (check_expr.cpp's expr_names_type: #type (int) -> int), checked
+//   as a type value. Any other expression, checked first, is "argument 1 of
+//   'Map' must be a type, for 'K: Type'", at it.
+// - A constant parameter takes an expression, or a bare name the parser
+//   read as a type, which is the name of a value here, looked up and
+//   checked as one, at its place: "'int' is a type, not a value" when it
+//   names a type, as a type's name where a value goes is. Any other written
+//   type is "'*int' is a type, not a value", at it. The value converts to
+//   the parameter's type and must be known while compiling (bake_constant).
+//   It's checked where the instance is written, as an array's count is (a
+//   local there is in sight, and no constant), needing no context, as a
+//   count doesn't (checker.cpp's check_array_count).
+static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 index, Generic_Binding *b) {
+    Ast_Param *param = generic->params[index];
+    if (b->is_type) {
+        if (is_written_type(arg)) {
+            b->type = resolve_type_value(c, (Ast_Type *)arg);
+            return b->type != nullptr;
+        }
+        if (expr_names_type(c, arg)) {
+            b->type = check_type_value(c, arg);
+            return b->type != nullptr;
+        }
+        if (!check_value(c, arg)) return false;
+        diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must be a type, for '" STR_FMT "'",
+                   (long long)(index + 1), STR_ARG(generic->name), STR_ARG(struct_parameter_text(c, param)));
+        return false;
+    }
+    if (is_written_type(arg)) {
+        Ast_Type *written = (Ast_Type *)arg;
+        if (written->kind != AST_TYPE_NAME) {
+            diag_error(c->diag, written->pos, "'" STR_FMT "' is a type, not a value",
+                       STR_ARG(written_type_text(c, written)));
+            return false;
+        }
+        Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
+        name->name = written->name;
+        if (expr_names_type(c, name)) {
+            report_type_as_value(c, name);
+            return false;
+        }
+        arg = name;
+    }
+    bool outer_contextless = c->contextless;
+    c->contextless = false;
+    Type *t = check_value(c, arg);
+    c->contextless = outer_contextless;
+    return t && bake_constant(c, arg, b, index, generic->name, struct_parameter_text(c, param));
+}
+
+// Sets `instance` on struct s, a struct instance's copy, and on each
+// anonymous member's struct in it, at any depth, so the fields of each see
+// the instance's bindings where they're laid out (checker.cpp's
+// resolve_struct and make_late_field, which lay an anonymous member's late
+// fields out with its own struct).
+static void set_instance(Ast_Struct *s, Ast_Instance *inst) {
+    s->instance = inst;
+    for (s64 i = 0; i < s->fields.count; i++) {
+        if (s->fields[i]->anonymous) set_instance(s->fields[i]->anonymous, inst);
+    }
+}
+
+// A new instance of generic struct `generic` for `bindings`, made where
+// the written type at `used_at` needs it, kept apart from find_instance so
+// what changes a struct as it's made (issue #228's #modify) comes between
+// them: its tree copied (ast_clone), no longer generic, its bindings made
+// as a procedure instance's are (make_bindings), named Map(string, int)
+// (each binding's value as the program would write it: a type as type_name
+// writes it, a constant as constant_text does), its copy named so and
+// given its Type (checker.cpp's new_struct_type), named so too, and added
+// to the generic's cache and the program's list before anything is laid
+// out, so a field that names its own instance, next: *List(T), finds it.
+// No symbol: no object-file name is a struct's.
+static Ast_Instance *make_struct_instance(Checker *c, Ast_Struct *generic, Array<Generic_Binding> bindings,
+                                          Position used_at) {
+    Ast_Instance *inst = arena_new<Ast_Instance>(c->arena);
+    inst->generic_struct = generic;
+    inst->structure = (Ast_Struct *)ast_clone(c->arena, generic);
+    inst->structure->is_generic = false;
+    set_instance(inst->structure, inst);
+    make_bindings(c, bindings, &inst->bindings);
+    inst->shown = bindings_text(c->arena, inst->bindings);
+    inst->name = string_printf(c->arena, STR_FMT "(" STR_FMT ")", STR_ARG(generic->name),
+                               STR_ARG(bindings_written(c->arena, inst->bindings, false)));
+    inst->structure->name = inst->name;
+    new_struct_type(c, inst->structure);
+    inst->called_at = used_at;
+    inst->made_in = c->instance;
+    inst->depth = c->instance ? c->instance->depth + 1 : 1;
+    array_add(&generic->instances, inst);
+    array_add(&c->file->struct_instances, inst);
+    return inst;
+}
+
+Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, Position at, Position used_at) {
+    // A parameter's type that needs an instance of its own struct finds its
+    // own check under way: a circle, said once, at the generic.
+    if (generic->resolve == RESOLVE_UNDER_WAY) {
+        if (!generic->had_errors) {
+            diag_error(c->diag, generic->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(generic->name));
+        }
+        generic->had_errors = true;
+        return nullptr;
+    }
+    check_generic_struct(c, generic);
+    if (generic->had_errors) return nullptr;  // its own mistake, said: its uses say nothing more
+    s64 count = generic->params.count;
+    if (args.count != count) {
+        diag_error(c->diag, at, "'" STR_FMT "' takes %lld argument%s, but %lld %s given", STR_ARG(generic->name),
+                   (long long)count, count == 1 ? "" : "s", (long long)args.count, args.count == 1 ? "was" : "were");
+        return nullptr;
+    }
+    // Every argument is bound, its own mistakes said, before any instance.
+    Array<Generic_Binding> bindings = struct_parameters(generic);
+    bool bound = true;
+    for (s64 i = 0; i < count; i++) bound = bind_struct_argument(c, generic, args[i], i, &bindings[i]) && bound;
+    Ast_Instance *inst = nullptr;
+    if (bound) {
+        inst = find_instance(generic->instances, bindings);
+        if (!inst) inst = make_struct_instance(c, generic, bindings, used_at);
+    }
+    array_free(&bindings);
+    // An instance found to contain itself, or too big, said where it was
+    // laid out, has no type: its uses say nothing more.
+    return inst ? inst->structure->declared : nullptr;
+}
+
+Type *check_written_instance(Checker *c, Ast_Type *written) {
+    if (written->instance_checked) return written->instance_type;
+    written->instance_checked = true;
+    // A built-in type's name always means the built-in type, as where
+    // checker.cpp's resolve_written looks first.
+    Ast *decl = type_from_name(written->name) ? nullptr : find_name(c, written->name);
+    if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
+        written->instance_type =
+            check_struct_instance(c, (Ast_Struct *)decl, written->args, written->pos, written->pos);
+    } else if (resolve_type_name(c, written, true)) {
+        // A type, but no generic struct's: it takes no arguments, which
+        // aren't looked at. Anything else said what it is
+        // (resolve_type_name).
+        diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
+                   STR_ARG(written->name));
+    }
+    return written->instance_type;
 }
 
 // The generic's own body (spec 7.11): what it means depends on T, so it's

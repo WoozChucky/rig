@@ -373,7 +373,7 @@ Every value and every expression in Rig has a type, known while compiling. The t
 - view types `[]T` (section 3.7);
 - resizable array types `[..]T` (section 3.17);
 - `string` (section 3.8);
-- struct types, declared by the program (section 3.9), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
+- struct types, declared by the program (section 3.9), the instances of its generic structs among them, `Map(string, int)` (section 3.23), and Preload's, which every program has (section 2.14), among them `Any`, a value of any type with its type's description (section 3.16);
 - union types, declared by the program, whose members all lie at offset 0, and the types of anonymous members, `union { ... }` and `struct { ... }` inside a struct or a union (section 3.19);
 - tagged union types, declared by the program with `union #tagged`, a tag saying which member they hold, then the members (section 3.20);
 - enum types, declared by the program with `enum` or `enum_flags`, each over an integer type (section 3.18), Preload's and Basic's among them, and the predeclared `Operating_System`, the systems a program can be built for (sections 2.5, 4.9);
@@ -384,14 +384,16 @@ Every value and every expression in Rig has a type, known while compiling. The t
 `Type` is the type of types, of a type written where a value goes, which only a comparison of types and a `$T: Type` parameter take (sections 5.20, 7.11), while compiling: no value of it exists when the program runs, so no type is written `Type` but such a parameter's. A variable's, any other parameter's, a field's, a result's, a cast's, `size_of`'s or `type_info`'s type, or a type written where a value goes, that is, or holds, `Type` is `'Type' only names types while compiling; a *Type_Info describes one at run time`, at the `Type`: a type's description, read at run time, is `type_info`'s (sections 3.16, 5.19).
 
 ```ebnf
-Type = "*" Type | "[" Expression "]" Type | "[" "]" Type | "[" ".." "]" Type | ProcType | identifier .
+Type         = "*" Type | "[" Expression "]" Type | "[" "]" Type | "[" ".." "]" Type | ProcType | identifier
+             | identifier "(" TypeArgument { "," TypeArgument } ")" .
+TypeArgument = Type | Expression .
 ```
 
-A parameter's type may also declare a generic procedure's type parameter, `$T`, which is then a type name in the procedure (section 7.11).
+A parameter's type may also declare a generic procedure's type parameter, `$T`, which is then a type name in the procedure (section 7.11). A name followed by `(` is an instance of a generic struct, `Map(string, int)` (section 3.23): each of its arguments is a `Type` when it starts with `*`, `[` or `$`, or is a name, with or without arguments of its own, followed by `,` or `)`, and an `Expression` otherwise (`4`, `N + 1`, `.B`).
 
 A type name is a built-in type's name, a struct's, a union's, an enum's or a type alias's (section 3.22). A name declared as something else, written where a type goes, is `'foo' is not a type`; a name declared nowhere is `unknown type 'foo'`, unless a `#load` has failed (section 2.13) or a top-level `#if`'s condition has an error (section 4.9). The built-in type names always mean the built-in types: a struct, a union, an enum or a type alias cannot be called `u8` (`'u8' is a built-in type`). Other declarations may use those names, hiding nothing of the types: a variable may be called `int`, and `int` is still the type wherever a type is written (where a value goes, the variable hides the type, section 5.20).
 
-**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, the same union declaration or anonymous member (section 3.19), the same enum declaration (two structs, unions or enums declared alike are two types), or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
+**Type identity.** Two types are the same type when they are the same built-in type, the same struct declaration, the same union declaration or anonymous member (section 3.19), the same enum declaration (two structs, unions or enums declared alike are two types), instances of the same generic struct with the same arguments (section 3.23), or are made the same way from the same types: `*T` and `*U` when `T` and `U` are the same, `[N]T` and `[M]U` when `N` equals `M` and `T` and `U` are the same, `[]T` and `[]U` when `T` and `U` are the same, `[..]T` and `[..]U` when `T` and `U` are the same, and two procedure types when their parameter types, their result types and their `#c_call` marks are, and both take a `..T` last or neither does (section 3.15). `float` is the same type as `float32`. `int` and `s64` are different types with the same size and representation; each converts implicitly to the other (section 3.13).
 
 ### 3.2 Integer types
 
@@ -714,7 +716,7 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 - **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
 - **Pointers** (`.POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
 - **Arrays, views and resizable arrays** (`.ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind`, a member of the enum `Array_Kind`, is `.FIXED` for an array `[N]T`, `.VIEW` for a view `[]T` and `.RESIZABLE` for a resizable array `[..]T` (section 3.17), in Jai's order, and `count` is the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A resizable array's `size` is 40 (section 3.11).
-- **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, whose `members` are its fields in order, none for a struct with none, and whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
+- **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, a generic struct's instance's its name, `Map(string, int)` (section 3.23), whose `members` are its fields in order, none for a struct with none, and whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
 - **Procedure types** (`.PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
 - **Enums**, `enum` and `enum_flags` types (`.ENUM`, section 3.18): a `Type_Info_Enum`, whose `name` is the enum's declared name, `underlying` the description of its integer type, whose size, alignment and sign it has, and `is_flags` whether it is an `enum_flags`. Its members are `names` and `values`, in order, none for an enum with none: `names[i]` is a member's name and `values[i]` its value, as 64 bits, sign-extended from a signed integer type and zero-extended from an unsigned one, so a `u64` member above `s64`'s largest value reads as a negative `s64`.
 - **Tagged unions** (`.TAGGED_UNION`, section 3.20): a `Type_Info_Tagged_Union`, whose `name` is the tagged union's declared name, `tag_type` the description of its tag's integer type, whose size and sign the tag has, and `tag_offset` the tag's offset, 0 in every Rig tagged union (it is there for a C layout that puts the tag elsewhere). Its `members` are described as a struct's, in order: each one's `name`, its type's description, `void`'s for a member that holds nothing, and its `offset`, the members' one offset past the tag. A value holds `members[tag]`, its tag read at `tag_offset`, when the tag is one of theirs.
@@ -1659,6 +1661,59 @@ example.rig:6:10: error: 'V' is a type, not a value
              ^
 ```
 
+### 3.23 Generic structs
+
+A struct may take **parameters**, in parentheses after `struct`: `Map :: struct (K: Type, V: Type) { ... }` declares a **generic struct**. It is no type itself: each set of arguments a type gives it, `Map(string, int)`, names one of its **instances**, a struct laid out from its fields with its parameters bound to those arguments. This is Jai's generic struct. A parameter `NAME: Type` is a type parameter, which each instance gives a type; any other is a constant parameter, `N: int`, which each instance gives a constant of its type: a number's, a `bool`'s, an enum's or a `string`'s, as for a generic procedure's `$N` (section 7.11). Any other type is `a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, not '[]int'`, at it.
+
+```ebnf
+StructDecl  = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" ] | "union" ) "{" { FieldDecl } "}" .
+StructParam = identifier ":" Type .
+```
+
+Every instance gives every parameter, so a parameter is a name and a type, nothing more: a `$` before its name is `a struct's parameters take no '$': each instance gives them all, as in Map :: struct (K: Type, V: Type)`, at the `$`; `using` is `a struct's parameter can't be 'using'`; a `..` before its type `a struct's parameter can't be '..'`; and a default value, for now, `a struct's parameter can't have a default value, for now`, at its `=`. A struct with no parameters has no parentheses: `struct () { }` is `a struct with no parameters has no '()', as in Vec2 :: struct { x: float; }`, at the `(`. Only a struct takes parameters, for now: `union (` and `union #tagged (` are `a union can't take parameters, for now`, at the `(`.
+
+```rig
+#import "Basic";
+
+Pair :: struct (A: Type, B: Type) { first: A; second: B; }
+Ring :: struct (T: Type, N: int) { items: [N]T; count: int; }
+List :: struct (T: Type) { value: T; next: *List(T); }
+
+push :: (r: *Ring(int, 4), v: int) {
+    r.items[r.count] = v;
+    r.count += 1;
+}
+
+main :: () {
+    p: Pair(string, int);
+    p.first = "ann";
+    p.second = 36;
+    r: Ring(int, 4);
+    push(*r, 7);
+    push(*r, 8);
+    tail: List(int) = .{2, null};
+    head: List(int) = .{1, *tail};
+    print("{} {} {}\n", p, r.items, head.next.value);
+    print("{} {}\n", size_of(Ring(int, 4)), (cast(*Type_Info_Struct) type_info(Pair(string, int))).name);
+}
+```
+
+```text
+{first = "ann", second = 36} [7, 8, 0, 0] 2
+40 Pair(string, int)
+```
+
+**Instances.** An instance is written wherever a type is (section 3.1): a variable's, a parameter's, a field's or a result's type, behind a pointer, in an array, a view or a resizable array, in a cast, `size_of` and `type_info`. It gives one argument per parameter, in order: `'Map' takes 2 arguments, but 1 was given`, at the name. An argument starting with `*` or `[`, or a name, with or without arguments of its own, before a `,` or the `)`, is written as a type; any other is an expression, `4`, `N + 1`, `.B`, `"hi"`, `#type (int) -> int`.
+
+- A type parameter takes a type: one written as a type, or an expression that names one (section 5.20). Anything else is `argument 1 of 'Map' must be a type, for 'K: Type'`, at it.
+- A constant parameter takes a constant: an expression, or a name, which is read as the value it names, `Ring(int, SIZE)`. It converts to the parameter's type as a call's argument does (section 5.10: `argument 2 of 'Ring' has type 'string', which can't be converted to 'int'`, `300 doesn't fit in 'u8'`), `.B` meeting an enum's, and must be known while compiling (section 5.9): `argument 2 of 'Ring' must be known while compiling, for 'N: int'`. A type there is `'int' is a type, not a value` (`'*int' is a type, not a value`). The arguments are checked where the instance is written, as an array's count is.
+
+The generic's name alone names no type: `x: Map;` and `*Map` are `'Map' is generic; write its arguments, as in Map(K, V)`, at the name, its parameters' names in the example. A struct without parameters takes no arguments: `Vec2(int)` is `'Vec2' isn't generic, so it takes no arguments`, and a name that names no type is what it is for any type, `unknown type 'Nope'` or `'main' is not a type`.
+
+**One type per set of arguments.** Instances given the same arguments are one type, program-wide, however each is written: types are the same when they are the same type (section 3.1), constants when they have the same type and value, strings when they have the same bytes. `Ring(int, 4)`, `Ring(int, 2 + 2)` and `Ring(int, cast(u8) 4)` are one type; `Ring(s64, 4)` and `Ring(int, 5)` are two others. An instance is named by its generic and its arguments as the program would write them, a type as messages name it, a constant by its value: `Map(string, int)`, `Map(int, Map(string, *u8))`, `Ring(int, 4)`, `Ring(float32, 1)` (`float` is `float32`), `Labeled("hi")`, `Tag(Mode.B)`, `Flag(true)`. Messages name it so, and so does its type information (section 3.16); Basic's `print` writes its value as any struct's.
+
+**Inside the struct.** In its fields' types and array counts, a type parameter is the type the instance gives and a constant parameter the constant, `items: [N]T;`, hiding a top-level declaration of its name; an instance's fields see its own parameters only, never those of a generic procedure's instance whose code names the instance (section 7.11). Each instance is laid out as any struct (section 3.9). A field may point at its own instance, view it or hold a resizable array of it, `next: *List(T);`, `kids: [..]Tree(T);`, or hold another instance that points back at it, but holds itself by value no more than any struct does. An instance may be a `using` field's type, `using base: Base(T);`, and a `using` parameter's, `(using b: *Base(u16))`, whose fields it reaches as its own (section 3.21), and a pointer to an instance converts to one to the instance it holds through a `using` field, `*Derived(u16)` to `*Base(u16)`. Its parameters are read only inside it, for now: `m.K` is the usual `'Map(string, int)' has no field 'K'`.
+
 ## 4. Declarations and scope
 
 ### 4.1 Declarations
@@ -1817,13 +1872,14 @@ A procedure's name is called (section 5.10), and used anywhere else it is a proc
 ### 4.5 Structs
 
 ```ebnf
-StructDecl = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
-FieldDecl  = [ "using" ] identifier ":" Type ";"
-           | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
-TaggedDecl = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
+StructDecl  = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" ] | "union" ) "{" { FieldDecl } "}" .
+StructParam = identifier ":" Type .
+FieldDecl   = [ "using" ] identifier ":" Type ";"
+            | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
+TaggedDecl  = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
 ```
 
-A struct declaration declares a type with named fields, each followed by `;`, the last one too; a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19), and `using` before a field's name makes the fields of the struct it holds, or points at, reached as the outer one's own too (section 3.21). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
+A struct declaration declares a type with named fields, each followed by `;`, the last one too, or, with parameters, a generic struct, whose instances are types (section 3.23); a union declaration, with `union`, one whose members are all at offset 0 (section 3.19); and with `union #tagged`, a `TaggedDecl`, a tagged union, whose tag says which member it holds (section 3.20). All are declared at the top level only. Among a struct's or a union's fields, `union { ... };` and `struct { ... };` are anonymous members, whose fields are reached as the outer one's own (section 3.19), and `using` before a field's name makes the fields of the struct it holds, or points at, reached as the outer one's own too (section 3.21). Two fields of one name, in one pair of braces or across an anonymous member's, are `'x' is already declared at PATH:L:C`. Section 3.9 gives the layout; section 5.17 the literals that make struct values; section 5.12 access to fields.
 
 A struct's name, or a union's, is a type, not a value: used as a value it is `'Vec2' is a type, not a value`, but where a type may be written as a value, as an operand of `==` with another type, `Vec2 == Vec2` (section 5.20).
 
@@ -4192,6 +4248,13 @@ The sections defining each construct give its messages. Some of those met most o
 | `a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not '[]int'` | 7.11 |
 | `a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: ..$T` | 7.11 |
 | `a '$' parameter can't come after one with a default value, since each parameter after that needs one` | 7.11 |
+| `'Map' is generic; write its arguments, as in Map(K, V)` | 3.23 |
+| `'Vec2' isn't generic, so it takes no arguments` | 3.23 |
+| `'Map' takes 2 arguments, but 1 was given` | 3.23 |
+| `argument 1 of 'Map' must be a type, for 'K: Type'` | 3.23 |
+| `argument 2 of 'Ring' must be known while compiling, for 'N: int'` | 3.23 |
+| `a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, not '[]int'` | 3.23 |
+| `a union can't take parameters, for now` | 3.23 |
 | `can't assign to 'a': it's a parameter` | 6.4 |
 | `'f' must return a value on every path, and this one reaches its end` | 6.11 |
 | `'A' is defined in terms of itself` | 4.8, 3.22 |
@@ -4728,7 +4791,8 @@ Results       = Type { "," Type } | "(" Type { "," Type } ")" .
 Params        = Param { "," Param } [ "," ".." ] .
 Param         = [ "using" ] [ "$" ] identifier ":" [ ".." ] Type [ "=" Expression ] .
 
-StructDecl    = identifier "::" ( "struct" | "union" ) "{" { FieldDecl } "}" .
+StructDecl    = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" ] | "union" ) "{" { FieldDecl } "}" .
+StructParam   = identifier ":" Type .
 FieldDecl     = [ "using" ] identifier ":" Type ";"
               | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
 TaggedDecl    = identifier "::" "union" "#tagged" [ identifier ] "{" { identifier ":" Type ";" } "}" .
@@ -4748,13 +4812,17 @@ Type          = "*" Type
               | "[" ".." "]" Type
               | ProcType
               | identifier
+              | identifier "(" TypeArgument { "," TypeArgument } ")"
               | "$" identifier .            (only in a Param's Type: section 7.11)
+TypeArgument  = Type | Expression .
 ProcType      = "(" [ ProcParam { "," ProcParam } ] ")" [ "->" ProcResults ] [ "#c_call" ] .
 ProcParam     = [ identifier ":" ] [ ".." ] Type .
 ProcResults   = Type | "(" Type { "," Type } ")" .
 ```
 
 After `::`, a `(` followed by `)`, by `..`, by `using`, by `$`, or by an identifier and `:` or `:=`, begins a `Signature`; any other `(` begins a `ConstDecl`'s expression. A `Signature` that reaches its `;`, outside parentheses and brackets, before any `{`, any directive but `#c_call`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file, and that begins as above or whose `)` is followed by `->` (`(int) -> int`), is an `AliasDecl`, at the top level and in a body: a procedure type's alias, read as a `ProcType` (section 3.22). A `ConstDecl` whose `Expression` names a type is an alias too (section 4.2). A `Param`'s `=` and its default value come after its type: `name := value` as a parameter is `a parameter needs its type, as in n: int = 0`, at the `:=`. A `ProcParam` has no `=`: `a procedure type can't have default values`, at the `=`. Where a default value may be is section 7.2's. C's bare `..` in a `Signature` anywhere but last is `'..' must be the last parameter`, and one with no parameter before it `'..' needs a parameter before it, as in (format: *u8, ..)`. A `..` before a parameter's type is on one `Param` of a `Signature` at most, any one of them: on a second it is `a procedure takes at most one '..' parameter`; where a default value may be beside it is section 7.2's. In a `ProcType` it is allowed only on the last `ProcParam`: on any other it is `'..' must be the last parameter`. A `ProcType` has no bare `..` (`a procedure type can't take '..': a procedure that takes C's '..' can't be a value`). A `"$" identifier` `Type`, a type parameter's declaration, is part of a `Param`'s `Type` only, at any depth in it but an array's count, a `ProcType`'s `ProcParam`s and results inside it included: in any other `Type` it is `'$' declares a type parameter only in a procedure's parameter, as in max :: (a: $T, b: T) -> T`, at the `$` (section 7.11). `ProcDecl`, `StructDecl`, `TaggedDecl`, `EnumDecl`, `LoadDecl`, `ImportDecl` and `RunDecl` appear only at the top level, where an `IfDirective`'s `Block`s hold `TopLevel`s in place of `Statement`s, so they appear in a top-level `IfDirective`'s branches too (section 4.9). After `else`, an `IfDirective` takes a `Block` or another `IfDirective`, never an `IfStmt` (`an #if's else is a block or another #if, as in else #if OS == .LINUX { ... }`). A program is the `File` of its main file and of every file a `LoadDecl` names (section 2.13), and of the `module.rig` of Preload, which every program imports, and of every module an `ImportDecl` names (section 2.14); a `RunDecl`'s `Block` is a procedure's body (section 7.8). In a `ProcDecl`, `#c_call` and `#no_abc` each appear at most once (`'#c_call' is written twice`), and neither with `#foreign` or `#compiler`: `#c_call` there is `a foreign procedure is C's already: it takes no '#c_call'` (`a #compiler procedure is the compiler's: it takes no '#c_call'`), and `#no_abc` `expected '{', found directive`. Only a module's file may declare a `#compiler` procedure (section 7.9).
+
+In a `Type`, an identifier followed by `(` is an instance of a generic struct (section 3.23), whose `TypeArgument` is a `Type` when it starts with `*`, `[` or `$`, or is an identifier, with or without its own `(` and `)`, followed by `,` or `)`, and an `Expression` otherwise. A `StructParam` is a name and its type, with no `$`, `using`, `..` or default value, and a `StructDecl` that has parentheses has a `StructParam` in them; a `union` has none (section 3.23).
 
 In `Results` and `ProcResults`, a `(` whose `)` is followed by `->` begins a `ProcType`, the one result; any other `(` there begins the parenthesized list. A `#c_call` after a `ProcType` belongs to the innermost `ProcType` that ends there. At the top level, a name followed by `:` and a `(` is a `VarDecl` with a `ProcType` when its `=` or `;` comes, outside parentheses and brackets, before a `{`, a directive other than `#c_call`, `#load`, `#import`, `#run` or `#if`, the next declaration (an identifier that starts a line, followed by `::`) or the end of the file. A `#load`, an `#import`, a `#run` or an `#if` reached first begins the next declaration, so the `VarDecl` is missing its `;`. Otherwise it is taken for a `ProcDecl` with its `::` mistyped (`expected '::', found ':'`).
 

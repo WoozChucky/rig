@@ -207,7 +207,11 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // top-level #if, so it can't decide another top-level #if"
 // (check_in_a_branch). A broken entry's name may have been anything, so
 // nothing is said about it. A struct found to contain itself has no type:
-// its uses say nothing more. In an instance of a generic procedure, a type
+// its uses say nothing more. A generic struct's name alone is no type (spec
+// 3.23): "'Map' is generic; write its arguments, as in Map(K, V)". An
+// instance of one, Map(string, int), is the instance's struct
+// (check_generic.cpp's check_written_instance), laid out here as a
+// struct's name's is. In an instance of a generic procedure, a type
 // parameter's name is the type it's bound to (spec 7.11, Ast_Alias), and a
 // type alias's name is the type it names, wherever (spec 3.22); one that
 // failed, its mistake said, says nothing more where it's used. Type,
@@ -223,6 +227,8 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // a pointer too: *[2]Node lays Node out. (A struct's own fields never need
 // that while it's laid out: one holding a pointer or a view has its type
 // made later, lay_out.)
+static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointer);
+
 static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer) {
     switch (written->kind) {
     case AST_TYPE_POINTER: {
@@ -256,8 +262,21 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         return check_array_type(c, element, count, written->pos);
     }
     case AST_TYPE_PROC: return resolve_proc_type(c, written);
-    default: break;
+    case AST_TYPE_INSTANCE: {
+        Type *t = check_written_instance(c, written);
+        if (!t) return nullptr;
+        Ast_Struct *s = t->decl;
+        if (behind_pointer && s->resolve != RESOLVE_DONE) return s->declared;
+        return resolve_struct(c, s);
     }
+    default: return resolve_type_name(c, written, behind_pointer);
+    }
+}
+
+// The type a written name means, as resolve_written says of one; an
+// instance's name too, for what it says of a name that is no generic
+// struct's (check_generic.cpp's check_written_instance).
+static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointer) {
     Type *t = type_from_name(written->name);
     if (t == &type_type) {
         // Type is the type of types while compiling (spec 5.20): no
@@ -273,6 +292,8 @@ static Type *resolve_written(Checker *c, Ast_Type *written, bool behind_pointer)
         // declares is no unknown type, but one no condition may use.
         if (c->deciding && check_in_a_branch(c, written->name, written->pos)) return nullptr;
         if (!c->lost_a_file) diag_error(c->diag, written->pos, "unknown type '" STR_FMT "'", STR_ARG(written->name));
+    } else if (decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
+        report_generic_struct(c, (Ast_Struct *)decl, written->pos);
     } else if (decl->kind == AST_STRUCT) {
         Ast_Struct *s = (Ast_Struct *)decl;
         if (behind_pointer && s->resolve != RESOLVE_DONE) return s->declared;
@@ -1711,7 +1732,11 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
         if (layout_levels(s->fields[i]) > levels) levels = layout_levels(s->fields[i]);
     }
     if (!open_declaration(c, s, s->name, levels, &outer)) return nullptr;
-    Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
+    // Its counts' names are the top level's, and an instance's bindings
+    // (spec 3.23), its own only, as a procedure instance's signature sees
+    // its own (resolve_signature); its mistakes are followed by its chain.
+    Outer_Scopes scopes = leave_scopes(c);
+    enter_instance(c, s->instance);
     s->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)s);
     Array<Ast_Field *> reachable = {};
@@ -1752,6 +1777,7 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     s32 outer;
     if (!open_declaration(c, field, field->name, field->type_expr->levels, &outer)) return;
     Outer_Scopes scopes = leave_scopes(c);  // its counts' names are the top level's
+    enter_instance(c, s->instance);         // and its struct instance's bindings, as resolve_struct's
     field->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)field);
     Type *type = resolve_type(c, field->type_expr);
@@ -1931,6 +1957,28 @@ static void resolve_late_fields(Checker *c, Ast_Struct *s) {
         field->type = made_again(field->type);
         if (t && field->index >= 0) t->fields[field->index].type = field->type;
     }
+}
+
+// Instance inst's type bindings made again (made_again), a procedure's or
+// a struct's: a binding that has no type now (null) leaves every use of
+// its name silent, as a parameter's does; an instance made from inside it
+// names it in its chain as it was made (check_generic.cpp's
+// instance_line). A constant binding's type, a number's, a bool's, an
+// enum's or string, is never made again.
+static void made_again_bindings(Ast_Instance *inst) {
+    for (s64 k = 0; k < inst->bindings.count; k++) {
+        if (inst->bindings[k]->kind != AST_ALIAS) continue;
+        Ast_Alias *binding = (Ast_Alias *)inst->bindings[k];
+        binding->aliased = made_again(binding->aliased);
+    }
+}
+
+// Struct instance inst (spec 3.23) laid out, if it isn't yet, and its late
+// fields made (resolve_late_fields), in check()'s passes: one only ever
+// taken behind a pointer, or where a value goes, has had neither.
+static void lay_out_instance(Checker *c, Ast_Instance *inst) {
+    resolve_struct(c, inst->structure);
+    resolve_late_fields(c, inst->structure);
 }
 
 // The type of an assignment's target, a place in memory (a variable, p.*,
@@ -3703,6 +3751,23 @@ static String declared_name(Ast *decl) {
     }
 }
 
+// A struct's Type, named as s is, kept in s->declared, its layout worked
+// out later (resolve_struct): a declared struct's, made with the top
+// level's names (declare_top_level), or a generic struct's instance's
+// (spec 3.23, check_generic.cpp's make_struct_instance).
+static Type *new_struct_type(Checker *c, Ast_Struct *s) {
+    Type *t = arena_new<Type>(c->arena);
+    t->kind = TYPE_STRUCT;
+    t->name = s->name;
+    t->align = 1;
+    t->decl = s;
+    t->arena = c->arena;  // so its pointer types are freed with it (type_pointer_to)
+    t->is_union = s->is_union;
+    t->is_tagged = s->is_tagged;  // its tag's type comes with its layout (lay_out_tag)
+    s->declared = t;
+    return t;
+}
+
 // The top level's names, so procedures, globals, constants, structs and
 // enums can be used before they're declared. They share one table: a global
 // can't have a procedure's name. The predeclared names, Operating_System,
@@ -3714,13 +3779,14 @@ static String declared_name(Ast *decl) {
 // twice is reported at the later one. Each struct gets its Type here, if it
 // has none yet (a decider made it, and what it worked out uses it), still
 // without its layout, so a pointer can name it from anywhere; one a decider
-// found in a circle, or too big, is done, and keeps having none. Each enum
-// gets its Type here too, once, with its size from the start. Then the
-// broken entries' names. With report, check()'s, the mistakes are said (a
-// built-in type's name, a predeclared name, a name already declared);
-// without, a decider's, the first of a name wins, silently: check() says
-// them once, later. Returns whether a broken entry lost its name (check()'s
-// main rule).
+// found in a circle, or too big, is done, and keeps having none; a generic
+// one never has one, being no type (spec 3.23). Each enum gets its Type
+// here too, once, with its size from the start. Then the broken entries'
+// names. With report, check()'s, the mistakes are said (a built-in type's
+// name, a predeclared name, a name already declared); without, a
+// decider's, the first of a name wins, silently: check() says them once,
+// later. Returns whether a broken entry lost its name (check()'s main
+// rule).
 static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report) {
     declare_predeclared(c, c->file);
     for (s64 i = 0; i < declarations.count; i++) {
@@ -3728,17 +3794,7 @@ static bool declare_top_level(Checker *c, Array<Ast *> declarations, bool report
         if (decl->kind == AST_PROC && ((Ast_Proc *)decl)->is_broken) continue;
         if (decl->kind == AST_STRUCT) {
             Ast_Struct *s = (Ast_Struct *)decl;
-            if (!s->declared && s->resolve == RESOLVE_NOT_YET) {
-                Type *t = arena_new<Type>(c->arena);
-                t->kind = TYPE_STRUCT;
-                t->name = s->name;
-                t->align = 1;
-                t->decl = s;
-                t->arena = c->arena;  // so its pointer types are freed with it (type_pointer_to)
-                t->is_union = s->is_union;
-                t->is_tagged = s->is_tagged;  // its tag's type comes with its layout (lay_out_tag)
-                s->declared = t;
-            }
+            if (!s->declared && s->resolve == RESOLVE_NOT_YET && !s->is_generic) new_struct_type(c, s);
         }
         if (decl->kind == AST_ENUM) {
             // An enum's Type (spec 3.18), made once, as a struct's, with its
@@ -3981,18 +4037,23 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // layouts, the enums' values, the signatures, the globals and the
     // constants, each one that isn't done yet (one needed earlier was worked
     // out there: resolve_struct, resolve_enum, resolve_signature,
-    // resolve_global). One pass, so a chain of declarations each needing
-    // the one before it never nests (open_declaration), whatever kind each
-    // is. Then the types of the structs' fields that wait for every layout
-    // (resolve_late_fields), and the types made before every layout was
-    // done, made again (made_again). All are done before the bodies, which
-    // only find them finished: a body may need a struct's size and fields,
-    // a call its procedure's parameters and results. All but the bodies a
-    // #run in the pass reaches, which are checked there
-    // (check_reached_body), and work out what they need there too.
+    // resolve_global), a generic struct its own check (spec 3.23,
+    // check_generic_struct). One pass, so a chain of declarations each
+    // needing the one before it never nests (open_declaration), whatever
+    // kind each is. Then the types of the structs' fields that wait for
+    // every layout (resolve_late_fields), the generic structs' instances
+    // made so far laid out first, and those their late fields make in
+    // turn; and the types made before every layout was done, made again
+    // (made_again). All are done before the bodies, which only find them
+    // finished: a body may need a struct's size and fields, a call its
+    // procedure's parameters and results. All but the bodies a #run in the
+    // pass reaches, which are checked there (check_reached_body), and work
+    // out what they need there too.
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
-        if (decl->kind == AST_STRUCT) {
+        if (decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
+            check_generic_struct(&c, (Ast_Struct *)decl);
+        } else if (decl->kind == AST_STRUCT) {
             resolve_struct(&c, (Ast_Struct *)decl);
         } else if (decl->kind == AST_ENUM) {
             resolve_enum(&c, (Ast_Enum *)decl);
@@ -4003,8 +4064,12 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
         }
     }
     for (s64 i = 0; i < file->globals.count; i++) {
-        if (file->globals[i]->kind == AST_STRUCT) resolve_late_fields(&c, (Ast_Struct *)file->globals[i]);
+        Ast *decl = file->globals[i];
+        if (decl->kind == AST_STRUCT && !((Ast_Struct *)decl)->is_generic) resolve_late_fields(&c, (Ast_Struct *)decl);
     }
+    // A struct instance's late fields may make more instances, behind a
+    // pointer, which join the end of the list, and are laid out in turn.
+    for (s64 i = 0; i < file->struct_instances.count; i++) lay_out_instance(&c, file->struct_instances[i]);
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
         Ast_Alias *alias = decl->kind == AST_CONST ? ((Ast_Const *)decl)->alias : nullptr;
@@ -4025,21 +4090,25 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     }
     array_free(&declarations);
     // And so are the instances of generic procedures made so far (spec
-    // 7.11), their type bindings with their signatures: a global's value or
-    // a type's count may have called one. A binding that has no type now
-    // (null) leaves every use of T in its body silent, as a parameter's
-    // does; an instance its body makes names it in its chain as it was
-    // made (check_generic.cpp's instance_line). A constant binding's type,
-    // a number's, a bool's, an enum's or string, is never made again.
+    // 7.11), their type bindings with their signatures (made_again_bindings):
+    // a global's value or a type's count may have called one.
     for (s64 i = 0; i < file->instances.count; i++) {
         Ast_Instance *inst = file->instances[i];
-        for (s64 k = 0; k < inst->bindings.count; k++) {
-            if (inst->bindings[k]->kind != AST_ALIAS) continue;
-            Ast_Alias *binding = (Ast_Alias *)inst->bindings[k];
-            binding->aliased = made_again(binding->aliased);
-        }
+        made_again_bindings(inst);
         made_again_signature(inst->proc);
     }
+    // So are the struct instances' bindings (spec 3.23), and the late
+    // fields of every struct: an instance laid out after a late field took
+    // it behind a pointer may have been found in a circle since.
+    for (s64 i = 0; i < file->struct_instances.count; i++) made_again_bindings(file->struct_instances[i]);
+    for (s64 i = 0; i < file->globals.count; i++) {
+        Ast *decl = file->globals[i];
+        if (decl->kind == AST_STRUCT && !((Ast_Struct *)decl)->is_generic) resolve_late_fields(&c, (Ast_Struct *)decl);
+    }
+    for (s64 i = 0; i < file->struct_instances.count; i++) {
+        resolve_late_fields(&c, file->struct_instances[i]->structure);
+    }
+    s64 laid_out = file->struct_instances.count;  // the struct instances laid out, all of them so far
 
     // Then the bodies, each that isn't done yet: a #run that reached one
     // checked it there (check_reached_body), so it isn't checked twice. A
@@ -4060,16 +4129,24 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // reaches walked, but never run here (check_top_level_run): they run
     // for their effect once the whole program checks (spec 7.8).
     for (s64 i = 0; i < file->runs.count; i++) check_top_level_run(&c, file->runs[i]);
-    // Then the instances' bodies, in the order the instances were made, each
-    // that isn't done yet: a body checked here may make more instances, which
-    // join the end of the list, and are checked in their turn. One whose
+    // Then the struct instances the bodies and the #runs made, laid out
+    // (spec 3.23), and the procedure instances' bodies, each in the order
+    // the instances were made, each that isn't done yet, until neither list
+    // grows: a body checked here may make more instances of either, which
+    // join the end of its list, and are done in their turn. One whose
     // signature its call found nested too deeply (said there) never had
     // it checked, and has errors (resolve_signature): its body isn't
     // checked either.
-    for (s64 i = 0; i < file->instances.count; i++) {
-        Ast_Proc *proc = file->instances[i]->proc;
-        if (proc->resolve != RESOLVE_DONE) continue;
-        if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) check_body(&c, proc);
+    s64 bodies = 0;
+    while (laid_out < file->struct_instances.count || bodies < file->instances.count) {
+        for (; laid_out < file->struct_instances.count; laid_out++) {
+            lay_out_instance(&c, file->struct_instances[laid_out]);
+        }
+        for (; bodies < file->instances.count; bodies++) {
+            Ast_Proc *proc = file->instances[bodies]->proc;
+            if (proc->resolve != RESOLVE_DONE) continue;
+            if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) check_body(&c, proc);
+        }
     }
 
     // A broken main, a broken declaration whose name was lost, a file a

@@ -1474,6 +1474,75 @@
 //   debug type for one, and a #run's walk takes one as nothing to reach
 //   (check_run.cpp's walk_node).
 //
+// Generic structs (issue #227, spec 3.23).
+// - A struct with parameters, `Map :: struct (K: Type, V: Type) { ... }`
+//   (Ast_Struct.is_generic), is no type: it has none (Ast_Struct.declared
+//   stays null), and its name alone where a type goes is "'Map' is
+//   generic; write its arguments, as in Map(K, V)", at the name
+//   (checker.cpp's resolve_written). A union takes no parameters, for now
+//   (the parser says so).
+// - Its own check (check_generic.cpp's check_generic_struct), in check()'s
+//   pass over the declarations in its turn, or earlier by its first use,
+//   at the top level and with no chain: a parameter `NAME: Type` is a type
+//   parameter; any other's type is resolved and must be a number's, a
+//   bool's, an enum's or string, kept in the parameter's Ast.type ("a
+//   struct's parameter is a type, 'T: Type', or a constant of a number,
+//   bool, enum or string type, not '[]int'", at the type). One whose own
+//   check said a mistake makes no instance (Ast_Struct.had_errors): its uses
+//   have no type and say nothing more.
+// - An instance is written where a type goes, Map(string, int)
+//   (AST_TYPE_INSTANCE), worked out once per written type
+//   (check_written_instance, Ast_Type.instance_type): a name that is no
+//   generic struct's says what it is ("'Vec2' isn't generic, so it takes no
+//   arguments", "unknown type 'Nope'", "'main' is not a type"); the count
+//   ("'Map' takes 2 arguments, but 1 was given", at the name); then each
+//   argument bound to its parameter, in order (check_struct_instance). A
+//   type parameter takes a written type, resolved behind a pointer, or an
+//   expression naming a type (#type (int) -> int); anything else is
+//   "argument 1 of 'Map' must be a type, for 'K: Type'", at it. A constant
+//   parameter takes an expression, or a bare name the parser read as a
+//   type, checked as the value it names; one naming a type is "'int' is a
+//   type, not a value", any other written type "'*int' is a type, not a
+//   value"; the value converts to the parameter's type as an argument does
+//   ("argument 2 of 'Ring' has type 'string', which can't be converted to
+//   'int'", "300 doesn't fit in 'u8'") and must be known while compiling
+//   ("argument 2 of 'Ring' must be known while compiling, for 'N: int'"),
+//   checked where the instance is written, as an array's count is.
+// - Each distinct set of bindings (a type by its Type *, a constant by its
+//   type and value, a string's by its bytes, as for a procedure's) makes one
+//   instance, program-wide, an Ast_Instance whose generic_struct and
+//   structure are set: the generic's tree copied (ast_clone), its
+//   bindings an Ast_Alias per type parameter and an Ast_Const per constant
+//   one (make_bindings), named Map(string, int), each binding's value as the
+//   program would write it (Ring(float32, 1), Labeled("hi"), Tag(Mode.B)),
+//   its copy named so, with a Type of its own of that name
+//   (new_struct_type), kept in the generic's cache (Ast_Struct.instances)
+//   and the program's list (Ast_File.struct_instances) before it's laid out,
+//   so a field naming its own instance, next: *List(T), finds it. Its Type
+//   is laid out where it's needed, as any struct's: by a written type unless
+//   behind a pointer (resolve_written), and in check()'s passes otherwise.
+// - Its copy, and each anonymous member's struct in it, has its record
+//   (Ast_Struct.instance), which resolve_struct and make_late_field enter
+//   (enter_instance) once the scopes are set aside, so its fields' types
+//   and counts see its bindings and only its: a parameter T hides a
+//   top-level T, and a procedure instance's T never reaches a struct
+//   instance laid out from inside it. An error there is followed by its
+//   chain, "    in 'Ring' with T = int, N = -2, used at PATH:L:C"
+//   (instance_line, Ast_Instance.shown), the procedure instances' lines
+//   after it when one made it.
+// - check(): the declarations pass checks a generic struct on its own and
+//   lays out any other; the late fields of every struct but a generic one
+//   are made, then each struct instance made so far is laid out and has its
+//   late fields made, in the order made, the list growing as they make more;
+//   the made_again pass makes their bindings and every struct's late fields
+//   again. The last pass lays out each struct instance the bodies and the
+//   #runs made, and checks the procedure instances' bodies, until neither
+//   list grows.
+// - What lowering may rely on: no generic struct is reached from any
+//   type; an instance is a struct as any other, laid out, its late fields
+//   made, its Type named as the instance. Nothing goes through the
+//   instances themselves (Ast_File.struct_instances).
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),

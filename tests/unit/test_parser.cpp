@@ -4839,3 +4839,85 @@ TEST(alias_syntax_mistakes) {
     CHECK_STR(errors, "2:1: expected ')', found identifier 'N'\n2:7: expected ';', found ')'\n");
     arena_free(&a);
 }
+
+// Issue #227: generic structs (spec 3.23).
+
+TEST(parses_generic_structs) {
+    // A struct with parameters in parentheses after its keyword is generic:
+    // each NAME: Type, dumped as a parameter is, (params (K Type) ...). A
+    // name followed by '(' where a type is written is an instance of one,
+    // (instance Map ...), each argument a type when it is written as only a
+    // type can be, or as a name, with or without its own arguments, before
+    // a ',' or the ')', and an expression otherwise: 4 + 1. A field may hold
+    // an instance of its own struct, behind a pointer.
+    Arena a = arena_make();
+    Token_List *list = src("Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; }\n"
+                           "Ring :: struct (T: Type, N: int) { items: [N]T; next: *Ring(T, N); }\n"
+                           "m: Map(string, Map(int, *u8));\n"
+                           "r: Ring(int, 4 + 1);\n"
+                           "Vec2 :: struct { x: float; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_STR(ast_dump(&a, file),
+              "(struct Map (params (K Type) (V Type)) (keys (resizable K)) (values (resizable V)))\n"
+              "(struct Ring (params (T Type) (N int)) (items (array (name N) T)) (next (ptr (instance Ring T N))))\n"
+              "(var m (instance Map string (instance Map int (ptr u8))))\n"
+              "(var r (instance Ring int (binary + (int 4) (int 1))))\n"
+              "(struct Vec2 (x float))\n");
+    CHECK_EQ(file->globals.count, 5);
+    if (file->globals.count == 5) {
+        CHECK(((Ast_Struct *)file->globals[0])->is_generic);
+        CHECK(((Ast_Struct *)file->globals[1])->is_generic);
+        CHECK(!((Ast_Struct *)file->globals[4])->is_generic);
+        // An instance is at its name; its arguments are each a written type
+        // or an expression, as read.
+        Ast_Type *m = ((Ast_Var *)file->globals[2])->type_expr;
+        CHECK_EQ(m->kind, AST_TYPE_INSTANCE);
+        CHECK_EQ(m->pos.col, 4);
+        CHECK_EQ(m->args.count, 2);
+        if (m->args.count == 2) {
+            CHECK_EQ(m->args[0]->kind, AST_TYPE_NAME);
+            CHECK_EQ(m->args[1]->kind, AST_TYPE_INSTANCE);
+        }
+        // Its '(' is a level, as a procedure type's is: a field's
+        // *Ring(T, N) reaches 2.
+        Ast_Struct *ring = (Ast_Struct *)file->globals[1];
+        CHECK_EQ(ring->fields.count, 2);
+        if (ring->fields.count == 2) CHECK_EQ(ring->fields[1]->type_expr->levels, 2);
+        Ast_Type *r = ((Ast_Var *)file->globals[3])->type_expr;
+        CHECK_EQ(r->args.count, 2);
+        if (r->args.count == 2) CHECK_EQ(r->args[1]->kind, AST_BINARY);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(struct_parameter_mistakes) {
+    // A struct's parameters are all given by each instance: no '$', no
+    // 'using', no '..', no default value, for now, and no empty '()'. A
+    // union takes none, for now, nor a tagged one. Each gives the
+    // declaration up, at the token that breaks the rule.
+    Arena a = arena_make();
+    String errors;
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"S :: struct ($T: Type) { }\n",
+         "1:14: a struct's parameters take no '$': each instance gives them all, as in Map :: struct (K: Type, V: "
+         "Type)\n"},
+        {"S :: struct (using T: Type) { }\n", "1:14: a struct's parameter can't be 'using'\n"},
+        {"S :: struct (T: ..Type) { }\n", "1:17: a struct's parameter can't be '..'\n"},
+        {"S :: struct (T: Type = int) { }\n", "1:22: a struct's parameter can't have a default value, for now\n"},
+        {"S :: struct () { }\n",
+         "1:13: a struct with no parameters has no '()', as in Vec2 :: struct { x: float; }\n"},
+        {"U :: union (T: Type) { a: T; }\n", "1:12: a union can't take parameters, for now\n"},
+        {"U :: union #tagged (T: Type) { a: T; }\n", "1:20: a union can't take parameters, for now\n"},
+    };
+    for (const Case &k : cases) {
+        parse_src(&a, k.text, &errors);
+        CHECK_STR(errors, k.message);
+    }
+    arena_free(&a);
+}

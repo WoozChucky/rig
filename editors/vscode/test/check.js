@@ -1228,8 +1228,8 @@ check('the grammar colours a procedure type\'s alias as a type', () => {
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and
 // struct get their type coloured, and nothing is coloured as a type but the
-// names its structs, unions and enums are declared with, its $T parameters
-// and its type aliases.
+// names its structs, unions and enums are declared with, its $T parameters,
+// its generic structs' type parameters and its type aliases.
 check('the grammar colours the types in every program of tests/run and tests/build', () => {
     const files = [];
     const walk = (dir) => {
@@ -1262,8 +1262,13 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     const typeNames = new Set();
     for (const source of [...sources.values(), ...modules]) {
         for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|union|enum|enum_flags)\b/g)) typeNames.add(m[1]);
-        // And a generic procedure's type parameters, $T (spec 7.11).
+        // And a generic procedure's type parameters, $T (spec 7.11), and a
+        // generic struct's, K in `Map :: struct (K: Type, V: Type)` (spec
+        // 3.23), as `keys: [..]K;` colours its K as a type.
         for (const m of source.matchAll(/\$([A-Za-z_]\w*)/g)) typeNames.add(m[1]);
+        for (const m of source.matchAll(/\b[A-Za-z_]\w*\s*::\s*struct\s*\(([^)]*)\)/g)) {
+            for (const p of m[1].matchAll(/([A-Za-z_]\w*)\s*:\s*Type\b/g)) typeNames.add(p[1]);
+        }
     }
     assert.ok(typeNames.has('Vec2') && typeNames.has('Node') && typeNames.has('Mode'));
     // And a type alias's name (spec 3.22), as `v: V` colours its V as a
@@ -1314,7 +1319,8 @@ check('the grammar colours the types in every program of tests/run and tests/bui
             const where = `${name}:${n + 1}: ${tokenized.text}`;
             const text = tokenized.text;
             // Each name coloured as a type is a struct's, a union's, an
-            // enum's, a $T parameter's or a type alias's.
+            // enum's, a $T parameter's, a generic struct's type
+            // parameter's or a type alias's.
             // (A word in a string may be split by an escape: \there.)
             for (const m of text.matchAll(/\b[A-Za-z_]\w*\b/g)) {
                 const scopes = tokenized.scopes[m.index];

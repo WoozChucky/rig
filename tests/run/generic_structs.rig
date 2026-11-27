@@ -1,0 +1,71 @@
+// Generic structs (issue #227, spec 3.23): a struct with parameters, types
+// (Pair's A and B) and constants (Ring's N, Grid's W and H), each set of
+// arguments making one instance where a type is written, laid out as any
+// struct with its parameters bound in its fields. A field may point at its
+// own instance (List), hold a resizable array of it (Tree), or be a using
+// field of another instance (Derived's Base(T)), whose fields it reaches as
+// its own, a using parameter of an instance too (bump), a *Derived(u16)
+// converting to a *Base(u16). An instance's type information names it as
+// the program writes it, Pair(string, int). The same compiled, interpreted
+// and in a top-level #run.
+#import "Basic";
+
+Pair :: struct (A: Type, B: Type) { first: A; second: B; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+List :: struct (T: Type) { value: T; next: *List(T); }
+Tree :: struct (T: Type) { value: T; kids: [..]Tree(T); }
+Base :: struct (T: Type) { id: T; }
+Derived :: struct (T: Type) { using base: Base(T); extra: T; }
+Grid :: struct (W: int, H: int, Cell: Type) { cells: [W * H]Cell; row: [W]u8; }
+
+bump :: (using b: *Base(u16)) { id += 1; }
+
+#run {
+    print("{}\n", size_of(Ring(u8, 2)));
+}
+
+main :: () {
+    p: Pair(string, int);
+    p.first = "ann";
+    p.second = 36;
+    print("{}\n", p);
+
+    r: Ring(int, 3);
+    for * r.items { it.* = it_index * 10; }
+    print("{} {}\n", r.items, size_of(Ring(int, 3)));
+
+    third: List(int) = .{3, null};
+    second: List(int) = .{2, *third};
+    first: List(int) = .{1, *second};
+    node := *first;
+    while node != null {
+        print("{}", node.value);
+        node = node.next;
+        if node != null { print(" "); }
+    }
+    print("\n");
+
+    t: Tree(string);
+    t.value = "root";
+    a: Tree(string);
+    a.value = "a";
+    b: Tree(string);
+    b.value = "b";
+    array_add(*t.kids, a);
+    array_add(*t.kids, b);
+    print("{} {}\n", t.kids.count, t.kids[1].value);
+    array_free(*t.kids);
+
+    d: Derived(u16);
+    d.id = 7;
+    d.extra = 8;
+    print("{} {}\n", d.id, d.base.id);
+    bump(*d);
+    print("{}\n", d.id);
+
+    g: Grid(2, 3, u8);
+    print("{}\n", g.cells.count);
+
+    print("{} {}\n", (cast(*Type_Info_Struct) type_info(Pair(string, int))).name,
+          (cast(*Type_Info_Struct) type_info(Ring(int, 3))).name);
+}

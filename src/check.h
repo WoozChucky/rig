@@ -2,8 +2,8 @@
 // declarations and statements and keeps the scopes; check_expr.cpp checks
 // expressions: their types, the constants it folds, and the implicit
 // conversions; check_run.cpp checks #run and walks what it reaches;
-// check_generic.cpp makes generic procedures' instances (checker.h has the
-// rules).
+// check_generic.cpp makes generic procedures' instances, and generic
+// structs' (checker.h has the rules).
 
 #pragma once
 
@@ -87,7 +87,8 @@ struct Checker {
     Type *any_type;              // Preload's Any (spec 3.16): what every value converts to; null
                                  // without Preload
     Ast_Instance *instance;      // the instance of a generic procedure whose signature, defaults or body
-                                 // is being checked (spec 7.11): its bindings are found after the scopes
+                                 // is being checked (spec 7.11), or of a generic struct whose fields are
+                                 // being laid out (spec 3.23): its bindings are found after the scopes
                                  // and the using parameters, before the top level (instance_binding);
                                  // null elsewhere. Set aside with the scopes (checker.cpp's leave_scopes),
                                  // so a declaration worked out inside an instance doesn't see its T.
@@ -98,10 +99,12 @@ struct Checker {
 
 // A type or constant parameter of a generic procedure (spec 7.11), $T or
 // $N: int, while a call of it is matched against its arguments
-// (check_generic.cpp's check_instance).
+// (check_generic.cpp's check_instance); or of a generic struct (spec 3.23),
+// K: Type or N: int, while a written instance's arguments are bound to it
+// (check_struct_instance).
 struct Generic_Binding {
     String name;
-    Position declared;  // its '$'
+    Position declared;  // its '$'; a struct's parameter's name
     bool is_type;       // a type parameter, $T; a constant one, $N: int, isn't
     Type *type;         // is_type: what it's bound to, null until then; otherwise the constant's type
     Ast *value;         // a constant one's argument, converted
@@ -561,7 +564,8 @@ String instance_context(Checker *c, Ast_Instance *inst);
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at);
 
 // The binding of instance inst called `name`, an Ast_Alias for a type
-// parameter, an Ast_Const for a constant one; null when it has none.
+// parameter, an Ast_Const for a constant one; null when it has none. A
+// struct instance's too.
 Ast *instance_binding(Ast_Instance *inst, String name);
 
 // The name binding b of an instance binds, T or N: its Ast_Alias's or its
@@ -577,4 +581,41 @@ String bindings_text(Arena *a, Array<Ast *> bindings);
 // (instance_context, made once, Ast_Instance.context) what every error is
 // followed by from now on (Diagnostics.context); null leaves every
 // instance, and errors have no chain, as checker.cpp's leave_scopes does.
+// A struct instance is entered where its fields are laid out
+// (checker.cpp's resolve_struct, make_late_field).
 void enter_instance(Checker *c, Ast_Instance *inst);
+
+// A generic struct's own check (spec 3.23), once, in check()'s pass over
+// the declarations in its turn or earlier by its first use, at the top
+// level, its mistakes with no chain: each parameter `NAME: Type` is a type
+// parameter; any other's type is resolved, and must be a number's, a
+// bool's, an enum's or string, kept in the parameter's Ast.type for each
+// instance's argument to convert to: "a struct's parameter is a type, 'T:
+// Type', or a constant of a number, bool, enum or string type, not
+// '[]int'", at the type. One that said a mistake makes no instance
+// (Ast_Struct.had_errors): its uses have no type and say nothing more.
+void check_generic_struct(Checker *c, Ast_Struct *generic);
+
+// The instance of generic struct `generic` that arguments `args` give (spec
+// 3.23), written at `at` (its name, where its messages point), used at
+// `used_at` (where its chain says it was used): their count first ("'Map'
+// takes 2 arguments, but 1 was given", at `at`), then each argument bound
+// to its parameter in order, a type to a type parameter, a constant known
+// while compiling, converted to its type, to a constant one, with their
+// messages at the argument; then the program's one instance for those
+// bindings, found in generic's cache or made (ast_clone), not laid out:
+// its Type, or null after saying why. Takes the arguments alone, no
+// written type, so any construct that names an instance may.
+Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, Position at, Position used_at);
+
+// The instance an AST_TYPE_INSTANCE written type names (check_struct_instance),
+// worked out once and kept on it (Ast_Type.instance_type), as an array's
+// count is: null after saying why, its name being no generic struct's too
+// ("'Vec2' isn't generic, so it takes no arguments", "unknown type 'Nope'",
+// "'main' is not a type", at the name).
+Type *check_written_instance(Checker *c, Ast_Type *written);
+
+// "'Map' is generic; write its arguments, as in Map(K, V)", at `at`, its
+// parameters' names in the example: generic struct `generic`'s name where
+// a type goes, alone (spec 3.23).
+void report_generic_struct(Checker *c, Ast_Struct *generic, Position at);
