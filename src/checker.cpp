@@ -4180,7 +4180,10 @@ static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
     Array<u8> key = {};
     for (s64 i = 0; i < notes->count; i++) {
         Ast_Const *constant = (*notes)[i].constant;
-        if (constant->type) continue;  // a value, whatever its mistakes: its notes stay
+        // A value, whatever its mistakes, keeps its notes, and so does a
+        // constant still under way, which only a #run's exit() leaves so
+        // (withdraw_at_exit): its type isn't known yet.
+        if (constant->type || constant->resolve == RESOLVE_UNDER_WAY) continue;
         s64 message = (*notes)[i].message;
         String instance = d->messages[message].context;
         key.count = 0;
@@ -4209,9 +4212,17 @@ static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
 // Diagnostics.at_exit while check() runs. A #run's code that calls C's
 // exit() ends the process inside check(), and the messages found by then
 // are printed as it ends (diag_print_at_exit): the notes that repeat a
-// constant's own mistake are withdrawn first, as check()'s end would, from
-// the state reached by then. A constant not worked out yet has said no
-// mistake of its own, so its notes stay.
+// constant's own mistake are withdrawn first, as check()'s end would, but
+// the answer comes from the state reached by then, not a finished check's.
+// A constant not worked out yet has said no mistake of its own, and one
+// still under way, the #run perhaps in its value, may yet get a type, as
+// `X :: (300 + cast(u8) 0) + #run stop();` would: the notes of both stay.
+// So may a note of a constant worked out whose only mistake is a note of
+// one not worked out yet, `X :: cast(Y) 1;` with `Y :: 5;` after the
+// #run: Y has no type yet, so that note isn't X's own mistake, though a
+// finished check, Y typed, would take it as one and withdraw X's notes.
+// A note may stay here that a finished check would withdraw, then, but
+// keeping an under-way constant's notes lets none go that it would keep.
 static void withdraw_at_exit(void *checker) {
     withdraw_repeated_not_a_type((Checker *)checker, 0);
 }

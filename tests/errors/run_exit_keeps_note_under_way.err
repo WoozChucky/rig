@@ -1,0 +1,6 @@
+tests/errors/run_exit_keeps_note_under_way.rig:7:10: error: 'X' is not a type
+    f :: (x: X) { }
+             ^
+tests/errors/run_exit_keeps_note_under_way.rig:9:7: error: 300 doesn't fit in 'u8'
+    X :: (300 + cast(u8) 0) + #run stop();
+          ^
