@@ -1,0 +1,42 @@
+// #modify blocks' own mistakes (issue #228, spec 7.12): a block is checked
+// once, as its generic's own code, with no chain, whether a call asks for
+// an instance or not. In it a type parameter is a variable of type Type:
+// no type to write, no address, no Any, and only an #if that is known
+// while compiling; a Type local needs a value, and only a variable's whole
+// type is Type. It returns a bool, and may add a message, on every path.
+// The procedure's other parameters aren't in it, no call's arguments
+// existing when it runs, and it can't call main. A generic whose block has
+// a mistake makes no instance: main's calls say nothing more.
+
+decided :: (v: $T) #modify { #if T == int { } return true; } { }
+as_type :: (v: $T) #modify { x: T; return true; } { }
+sized :: (v: $T) #modify { s := size_of(T); return true; } { }
+addressed :: (v: $T) #modify { p := *T; return true; } { }
+as_any :: (v: $T) #modify { a: Any = T; return true; } { }
+no_value :: (v: $T) #modify { t: Type; return true; } { }
+left_alone :: (v: $T) #modify { t: Type = ---; return true; } { }
+viewed :: (v: $T) #modify { a: []Type; return true; } { }
+returns_nothing :: (v: $T) #modify { return; } { }
+returns_three :: (v: $T) #modify { return true, "a", 1; } { }
+runs_off :: (v: $T) #modify { x := 1; } { }
+counts :: (values: []$T) #modify { return values.count > 0; } { }
+set_to_five :: (v: $T) #modify { T = 5; return true; } { }
+starts :: (v: $T) #modify { main(); return true; } { }
+
+main :: () {
+    decided(1);
+    as_type(1);
+    sized(1);
+    addressed(1);
+    as_any(1);
+    no_value(1);
+    left_alone(1);
+    viewed(1);
+    returns_nothing(1);
+    returns_three(1);
+    runs_off(1);
+    values: []int;
+    counts(values);
+    set_to_five(1);
+    starts(1);
+}

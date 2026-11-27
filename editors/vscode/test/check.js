@@ -1213,6 +1213,21 @@ check('the grammar colours a signature that starts with a type parameter', () =>
     });
 });
 
+// #modify (issue #228, spec 7.12) is a directive as any other, after a
+// generic's signature or a generic struct's parameters: its procedure's
+// name and its struct's keep their scopes, and the block is code.
+check('the grammar colours #modify as a directive, its generic as ever', () => {
+    assertScopes('sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } {', {
+        sum: ['entity.name.function.rig', 'string.quoted.double.rig'],
+        '#modify': 'keyword.other.directive.rig',
+        string: PRIMITIVE,
+    });
+    assertScopes('Box :: struct (T: Type) #modify {', {
+        Box: TYPE,
+        '#modify': 'keyword.other.directive.rig',
+    });
+});
+
 // Type aliases (issue #227, spec 3.22): a signature that ends at its ';',
 // with no body and no directive but #c_call, is a procedure type's alias,
 // its name a type's, and so is a constant whose value is written with

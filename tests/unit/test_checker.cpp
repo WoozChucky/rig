@@ -15784,3 +15784,114 @@ TEST(inference_through_an_instance_that_lost_a_binding) {
               circle);
     arena_free(&a);
 }
+
+// Issue #228: #modify (spec 7.12).
+
+TEST(modify_blocks_are_checked_once_at_the_generic) {
+    // A generic's #modify block is checked once, as the generic's own
+    // code, whether a call asks for an instance or not. Its variables are
+    // the generic's type and constant parameters, a type one of type Type.
+    // A written type there is a value of type Type, and == and != of two
+    // Type values compare them when the block runs, unless both are
+    // written types, which compare while compiling. type_info of a Type
+    // value is its description, read when the block runs: the block
+    // describes types.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "pick_first :: (v: $T, n: $N) -> T #modify { t := T; if t == u8 || T == U16 { T = "
+                                 "int; } x: Type = s64; same := T == x; aliased := U16 == u16; info := type_info(T); "
+                                 "return info.size > 0 && !same; } { return v; }\n"
+                                 "U16 :: u16;\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "");
+    Ast_Proc *pick = (Ast_Proc *)top_level_named(file, "pick_first");
+    Ast_Modify *modify = pick->modify;
+    CHECK(modify != nullptr);
+    if (!modify) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(modify->resolve, RESOLVE_DONE);
+    CHECK(!modify->had_errors);
+    CHECK(!pick->had_errors);
+    CHECK(modify->describes);
+    CHECK_EQ(modify->vars.count, 2);
+    if (modify->vars.count == 2) {
+        CHECK_STR(modify->vars[0]->name, "T");
+        CHECK_STR(modify->vars[1]->name, "N");
+        CHECK(modify->vars[0]->type == &type_type);
+        CHECK(modify->vars[1]->type == &type_type);
+    }
+    Array<Ast *> &statements = modify->proc->body->statements;
+    CHECK_EQ(statements.count, 7);
+    if (statements.count == 7) {
+        CHECK(statements[0]->type == &type_type);  // t
+        CHECK(statements[2]->type == &type_type);  // x
+        Ast_Binary *either = (Ast_Binary *)((Ast_If *)statements[1])->condition;
+        Ast_Binary *t_is_u8 = (Ast_Binary *)either->left;
+        CHECK(!t_is_u8->is_constant);
+        CHECK(t_is_u8->operand_type == &type_type);
+        CHECK(t_is_u8->type == &type_bool);
+        Ast *same = ((Ast_Var *)statements[3])->value;
+        CHECK(!same->is_constant);
+        Ast *aliased = ((Ast_Var *)statements[4])->value;
+        CHECK(aliased->is_constant);
+        CHECK_EQ(aliased->constant, 1);
+        // A return of the bool alone gives an empty message.
+        Ast_Return *ret = (Ast_Return *)statements[6];
+        CHECK_EQ(ret->values.count, 2);
+        if (ret->values.count == 2) {
+            CHECK_EQ(ret->values[1]->kind, AST_STRING);
+            CHECK(ret->values[1]->type == &type_string);
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(modify_block_mistakes) {
+    // Each mistake in a block is said once, as the generic's own, with no
+    // chain, whether the generic is called twice or never; then the
+    // generic makes no instance, and its calls say nothing more.
+    Arena a = arena_make();
+    const char *returns = "a #modify block returns a bool, and may add a message, as in return T != string, \"sum "
+                          "needs numbers\";";
+    const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
+                           "type_info(T).size";
+    struct Case {
+        const char *block;  // the block's code, before its `return true;` unless `returns`
+        bool returns;
+        s32 col;
+        const char *message;
+    };
+    // The block starts at column 31 of `f :: (values: []$T) #modify { `.
+    const Case cases[] = {
+        {"#if T == int { }", false, 35, "the condition of '#if' must be known while compiling"},
+        {"x: T;", false, 34, variable},
+        {"s := size_of(T);", false, 44, variable},
+        {"p := *T;", false, 37, "can't take the address of 'T': it's a 'Type'"},
+        {"a: Any = T;", false, 40, "a value of type 'Type' can't be an 'Any'; type_info(T) describes the type"},
+        {"t: Type;", false, 31, "a variable of type 'Type' needs a value, as in t := int;"},
+        {"t: Type = ---;", false, 31, "a variable of type 'Type' needs a value, as in t := int;"},
+        {"a: []Type;", false, 36, "'Type' only names types while compiling; a *Type_Info describes one at run time"},
+        {"return;", true, 31, returns},
+        {"return true, \"a\", 1;", true, 31, returns},
+        {"x := 1;", true, 39, "'#modify' must return a bool on every path, and this one reaches its end"},
+        {"return values.count > 0;", true, 38, "unknown identifier 'values'"},
+        {"T = 5;", false, 35, "a value of type 'int' doesn't convert to 'Type' implicitly"},
+        {"main();", false, 21, "main is where the program starts; #modify can't call it"},
+    };
+    const char *calls[] = {"a: []int; f(a); f(a);", ""};
+    for (const Case &k : cases) {
+        for (const char *call : calls) {
+            const char *text = string_cstr(&a, string_printf(&a,
+                                                             "f :: (values: []$T) #modify { %s%s } { }\n"
+                                                             "main :: () { %s }\n",
+                                                             k.block, k.returns ? "" : " return true;", call));
+            CHECK_STR(check_with_preload(&a, text),
+                      string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, k.message)));
+        }
+    }
+    arena_free(&a);
+}

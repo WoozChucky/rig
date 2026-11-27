@@ -5028,3 +5028,90 @@ TEST(parses_instance_literals) {
               TOO_DEEP);
     arena_free(&a);
 }
+
+// Issue #228: #modify (spec 7.12).
+
+TEST(parses_modify) {
+    // A generic's #modify block comes after its signature's directives,
+    // before its body, or after a generic struct's parameters, before its
+    // fields: a procedure of its own named #modify, at the directive, with
+    // no parameters, whose results are bool and string, dumped (modify
+    // BLOCK).
+    Arena a = arena_make();
+    Token_List *list = src("widen :: (v: $T) -> T #no_abc #modify { return true; } { return v; }\n"
+                           "Box :: struct (T: Type) #modify { return T != u8, \"no bytes\"; } { v: T; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_STR(ast_dump(&a, file),
+              "(proc widen (params (v $T)) (returns T) (no_abc) (modify (block (return (bool true)))) "
+              "(block (return (name v))))\n"
+              "(struct Box (params (T Type)) (modify (block (return (binary != (name T) (name u8)) "
+              "(string \"no bytes\")))) (v T))\n");
+    CHECK_EQ(file->procs.count, 1);
+    CHECK_EQ(file->globals.count, 1);
+    if (file->procs.count == 1 && file->globals.count == 1) {
+        Ast_Modify *modify = file->procs[0]->modify;
+        CHECK(modify != nullptr);
+        if (modify) {
+            CHECK_EQ(modify->pos.line, 1);
+            CHECK_EQ(modify->pos.col, 31);
+            Ast_Proc *proc = modify->proc;
+            CHECK_STR(proc->name, "#modify");
+            CHECK_EQ(proc->pos.col, 31);
+            CHECK_EQ(proc->params.count, 0);
+            CHECK(proc->modify_of == modify);
+            CHECK(proc->body && proc->body->proc == proc);
+            CHECK_EQ(proc->results.count, 2);
+            if (proc->results.count == 2) {
+                CHECK_STR(proc->results[0]->name, "bool");
+                CHECK_STR(proc->results[1]->name, "string");
+            }
+        }
+        Ast_Struct *box = (Ast_Struct *)file->globals[0];
+        CHECK(box->modify != nullptr);
+        if (box->modify) {
+            CHECK_EQ(box->modify->pos.line, 2);
+            CHECK_EQ(box->modify->pos.col, 25);
+            CHECK_STR(box->modify->proc->name, "#modify");
+            CHECK(box->modify->proc->modify_of == box->modify);
+        }
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(modify_syntax_mistakes) {
+    // #modify is a generic's: after a signature that declares no '$', after
+    // a struct with no parameters, or after a union, it's refused at the
+    // directive. Written twice, the second is said; any other directive
+    // after the block is where the body's '{' goes. Each gives the
+    // declaration up.
+    Arena a = arena_make();
+    String errors;
+    const char *not_generic =
+        "#modify is for a generic procedure or struct, as in sum :: (values: []$T) -> T #modify { ... } { ... }";
+    struct Case {
+        const char *text;
+        const char *message;
+        s32 col;
+    };
+    const Case cases[] = {
+        {"f :: (a: int) #modify { return true; } { }\n", not_generic, 15},
+        {"S :: struct #modify { return true; } { a: int; }\n", not_generic, 13},
+        {"U :: union #modify { return true; } { a: int; }\n", not_generic, 12},
+        {"V :: union #tagged #modify { return true; } { a: int; }\n", not_generic, 20},
+        {"g :: (a: $T) #modify { return true; } #modify { return true; } { }\n", "'#modify' is written twice", 39},
+        {"B :: struct (T: Type) #modify { return true; } #modify { return true; } { a: T; }\n",
+         "'#modify' is written twice", 48},
+        {"h :: (a: $T) #modify { return true; } #no_abc { }\n", "expected '{', found directive", 39},
+    };
+    for (const Case &k : cases) {
+        parse_src(&a, k.text, &errors);
+        CHECK_STR(errors, string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, k.message)));
+    }
+    // Anywhere else, #modify is what it is where something else was
+    // expected, as #type is.
+    body_dump(&a, "x := #modify;", &errors);
+    CHECK_STR(errors, "2:10: expected an expression, found directive\n");
+    arena_free(&a);
+}

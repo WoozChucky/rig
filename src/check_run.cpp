@@ -22,14 +22,21 @@
 // #run with no value, a procedure that is broken or had errors, a struct
 // still being laid out, a struct field whose type is still unknown, an enum
 // described with a member whose value is unknown.
+//
+// A #modify block (spec 7.12) runs while compiling too: what it reaches is
+// walked as a block #run's is (reach_modify), once, by its check.
 
 #include "check.h"
 
-// What a #run reaches, being walked (reach_run): a worklist, depth first
-// in source order, of the nodes and types still to look at.
+// What a #run reaches, being walked (reach_run), or a #modify block (spec
+// 7.12, reach_modify): a worklist, depth first in source order, of the
+// nodes and types still to look at.
 struct Reach {
     Checker *c;
-    Ast_Run *run;
+    Position at;                 // where the walk's own messages point: the #run, or the #modify
+    const char *who;             // what runs the code, as they say it: "#run" or "#modify"
+    bool describes;              // a #modify block that describes types (Ast_Modify.describes): a written
+                                 // type in it is held as its description's address
     Array<Ast *> nodes;          // expressions, statements, and the declarations names reach
     Array<Type *> types;         // the types of what's reached (walk_type)
     Array<Type *> described;     // types whose descriptions the code needs, still to walk (walk_described)
@@ -185,7 +192,7 @@ static bool uses_no_locals(Checker *c, Ast *operand) {
 // other itself.
 static bool walk_proc(Reach *r, Ast_Proc *proc) {
     if (proc->is_broken || !check_proc_signature(r->c, proc) || proc->had_errors) return false;
-    if (!check_reached_body(r->c, proc, r->run->pos)) return false;
+    if (!check_reached_body(r->c, proc, r->at)) return false;
     for (s64 i = 0; i < proc->params.count; i++) {
         if (!proc->params[i]->type) return false;
         reach_type(r, proc->params[i]->type);
@@ -211,22 +218,34 @@ static bool walk_proc(Reach *r, Ast_Proc *proc) {
 // parameter is in the body being walked); a using parameter's field, the
 // chain of members it means (Ast_Name.through). A call of a procedure
 // reaches the procedure, but never main, where the program starts: "main
-// is where the program starts; #run can't call it", at the #run. A #run is
+// is where the program starts; #run can't call it", at the #run ("...
+// #modify can't call it", at the #modify, in a #modify block). A #run is
 // walked through its value: one with none failed, or reached errors, said
 // already.
 // type_info(T) needs T's description, and a value converted to Any its
 // type's (Ast.to_any): lowering the #run's code writes those descriptions
 // (lower.cpp's describe_type), from every type they reach, so what they
 // reach is walked for them (reach_described).
+//
+// A comparison of types known while compiling (spec 5.20) is a constant: a
+// leaf, its operands never looked at. Any other node of type Type is a
+// #modify block's (spec 7.12), a leaf too: a read of a variable of type
+// Type, which is nothing more, or a written type, held as its description's
+// address when the block describes types, which reaches that description
+// then. A type_info(t) of a variable t reaches no description: which one is
+// known only when the block runs.
 static bool walk_expression(Reach *r, Ast *e) {
     if (!e->type) return false;
-    // A type where a value goes (spec 5.20), an operand of a comparison of
-    // types, has no code: the comparison is a constant. A leaf, its parts
-    // never looked at.
-    if (e->type == &type_type) return true;
+    if (e->kind == AST_BINARY && e->is_constant && ((Ast_Binary *)e)->operand_type == &type_type) return true;
+    if (e->type == &type_type) {
+        Ast *decl = e->kind == AST_NAME ? ((Ast_Name *)e)->decl : nullptr;
+        bool variable = decl && decl->kind == AST_VAR;
+        if (r->describes && !variable) reach_described(r, type_value(e));
+        return true;
+    }
     reach_type(r, e->type);
     if (e->to_any != ANY_NONE) reach_described(r, e->type);
-    if (e->kind == AST_TYPE_INFO) reach_described(r, ((Ast_Type_Info *)e)->described);
+    if (e->kind == AST_TYPE_INFO && !((Ast_Type_Info *)e)->of) reach_described(r, ((Ast_Type_Info *)e)->described);
     if (e->kind == AST_BINARY) {
         // Pointer arithmetic's operands are taken at the pointer's type
         // (Ast_Binary.operand_type); a comparison's may be too, but needs no
@@ -265,7 +284,7 @@ static bool walk_expression(Reach *r, Ast *e) {
         }
         if (!call->proc) break;  // through a procedure value: its callee is walked as any value
         if (string_eq(call->proc->name, str("main"))) {
-            diag_error(r->c->diag, r->run->pos, "main is where the program starts; #run can't call it");
+            diag_error(r->c->diag, r->at, "main is where the program starts; %s can't call it", r->who);
             return false;
         }
         // The callee names the procedure (or a constant naming it): only
@@ -512,6 +531,45 @@ static bool walk_described(Reach *r, Type *t) {
     }
 }
 
+// A walk that starts at `at`, said to be run by `who` ("#run" or
+// "#modify"), its worklist still empty.
+static Reach start_reach(Checker *c, Position at, const char *who) {
+    Reach r = {};
+    r.c = c;
+    r.at = at;
+    r.who = who;
+    r.keys = arena_make(4 * 1024);  // 8 bytes a key
+    return r;
+}
+
+// Walks what's on r's worklist, and what it reaches in turn, then frees the
+// walk: true when nothing in it has an error. Every run's procedure calls
+// Preload's __runtime_init first (lowering's startup, spec 7.10), a
+// #modify block's too, so its body is reached as well, and checked before
+// the code is lowered: a constant's #run in the declarations pass, before
+// any body is checked, included. It stops at the first failure, which says
+// nothing more.
+static bool walk_reached(Reach *r) {
+    if (r->c->file->runtime_init) reach_decl(r, r->c->file->runtime_init);
+    bool clean = true;
+    while (clean && (r->types.count || r->described.count || r->nodes.count)) {
+        if (r->types.count) {
+            clean = walk_type(r, array_pop(&r->types));
+        } else if (r->described.count) {
+            clean = walk_described(r, array_pop(&r->described));
+        } else {
+            clean = walk_node(r, array_pop(&r->nodes));
+        }
+    }
+    array_free(&r->nodes);
+    array_free(&r->types);
+    array_free(&r->described);
+    table_free(&r->seen);
+    table_free(&r->described_seen);
+    arena_free(&r->keys);
+    return clean;
+}
+
 // Walks what #run `run` reaches, from its operand (an expression's) or its
 // procedure (a block's), and its own type: true when nothing in it has an
 // error, so it can run. A local in an expression's operand is said
@@ -519,38 +577,24 @@ static bool walk_described(Reach *r, Type *t) {
 // the first failure, which says nothing more.
 static bool reach_run(Checker *c, Ast_Run *run, Type *t) {
     bool no_locals = !run->operand || uses_no_locals(c, run->operand);
-    Reach r = {};
-    r.c = c;
-    r.run = run;
-    r.keys = arena_make(4 * 1024);  // 8 bytes a key
+    Reach r = start_reach(c, run->pos, "#run");
     if (run->operand) {
         array_add(&r.nodes, run->operand);
     } else {
         reach_decl(&r, run->proc);
     }
-    // Every run's procedure calls Preload's __runtime_init first (lowering's
-    // startup, spec 7.10), so its body is reached too, and checked before
-    // the run is lowered: a constant's #run in the declarations pass, before
-    // any body is checked, included.
-    if (c->file->runtime_init) reach_decl(&r, c->file->runtime_init);
     reach_type(&r, t);
-    bool clean = true;
-    while (clean && (r.types.count || r.described.count || r.nodes.count)) {
-        if (r.types.count) {
-            clean = walk_type(&r, array_pop(&r.types));
-        } else if (r.described.count) {
-            clean = walk_described(&r, array_pop(&r.described));
-        } else {
-            clean = walk_node(&r, array_pop(&r.nodes));
-        }
-    }
-    array_free(&r.nodes);
-    array_free(&r.types);
-    array_free(&r.described);
-    table_free(&r.seen);
-    table_free(&r.described_seen);
-    arena_free(&r.keys);
+    bool clean = walk_reached(&r);
     return no_locals && clean;
+}
+
+// A #modify block is walked from its procedure, as a block #run is; its
+// written types reach their descriptions when it describes types.
+bool reach_modify(Checker *c, Ast_Modify *modify) {
+    Reach r = start_reach(c, modify->pos, "#modify");
+    r.describes = modify->describes;
+    reach_decl(&r, modify->proc);
+    return walk_reached(&r);
 }
 
 // In order:

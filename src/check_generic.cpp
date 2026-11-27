@@ -1638,10 +1638,85 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
     return inst;
 }
 
+// #modify (spec 7.12). A generic procedure or struct may carry a block of
+// code, run while compiling before each new set of bindings its uses give
+// makes an instance. The block is checked once, as the generic's own code,
+// whether an instance is ever asked for or not: the first time one is, or
+// else in check()'s pass over the bodies (check_generic_modify). A mistake
+// there is the generic's, which then makes no instance.
+
+bool check_modify(Checker *c, Ast_Modify *modify, Array<Generic_Binding> declared) {
+    if (modify->resolve == RESOLVE_DONE) return !modify->had_errors;
+    // Under way: a use from inside the block, or from code it reaches, asks
+    // for its own generic's instance, which the block decides.
+    if (modify->resolve == RESOLVE_UNDER_WAY) return false;
+    modify->resolve = RESOLVE_UNDER_WAY;
+    // The generic's own code, in no instance: its mistakes are said with no
+    // chain, whichever use asked for the check first.
+    Ast_Instance *outer_instance = c->instance;
+    String outer_context = c->diag->context;
+    enter_instance(c, nullptr);
+    s64 errors = c->diag->error_count;
+    // Its variables, one per parameter, which the block's body declares in
+    // its own scope (checker.cpp's check_body): a type parameter's of type
+    // Type, a constant one's of the constant's type (null when the
+    // generic's own check refused it, its mistake said).
+    for (s64 i = 0; i < declared.count; i++) {
+        Generic_Binding *b = &declared[i];
+        Ast_Var *var = ast_new<Ast_Var>(c->arena, AST_VAR, b->declared);
+        var->name = b->name;
+        var->type = b->is_type ? &type_type : b->type;
+        array_add(&modify->vars, var);
+    }
+    Ast_Proc *proc = modify->proc;
+    bool fine = check_proc_signature(c, proc) && check_reached_body(c, proc, modify->pos) && reach_modify(c, modify);
+    modify->had_errors = !fine || c->diag->error_count != errors;
+    modify->resolve = RESOLVE_DONE;
+    enter_instance(c, outer_instance);
+    c->diag->context = outer_context;
+    return !modify->had_errors;
+}
+
+static Array<Generic_Binding> struct_parameters(Ast_Struct *generic);
+
+void check_generic_modify(Checker *c, Ast *generic) {
+    if (generic->kind == AST_PROC) {
+        Ast_Proc *proc = (Ast_Proc *)generic;
+        // Its signature, whose check gives a constant parameter its type,
+        // is done in the pass before; one found in a circle, or too deep,
+        // was said, and its block isn't checked.
+        if (!proc->modify || proc->modify->resolve != RESOLVE_NOT_YET || !check_proc_signature(c, proc)) return;
+        Array<Generic_Binding> declared = generic_parameters(c, proc);
+        if (!check_modify(c, proc->modify, declared)) proc->had_errors = true;
+        array_free(&declared);
+        return;
+    }
+    Ast_Struct *s = (Ast_Struct *)generic;
+    if (!s->modify || s->modify->resolve != RESOLVE_NOT_YET) return;
+    // Its own check, which gives a constant parameter its type, is done in
+    // the pass before, but for one too deep to check there, said.
+    check_generic_struct(c, s);
+    if (s->resolve != RESOLVE_DONE) return;
+    Array<Generic_Binding> declared = struct_parameters(s);
+    if (!check_modify(c, s->modify, declared)) s->had_errors = true;
+    array_free(&declared);
+}
+
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at) {
     Array<Generic_Binding> bindings = generic_parameters(c, generic);
     Ast_Proc *proc = nullptr;
-    if (infer_bindings(c, generic, args, callee, &bindings)) {
+    // Before any instance, the generic's #modify block is checked (spec
+    // 7.12), its declared parameters' names, places, kinds and constant
+    // types those of the bindings inferred: one with a mistake makes the
+    // generic's, which makes no instance, and the calls say nothing more.
+    // (One whose check is under way is asked for from inside it: no
+    // instance either.)
+    bool inferred = infer_bindings(c, generic, args, callee, &bindings);
+    if (inferred && generic->modify && !check_modify(c, generic->modify, bindings)) {
+        generic->had_errors |= generic->modify->had_errors;
+        inferred = false;
+    }
+    if (inferred) {
         Ast_Instance *inst = find_instance(generic->instances, bindings);
         if (!inst) inst = make_instance(c, generic, bindings, called_at);
         // An instance whose signature had errors, said where it was made,
@@ -2188,6 +2263,12 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
     Array<Generic_Binding> bindings = struct_parameters(generic);
     bool bound = true;
     for (s64 i = 0; i < count; i++) bound = bind_struct_argument(c, generic, args[i], i, &bindings[i]) && bound;
+    // Then its #modify block's check (spec 7.12), as a generic procedure's
+    // (check_instance): one with a mistake makes no instance.
+    if (bound && generic->modify && !check_modify(c, generic->modify, bindings)) {
+        generic->had_errors |= generic->modify->had_errors;
+        bound = false;
+    }
     Ast_Instance *inst = nullptr;
     if (bound) {
         inst = find_instance(generic->instances, bindings);

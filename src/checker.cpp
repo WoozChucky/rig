@@ -335,6 +335,14 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
         // branch below says so, and records the note, which check()
         // withdraws at its end when the constant has no type and its own
         // declaration said a mistake (withdraw_repeated_not_a_type).
+    } else if (decl->kind == AST_VAR && decl->type == &type_type) {
+        // A #modify block's variable of type Type (spec 7.12) holds a type
+        // only when the block runs: no type is written of it while
+        // compiling, but its description can be read then.
+        diag_error(c->diag, written->pos,
+                   "'" STR_FMT "' is a variable of type 'Type', not a type; type_info(" STR_FMT
+                   ") describes it, as in type_info(" STR_FMT ").size",
+                   STR_ARG(written->name), STR_ARG(written->name), STR_ARG(written->name));
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
         // A constant's is recorded: whether its own declaration fails is
@@ -390,6 +398,7 @@ struct Outer_Scopes {
     bool in_code;                     // Checker.in_code
     bool contextless;                 // Checker.contextless
     Ast_Instance *instance;           // Checker.instance
+    Ast_Modify *modify;               // Checker.modify
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -417,11 +426,15 @@ struct Outer_Scopes {
 // bindings are its signature's, defaults' and body's only: a global, a
 // constant or a type worked out from inside one is the program's, and
 // doesn't see its T. resolve_signature and check_body enter the instance
-// they check, if any, once the scopes are set aside.
+// they check, if any, once the scopes are set aside. And so is the #modify
+// block being checked (spec 7.12), whose rules are its own body's only: a
+// declaration worked out inside it, or a body it reaches, takes a written
+// type for no value.
 static Outer_Scopes leave_scopes(Checker *c) {
     Outer_Scopes outer = {c->scopes,        c->using_params, c->lost_a_local, c->default_of,
                           c->filled_depth,  c->needs_context, c->in_code,     c->contextless,
-                          c->instance};
+                          c->instance,      c->modify};
+    c->modify = nullptr;
     c->scopes = {};
     c->using_params = {};
     c->lost_a_local = false;
@@ -436,7 +449,7 @@ static Outer_Scopes leave_scopes(Checker *c) {
 
 // Back to the scopes leave_scopes set aside, every scope opened since
 // closed, and to their using parameters, lost_a_local, default_of,
-// filled_depth, needs_context, in_code, contextless and instance.
+// filled_depth, needs_context, in_code, contextless, instance and modify.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
@@ -449,6 +462,7 @@ static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     c->needs_context = outer.needs_context;
     c->in_code = outer.in_code;
     c->contextless = outer.contextless;
+    c->modify = outer.modify;
     enter_instance(c, outer.instance);
 }
 
@@ -627,10 +641,32 @@ static bool check_var_value(Checker *c, Ast_Var *var) {
     return fine;
 }
 
+// Whether local var's whole written type is Type in a #modify block (spec
+// 7.12), where a variable may hold a type: a Type value is the block's
+// alone. Type itself, not hidden: a built-in type's name always means it.
+static bool is_type_local(Checker *c, Ast_Var *var) {
+    Ast_Type *written = var->type_expr;
+    return c->modify && written && written->kind == AST_TYPE_NAME && type_from_name(written->name) == &type_type;
+}
+
 // A local variable. It's declared after its value is checked, so
-// `x := x + 1;` in an inner block reads the outer x.
+// `x := x + 1;` in an inner block reads the outer x. In a #modify block
+// (spec 7.12) its whole type may be Type, `x: Type = s64;`, which no zero
+// stands for: without a value, or with ---, it's "a variable of type 'Type'
+// needs a value, as in t := int;", at its name, and it's of type Type all
+// the same, so its uses say nothing more.
 static void check_var(Checker *c, Ast_Var *var) {
-    check_var_value(c, var);
+    if (is_type_local(c, var)) {
+        var->type = &type_type;
+        if (!var->value) {
+            diag_error(c->diag, var->pos, "a variable of type 'Type' needs a value, as in " STR_FMT " := int;",
+                       STR_ARG(var->name));
+        } else if (check_value(c, var->value) && !check_convert(c, var->value, &type_type)) {
+            report_no_conversion(c, var->value, &type_type);
+        }
+    } else {
+        check_var_value(c, var);
+    }
     declare(c, var->name, var);
 }
 
@@ -2211,6 +2247,12 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
 // code runs as its block is left, and leaves itself only by its end. Each
 // of its values is still checked, so its own errors are said, but nothing
 // compares it with the procedure's results.
+//
+// A #modify block (spec 7.12) returns a bool, and may add a message: `return
+// b;` gives an empty one, a string "" made here at the return, so the
+// return holds both values from here on. Any other count of values is "a
+// #modify block returns a bool, and may add a message, as in return T !=
+// string, \"sum needs numbers\";", at the 'return'.
 static void check_return(Checker *c, Ast_Return *ret) {
     if (c->deferring) {
         diag_error(c->diag, ret->pos, "can't return from a deferred statement");
@@ -2218,6 +2260,17 @@ static void check_return(Checker *c, Ast_Return *ret) {
         return;
     }
     Ast_Proc *proc = c->proc;
+    if (proc->modify_of && ret->values.count == 1) {
+        Ast_String *none = ast_new<Ast_String>(c->arena, AST_STRING, ret->pos);
+        array_add(&ret->values, (Ast *)none);
+    }
+    if (proc->modify_of && ret->values.count != 2) {
+        for (s64 i = 0; i < ret->values.count; i++) check_expression(c, ret->values[i]);
+        diag_error(c->diag, ret->pos,
+                   "a #modify block returns a bool, and may add a message, as in return T != string, \"sum needs "
+                   "numbers\";");
+        return;
+    }
     s64 want = proc->results.count, given = ret->values.count;
     if (want == given) {
         for (s64 i = 0; i < given; i++) {
@@ -3110,14 +3163,24 @@ static void check_body(Checker *c, Ast_Proc *proc) {
         Array<Ast *> &bindings = proc->instance->bindings;
         for (s64 i = 0; i < bindings.count; i++) declare(c, binding_name(bindings[i]), bindings[i]);
     }
+    // A #modify block's (spec 7.12): its variables, the generic's type and
+    // constant parameters, declared in its scope as an instance's bindings
+    // are, and its own rules hold in it (Checker.modify), but in what
+    // leave_scopes sets it aside for.
+    c->modify = proc->modify_of;
+    if (proc->modify_of) {
+        Array<Ast_Var *> &vars = proc->modify_of->vars;
+        for (s64 i = 0; i < vars.count; i++) declare(c, vars[i]->name, vars[i]);
+    }
     add_using_params(c, proc);
     check_block(c, proc->body);
     pop_scope(c);
     // main's results are reported by check() already: main returns nothing.
     if (proc->results.count && !is_main && reaches_end(proc->body)) {
         // "a value" for one result, "its values" for several: every path
-        // returns all of them.
-        const char *what = proc->results.count > 1 ? "its values" : "a value";
+        // returns all of them. A #modify block returns a bool, its message
+        // being optional (check_return).
+        const char *what = proc->modify_of ? "a bool" : proc->results.count > 1 ? "its values" : "a value";
         diag_error(c->diag, proc->body->end, "'" STR_FMT "' must return %s on every path, and this one reaches its end",
                    STR_ARG(proc->name), what);
     }
@@ -4331,15 +4394,22 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // broken entry has none: the parser gave up on it. A generic procedure's
     // body is checked only as its instances' (spec 7.11): in its turn its
     // names are walked (check_generic_names), unless an instance's body
-    // checked earlier had them walked first.
+    // checked earlier had them walked first. A generic's #modify block (spec
+    // 7.12), a generic struct's too, is checked in its turn here, unless a
+    // use checked it first (check_generic_modify).
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
-        if (proc->is_broken || proc->body_resolve != RESOLVE_NOT_YET) continue;
+        if (proc->is_broken) continue;
         if (proc->is_generic) {
-            check_generic_names(&c, proc);
-        } else if (proc->body) {
+            check_generic_modify(&c, proc);
+            if (proc->body_resolve == RESOLVE_NOT_YET) check_generic_names(&c, proc);
+        } else if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) {
             check_body(&c, proc);
         }
+    }
+    for (s64 i = 0; i < file->globals.count; i++) {
+        Ast *decl = file->globals[i];
+        if (decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) check_generic_modify(&c, decl);
     }
     // Then the top-level #runs, in source order: checked, and what each
     // reaches walked, but never run here (check_top_level_run): they run

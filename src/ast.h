@@ -198,9 +198,12 @@ enum Ast_Resolve : u8 {
 };
 
 struct Ast_Instance;
+struct Ast_Modify;
+struct Ast_Var;
 
 // A procedure: a declaration, or the procedure a top-level #run { ... } runs
-// as (Ast_Run.proc). When the parser gave up on a declaration (a syntax
+// as (Ast_Run.proc), or the one a generic's #modify { ... } is
+// (Ast_Modify.proc). When the parser gave up on a declaration (a syntax
 // error), it is still kept, as a broken entry: is_broken is set and only
 // name and pos mean anything, so the checker knows the name is declared. Its
 // name is the one the declaration started with, where the tokens look like a
@@ -272,7 +275,40 @@ struct Ast_Proc : Ast {
     Array<Ast_Instance *> instances;  // a generic's instances, the program's one cache of them, in the
                                       // order made (check_generic.cpp's find_instance)
     Ast_Instance *instance;           // an instance's record; null for any other procedure
+    Ast_Modify *modify;               // a generic's #modify block (spec 7.12), null without one; never
+                                      // cloned, so an instance has none
+    Ast_Modify *modify_of;            // the procedure a #modify block is: that block's own; null for any
+                                      // other procedure
 };
+
+// A #modify { ... } block (spec 7.12): code a generic procedure or struct
+// carries, written after its signature's directives or its parameters, run
+// while compiling before each new set of bindings given makes an instance.
+// Not an Ast: no list holds it, only its generic (Ast_Proc.modify,
+// Ast_Struct.modify). Its block is a procedure of its own, named #modify,
+// at the directive, with no parameters, whose results are bool and string:
+// written types the parser makes at the directive. The block's variables
+// are the generic's type and constant parameters, made by its check
+// (check_generic.cpp's check_modify), which is once: as the generic's own
+// code, with no chain, called or not.
+struct Modify_Run;
+struct Ast_Modify {
+    Position pos;              // its '#modify'
+    Ast_Proc *proc;            // the block as a procedure named "#modify", at the directive: no parameters,
+                               // results bool and string (the parser's); its modify_of is this
+    Array<Ast_Var *> vars;     // one per type or constant parameter, in the generic's order, at what
+                               // declares it, of type Type or the constant's (check_modify)
+    Ast_Resolve resolve;       // its check: once
+    bool had_errors;           // its check said a mistake: the generic makes no instance
+    bool describes;            // it takes type_info of a Type value: Type values are descriptions'
+                               // addresses when it runs (spec 7.12)
+    Array<Modify_Run *> runs;  // its cache, one per set of bindings given, in the order run
+};
+
+// The size of a #modify variable's slot in the block of bindings the block
+// runs with (spec 7.12): one value of any type a parameter may have, a
+// string's 16 bytes at most.
+const s64 MODIFY_SLOT_SIZE = 16;
 
 // A name for a type: an instance's type parameter, T bound to int in
 // max(T = int) (spec 7.11), found between the scopes and the top level
@@ -455,6 +491,8 @@ struct Ast_Struct : Ast {
     Generic_Fields *field_check;  // a generic struct's: what's left of its own check of its fields while
                                   // it's under way, or of the names in them that wait for an alias
                                   // (check_generic.cpp's check_generic_fields); null otherwise
+    Ast_Modify *modify;         // a generic struct's #modify block (spec 7.12), null without one; never
+                                // cloned, so an instance has none
 };
 
 // An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`
@@ -533,10 +571,14 @@ struct Ast_Size_Of : Ast {
 };
 
 // type_info(T): the address of T's description (spec 5.19), a *Type_Info,
-// no constant. pos is the name type_info.
+// no constant. pos is the name type_info. In a #modify block (spec 7.12), T
+// may name a variable of type Type, whose description is known only when
+// the block runs: `of` is then that name as a value, checked.
 struct Ast_Type_Info : Ast {
     Ast_Type *type_expr;
-    Type *described;  // T, once checked (void too)
+    Type *described;  // T, once checked (void too); null when `of` is set
+    Ast *of;          // type_info(t) in a #modify, t a Type value: the name t, read when the block runs;
+                      // null otherwise
 };
 
 // A type written where a value goes (spec 5.20): [N]T, []T or [..]T, read
@@ -1067,7 +1109,10 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
 // own nodes, never checked, are. A body's block points at its copied
 // procedure. A node only the top level has (an enum, a #load) is never
 // in a procedure or a struct, so it's never copied; a struct is, but only
-// as the node copied itself, with its anonymous members' structs.
+// as the node copied itself, with its anonymous members' structs. A
+// generic's #modify block (spec 7.12) isn't copied either: it decides which
+// instance a use makes, so it's the generic's alone, and an instance has
+// none.
 Ast *ast_clone(Arena *a, Ast *node);
 
 // The binary operator a compound assignment applies: TOKEN_PLUS for
@@ -1119,13 +1164,17 @@ Token_Kind compound_operator(Token_Kind op);
 //   (proc-type (params int (.. int)) (returns int))   (int, ..int) -> int
 //   (proc-type (params (ptr void)) (returns s32) (c_call))   (p: *void) -> s32 #c_call
 //   (proc-type (params))   ()
+//   (proc widen (params (v $T)) (returns T) (modify (block ...)) (block ...))
+//                                            widen :: (v: $T) -> T #modify { ... } { ... }
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float), a generic one with its
 // parameters first, (struct Map (params (K Type) (V Type)) (keys
-// (resizable K))). An instance of one prints as (instance Map string (ptr
-// u8)), each argument as a type prints or as an expression does: (instance
-// Ring int (binary + (int 4) (int 1))). An enum prints as
+// (resizable K))), and its #modify block after them, (struct Box (params
+// (T Type)) (modify (block ...)) (v T)). An instance of one prints as
+// (instance Map string (ptr u8)), each argument as a type prints or as an
+// expression does: (instance Ring int (binary + (int 4) (int 1))). An enum
+// prints as
 // (enum Small u8 (A) (B (int 5))), its integer type as written or _ for
 // none, each member with its value when it has one (a written one, or
 // the number the checker gave it); an enum_flags as

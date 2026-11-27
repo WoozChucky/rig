@@ -1,0 +1,42 @@
+tests/errors/modify_mistakes.rig:11:34: error: the condition of '#if' must be known while compiling
+    decided :: (v: $T) #modify { #if T == int { } return true; } { }
+                                     ^
+tests/errors/modify_mistakes.rig:12:33: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
+    as_type :: (v: $T) #modify { x: T; return true; } { }
+                                    ^
+tests/errors/modify_mistakes.rig:13:41: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
+    sized :: (v: $T) #modify { s := size_of(T); return true; } { }
+                                            ^
+tests/errors/modify_mistakes.rig:14:38: error: can't take the address of 'T': it's a 'Type'
+    addressed :: (v: $T) #modify { p := *T; return true; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:15:38: error: a value of type 'Type' can't be an 'Any'; type_info(T) describes the type
+    as_any :: (v: $T) #modify { a: Any = T; return true; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:16:31: error: a variable of type 'Type' needs a value, as in t := int;
+    no_value :: (v: $T) #modify { t: Type; return true; } { }
+                                  ^
+tests/errors/modify_mistakes.rig:17:33: error: a variable of type 'Type' needs a value, as in t := int;
+    left_alone :: (v: $T) #modify { t: Type = ---; return true; } { }
+                                    ^
+tests/errors/modify_mistakes.rig:18:34: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+    viewed :: (v: $T) #modify { a: []Type; return true; } { }
+                                     ^
+tests/errors/modify_mistakes.rig:19:38: error: a #modify block returns a bool, and may add a message, as in return T != string, "sum needs numbers";
+    returns_nothing :: (v: $T) #modify { return; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:20:36: error: a #modify block returns a bool, and may add a message, as in return T != string, "sum needs numbers";
+    returns_three :: (v: $T) #modify { return true, "a", 1; } { }
+                                       ^
+tests/errors/modify_mistakes.rig:21:39: error: '#modify' must return a bool on every path, and this one reaches its end
+    runs_off :: (v: $T) #modify { x := 1; } { }
+                                          ^
+tests/errors/modify_mistakes.rig:22:43: error: unknown identifier 'values'
+    counts :: (values: []$T) #modify { return values.count > 0; } { }
+                                              ^
+tests/errors/modify_mistakes.rig:23:38: error: a value of type 'int' doesn't convert to 'Type' implicitly
+    set_to_five :: (v: $T) #modify { T = 5; return true; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:24:19: error: main is where the program starts; #modify can't call it
+    starts :: (v: $T) #modify { main(); return true; } { }
+                      ^
