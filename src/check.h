@@ -613,6 +613,13 @@ void check_generic_struct(Checker *c, Ast_Struct *generic);
 // written type, so any construct that names an instance may.
 Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, Position at, Position used_at);
 
+// Whether struct instance inst may be laid out (spec 3.23): its generic's
+// own check said no mistake. One made while that check's fields were still
+// being checked, by a field's type that reached it through an alias, has
+// the rest of them checked first, with no chain, so the generic's
+// mistakes are said once, there, and its instance says none of them again.
+bool instance_may_be_laid_out(Checker *c, Ast_Instance *inst);
+
 // The instance an AST_TYPE_INSTANCE written type names (check_struct_instance),
 // worked out once and kept on it (Ast_Type.instance_type), as an array's
 // count is: null after saying why, its name being no generic struct's too

@@ -1715,8 +1715,18 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // too big", at its name, and has no type either; so has a tagged union
 // whose written tag type can't count its members (lay_out_tag), and a
 // struct instance's copy nested too deeply to be laid out where it's
-// needed (open_declaration, said).
+// needed (open_declaration, said). A struct instance's copy whose generic
+// said a mistake of its own (spec 3.23), the copy made while the
+// generic's fields were still being checked, is never laid out: it has no
+// type, says nothing, and nor do its uses.
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
+    if (s->resolve == RESOLVE_NOT_YET && s->instance && s->instance->structure == s &&
+        !instance_may_be_laid_out(c, s->instance)) {
+        s->resolve = RESOLVE_DONE;
+        s->declared = nullptr;
+    }
+    // Done: laid out before, or just now, needed by a later field's type
+    // as instance_may_be_laid_out checked it.
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
         if (s->resolve == RESOLVE_UNDER_WAY && circle_through_a_value(c, s)) {
@@ -1959,6 +1969,14 @@ static void made_again_signature(Ast_Proc *proc) {
 // mistakes. An anonymous member's late fields are its own struct's (spec
 // 3.19), made in turn, as its fields come.
 static void resolve_late_fields(Checker *c, Ast_Struct *s) {
+    // A struct instance's copy laid out while its generic's fields were
+    // being checked, inside a field's type, whose later names then said a
+    // mistake of the generic's own (spec 3.23): it has no type now, and its
+    // late fields, the generic's, say nothing again.
+    if (s->instance && s->instance->generic_struct->had_errors) {
+        s->declared = nullptr;
+        return;
+    }
     Type *t = s->declared;
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];

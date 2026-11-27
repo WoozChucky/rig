@@ -14719,6 +14719,26 @@ TEST(generic_structs_nest_at_most_max_depth) {
     arena_free(&a);
 }
 
+TEST(generic_struct_fields_nest_at_most_max_depth) {
+    // A generic struct's fields' types count too: a name in one is resolved
+    // inside its own check, as a declaration needed inside it. Each link's
+    // field, in an anonymous member's braces, a level above its *[]A, names
+    // an alias of a pointer to the next link's instance: eight levels a
+    // link, so the 125 links from S0 fit, and a 126th puts S125 too deep,
+    // said once, at it, and checked in its own turn, from 0. Counted
+    // without the field's levels, or without the braces', the 126 fit.
+    Arena a = arena_make();
+    const char *link = "S%lld :: struct (T: Type) { union { a: *[]A%lld; }; }\n";
+    const char *alias = "A%lld :: #type *S%lld(int);\n";
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 124, 1),
+                                      chain_of(&a, alias, 1, 125, 0), "S125 :: struct (T: Type) { }\n")),
+              "");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 125, 1),
+                                      chain_of(&a, alias, 1, 126, 0), "S126 :: struct (T: Type) { }\n")),
+              needed_too_deeply(&a, 127, "S125"));
+    arena_free(&a);
+}
+
 TEST(clones_structs_deep_and_unchecked) {
     // A struct instance is a copy of its generic's tree, as an instance of
     // a generic procedure is: a struct holding a using field of an
@@ -14800,6 +14820,28 @@ TEST(generic_struct_declaration_mistakes) {
         {"S :: struct (N: int) { a: N; }\n", "x: S(1); y: S(2);", "1:27: 'N' is not a type\n"},
         {"S :: struct (T: Type) { a: void; }\n", "x: S(int); y: S(u8);",
          "1:28: 'void' is only a pointer's target, as in *void\n"},
+        // A field said to clash still has its type checked.
+        {"S :: struct (T: Type) { a: T; a: Nope; }\n", "x: S(int); y: S(u8);",
+         "1:31: 'a' is already declared at test.rig:1:25\n1:34: unknown type 'Nope'\n"},
+        // A field's type that reaches an instance through an alias, behind
+        // a pointer or by value, before a later field's mistake is found:
+        // the instance is never laid out, so the mistake is said once, with
+        // no chain, and so is no mistake of the instance's own, [-1]T.
+        {"S :: struct (T: Type) { p: A; q: Nope; }\nA :: #type *S(int);\n", "x: S(int); y: S(u8);",
+         "1:34: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { p: A; a: int; a: int; }\nA :: #type *S(int);\n", "x: S(int); y: S(u8);",
+         "1:39: 'a' is already declared at test.rig:1:31\n"},
+        {"S :: struct (T: Type) { a: A; b: [-1]T; c: Nope; }\nA :: #type *S(int);\n", "x: S(int); y: S(u8);",
+         "1:44: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { a: *A; b: Nope; }\nA :: #type S(int);\n", "x: S(int); y: S(u8);",
+         "1:35: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { p: *A; q: Nope; }\nA :: #type [size_of(S(int))]u8;\n", "x: S(int); y: S(u8);",
+         "1:35: unknown type 'Nope'\n"},
+        // Or laid out by an earlier part of the field's own type, a late
+        // field's, whose later part has the mistake: the instance then has
+        // no type, and its late field isn't made.
+        {"S :: struct (T: Type) { a: (A) -> Nope; }\nA :: #type [size_of(S(int))]u8;\n", "x: S(int); y: S(u8);",
+         "1:35: unknown type 'Nope'\n"},
     };
     for (const Case &k : cases) {
         CHECK_STR(check_source(&a, joined(&a, k.declaration, "main :: () { }\n")), k.message);
@@ -14816,6 +14858,33 @@ TEST(generic_struct_declaration_mistakes) {
                                "S :: struct (T: Type, N: int) { p: *void; a: [N]T; s: *S(T, N); Vec2: T; }\n"
                                "U :: struct (T: Type) { a: T; p: *void; }\n"
                                "main :: () { s: S(int, 2); u: U(u8); }\n"),
+              "");
+    // First checked inside an instance, a procedure's whose signature names
+    // it, the generic's mistake is still its own: no chain.
+    CHECK_STR(check_source(&a, "g := make(1);\n"
+                               "make :: (v: $T) -> S(T) { s: S(T); return s; }\n"
+                               "S :: struct (T: Type) { a: Nope; }\n"
+                               "main :: () { }\n"),
+              "3:28: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+TEST(generic_struct_fields_reach_its_instances) {
+    // A field's type may reach an instance of its own generic through an
+    // alias, by value or behind a pointer, during the generic's own check:
+    // the generic's parameters are checked by then, so it's no circle, and
+    // the instance is the one every use shares.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "S :: struct (T: Type) { v: T; a: *A; }\n"
+                              "A :: #type S(int);\n"
+                              "main :: () { x: S(int); }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "S(int)");
+    CHECK_EQ(((Ast_Struct *)global_named(&c, "S"))->instances.count, 1);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "List :: struct (T: Type) { a: A; b: T; }\n"
+                               "A :: #type *List(int);\n"
+                               "main :: () { x: List(int); x.a = *x; }\n"),
               "");
     arena_free(&a);
 }
@@ -14860,6 +14929,23 @@ TEST(struct_instances_have_a_depth_limit) {
                            "Grow :: struct (T: Type) { next: *Grow(*T); }\n"
                            "main :: () { g: Grow(int); }\n"),
               string_cstr(&a, expected));
+    // Struct instances count with procedure instances: written in the code
+    // of a procedure instance MAX_DEPTH deep, whose instances' bodies each
+    // called the next, the struct's is refused where it's written, its
+    // signature's and its body's each, with that chain, as the call it
+    // makes is.
+    String chain = pointer_chain(&a, "grow", 1000, "2:47", "3:14");
+    String code = str("is instantiated more than 1000 levels deep, each instance's code making the next\n");
+    String body = str("is instantiated more than 1000 levels deep, each instance's body making the next\n");
+    CHECK_STR(check_source(&a,
+                           "Box :: struct (T: Type) { v: T; }\n"
+                           "grow :: (v: $T) -> Box(T) { b: Box(T); p: *T; grow(p); return b; }\n"
+                           "main :: () { grow(1); }\n"),
+              string_cstr(&a, string_printf(&a,
+                                            "2:20: 'Box' " STR_FMT STR_FMT "2:32: 'Box' " STR_FMT STR_FMT
+                                            "2:47: 'grow' " STR_FMT STR_FMT,
+                                            STR_ARG(code), STR_ARG(chain), STR_ARG(code), STR_ARG(chain),
+                                            STR_ARG(body), STR_ARG(chain))));
     // Held by value, the instances are laid out inside one another, as
     // declarations nest, and meet that limit first: one message, naming the
     // innermost instance, with the chain of those whose layouts are under
@@ -14869,6 +14955,9 @@ TEST(struct_instances_have_a_depth_limit) {
     Diagnostics *d = &c.list->diag;
     CHECK_EQ(d->messages.count, 1);
     if (d->messages.count == 1) {
+        // At the generic's name, which the instances' copies share.
+        CHECK_EQ(d->messages[0].pos.line, 1);
+        CHECK_EQ(d->messages[0].pos.col, 1);
         String message = d->messages[0].message;
         String start = str("'Wrap(Wrap(");
         String end = str("' is nested too deeply in the declarations that need it (more than 1000 levels)");

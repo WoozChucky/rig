@@ -287,6 +287,7 @@ struct Ast_Alias : Ast {
 };
 
 struct Ast_Struct;
+struct Generic_Fields;
 
 // One instance of a generic procedure (spec 7.11): the generic's tree
 // copied (ast_clone), its type parameters bound, checked and compiled as
@@ -436,6 +437,9 @@ struct Ast_Struct : Ast {
                                 // record, whose bindings its fields see; null otherwise. Only the copy
                                 // itself is its record's `structure`
     bool had_errors;            // a generic struct's own check said a mistake: it makes no instance
+    Generic_Fields *field_check;  // a generic struct's: what's left of its own check of its fields while
+                                  // it's under way (check_generic.cpp's check_generic_fields); null
+                                  // otherwise
 };
 
 // An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`

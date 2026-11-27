@@ -1496,9 +1496,11 @@
 //   the parameters taken as types and constants still to be known
 //   (check_generic_type: "unknown type 'Nope'", "'N' is not a type",
 //   "'void' is only a pointer's target, as in *void"), array counts and
-//   instances' arguments left to each instance. One whose own check said a
-//   mistake makes no instance (Ast_Struct.had_errors): its uses have no
-//   type and say nothing more.
+//   instances, their names too for now, left to each instance. One whose
+//   own check said a mistake makes no instance (Ast_Struct.had_errors): its
+//   uses have no type and say nothing more, and one made before the
+//   mistake was found, by a field's type through an alias, is never laid
+//   out (instance_may_be_laid_out).
 // - An instance is written where a type goes, Map(string, int)
 //   (AST_TYPE_INSTANCE), worked out once per written type
 //   (check_written_instance, Ast_Type.instance_type): a name that is no
