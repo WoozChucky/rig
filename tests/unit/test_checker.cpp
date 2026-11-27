@@ -14361,6 +14361,11 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
         {"f :: (a: $T) { X :: 1 + \"a\"; x: X; }\nmain :: () { f(1); f(true); }\n",
          "1:23: '+' needs numbers, not 'string'\n    in 'f' with T = int, called at test.rig:2:14\n"
          "1:23: '+' needs numbers, not 'string'\n    in 'f' with T = bool, called at test.rig:2:20\n"},
+        // In each instance of f, Y's note in X is X's own mistake, Y having
+        // a type there: X's note goes, and Y's is said once per instance.
+        {"f :: (t: $T) { Y :: 5; X :: cast(Y) 1; x: X; }\nmain :: () { f(1); f(true); }\n",
+         "1:34: 'Y' is not a type\n    in 'f' with T = int, called at test.rig:2:14\n"
+         "1:34: 'Y' is not a type\n    in 'f' with T = bool, called at test.rig:2:20\n"},
         // A top-level X's mistake is said in no instance, its notes in each
         // instance of f, before X's declaration or after.
         {"X :: 1 + \"a\";\nf :: (a: $T) { x: X; }\nmain :: () { f(1); f(true); }\n",
@@ -14423,6 +14428,10 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     decide_all(file, &a, &list->diag);
     CHECK(!check(file, &a, &list->diag));
+    // Done, check() leaves nothing for an exit() after it to withdraw: its
+    // Checker, which withdraw_at_exit reads, is gone.
+    CHECK(list->diag.at_exit == nullptr);
+    CHECK(list->diag.at_exit_data == nullptr);
     diag_sort(&list->diag);
     CHECK_STR(messages(&a, &list->diag), "3:8: '+' needs numbers, not 'string'\n");
     token_list_free(list);
