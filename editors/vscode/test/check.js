@@ -929,6 +929,13 @@ check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('v := Vec2 .{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
     assertScopes('w := Vec2. {3, 4};', { w: null, Vec2: TYPE });
     assertScopes('a := int .[1, 2];', { a: null, int: PRIMITIVE });
+    // A generic struct's instance before a literal is a type, its arguments
+    // coloured as anywhere, one's own parentheses too (spec 3.23); a call
+    // followed by no literal stays a call.
+    assertScopes('p := Pair(string, int).{"a", 1};', { p: null, Pair: TYPE, string: PRIMITIVE, int: PRIMITIVE });
+    assertScopes('r := Ring(int, 3) .[];', { Ring: TYPE, int: PRIMITIVE });
+    assertScopes('m := Map(int, Map(string, *u8)).{};', { Map: [TYPE, 'entity.name.function.call.rig'], u8: PRIMITIVE });
+    assertScopes('n := twice(2) + 1;', { twice: 'entity.name.function.call.rig' });
     // A keyword before an untyped literal stays a keyword; a range and a
     // dereference aren't literals.
     assertScopes('return .{a, b};', { return: 'keyword.control.rig', a: null });
@@ -1208,8 +1215,9 @@ check('the grammar colours a signature that starts with a type parameter', () =>
 
 // Type aliases (issue #227, spec 3.22): a signature that ends at its ';',
 // with no body and no directive but #c_call, is a procedure type's alias,
-// its name a type's; with a body, or #foreign, it's a procedure. A
-// parenthesised constant stays a constant.
+// its name a type's, and so is a constant whose value is written with
+// #type; with a body, or #foreign, it's a procedure. A parenthesised
+// constant stays a constant.
 check('the grammar colours a procedure type\'s alias as a type', () => {
     assertScopes('Cb :: (code: int, name: string) -> bool;', {
         Cb: TYPE,
@@ -1218,6 +1226,9 @@ check('the grammar colours a procedure type\'s alias as a type', () => {
         bool: PRIMITIVE,
     });
     assertScopes('Raw :: (int) -> int #c_call;', { Raw: TYPE });
+    // A type written with #type is an alias's value too.
+    assertScopes('Cb :: #type (int) -> int;', { Cb: TYPE, '#type': 'keyword.other.directive.rig', int: [PRIMITIVE, PRIMITIVE] });
+    assertScopes('    P :: #type *Vec2;', { P: TYPE, Vec2: TYPE });
     assertScopes('    Cb :: () -> int; // a callback', { Cb: TYPE });
     assertScopes('greet :: (name: string) {', { greet: 'entity.name.function.rig' });
     assertScopes('g :: (a: int) #foreign libc;', { g: 'entity.name.function.rig' });
@@ -1278,12 +1289,12 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     // parameter, or its ')' followed by '->', as the grammar's rule reads
     // it) with no body and no directive but #c_call; or one whose value is
     // a name, after any '*' and '[...]', that is a type's, or such a name
-    // with arguments, a generic struct's instance, `Int_Pair :: Pair(int,
-    // int);` (spec 3.23). NAME :: X; is an
-    // alias when X is a type: a built-in one, or one of the names known, an
-    // alias's included, declared in any order, so the look goes on until it
-    // finds no more. A constant naming a value, `ADD :: add;` or `VERBOSE ::
-    // true;`, is none, nor is a value in parentheses, `N :: (1 + 2);`.
+    // with arguments, a generic struct's instance, `Int_Pair ::
+    // Pair(int, int);` (spec 3.23). NAME :: X; is an alias when X is a
+    // type: a built-in one, or one of the names known, an alias's included,
+    // declared in any order, so the look goes on until it finds no more. A
+    // constant naming a value, `ADD :: add;` or `VERBOSE :: true;`, is
+    // none, nor is a value in parentheses, `N :: (1 + 2);`.
     const builtIn = new RegExp(`^(?:${grammar().repository.types.match})$`);
     const learnAliases = (from, names) => {
         const aliases = [];   // [NAME, X] of each NAME :: X;, after any '*' and '[...]'
