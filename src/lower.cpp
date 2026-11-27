@@ -4220,12 +4220,11 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // parameters' and results' descriptions (a ..T parameter's []T), #c_call
 // and whether its last parameter is a ..T; an enum's name, its integer
 // type's description, whether it's an enum_flags, and its members' names
-// and values. Its names' str.N and its
-// arrays' globals are made first; the descriptions it points at are asked
-// for through type_info_global, which only queues them. The relocations go
-// in increasing offset, as the backend wants. The bytes are put in the
-// global last, through its index: the globals array may move while they're
-// made.
+// and values. Its names' str.N and its arrays' globals are made first; the
+// descriptions it points at are asked for through type_info_global, which
+// only queues them. The relocations go in increasing offset, as the
+// backend wants. The bytes are put in the global last, through its index:
+// the globals array may move while they're made.
 static void describe_type(Lowering *l, s32 global, Type *t) {
     String name = l->module->globals[global].name;
     s64 size = l->module->globals[global].size;
