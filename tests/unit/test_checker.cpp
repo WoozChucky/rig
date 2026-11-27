@@ -14341,6 +14341,12 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
         {"X :: (int);\nmain :: () { x: X; }\n", "1:7: 'int' is a type, not a value\n"},
         {"main :: () { X :: 1 + \"a\"; x: X; }\n", "1:21: '+' needs numbers, not 'string'\n"},
         {"X :: #run 1 + \"a\";\nmain :: () { x: X; }\n", "1:13: '+' needs numbers, not 'string'\n"},
+        // A note of a constant that has a type is a mistake that stays, so
+        // it's X's own, before Y's declaration or after, as one said of a
+        // variable is.
+        {"X :: cast(Y) 1;\nY :: 5;\nmain :: () { x: X; }\n", "1:11: 'Y' is not a type\n"},
+        {"Y :: 5;\nX :: cast(Y) 1;\nmain :: () { x: X; }\n", "2:11: 'Y' is not a type\n"},
+        {"g := 5;\nX :: cast(g) 1;\nmain :: () { x: X; }\n", "2:11: 'g' is not a type\n"},
         {"X :: 1 +\n    \"a\";\nmain :: () { x: X; }\n", "1:8: '+' needs numbers, not 'string'\n"},
         {"X :: 1\n    + \"a\";\nmain :: () { x: X; }\n", "2:5: '+' needs numbers, not 'string'\n"},
         // A circle's message is said at its name.
@@ -14369,10 +14375,12 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
         // only one, in either order.
         {"S :: struct { a: C; }\ng: S;\nC :: g.a;\nmain :: () { }\n", "1:18: 'C' is not a type\n"},
         {"C :: g.a;\ng: S;\nS :: struct { a: C; }\nmain :: () { }\n", "3:18: 'C' is not a type\n"},
-        // A note is no constant's own mistake, in its own declaration or
-        // said of another constant there.
+        // A note of a constant with no type is no constant's own mistake,
+        // said of itself in its own declaration or of another there: Y's
+        // note in X is withdrawn, its mistake Y's own, and X's stays.
         {"X :: cast(X) 1;\nmain :: () { }\n", "1:11: 'X' is not a type\n"},
-        {"X :: cast(Y) 1;\nY :: 5;\nmain :: () { x: X; }\n", "1:11: 'Y' is not a type\n3:17: 'X' is not a type\n"},
+        {"X :: cast(Y) 1;\nY :: 1 + \"a\";\nmain :: () { x: X; }\n",
+         "2:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
         // K's mistake isn't X's own, in either order.
         {"X :: K + 1;\nK :: 1 + \"a\";\nmain :: () { x: X; }\n",
          "2:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
@@ -14387,8 +14395,8 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
          "1:17: 'X' is not a type\n2:6: 300 doesn't fit in 'u8'\n"},
         // A mistake on the line of X's declaration, before its name or
         // after its ';', isn't X's own.
-        {"Y :: 5;\nmain :: () { a := 1 + \"a\"; X :: cast(Y) 1; x: X; }\n",
-         "2:21: '+' needs numbers, not 'string'\n2:38: 'Y' is not a type\n2:47: 'X' is not a type\n"},
+        {"K :: 1 + \"a\";\nmain :: () { a := 1 + \"a\"; X :: K + 1; x: X; }\n",
+         "1:8: '+' needs numbers, not 'string'\n2:21: '+' needs numbers, not 'string'\n2:43: 'X' is not a type\n"},
         {"X :: K + 1; K :: 1 + \"a\";\nmain :: () { x: X; }\n",
          "1:20: '+' needs numbers, not 'string'\n2:17: 'X' is not a type\n"},
         // Nor is another instance's: each instance of f has its own X, at
