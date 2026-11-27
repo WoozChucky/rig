@@ -3392,10 +3392,11 @@ static bool declares_name(Ast_Struct *s, String name) {
 
 // Whether struct s's declaration may hold `name`, at any depth: a field of
 // that name, in an anonymous member too (spec 3.19), or a using field whose
-// struct may hold it, that struct found by the name written, at the top
-// level, as its layout finds it. A using field whose type is written any
-// other way, or names no struct declared (an error, a builtin type), may:
-// its layout says what it is. Each struct is followed once (`seen`), which
+// struct may hold it, that struct found by the name written, as its layout
+// finds it: among a struct instance's bindings, whose parameters hide the
+// top level's names (spec 3.23), else at the top level. A using field whose
+// type is written any other way, or names no struct declared or bound (an
+// error, a builtin type, a pointer bound), may: its layout says what it is. Each struct is followed once (`seen`), which
 // ends a cycle of using fields. Only names are read, so nothing is laid out
 // or made here.
 static bool may_hold_name(Checker *c, Ast_Struct *s, String name, Array<Ast_Struct *> *seen) {
@@ -3414,6 +3415,16 @@ static bool may_hold_name(Checker *c, Ast_Struct *s, String name, Array<Ast_Stru
         Ast_Type *written = field->type_expr;
         if (written->kind == AST_TYPE_POINTER) written = written->pointee;
         if (written->kind != AST_TYPE_NAME || type_from_name(written->name)) return true;
+        // In a struct instance's copy, a parameter hides the top level's
+        // name (spec 3.23): its struct is the one bound, and anything else
+        // bound may hold the name.
+        Ast *binding = s->instance ? instance_binding(s->instance, written->name) : nullptr;
+        if (binding) {
+            Type *bound = binding->kind == AST_ALIAS ? ((Ast_Alias *)binding)->aliased : nullptr;
+            if (!bound || bound->kind != TYPE_STRUCT || !bound->decl) return true;
+            if (may_hold_name(c, bound->decl, name, seen)) return true;
+            continue;
+        }
         Ast **decl = table_get(&c->top_level, written->name);
         if (!decl || (*decl)->kind != AST_STRUCT) return true;
         if (may_hold_name(c, (Ast_Struct *)*decl, name, seen)) return true;

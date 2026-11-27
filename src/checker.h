@@ -1503,7 +1503,10 @@
 //   parameter takes an expression, or a bare name the parser read as a
 //   type, checked as the value it names; one naming a type is "'int' is a
 //   type, not a value", any other written type "'*int' is a type, not a
-//   value"; the value converts to the parameter's type as an argument does
+//   value", but a name with arguments that names no generic struct, which
+//   is a call, checked as one (twice(2): never known while compiling;
+//   Nope(1), Mode(1): what the call's callee is; twice(nope): what its
+//   arguments' mistakes are); the value converts to the parameter's type as an argument does
 //   ("argument 2 of 'Ring' has type 'string', which can't be converted to
 //   'int'", "300 doesn't fit in 'u8'") and must be known while compiling
 //   ("argument 2 of 'Ring' must be known while compiling, for 'N: int'"),

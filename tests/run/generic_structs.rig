@@ -6,8 +6,9 @@
 // field of another instance (Derived's Base(T)), whose fields it reaches as
 // its own, a using parameter of an instance too (bump), a *Derived(u16)
 // converting to a *Base(u16). An instance's type information names it as
-// the program writes it, Pair(string, int). The same compiled, interpreted
-// and in a top-level #run.
+// the program writes it, Pair(string, int). An instance only ever taken
+// behind a pointer before the bodies (Only, by a global) is laid out all
+// the same. The same compiled, interpreted and in a top-level #run.
 #import "Basic";
 
 Pair :: struct (A: Type, B: Type) { first: A; second: B; }
@@ -17,6 +18,9 @@ Tree :: struct (T: Type) { value: T; kids: [..]Tree(T); }
 Base :: struct (T: Type) { id: T; }
 Derived :: struct (T: Type) { using base: Base(T); extra: T; }
 Grid :: struct (W: int, H: int, Cell: Type) { cells: [W * H]Cell; row: [W]u8; }
+Only :: struct (T: Type) { a: T; b: T; }
+
+only: *Only(int);
 
 bump :: (using b: *Base(u16)) { id += 1; }
 
@@ -68,4 +72,5 @@ main :: () {
 
     print("{} {}\n", (cast(*Type_Info_Struct) type_info(Pair(string, int))).name,
           (cast(*Type_Info_Struct) type_info(Ring(int, 3))).name);
+    print("{}\n", (cast(*Type_Info_Pointer) type_info(*Only(int))).pointer_to.size);
 }

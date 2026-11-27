@@ -4848,9 +4848,11 @@ TEST(parses_generic_structs) {
     // name followed by '(' where a type is written is an instance of one,
     // (instance Map ...), each argument a type when it is written as only a
     // type can be, or as a name, with or without its own arguments, before
-    // a ',' or the ')', and an expression otherwise: 4 + 1. size_of(...)
-    // and type_info(...) are expressions there, as everywhere, and so is
-    // #type. A field may hold an instance of its own struct, behind a
+    // a ',' or the ')', and an expression otherwise: 4 + 1, a name with an
+    // operator after it, N + 1, Mode.B. A '[' starts a type, []int, [4]u8.
+    // size_of(...) and type_info(...) are expressions there, as everywhere,
+    // and so is #type. An empty '()' gives no arguments, for the checker to
+    // count. A field may hold an instance of its own struct, behind a
     // pointer.
     Arena a = arena_make();
     Token_List *list = src("Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; }\n"
@@ -4858,7 +4860,11 @@ TEST(parses_generic_structs) {
                            "m: Map(string, Map(int, *u8));\n"
                            "r: Ring(int, 4 + 1);\n"
                            "Vec2 :: struct { x: float; }\n"
-                           "p: Pad(size_of(u8), type_info(u8), #type (int) -> int);\n");
+                           "p: Pad(size_of(u8), type_info(u8), #type (int) -> int);\n"
+                           "q: Ring(int, N + 1);\n"
+                           "t: Tag(Mode.B);\n"
+                           "b: Box([]int, [4]u8);\n"
+                           "e: Map();\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK_STR(ast_dump(&a, file),
@@ -4867,9 +4873,13 @@ TEST(parses_generic_structs) {
               "(var m (instance Map string (instance Map int (ptr u8))))\n"
               "(var r (instance Ring int (binary + (int 4) (int 1))))\n"
               "(struct Vec2 (x float))\n"
-              "(var p (instance Pad (size_of u8) (type_info u8) (type (proc-type (params int) (returns int)))))\n");
-    CHECK_EQ(file->globals.count, 6);
-    if (file->globals.count == 6) {
+              "(var p (instance Pad (size_of u8) (type_info u8) (type (proc-type (params int) (returns int)))))\n"
+              "(var q (instance Ring int (binary + (name N) (int 1))))\n"
+              "(var t (instance Tag (member (name Mode) B)))\n"
+              "(var b (instance Box (view int) (array (int 4) u8)))\n"
+              "(var e (instance Map))\n");
+    CHECK_EQ(file->globals.count, 10);
+    if (file->globals.count == 10) {
         CHECK(((Ast_Struct *)file->globals[0])->is_generic);
         CHECK(((Ast_Struct *)file->globals[1])->is_generic);
         CHECK(!((Ast_Struct *)file->globals[4])->is_generic);
@@ -4898,6 +4908,19 @@ TEST(parses_generic_structs) {
         Ast_Type *r = ((Ast_Var *)file->globals[3])->type_expr;
         CHECK_EQ(r->args.count, 2);
         if (r->args.count == 2) CHECK_EQ(r->args[1]->kind, AST_BINARY);
+        Ast_Type *q = ((Ast_Var *)file->globals[6])->type_expr;
+        CHECK_EQ(q->args.count, 2);
+        if (q->args.count == 2) CHECK_EQ(q->args[1]->kind, AST_BINARY);
+        Ast_Type *t = ((Ast_Var *)file->globals[7])->type_expr;
+        CHECK_EQ(t->args.count, 1);
+        if (t->args.count == 1) CHECK_EQ(t->args[0]->kind, AST_MEMBER);
+        Ast_Type *b = ((Ast_Var *)file->globals[8])->type_expr;
+        CHECK_EQ(b->args.count, 2);
+        if (b->args.count == 2) {
+            CHECK_EQ(b->args[0]->kind, AST_TYPE_VIEW);
+            CHECK_EQ(b->args[1]->kind, AST_TYPE_ARRAY);
+        }
+        CHECK_EQ(((Ast_Var *)file->globals[9])->type_expr->args.count, 0);
     }
     token_list_free(list);
     arena_free(&a);

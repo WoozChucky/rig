@@ -848,7 +848,10 @@ static String baked_text(Checker *c, Ast_Param *param) {
 // an enum's value folded (Ast.is_constant), a string's its constant data
 // (constant_data), or it's "argument 1 of 'fill' must be known while
 // compiling, for '$N: int'", at it, `param_text` naming the parameter as
-// written ("$N: int" for a procedure's, "N: int" for a struct's).
+// written ("$N: int" for a procedure's, "N: int" for a struct's); unless a
+// #run in it failed, which was said, and has no value (has_failed_run), as
+// an array's count says nothing more then (checker.cpp's
+// check_array_count).
 static bool bake_constant(Checker *c, Ast *arg, Generic_Binding *b, s64 index, String who, String param_text) {
     if (!arg->type) return false;
     s64 errors = c->diag->error_count;
@@ -856,6 +859,7 @@ static bool bake_constant(Checker *c, Ast *arg, Generic_Binding *b, s64 index, S
     if (c->diag->error_count != errors || !arg->type) return false;
     Ast *data;
     bool known = b->type->kind == TYPE_STRING ? constant_data(arg, &data) : arg->is_constant;
+    if (!known && has_failed_run(arg)) return false;
     if (!known) {
         diag_error(c->diag, arg->start,
                    "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
@@ -1326,6 +1330,16 @@ static bool struct_takes_a_type(Ast_Param *param) {
 
 void check_generic_struct(Checker *c, Ast_Struct *generic) {
     if (generic->resolve != RESOLVE_NOT_YET) return;
+    // Worked out inside what needs it, as a struct's layout is, so a chain
+    // of generics each needing the next in a parameter's type nests at most
+    // MAX_DEPTH levels (checker.cpp's open_declaration): the one too deep,
+    // said, is left to be checked in its own turn, and what needed it makes
+    // no instance.
+    s32 levels = 0, outer;
+    for (s64 i = 0; i < generic->params.count; i++) {
+        if (generic->params[i]->type_expr->levels > levels) levels = generic->params[i]->type_expr->levels;
+    }
+    if (!open_declaration(c, generic, generic->name, levels, &outer)) return;
     generic->resolve = RESOLVE_UNDER_WAY;
     // Its parameters' types are the top level's, whatever needed it first,
     // and its mistakes are its own, with no instance's chain.
@@ -1354,6 +1368,7 @@ void check_generic_struct(Checker *c, Ast_Struct *generic) {
         param->type = t;
     }
     generic->had_errors |= c->diag->error_count != errors;
+    c->levels = outer;
     return_to_scopes(c, scopes);
     generic->resolve = RESOLVE_DONE;
 }
@@ -1400,6 +1415,45 @@ static bool names_generic_struct(Checker *c, String name) {
     return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic;
 }
 
+// Instance argument `arg`, as written (parse_instance_argument), as the
+// expression it is in a call read as an instance: an expression as it is,
+// a bare name as a name, a name with arguments that names no generic
+// struct as a call (instance_as_call), and any other written type as a
+// type written where a value goes (Ast_Type_Value), which the call's
+// check says is no value, or takes as a generic procedure's type argument.
+static Ast *call_argument(Checker *c, Ast *arg);
+
+// Written type `written`, a name with arguments that names no generic
+// struct, as the call it is: its name the callee, at its place, and its
+// arguments the call's (call_argument), so the call is checked as any is
+// (check_expr.cpp's check_call), its callee's and its arguments' mistakes
+// said ("unknown identifier 'Nope'", "'Mode' isn't a procedure, so it
+// can't be called").
+static Ast_Call *instance_as_call(Checker *c, Ast_Type *written) {
+    Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
+    name->name = written->name;
+    Ast_Call *call = ast_new<Ast_Call>(c->arena, AST_CALL, written->pos);
+    call->callee = name;
+    for (s64 i = 0; i < written->args.count; i++) array_add(&call->args, call_argument(c, written->args[i]));
+    return call;
+}
+
+static Ast *call_argument(Checker *c, Ast *arg) {
+    if (!is_written_type(arg)) return arg;
+    Ast_Type *written = (Ast_Type *)arg;
+    if (written->kind == AST_TYPE_NAME) {
+        Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
+        name->name = written->name;
+        return name;
+    }
+    if (written->kind == AST_TYPE_INSTANCE && !names_generic_struct(c, written->name)) {
+        return instance_as_call(c, written);
+    }
+    Ast_Type_Value *value = ast_new<Ast_Type_Value>(c->arena, AST_TYPE_VALUE, written->pos);
+    value->type_expr = written;
+    return value;
+}
+
 // Binds the index-th parameter of generic struct `generic`, its binding b,
 // to argument `arg`, as written (parse_instance_argument): true when it's
 // bound; false after saying why it can't be, or when the argument's own
@@ -1414,13 +1468,14 @@ static bool names_generic_struct(Checker *c, String name) {
 //   read as a type, which is the name of a value here, looked up and
 //   checked as one, at its place: "'int' is a type, not a value" when it
 //   names a type, as a type's name where a value goes is. A name with
-//   arguments that names no generic struct is a call, twice(2), whose
-//   callee is checked as a call's is ("unknown identifier 'Nope'", "'Mode'
-//   isn't a procedure, so it can't be called"), and which, calling one, is
-//   never known while compiling: "argument 2 of 'Ring' must be known while
-//   compiling, for 'N: int'", at it. Any other written type, a generic
-//   struct's instance too, is "'*int' is a type, not a value", at it. The
-//   value converts to the parameter's type and must be known while
+//   arguments that names no generic struct is a call, twice(2), checked as
+//   any call is, its callee and its arguments (instance_as_call: "unknown
+//   identifier 'Nope'", "'Mode' isn't a procedure, so it can't be called"),
+//   and which, calling a procedure, is never known while compiling:
+//   "argument 2 of 'Ring' must be known while compiling, for 'N: int'", at
+//   it. Any other written type, a generic struct's instance too, is "'*int'
+//   is a type, not a value", at it. The value, its own check saying no
+//   mistake, converts to the parameter's type and must be known while
 //   compiling (bake_constant). It's checked where the instance is written,
 //   as an array's count is (a local there is in sight, and no constant),
 //   needing no context, as a count doesn't (checker.cpp's
@@ -1444,38 +1499,30 @@ static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 
     if (is_written_type(arg)) {
         Ast_Type *written = (Ast_Type *)arg;
         if (written->kind == AST_TYPE_INSTANCE && !names_generic_struct(c, written->name)) {
-            // A call, read as an instance: what its callee is said as a
-            // call's is (check_expr.cpp's check_callee), or, for a
-            // procedure, that no call is known while compiling.
-            Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
-            name->name = written->name;
-            Ast_Call *call = ast_new<Ast_Call>(c->arena, AST_CALL, written->pos);
-            call->callee = name;
-            if (check_callee(c, call)) {
-                diag_error(c->diag, written->pos,
-                           "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
-                           (long long)(index + 1), STR_ARG(generic->name), STR_ARG(struct_parameter_text(c, param)));
-            }
-            return false;
-        }
-        if (written->kind != AST_TYPE_NAME) {
+            arg = instance_as_call(c, written);  // checked below, as any call
+        } else if (written->kind != AST_TYPE_NAME) {
             diag_error(c->diag, written->pos, "'" STR_FMT "' is a type, not a value",
                        STR_ARG(written_type_text(c, written)));
             return false;
+        } else {
+            Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
+            name->name = written->name;
+            if (expr_names_type(c, name)) {
+                report_type_as_value(c, name);
+                return false;
+            }
+            arg = name;
         }
-        Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
-        name->name = written->name;
-        if (expr_names_type(c, name)) {
-            report_type_as_value(c, name);
-            return false;
-        }
-        arg = name;
     }
+    // A value whose check said a mistake, a call's argument's (twice(nope))
+    // though the call has its result's type, says nothing more.
     bool outer_contextless = c->contextless;
     c->contextless = false;
+    s64 errors = c->diag->error_count;
     Type *t = check_value(c, arg);
     c->contextless = outer_contextless;
-    return t && bake_constant(c, arg, b, index, generic->name, struct_parameter_text(c, param));
+    if (!t || c->diag->error_count != errors) return false;
+    return bake_constant(c, arg, b, index, generic->name, struct_parameter_text(c, param));
 }
 
 // Sets `instance` on struct s, a struct instance's copy, and on each
@@ -1533,7 +1580,9 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
         return nullptr;
     }
     check_generic_struct(c, generic);
-    if (generic->had_errors) return nullptr;  // its own mistake, said: its uses say nothing more
+    // Its own mistake, said, or its check too deep here (said): its uses
+    // say nothing more.
+    if (generic->had_errors || generic->resolve != RESOLVE_DONE) return nullptr;
     s64 count = generic->params.count;
     if (args.count != count) {
         diag_error(c->diag, at, "'" STR_FMT "' takes %lld argument%s, but %lld %s given", STR_ARG(generic->name),

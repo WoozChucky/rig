@@ -14344,6 +14344,9 @@ TEST(struct_instances_are_one_per_set_of_arguments) {
     // the program would write them, and laid out as any struct, its fields
     // of its parameters' types. A global and a signature above the generic
     // use it before the declarations pass reaches it, which checks it then.
+    // A type argument may be any type, a struct's (resolved behind a
+    // pointer, with no layout: Node holds a Wrap(Node), which points at
+    // Node), an instance's, an array's, each written as types are.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
@@ -14352,6 +14355,11 @@ TEST(struct_instances_are_one_per_set_of_arguments) {
                                         "first :: (r: *Ring(u8, 2)) -> u8 { return r.items[0]; }\n",
                                         GENERIC_STRUCTS,
                                         "G: Ring(int, 4);\n"
+                                        "SIZE :: 3;\n"
+                                        "Vec2 :: struct { x: float; y: float; }\n"
+                                        "Box :: struct (T: Type) { v: T; }\n"
+                                        "Wrap :: struct (T: Type) { p: *T; n: int; }\n"
+                                        "Node :: struct { v: int; w: Wrap(Node); }\n"
                                         "main :: () {\n"
                                         "    a: Map(string, int);\n"
                                         "    b: Map(string, int);\n"
@@ -14362,6 +14370,13 @@ TEST(struct_instances_are_one_per_set_of_arguments) {
                                         "    r4: Ring(s64, 4);\n"
                                         "    r5: Ring(float, 1);\n"
                                         "    r6: Ring(float32, 1);\n"
+                                        "    r7: Ring(int, SIZE + 1);\n"
+                                        "    n1: Map(int, Map(string, *u8));\n"
+                                        "    n2: Map(int, Map(string, *u8));\n"
+                                        "    n3: Map(Vec2, [2]Vec2);\n"
+                                        "    v: Box(Vec2);\n"
+                                        "    bv: Box([]int);\n"
+                                        "    ba: Box([4]u8);\n"
                                         "}\n"
                                         "other :: () { m: Map(string, int); }\n"),
                                  &tree),
@@ -14385,9 +14400,29 @@ TEST(struct_instances_are_one_per_set_of_arguments) {
     CHECK_STR(type_name(&a, r1), "Ring(int, 4)");
     CHECK_STR(type_name(&a, r4), "Ring(s64, 4)");
     CHECK_STR(type_name(&a, r5), "Ring(float32, 1)");
-    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Map"))->instances.count, 2);
+    CHECK(local_type(tree, "main", "r7") == r1);
+    Type *n1 = local_type(tree, "main", "n1");
+    CHECK(n1 && local_type(tree, "main", "n2") == n1);
+    CHECK_STR(type_name(&a, n1), "Map(int, Map(string, *u8))");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "n3")), "Map(Vec2, [2]Vec2)");
+    Type *vec2 = ((Ast_Struct *)top_level_named(tree, "Vec2"))->declared;
+    Type *v = local_type(tree, "main", "v");
+    CHECK_STR(type_name(&a, v), "Box(Vec2)");
+    CHECK(v && v->size == 8 && v->fields.count == 1 && v->fields[0].type == vec2);
+    Type *bv = local_type(tree, "main", "bv"), *ba = local_type(tree, "main", "ba");
+    CHECK(bv && bv->size == 16);
+    CHECK(ba && ba->size == 4);
+    CHECK_STR(type_name(&a, ba), "Box([4]u8)");
+    Type *node = ((Ast_Struct *)top_level_named(tree, "Node"))->declared;
+    CHECK(node && node->size == 24 && node->fields.count == 2);
+    if (node && node->fields.count == 2) {
+        Type *wrap = node->fields[1].type;
+        CHECK_STR(type_name(&a, wrap), "Wrap(Node)");
+        CHECK(wrap && wrap->fields.count == 2 && wrap->fields[0].type && wrap->fields[0].type->pointee == node);
+    }
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Map"))->instances.count, 5);
     CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Ring"))->instances.count, 4);
-    CHECK_EQ(tree->struct_instances.count, 6);
+    CHECK_EQ(tree->struct_instances.count, 13);
     CHECK_EQ(a_type->size, 88);
     CHECK_EQ(r1->size, 32);
     CHECK_EQ(r5->size, 4);
@@ -14400,10 +14435,10 @@ TEST(struct_instances_are_one_per_set_of_arguments) {
 TEST(struct_parameters_are_types_and_constants) {
     // A parameter is a type, K: Type, or a constant of a number, a bool, an
     // enum or a string, which the fields' counts may use; a constant
-    // argument converts to its parameter's type, .B meeting the enum.
-    // size_of(T) is a constant argument, as everywhere, inside a generic
-    // struct too, and an expression that names a type, #type (int) -> int,
-    // a type argument.
+    // argument converts to its parameter's type, .B meeting the enum, as
+    // Mode.B does, the one instance. size_of(T) is a constant argument, as
+    // everywhere, inside a generic struct too, and an expression that names
+    // a type, #type (int) -> int, a type argument.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "Grid :: struct (W: int, H: int, Cell: Type) {\n"
@@ -14423,6 +14458,7 @@ TEST(struct_parameters_are_types_and_constants) {
                                                               "    g: Grid(2, 3, u8);\n"
                                                               "    l: Labeled(\"hi\");\n"
                                                               "    t: Tag(.B);\n"
+                                                              "    t2: Tag(Mode.B);\n"
                                                               "    f: Flag(true);\n"
                                                               "    c: Padded(int);\n"
                                                               "    p: Pad(size_of(int));\n"
@@ -14435,6 +14471,7 @@ TEST(struct_parameters_are_types_and_constants) {
     CHECK_STR(type_name(&a, g), "Grid(2, 3, u8)");
     CHECK_STR(type_name(&a, local_type(tree, "main", "l")), "Labeled(\"hi\")");
     CHECK_STR(type_name(&a, local_type(tree, "main", "t")), "Tag(Mode.B)");
+    CHECK(local_type(tree, "main", "t2") == local_type(tree, "main", "t"));
     CHECK_STR(type_name(&a, local_type(tree, "main", "f")), "Flag(true)");
     Type *c = local_type(tree, "main", "c"), *p = local_type(tree, "main", "p");
     CHECK(c && c->size == 16);
@@ -14477,6 +14514,26 @@ TEST(struct_instances_hold_themselves_behind_pointers) {
         CHECK(inner && inner->fields.count == 1 && inner->fields[0].type &&
               inner->fields[0].type->pointee == b);
     }
+    // An instance only ever taken behind a pointer before the bodies, by a
+    // global and a signature, is laid out all the same, after the
+    // declarations' late fields; and found to contain itself there, though
+    // only a plain struct's late field takes it.
+    CHECK_STR(check_with_preload(&a, "Only :: struct (T: Type) { a: T; b: T; }\n"
+                                     "g: *Only(int);\n"
+                                     "f :: (p: *Only(u8)) { }\n"
+                                     "main :: () { }\n",
+                                 &tree),
+              "");
+    Type *only = top_level_named(tree, "g")->type;
+    CHECK(only && only->kind == TYPE_POINTER && only->pointee);
+    if (only && only->pointee) CHECK(only->pointee->size == 16 && only->pointee->fields.count == 2);
+    Type *param = ((Ast_Proc *)top_level_named(tree, "f"))->params[0]->type;
+    CHECK(param && param->pointee && param->pointee->size == 2 && param->pointee->fields.count == 2);
+    CHECK_STR(check_with_preload(&a, "Bad :: struct (T: Type) { b: Bad(T); }\n"
+                                     "Holder :: struct { p: *Bad(u8); }\n"
+                                     "main :: () { }\n"),
+              "1:1: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)\n"
+              "    in 'Bad' with T = u8, used at test.rig:2:24\n");
     arena_free(&a);
 }
 
@@ -14486,10 +14543,16 @@ TEST(struct_instances_see_only_their_bindings) {
     // procedure instance that uses it: make_box's Box(u8) is the one Box(u8)
     // whatever its T. An argument naming a constant is that constant.
     // Leak(u8), first laid out inside make_box's instances, finds the top
-    // level's T, not the T each binds: one instance, 16 bytes.
+    // level's T, not the T each binds: one instance, 16 bytes. A using
+    // field of a parameter's type is the struct bound, not the top level's
+    // T, wherever a using walk looks for a name: through the instance, a
+    // pointer to it and a using parameter.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "T :: struct { g: int; }\n"
+                                                              "Inner :: struct { x: int; }\n"
+                                                              "W :: struct (T: Type) { using t: T; }\n"
+                                                              "reach :: (using v: *W(Inner)) { c := x; }\n"
                                                               "Box :: struct (T: Type) { v: T; }\n"
                                                               "Leak :: struct (X: Type) { v: T; w: X; }\n"
                                                               "N :: 100;\n"
@@ -14506,9 +14569,17 @@ TEST(struct_instances_see_only_their_bindings) {
                                                               "    r: Ring(int, SIZE);\n"
                                                               "    p := make_box(\"s\");\n"
                                                               "    q := make_box(1);\n"
+                                                              "    w: W(Inner);\n"
+                                                              "    wx := w.x;\n"
+                                                              "    pw := *w;\n"
+                                                              "    px := pw.x;\n"
+                                                              "    reach(*w);\n"
                                                               "}\n"),
                                  &tree),
               "");
+    CHECK(local_type(tree, "main", "wx") == &type_int);
+    CHECK(local_type(tree, "main", "px") == &type_int);
+    CHECK(local_type(tree, "reach", "c") == &type_int);
     Type *x = local_type(tree, "main", "x");
     CHECK(x && x->size == 1);
     Type *y = local_type(tree, "main", "y");
@@ -14569,6 +14640,9 @@ TEST(struct_argument_mistakes) {
     };
     const Case cases[] = {
         {"main :: () { x: Map(int); }\n", "4:17: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { x: Map(); }\n", "4:17: 'Map' takes 2 arguments, but 0 were given\n"},
+        {"Box :: struct (T: Type) { v: T; }\nmain :: () { x: Box(int, int); }\n",
+         "5:17: 'Box' takes 1 argument, but 2 were given\n"},
         {"main :: () { x: Map; }\n", "4:17: 'Map' is generic; write its arguments, as in Map(K, V)\n"},
         {"main :: () { x: *Map; }\n", "4:18: 'Map' is generic; write its arguments, as in Map(K, V)\n"},
         {"Vec2 :: struct { x: float; }\nmain :: () { x: Vec2(int); }\n",
@@ -14583,11 +14657,26 @@ TEST(struct_argument_mistakes) {
          "5:27: '*Grid(1 + 1, 3, u8)' is a type, not a value\n"},
         {"main :: () { x: Ring(int, Ring(int, 2)); }\n", "4:27: 'Ring(int, 2)' is a type, not a value\n"},
         // A name with arguments that names no generic struct is a call
-        // there, never known while compiling, or what its name is.
+        // there, never known while compiling, or what its name is; its
+        // arguments are checked as any call's are.
         {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(2)); }\n",
          "5:27: argument 2 of 'Ring' must be known while compiling, for 'N: int'\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(nope)); }\n",
+         "5:33: unknown identifier 'nope'\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(1, 2)); }\n",
+         "5:27: 'twice' takes 1 argument, but 2 were given\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(*int)); }\n",
+         "5:33: '*int' is a type, not a value\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(twice(nope))); }\n",
+         "5:39: unknown identifier 'nope'\n"},
         {"main :: () { x: Ring(int, Nope(1)); }\n", "4:27: unknown identifier 'Nope'\n"},
         {"main :: () { x: Ring(int, Mode(1)); }\n", "4:27: 'Mode' isn't a procedure, so it can't be called\n"},
+        // A #run that fails says so, and nothing more, as in an array's
+        // count.
+        {"fail :: () -> int { a: [2]int; i := 2; return a[i]; }\nmain :: () { x: Ring(int, #run fail()); }\n",
+         "5:27: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+         "    in fail (test.rig:4:48)\n"
+         "    in #run (test.rig:5:27)\n"},
         {"main :: () { x: Ring(int, \"a\"); }\n",
          "4:27: argument 2 of 'Ring' has type 'string', which can't be converted to 'int'\n"},
         {"Small :: struct (N: u8) { }\nmain :: () { x: Small(300); }\n", "5:23: 300 doesn't fit in 'u8'\n"},
@@ -14603,6 +14692,28 @@ TEST(struct_argument_mistakes) {
         {"S :: struct (N: S(1)) { }\nmain :: () { x: S(1); }\n", "4:1: 'S' is defined in terms of itself\n"},
     };
     for (const Case &k : cases) CHECK_STR(check_with_preload(&a, with_generic_structs(&a, k.text)), k.message);
+    arena_free(&a);
+}
+
+TEST(generic_structs_nest_at_most_max_depth) {
+    // A generic struct's own check is worked out inside what needs it, as a
+    // declaration is: each parameter's type an instance of the next is two
+    // levels, so S0 is at 0 and S500 at 1000, where its parameter's '(' is
+    // one too many. Shorter by one, the chain fits, its last mistake (a
+    // struct's instance is no parameter's type) said; longer, the one too
+    // deep is said, and checked in its own turn, from 0, where its own
+    // mistake is found. No crash either way.
+    Arena a = arena_make();
+    const char *link = "S%lld :: struct (N: S%lld(1)) { }\n";
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 499, 1),
+                                      "S500 :: struct (N: int) { }\n")),
+              "501:20: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string "
+              "type, not 'S500(1)'\n");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 500, 1),
+                                      "S501 :: struct (N: int) { }\n")),
+              joined(&a, needed_too_deeply(&a, 502, "S500"),
+                     "502:20: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or "
+                     "string type, not 'S501(1)'\n"));
     arena_free(&a);
 }
 

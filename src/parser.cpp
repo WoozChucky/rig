@@ -20,8 +20,8 @@ struct Parser {
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token, top-level #if branches included
     s32 branches;               // the top-level #if branches open around the next token (also in blocks)
-    s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
-                                // the next token
+    s32 type_levels;            // the type levels (*, [], [N], a procedure type's '(' and an
+                                // instance's) open around the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
     s32 body_deepest;           // the most levels reached in the body being read, the body's own
                                 // blocks open around each counted too, not the top-level #if
@@ -74,8 +74,9 @@ struct Parser {
 // with each operator, though the parser itself doesn't recurse to build it
 // (the checker does, to check it).
 //
-// A type's levels are each '*', '[]', '[N]' and procedure type's '(' in it
-// (parse_type): ***int is 3, [][4]*u8 is 3, (*int) -> int 2, a name none.
+// A type's levels are each '*', '[]', '[N]', procedure type's '(' and
+// instance's '(' in it (parse_type): ***int is 3, [][4]*u8 is 3, (*int) ->
+// int 2, Map(int, *u8) 2, a name none.
 //
 // Types and expressions nest inside each other: an array's count is an
 // expression inside its '[N]' level, and size_of(T), type_info(T) and
