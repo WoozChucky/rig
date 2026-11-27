@@ -14992,10 +14992,10 @@ TEST(generic_struct_fields_reach_its_instances) {
 TEST(aliases_of_instances_come_before_their_generics) {
     // An alias of an instance declared before its generic checks the
     // generic while it's worked out, and a field naming the alias is no
-    // circle, in either order (spec 4.8): the generic's own check passes
-    // over the alias (alias_under_way), each instance's layout resolving
-    // it. So is one first needed by a global, a plain struct's field or a
-    // parameter, or reached through a second generic.
+    // circle, in either order (spec 4.8): the generic's own check leaves the
+    // alias's name until the alias is worked out (alias_under_way). So is
+    // one first needed by a global, a plain struct's field or a parameter,
+    // or reached through a second generic.
     Arena a = arena_make();
     const char *fine[] = {
         "Ptr :: *Node(int);\nNode :: struct (T: Type) { v: T; kids: [..]Ptr; }\nmain :: () { x: Node(int); }\n",
@@ -15013,13 +15013,41 @@ TEST(aliases_of_instances_come_before_their_generics) {
         "main :: () { x: A(int); y: B(int); }\n",
     };
     for (s64 i = 0; i < (s64)(sizeof(fine) / sizeof(fine[0])); i++) CHECK_STR(check_with_preload(&a, fine[i]), "");
+    // A mistake at the alias's name is still the generic's, said once, at
+    // it, with no chain, in either order, the alias on line 1 or on line 3:
+    // it's checked before either instance is laid out, and the generic
+    // makes no instance. In a resizable array, behind a pointer, by value
+    // with the alias's value an instance by value, and at two fields.
+    struct {
+        const char *alias, *generic, *uses, *expected;
+    } late[] = {
+        {"Ptr :: *Node(int);", "Node :: struct (T: Type) { v: T; kids: [..]Ptr(T); }",
+         "main :: () { a: Node(u8); b: Node(s8); }", "2:44: 'Ptr' isn't generic, so it takes no arguments\n"},
+        {"Ptr :: *Node(int);", "Node :: struct (T: Type) { v: T; kids: *Ptr(T); }",
+         "main :: () { a: Node(u8); b: Node(s8); }", "2:41: 'Ptr' isn't generic, so it takes no arguments\n"},
+        {"Ptr :: Node(int);", "Node :: struct (T: Type) { v: T; w: Ptr(T); }",
+         "main :: () { a: Node(u8); b: Node(s8); }", "2:37: 'Ptr' isn't generic, so it takes no arguments\n"},
+        {"A :: *S(int);", "S :: struct (T: Type) { a: *A(T); b: *A(T); }", "main :: () { a: S(u8); b: S(s8); }",
+         "2:29: 'A' isn't generic, so it takes no arguments\n"
+         "2:39: 'A' isn't generic, so it takes no arguments\n"},
+    };
+    for (s64 i = 0; i < (s64)(sizeof(late) / sizeof(late[0])); i++) {
+        String first = string_printf(&a, "%s\n%s\n\n%s\n", late[i].alias, late[i].generic, late[i].uses);
+        String after = string_printf(&a, "\n%s\n%s\n%s\n", late[i].generic, late[i].alias, late[i].uses);
+        CHECK_STR(check_source(&a, string_cstr(&a, first)), late[i].expected);
+        CHECK_STR(check_source(&a, string_cstr(&a, after)), late[i].expected);
+    }
     // A real circle is still said, once: a value that needs itself, and a
     // layout that needs the alias's value while it's worked out, in either
     // order, with the instance whose layout needed it.
     CHECK_STR(check_source(&a, "Box :: struct (T: Type) { v: T; }\nA :: *Box(A);\nmain :: () { }\n"),
               "2:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "A :: *Box(A);\nBox :: struct (T: Type) { v: T; }\nmain :: () { }\n"),
+              "1:1: 'A' is defined in terms of itself\n");
     CHECK_STR(check_source(&a, "Box :: struct (T: Type) { v: T; }\nA :: Box(B); B :: Box(A);\nmain :: () { }\n"),
               "2:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "A :: Box(B); B :: Box(A);\nBox :: struct (T: Type) { v: T; }\nmain :: () { }\n"),
+              "1:1: 'A' is defined in terms of itself\n");
     CHECK_STR(check_source(&a, "Al :: [2]S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n"),
               "1:1: 'Al' is defined in terms of itself\n"
               "    in 'S' with T = int, used at test.rig:1:10\n");

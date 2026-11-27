@@ -446,8 +446,8 @@ struct Ast_Struct : Ast {
                                 // then on, and one made before it, through an alias a field's type
                                 // names, is never laid out (check_generic.cpp's instance_may_be_laid_out)
     Generic_Fields *field_check;  // a generic struct's: what's left of its own check of its fields while
-                                  // it's under way (check_generic.cpp's check_generic_fields); null
-                                  // otherwise
+                                  // it's under way, or of the names in them that wait for an alias
+                                  // (check_generic.cpp's check_generic_fields); null otherwise
 };
 
 // An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`

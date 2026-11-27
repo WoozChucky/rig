@@ -1704,21 +1704,24 @@ struct Generic_Field_Step {
     Name_Place place;  // where the type name is in the field's type
 };
 
-// What's left of a generic struct's own check of its fields (spec 3.23)
-// while it's under way (Ast_Struct.field_check), step by step. A field's
-// type may reach an instance of the generic before the names after it are
-// checked, through an alias whose value names it (a: *A; A :: #type
-// List(int);), in a later field or later in its own type ((A) -> Nope):
-// the instance is made, but before anything lays it out the rest of the
-// steps are checked (instance_may_be_laid_out), so the generic's mistakes
-// are known, and said once, at it, before an instance's layout would say
-// them again, or say its own.
+// What's left of a generic struct's own check of its fields (spec 3.23),
+// step by step (Ast_Struct.field_check). A field's type may reach an
+// instance of the generic before the names after it are checked, through
+// an alias whose value names it (a: *A; A :: #type List(int);), in a later
+// field or later in its own type ((A) -> Nope): the instance is made, but
+// before anything lays it out the rest of the steps are checked
+// (instance_may_be_laid_out), so the generic's mistakes are known, and
+// said once, at it, before an instance's layout would say them again, or
+// say its own. A step naming an alias being worked out waits until it's
+// worked out (alias_under_way), past the end of the generic's own check,
+// so what's left then is those steps alone.
 struct Generic_Fields {
-    Array<Generic_Field_Step> steps;  // its named fields' steps in source order (field_steps)
-    s64 checked;                      // how many of them are checked, or being checked
-    Array<Generic_Binding> declared;  // its parameters (struct_parameters)
-    Array<Ast_Field *> reachable;     // the named fields so far that clash with none, across its braces
-    Ast_Field *unchecked;             // a field said to clash whose type isn't checked, or null
+    Array<Generic_Field_Step> steps;    // its named fields' steps in source order (field_steps)
+    s64 checked;                        // how many of them are checked, or being checked
+    Array<Generic_Binding> declared;    // its parameters (struct_parameters)
+    Array<Ast_Field *> reachable;       // the named fields so far that clash with none, across its braces
+    Ast_Field *unchecked;               // a field said to clash whose type isn't checked, or null
+    Array<Generic_Field_Step> waiting;  // the steps that wait for an alias being worked out
 };
 
 // What add_type_name_step needs: the steps, and the field whose type is
@@ -1765,11 +1768,16 @@ static void field_steps(Ast_Struct *s, Array<Generic_Field_Step> *steps) {
 // circle, as an instance needs only the generic's parameters
 // (check_struct_instance), but looking the name up would work the constant
 // out again and say it's defined in terms of itself, which the other order
-// never says (spec 4.8). So the generic's own check passes over it, and
-// each instance's layout resolves it, the alias worked out by then. A
-// layout that needs the alias's value while it's worked out still says the
-// circle, as in Al :: [2]S(int); with a field a: Al, and so does a value
-// that needs itself, A :: *Box(A); (resolve_global).
+// never says (spec 4.8). So the step waits (Generic_Fields.waiting), and
+// is checked as the generic's own, at the top level and with no chain,
+// once the alias is worked out: before an instance is laid out
+// (instance_may_be_laid_out) or in the generic's turn in check()'s pass
+// (finish_generic_fields), whichever comes first. Its mistakes are then
+// said once, as in the other order, and mark the generic, so it makes no
+// instance. A layout that needs the alias's value while it's worked out
+// finds the step still waiting, and says the circle, as in Al :: [2]S(int);
+// with a field a: Al, as does a value that needs itself, A :: *Box(A);
+// (resolve_global).
 static bool alias_under_way(Checker *c, Array<Generic_Binding> declared, Ast_Type *written) {
     if (type_from_name(written->name) || is_type_parameter(declared, written->name) ||
         is_constant_parameter(declared, written->name)) {
@@ -1798,22 +1806,27 @@ static bool alias_under_way(Checker *c, Array<Generic_Binding> declared, Ast_Typ
 //   generic, so it takes no arguments", its count right, "'Map' takes 2
 //   arguments, but 1 was given", and a written type where it takes a
 //   constant no value (at_generic_instance). An array's count and an
-//   instance's other arguments are each instance's to check, and so is a
-//   name of an alias being worked out (alias_under_way).
-// A field said to clash has its type checked, for its own mistakes, only
-// when it holds a pointer or a view, as lay_out makes only a late one's.
-// Each mistake marks the generic as it's said (Ast_Struct.had_errors); a
-// name's alias's own mistakes, or an instance's its value lays out, don't.
-// Each step is counted checked as it starts, so an instance's layout that a
-// name's alias needs finds the steps after it still to check, and checks
-// them first (Generic_Fields).
+//   instance's other arguments are each instance's to check.
+// A name of an alias being worked out waits (alias_under_way), and the
+// steps that wait are checked after the rest, each whose alias is worked
+// out by then. A field said to clash has its type checked, for its own
+// mistakes, only when it holds a pointer or a view, as lay_out makes only
+// a late one's. Each mistake marks the generic as it's said
+// (Ast_Struct.had_errors); a name's alias's own mistakes, or an instance's
+// its value lays out, don't. Each step is counted checked as it starts, so
+// an instance's layout that a name's alias needs finds the steps after it
+// still to check, and checks them first (Generic_Fields).
 static void check_generic_fields(Checker *c, Ast_Struct *generic) {
     Generic_Fields *check = generic->field_check;
     while (check->checked < check->steps.count) {
         Generic_Field_Step step = check->steps[check->checked++];
         Ast_Field *field = step.field;
         if (step.name) {
-            if (field == check->unchecked || alias_under_way(c, check->declared, step.name)) continue;
+            if (field == check->unchecked) continue;
+            if (alias_under_way(c, check->declared, step.name)) {
+                array_add(&check->waiting, step);
+                continue;
+            }
             Generic_Type_Check name_check = {c, check->declared, false};
             at_generic_type_name(&name_check, step.name, step.place);
             generic->had_errors |= name_check.said;
@@ -1836,18 +1849,54 @@ static void check_generic_fields(Checker *c, Ast_Struct *generic) {
             array_add(&check->reachable, field);
         }
     }
+    // Taken out while they're checked, so a layout one of them needs finds
+    // only those still waiting.
+    Array<Generic_Field_Step> waiting = check->waiting;
+    check->waiting = {};
+    for (s64 i = 0; i < waiting.count; i++) {
+        Generic_Field_Step step = waiting[i];
+        if (alias_under_way(c, check->declared, step.name)) {
+            array_add(&check->waiting, step);
+            continue;
+        }
+        Generic_Type_Check name_check = {c, check->declared, false};
+        at_generic_type_name(&name_check, step.name, step.place);
+        generic->had_errors |= name_check.said;
+    }
+    array_free(&waiting);
+}
+
+// Ends generic struct generic's check of its fields: what it kept is
+// freed, and nothing is left (Ast_Struct.field_check).
+static void end_field_check(Ast_Struct *generic) {
+    Generic_Fields *check = generic->field_check;
+    array_free(&check->waiting);
+    array_free(&check->reachable);
+    array_free(&check->declared);
+    array_free(&check->steps);
+    generic->field_check = nullptr;
+}
+
+// What's left of generic struct generic's own check of its fields, if
+// anything is (Generic_Fields), checked at the top level, with no chain:
+// the generic's mistakes are its own, whatever needed them first.
+static void check_rest_of_fields(Checker *c, Ast_Struct *generic) {
+    if (!generic->field_check) return;
+    Outer_Scopes scopes = leave_scopes(c);
+    check_generic_fields(c, generic);
+    return_to_scopes(c, scopes);
 }
 
 bool instance_may_be_laid_out(Checker *c, Ast_Instance *inst) {
-    Ast_Struct *generic = inst->generic_struct;
-    if (generic->field_check) {
-        // The generic's mistakes are its own, with no chain, whatever
-        // layout needed them first.
-        Outer_Scopes scopes = leave_scopes(c);
-        check_generic_fields(c, generic);
-        return_to_scopes(c, scopes);
-    }
-    return !generic->had_errors;
+    check_rest_of_fields(c, inst->generic_struct);
+    return !inst->generic_struct->had_errors;
+}
+
+void finish_generic_fields(Checker *c, Ast_Struct *generic) {
+    check_rest_of_fields(c, generic);
+    // Nothing else is being worked out in the generic's turn in check()'s
+    // pass, so no step still waits for an alias.
+    if (generic->field_check && !generic->field_check->waiting.count) end_field_check(generic);
 }
 
 void check_generic_struct(Checker *c, Ast_Struct *generic) {
@@ -1914,17 +1963,16 @@ void check_generic_struct(Checker *c, Ast_Struct *generic) {
     // checked after, each mistake marking the generic as it's said, so a
     // use after it makes no instance, and one made before it, laid out only
     // once every name after the one that needs it is checked, is never laid
-    // out (instance_may_be_laid_out).
+    // out (instance_may_be_laid_out). A step that waits for an alias being
+    // worked out is kept, with what checking it needs, until it's checked
+    // (finish_generic_fields).
     generic->resolve = RESOLVE_DONE;
-    Generic_Fields fields = {};
-    field_steps(generic, &fields.steps);
-    fields.declared = struct_parameters(generic);
-    generic->field_check = &fields;
+    Generic_Fields *fields = arena_new<Generic_Fields>(c->arena);
+    field_steps(generic, &fields->steps);
+    fields->declared = struct_parameters(generic);
+    generic->field_check = fields;
     check_generic_fields(c, generic);
-    generic->field_check = nullptr;
-    array_free(&fields.reachable);
-    array_free(&fields.declared);
-    array_free(&fields.steps);
+    if (!fields->waiting.count) end_field_check(generic);
     c->levels = outer;
     return_to_scopes(c, scopes);
 }

@@ -616,8 +616,19 @@ void enter_instance(Checker *c, Ast_Instance *inst);
 // 'Nope'", "'N' is not a type"). One that said a mistake makes no instance
 // (Ast_Struct.had_errors): its uses have no type and say nothing more. An
 // alias its fields' types name, worked out there, says its own mistakes,
-// and an instance its value lays out its own: none is the generic's.
+// and an instance its value lays out its own: none is the generic's. A
+// name of an alias being worked out already, whose value needs the
+// generic, waits until the alias is worked out (finish_generic_fields).
 void check_generic_struct(Checker *c, Ast_Struct *generic);
+
+// In generic struct generic's turn in check()'s pass, after its own check
+// (check_generic_struct): the names in its fields' types that waited for
+// an alias being worked out, Ptr in `kids: [..]Ptr(T);` with `Ptr ::
+// *Node(int);` before it, checked now if no instance's layout checked them
+// first (instance_may_be_laid_out), as its own, at the top level and with
+// no chain: "'Ptr' isn't generic, so it takes no arguments", said once, as
+// in the other order, and the generic makes no instance.
+void finish_generic_fields(Checker *c, Ast_Struct *generic);
 
 // The instance of generic struct `generic` that arguments `args` give (spec
 // 3.23), written at `at` (its name, where its messages point), used at
@@ -636,7 +647,8 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
 // being checked, by a field's type that reached it through an alias, has
 // the rest of them checked first, the rest of that field's type too, with
 // no chain, so the generic's mistakes are said once, there, and its
-// instance says none of them again, nor any of its own.
+// instance says none of them again, nor any of its own. So are the names
+// that waited for an alias worked out since (finish_generic_fields).
 bool instance_may_be_laid_out(Checker *c, Ast_Instance *inst);
 
 // The instance an AST_TYPE_INSTANCE written type names (check_struct_instance),

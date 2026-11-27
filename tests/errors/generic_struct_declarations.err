@@ -1,27 +1,30 @@
-tests/errors/generic_struct_declarations.rig:9:27: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:9:18
+tests/errors/generic_struct_declarations.rig:10:27: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:10:18
     Twice :: struct (T: Type, T: Type) { }
                               ^
-tests/errors/generic_struct_declarations.rig:10:21: error: 'int' is a built-in type
+tests/errors/generic_struct_declarations.rig:11:21: error: 'int' is a built-in type
     Built_In :: struct (int: Type) { }
                         ^
-tests/errors/generic_struct_declarations.rig:11:35: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:11:24
+tests/errors/generic_struct_declarations.rig:12:35: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:12:24
     Field_Param :: struct (T: Type) { T: int; }
                                       ^
-tests/errors/generic_struct_declarations.rig:12:43: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:12:24
+tests/errors/generic_struct_declarations.rig:13:43: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:13:24
     Inner_Param :: struct (T: Type) { union { T: int; }; }
                                               ^
-tests/errors/generic_struct_declarations.rig:13:39: error: 'a' is already declared at tests/errors/generic_struct_declarations.rig:13:33
+tests/errors/generic_struct_declarations.rig:14:39: error: 'a' is already declared at tests/errors/generic_struct_declarations.rig:14:33
     Duplicate :: struct (T: Type) { a: T; a: int; }
                                           ^
-tests/errors/generic_struct_declarations.rig:14:34: error: unknown type 'Nope'
+tests/errors/generic_struct_declarations.rig:15:34: error: unknown type 'Nope'
     Missing :: struct (T: Type) { a: Nope; }
                                      ^
-tests/errors/generic_struct_declarations.rig:15:34: error: 'N' is not a type
+tests/errors/generic_struct_declarations.rig:16:34: error: 'N' is not a type
     Constant :: struct (N: int) { a: N; }
                                      ^
-tests/errors/generic_struct_declarations.rig:16:32: error: 'void' is only a pointer's target, as in *void
+tests/errors/generic_struct_declarations.rig:17:32: error: 'void' is only a pointer's target, as in *void
     Empty :: struct (T: Type) { a: void; }
                                    ^
-tests/errors/generic_struct_declarations.rig:17:44: error: unknown type 'Nope'
+tests/errors/generic_struct_declarations.rig:18:44: error: unknown type 'Nope'
     Unknown_Instance :: struct (T: Type) { a: *Nope(T); }
+                                               ^
+tests/errors/generic_struct_declarations.rig:20:44: error: 'Late_Ptr' isn't generic, so it takes no arguments
+    Late :: struct (T: Type) { v: T; kids: [..]Late_Ptr(T); }
                                                ^

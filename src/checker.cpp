@@ -4106,21 +4106,23 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // constants, each one that isn't done yet (one needed earlier was worked
     // out there: resolve_struct, resolve_enum, resolve_signature,
     // resolve_global), a generic struct its own check (spec 3.23,
-    // check_generic_struct). One pass, so a chain of declarations each
-    // needing the one before it never nests (open_declaration), whatever
-    // kind each is. Then the types of the structs' fields that wait for
-    // every layout (resolve_late_fields), the generic structs' instances
-    // made so far laid out first, and those their late fields make in
-    // turn; and the types made before every layout was done, made again
-    // (made_again). All are done before the bodies, which only find them
-    // finished: a body may need a struct's size and fields, a call its
-    // procedure's parameters and results. All but the bodies a #run in the
-    // pass reaches, which are checked there (check_reached_body), and work
-    // out what they need there too.
+    // check_generic_struct) and then the names in its fields that waited
+    // for an alias (finish_generic_fields). One pass, so a chain of
+    // declarations each needing the one before it never nests
+    // (open_declaration), whatever kind each is. Then the types of the
+    // structs' fields that wait for every layout (resolve_late_fields), the
+    // generic structs' instances made so far laid out first, and those
+    // their late fields make in turn; and the types made before every
+    // layout was done, made again (made_again). All are done before the
+    // bodies, which only find them finished: a body may need a struct's
+    // size and fields, a call its procedure's parameters and results. All
+    // but the bodies a #run in the pass reaches, which are checked there
+    // (check_reached_body), and work out what they need there too.
     for (s64 i = 0; i < declarations.count; i++) {
         Ast *decl = declarations[i];
         if (decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
             check_generic_struct(&c, (Ast_Struct *)decl);
+            finish_generic_fields(&c, (Ast_Struct *)decl);
         } else if (decl->kind == AST_STRUCT) {
             resolve_struct(&c, (Ast_Struct *)decl);
         } else if (decl->kind == AST_ENUM) {

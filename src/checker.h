@@ -1470,8 +1470,9 @@
 //   defined in terms of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias
 //   dropped. An alias whose value needs an instance of a generic struct
 //   whose field names the alias, `Ptr :: *Node(int);` with `kids:
-//   [..]Ptr;`, is none: the generic's own check passes over the alias
-//   being worked out (check_generic.cpp's alias_under_way).
+//   [..]Ptr;`, is no circle: the generic's own check leaves the alias's
+//   name until the alias is worked out, and checks it then
+//   (check_generic.cpp's alias_under_way).
 // - An alias whose check failed, or that is in a circle, has no type, its
 //   mistake said once: its uses say nothing more (resolve_written,
 //   check_addressable). Nor do those of one naming a struct found in a
@@ -1513,11 +1514,13 @@
 //   pointer's target, as in *void"; an instance's name, its count and a
 //   written type where it takes a constant, as in a generic procedure's
 //   signature, "'Vec2' isn't generic, so it takes no arguments"), array
-//   counts and instances' other arguments left to each instance. One whose
-//   own check said a mistake makes no instance (Ast_Struct.had_errors): its
-//   uses have no type and say nothing more, and one made before the
-//   mistake was found, by a field's type through an alias, is never laid
-//   out (instance_may_be_laid_out).
+//   counts and instances' other arguments left to each instance; a name
+//   of an alias being worked out, whose value needs the generic, is
+//   checked once the alias is (finish_generic_fields). One whose own check
+//   said a mistake makes no instance (Ast_Struct.had_errors): its uses
+//   have no type and say nothing more, and one made before the mistake
+//   was found, by a field's type through an alias, is never laid out
+//   (instance_may_be_laid_out).
 // - An instance is written where a type goes, Map(string, int)
 //   (AST_TYPE_INSTANCE), worked out once per written type
 //   (check_written_instance, Ast_Type.instance_type): a name that is no
