@@ -1,0 +1,9 @@
+l+t
+l+s
+l+l
+x modify!widen*
+bp `modify.rig:32`
+g
+dv /t
+?? b.v
+q

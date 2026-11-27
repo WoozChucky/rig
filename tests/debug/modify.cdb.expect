@@ -1,0 +1,7 @@
+modify!widen(T = int)
+int64 a = 0n3
+int64 c = 0n4
+struct Box(int) b
+0n5
+!widen(T = u8)
+!Box(u8)
