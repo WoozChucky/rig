@@ -1969,10 +1969,9 @@ static void made_again_signature(Ast_Proc *proc) {
 // mistakes. An anonymous member's late fields are its own struct's (spec
 // 3.19), made in turn, as its fields come.
 static void resolve_late_fields(Checker *c, Ast_Struct *s) {
-    // A struct instance's copy laid out while its generic's fields were
-    // being checked, inside a field's type, whose later names then said a
-    // mistake of the generic's own (spec 3.23): it has no type now, and its
-    // late fields, the generic's, say nothing again.
+    // A struct instance's copy whose generic said a mistake of its own
+    // (spec 3.23) was never laid out (resolve_struct): it has no type, and
+    // its late fields, the generic's, say nothing again.
     if (s->instance && s->instance->generic_struct->had_errors) {
         s->declared = nullptr;
         return;

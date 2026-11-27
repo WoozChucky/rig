@@ -14820,9 +14820,12 @@ TEST(generic_struct_declaration_mistakes) {
         {"S :: struct (N: int) { a: N; }\n", "x: S(1); y: S(2);", "1:27: 'N' is not a type\n"},
         {"S :: struct (T: Type) { a: void; }\n", "x: S(int); y: S(u8);",
          "1:28: 'void' is only a pointer's target, as in *void\n"},
-        // A field said to clash still has its type checked.
+        // A field said to clash has its type checked only when it holds a
+        // pointer or a view, as any struct's layout makes only a late one's.
         {"S :: struct (T: Type) { a: T; a: Nope; }\n", "x: S(int); y: S(u8);",
-         "1:31: 'a' is already declared at test.rig:1:25\n1:34: unknown type 'Nope'\n"},
+         "1:31: 'a' is already declared at test.rig:1:25\n"},
+        {"S :: struct (T: Type) { a: T; a: *Nope; }\n", "x: S(int); y: S(u8);",
+         "1:31: 'a' is already declared at test.rig:1:25\n1:35: unknown type 'Nope'\n"},
         // A field's type that reaches an instance through an alias, behind
         // a pointer or by value, before a later field's mistake is found:
         // the instance is never laid out, so the mistake is said once, with
@@ -14837,11 +14840,17 @@ TEST(generic_struct_declaration_mistakes) {
          "1:35: unknown type 'Nope'\n"},
         {"S :: struct (T: Type) { p: *A; q: Nope; }\nA :: #type [size_of(S(int))]u8;\n", "x: S(int); y: S(u8);",
          "1:35: unknown type 'Nope'\n"},
-        // Or laid out by an earlier part of the field's own type, a late
-        // field's, whose later part has the mistake: the instance then has
-        // no type, and its late field isn't made.
+        // Or needed by an earlier part of the field's own type, whose later
+        // part has the mistake: the rest of that type is checked before the
+        // instance would be laid out, and it never is, so its own [-1]T
+        // isn't said either. A mistake earlier in that field counts too,
+        // with no field after it.
         {"S :: struct (T: Type) { a: (A) -> Nope; }\nA :: #type [size_of(S(int))]u8;\n", "x: S(int); y: S(u8);",
          "1:35: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { b: [-1]T; a: (A) -> Nope; }\nA :: #type [size_of(S(int))]u8;\n",
+         "x: S(int); y: S(u8);", "1:45: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { b: [-1]T; a: (Nope) -> A; }\nA :: #type [size_of(S(int))]u8;\n",
+         "x: S(int); y: S(u8);", "1:39: unknown type 'Nope'\n"},
     };
     for (const Case &k : cases) {
         CHECK_STR(check_source(&a, joined(&a, k.declaration, "main :: () { }\n")), k.message);
@@ -14866,6 +14875,48 @@ TEST(generic_struct_declaration_mistakes) {
                                "S :: struct (T: Type) { a: Nope; }\n"
                                "main :: () { }\n"),
               "3:28: unknown type 'Nope'\n");
+    // So is one found by an instance's layout inside a procedure instance,
+    // while the generic's fields are still being checked: f(0)'s body
+    // needs S(int), whose generic's later field has the mistake.
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { p: *A; q: Nope; }\n"
+                               "A :: #type [#run f(0)]u8;\n"
+                               "f :: (v: $T) -> int { return size_of(S(int)); }\n"
+                               "main :: () { }\n"),
+              "1:35: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+TEST(generic_struct_mistakes_are_only_its_own) {
+    // A name in a generic struct's field's type that is an alias is worked
+    // out there: the alias's own mistakes, and those of an instance its
+    // value lays out, are theirs, not the generic's, which still makes its
+    // instances, whichever order they're declared in. Each instance's and
+    // each use's mistakes are said.
+    Arena a = arena_make();
+    const char *generic = "S :: struct (T: Type, N: int) { p: *A; b: [N]T; }\n";
+    const char *uses = "main :: () { x: S(u8, 2); y: S(u8, -5); x.b[0] = \"no\"; }\n";
+    CHECK_STR(check_source(&a, joined(&a, generic, "A :: #type [Missing]u8;\n", uses)),
+              "1:44: an array's count can't be negative (-5)\n"
+              "    in 'S' with T = u8, N = -5, used at test.rig:3:30\n"
+              "2:13: unknown identifier 'Missing'\n"
+              "3:50: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, joined(&a, "A :: #type [Missing]u8;\n", generic, uses)),
+              "1:13: unknown identifier 'Missing'\n"
+              "2:44: an array's count can't be negative (-5)\n"
+              "    in 'S' with T = u8, N = -5, used at test.rig:3:30\n"
+              "3:50: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, joined(&a, generic, "A :: #type [size_of(S(int, -1))]u8;\n", uses)),
+              "1:44: an array's count can't be negative (-1)\n"
+              "    in 'S' with T = int, N = -1, used at test.rig:2:21\n"
+              "1:44: an array's count can't be negative (-5)\n"
+              "    in 'S' with T = u8, N = -5, used at test.rig:3:30\n"
+              "3:50: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { p: *A; b: T; }\n"
+                               "A :: #type *[g]u8;\n"
+                               "g :: 1 + \"a\";\n"
+                               "main :: () { x: S(u8); x.b = \"no\"; }\n"),
+              "3:8: '+' needs numbers, not 'string'\n"
+              "4:30: a value of type 'string' doesn't convert to 'u8' implicitly\n");
     arena_free(&a);
 }
 
@@ -14929,6 +14980,19 @@ TEST(struct_instances_have_a_depth_limit) {
                            "Grow :: struct (T: Type) { next: *Grow(*T); }\n"
                            "main :: () { g: Grow(int); }\n"),
               string_cstr(&a, expected));
+    // A procedure instance the fields of the struct instance that deep
+    // would make is refused too, with the same chain, made by fields too.
+    String fields_chain = pointer_chain(&a, "Grow", 1000, "2:35", "3:17", "used");
+    CHECK_STR(check_source(&a,
+                           "sz :: ($T: Type) -> int { return 1; }\n"
+                           "Grow :: struct (T: Type) { next: *Grow(*T); a: [#run sz(T)]u8; }\n"
+                           "main :: () { g: Grow(int); }\n"),
+              string_cstr(&a, string_printf(&a,
+                                            "2:35: 'Grow' is instantiated more than 1000 levels deep, each "
+                                            "instance's fields making the next\n" STR_FMT
+                                            "2:54: 'sz' is instantiated more than 1000 levels deep, each "
+                                            "instance's fields making the next\n" STR_FMT,
+                                            STR_ARG(fields_chain), STR_ARG(fields_chain))));
     // Struct instances count with procedure instances: written in the code
     // of a procedure instance MAX_DEPTH deep, whose instances' bodies each
     // called the next, the struct's is refused where it's written, its

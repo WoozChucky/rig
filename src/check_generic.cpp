@@ -238,10 +238,12 @@ static bool is_constant_parameter(Array<Generic_Binding> declared, String name) 
 }
 
 // What check_generic_type's action needs: the checker, and the type and
-// constant parameters the generic, a procedure or a struct, declares.
+// constant parameters the generic, a procedure or a struct, declares; and
+// what it found: whether it said a mistake of the generic's own.
 struct Generic_Type_Check {
     Checker *c;
     Array<Generic_Binding> declared;
+    bool said;
 };
 
 // At a type name in a written type of a generic's signature, or of a
@@ -258,6 +260,11 @@ struct Generic_Type_Check {
 // mistakes said once per instance, and nothing in it is looked at here. A
 // constant parameter's name is no type: "'N' is not a type", as
 // resolve_written says of a constant's.
+//
+// A name that may be an alias is worked out first, as find_name works it
+// out: what that says is the alias's own mistake, or an instance's that its
+// value lays out, never the generic's, which are only those said at the
+// name after it (Generic_Type_Check.said).
 static void at_generic_type_name(void *data, Ast *name, Name_Place place) {
     if (name->kind != AST_TYPE_NAME || place.in_count) return;
     Generic_Type_Check *check = (Generic_Type_Check *)data;
@@ -269,19 +276,24 @@ static void at_generic_type_name(void *data, Ast *name, Name_Place place) {
         // (check_signature_names).
         if (!written->declares) {
             diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+            check->said = true;
         }
         return;
     }
+    find_name(c, written->name);
+    s64 errors = c->diag->error_count;
     if (resolve_written(c, written, true) == &type_void && !place.pointee) {
         diag_error(c->diag, written->pos, "'void' is only a pointer's target, as in *void");
     }
+    check->said |= c->diag->error_count != errors;
 }
 
-// Checks written type `written` of a generic's signature, or of a generic
-// struct's field, against the type and constant parameters the generic
-// declares, `declared` (at_generic_type_name).
+// Checks written type `written` of a generic's signature against the type
+// and constant parameters the generic declares, `declared`
+// (at_generic_type_name). A generic struct's fields are checked name by
+// name instead (check_generic_fields).
 static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared) {
-    Generic_Type_Check check = {c, declared};
+    Generic_Type_Check check = {c, declared, false};
     walk_names(written, Name_Place{}, at_generic_type_name, &check);
 }
 
@@ -1265,13 +1277,16 @@ static void make_bindings(Checker *c, Array<Generic_Binding> bindings, Array<Ast
 // without end. One to be made in an instance MAX_DEPTH deep is refused at
 // its call, "'grow' is instantiated more than 1000 levels deep, each
 // instance's body making the next", followed by the chain it's in, as any
-// error there is (Diagnostics.context), and none is made: null.
+// error there is (Diagnostics.context), and none is made: null. Called in
+// the fields of a struct instance that deep (make_struct_instance), whose
+// instances' fields each made the next, a: [#run sz(T)]u8, it's "each
+// instance's fields making the next".
 static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_Binding> bindings,
                                    Position called_at) {
     if (c->instance && c->instance->depth >= MAX_DEPTH) {
         diag_error(c->diag, called_at,
-                   "'" STR_FMT "' is instantiated more than %d levels deep, each instance's body making the next",
-                   STR_ARG(generic->name), MAX_DEPTH);
+                   "'" STR_FMT "' is instantiated more than %d levels deep, each instance's %s making the next",
+                   STR_ARG(generic->name), MAX_DEPTH, c->instance->generic_struct ? "fields" : "body");
         return nullptr;
     }
     Ast_Instance *inst = arena_new<Ast_Instance>(c->arena);
@@ -1362,59 +1377,98 @@ static s32 field_levels(Ast_Struct *s) {
     return deepest;
 }
 
+// One step of a generic struct's own check of its fields (Generic_Fields):
+// a named field's name, or a type name in its written type outside any
+// array's count or instance's argument (at_generic_type_name).
+struct Generic_Field_Step {
+    Ast_Field *field;
+    Ast_Type *name;    // the type name, or null for the field's own name
+    Name_Place place;  // where the type name is in the field's type
+};
+
 // What's left of a generic struct's own check of its fields (spec 3.23)
-// while it's under way (Ast_Struct.field_check). A field's type may reach
-// an instance of the generic before a later field is checked, through an
-// alias whose value names it (a: *A; A :: #type List(int);): the instance
-// is made, but before anything lays it out the rest of the fields are
-// checked (instance_may_be_laid_out), so the generic's mistakes are known,
-// and said once, at it, before an instance's layout would say them again.
+// while it's under way (Ast_Struct.field_check), step by step. A field's
+// type may reach an instance of the generic before the names after it are
+// checked, through an alias whose value names it (a: *A; A :: #type
+// List(int);), in a later field or later in its own type ((A) -> Nope):
+// the instance is made, but before anything lays it out the rest of the
+// steps are checked (instance_may_be_laid_out), so the generic's mistakes
+// are known, and said once, at it, before an instance's layout would say
+// them again, or say its own.
 struct Generic_Fields {
-    Array<Ast_Field *> fields;        // its named fields in source order, an anonymous member's at its braces
+    Array<Generic_Field_Step> steps;  // its named fields' steps in source order (field_steps)
     s64 checked;                      // how many of them are checked, or being checked
     Array<Generic_Binding> declared;  // its parameters (struct_parameters)
     Array<Ast_Field *> reachable;     // the named fields so far that clash with none, across its braces
-    s64 errors;                       // the error count its check started at
+    Ast_Field *unchecked;             // a field said to clash whose type isn't checked, or null
 };
 
-// The named fields of struct s, added to *fields in source order, an
-// anonymous member's where its braces are, at any depth.
-static void named_fields(Ast_Struct *s, Array<Ast_Field *> *fields) {
+// What add_type_name_step needs: the steps, and the field whose type is
+// walked.
+struct Field_Steps {
+    Array<Generic_Field_Step> *steps;
+    Ast_Field *field;
+};
+
+// At a type name in a field's written type outside any array's count or
+// instance's argument: a step that checks it, added to the Field_Steps
+// `data` is.
+static void add_type_name_step(void *data, Ast *name, Name_Place place) {
+    if (name->kind != AST_TYPE_NAME || place.in_count) return;
+    Field_Steps *steps = (Field_Steps *)data;
+    array_add(steps->steps, Generic_Field_Step{steps->field, (Ast_Type *)name, place});
+}
+
+// The steps of struct s's named fields, added to *steps in source order,
+// an anonymous member's where its braces are, at any depth: each field's
+// name, then each type name in its type, in the order walk_names meets it.
+static void field_steps(Ast_Struct *s, Array<Generic_Field_Step> *steps) {
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
         if (field->anonymous) {
-            named_fields(field->anonymous, fields);
-        } else {
-            array_add(fields, field);
+            field_steps(field->anonymous, steps);
+            continue;
         }
+        array_add(steps, Generic_Field_Step{field, nullptr, Name_Place{}});
+        Field_Steps walk = {steps, field};
+        walk_names(field->type_expr, Name_Place{}, add_type_name_step, &walk);
     }
 }
 
-// The fields of generic struct generic not checked yet, its own and its
-// anonymous members', checked as the generic's own (spec 3.23), against its
-// parameters and the named fields so far across its braces
-// (Generic_Fields), in source order:
+// The steps of generic struct generic's check of its fields not checked
+// yet, its own and its anonymous members', checked as the generic's own
+// (spec 3.23), against its parameters and the named fields so far across
+// its braces (Generic_Fields), in source order:
 // - a field named as a parameter is "'T' is already declared at PATH:L:C",
 //   at it, as two of a procedure's parameters are;
 // - a field named as an earlier field, in its own braces or in another
 //   member's, is the same, as each instance's layout would say it
 //   (checker.cpp's lay_out), once here instead;
-// - its written type is checked as a generic procedure's parameter's is
-//   (check_generic_type), the parameters taken as types and constants
-//   still to be known: "unknown type 'Nope'", "'N' is not a type", "'void'
-//   is only a pointer's target, as in *void". An array's count and an
-//   instance's arguments are each instance's to check, and so, for now, is
-//   an instance's name.
-// A field said to clash still has its type checked, for its own mistakes,
-// as lay_out makes a late one's. Once the generic's check has said more
-// than the errors it started with, after each field, it is marked
-// (Ast_Struct.had_errors). Each field is counted checked as its check
-// starts, so an instance's layout that a field's type needs finds the
-// fields after it still to check, and checks them first (Generic_Fields).
+// - each type name in its written type is checked as one in a generic
+//   procedure's parameter's is (at_generic_type_name), the parameters
+//   taken as types and constants still to be known: "unknown type 'Nope'",
+//   "'N' is not a type", "'void' is only a pointer's target, as in *void".
+//   An array's count and an instance's arguments are each instance's to
+//   check, and so, for now, is an instance's name.
+// A field said to clash has its type checked, for its own mistakes, only
+// when it holds a pointer or a view, as lay_out makes only a late one's.
+// Each mistake marks the generic as it's said (Ast_Struct.had_errors); a
+// name's alias's own mistakes, or an instance's its value lays out, don't.
+// Each step is counted checked as it starts, so an instance's layout that a
+// name's alias needs finds the steps after it still to check, and checks
+// them first (Generic_Fields).
 static void check_generic_fields(Checker *c, Ast_Struct *generic) {
     Generic_Fields *check = generic->field_check;
-    while (check->checked < check->fields.count) {
-        Ast_Field *field = check->fields[check->checked++];
+    while (check->checked < check->steps.count) {
+        Generic_Field_Step step = check->steps[check->checked++];
+        Ast_Field *field = step.field;
+        if (step.name) {
+            if (field == check->unchecked) continue;
+            Generic_Type_Check name_check = {c, check->declared, false};
+            at_generic_type_name(&name_check, step.name, step.place);
+            generic->had_errors |= name_check.said;
+            continue;
+        }
         Ast_Param *param = nullptr;
         for (s64 j = 0; j < generic->params.count && !param; j++) {
             if (string_eq(generic->params[j]->name, field->name)) param = generic->params[j];
@@ -1423,15 +1477,14 @@ static void check_generic_fields(Checker *c, Ast_Struct *generic) {
         for (s64 j = 0; j < check->reachable.count && !earlier; j++) {
             if (string_eq(check->reachable[j]->name, field->name)) earlier = check->reachable[j];
         }
-        if (param) {
-            report_declared_again(c, field->name, field->pos, param->pos);
-        } else if (earlier) {
-            report_declared_again(c, field->name, field->pos, earlier->pos);
+        check->unchecked = nullptr;
+        if (param || earlier) {
+            report_declared_again(c, field->name, field->pos, param ? param->pos : earlier->pos);
+            generic->had_errors = true;
+            if (!holds_pointer_or_view(field->type_expr)) check->unchecked = field;
         } else {
             array_add(&check->reachable, field);
         }
-        check_generic_type(c, field->type_expr, check->declared);
-        generic->had_errors |= c->diag->error_count != check->errors;
     }
 }
 
@@ -1439,11 +1492,9 @@ bool instance_may_be_laid_out(Checker *c, Ast_Instance *inst) {
     Ast_Struct *generic = inst->generic_struct;
     if (generic->field_check) {
         // The generic's mistakes are its own, with no chain, whatever
-        // layout needed them first; one in the field whose type needed
-        // this, before the instance, counts too.
+        // layout needed them first.
         Outer_Scopes scopes = leave_scopes(c);
         check_generic_fields(c, generic);
-        generic->had_errors |= c->diag->error_count != generic->field_check->errors;
         return_to_scopes(c, scopes);
     }
     return !generic->had_errors;
@@ -1510,20 +1561,20 @@ void check_generic_struct(Checker *c, Ast_Struct *generic) {
     // reaches an instance of the generic, through an alias whose value
     // names it, worked out as find_name finds it (a: A; A :: #type
     // *List(int);), finds it checked, not in a circle. Its fields are
-    // checked after, each mistake marking the generic at once, so a use
-    // after it makes no instance, and one made before it is never laid out
-    // (instance_may_be_laid_out).
+    // checked after, each mistake marking the generic as it's said, so a
+    // use after it makes no instance, and one made before it, laid out only
+    // once every name after the one that needs it is checked, is never laid
+    // out (instance_may_be_laid_out).
     generic->resolve = RESOLVE_DONE;
     Generic_Fields fields = {};
-    named_fields(generic, &fields.fields);
+    field_steps(generic, &fields.steps);
     fields.declared = struct_parameters(generic);
-    fields.errors = errors;
     generic->field_check = &fields;
     check_generic_fields(c, generic);
     generic->field_check = nullptr;
     array_free(&fields.reachable);
     array_free(&fields.declared);
-    array_free(&fields.fields);
+    array_free(&fields.steps);
     c->levels = outer;
     return_to_scopes(c, scopes);
 }

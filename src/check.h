@@ -598,7 +598,9 @@ void enter_instance(Checker *c, Ast_Instance *inst);
 // built-in type's ("'int' is a built-in type"), and its fields' types, the
 // parameters taken as types and constants still to be known ("unknown type
 // 'Nope'", "'N' is not a type"). One that said a mistake makes no instance
-// (Ast_Struct.had_errors): its uses have no type and say nothing more.
+// (Ast_Struct.had_errors): its uses have no type and say nothing more. An
+// alias its fields' types name, worked out there, says its own mistakes,
+// and an instance its value lays out its own: none is the generic's.
 void check_generic_struct(Checker *c, Ast_Struct *generic);
 
 // The instance of generic struct `generic` that arguments `args` give (spec
@@ -616,8 +618,9 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
 // Whether struct instance inst may be laid out (spec 3.23): its generic's
 // own check said no mistake. One made while that check's fields were still
 // being checked, by a field's type that reached it through an alias, has
-// the rest of them checked first, with no chain, so the generic's
-// mistakes are said once, there, and its instance says none of them again.
+// the rest of them checked first, the rest of that field's type too, with
+// no chain, so the generic's mistakes are said once, there, and its
+// instance says none of them again, nor any of its own.
 bool instance_may_be_laid_out(Checker *c, Ast_Instance *inst);
 
 // The instance an AST_TYPE_INSTANCE written type names (check_struct_instance),
