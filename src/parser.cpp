@@ -185,7 +185,7 @@ static Token *expect(Parser *p, Token_Kind kind) {
 static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
-static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start);
+static Ast *parse_literal(Parser *p, Ast_Type *type_expr, s32 type_height, Token *dot, Position start);
 static bool parameters_follow(Parser *p, s64 open);
 static bool starts_global(Parser *p);
 static bool c_style_literal_follows(Parser *p);
@@ -332,8 +332,8 @@ static Ast *parse_type_info(Parser *p) {
 // it, or the whole of an alias's value. The caller is past the '#type', or
 // still at the '[' or the '(', which begins the type. A literal never
 // follows one: in []int.{1} the '.' after a type value, which is no name
-// (only an Ast_Name is a literal's type), is parse_postfix's "expected a
-// field's name".
+// (only an Ast_Name, or a call of one, an instance's, is a literal's
+// type), is parse_postfix's "expected a field's name".
 static Ast *parse_type_value(Parser *p, Token *at) {
     Ast_Type_Value *value = ast_new<Ast_Type_Value>(p->arena, AST_TYPE_VALUE, at->pos);
     value->type_expr = parse_type_below(p);
@@ -440,7 +440,7 @@ static Ast *parse_primary(Parser *p) {
     case TOKEN_DOT:
         if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
             Token *dot = advance(p);
-            return parse_literal(p, nullptr, dot, dot->pos);
+            return parse_literal(p, nullptr, 0, dot, dot->pos);
         }
         if (peek(p, 1)->kind == TOKEN_IDENT) {
             Token *dot = advance(p);
@@ -482,16 +482,18 @@ static Ast *parse_primary(Parser *p) {
 // when '=' follows it (x == 1 is a value in order). An array's are in
 // order, with no names. The literal is at its '.' and starts at `start`
 // (its type's name, or the '.'); it's a level above its values, as a call
-// is above its arguments. Which fields there are, how many elements, and
+// is above its arguments, and above its type's, `type_height` (an
+// instance's arguments, 0 for a name or no type), which the checker walks
+// as it does the values. Which fields there are, how many elements, and
 // what each value converts to, is the checker's business.
-static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start) {
+static Ast *parse_literal(Parser *p, Ast_Type *type_expr, s32 type_height, Token *dot, Position start) {
     Token *open = advance(p);  // the '{' or '['
     Ast_Literal *literal = ast_new<Ast_Literal>(p->arena, AST_LITERAL, dot->pos);
     literal->start = start;
     literal->type_expr = type_expr;
     literal->is_array = open->kind == TOKEN_LBRACKET;
     Token_Kind close = literal->is_array ? TOKEN_RBRACKET : TOKEN_RBRACE;
-    s32 height = 0;  // the highest value's
+    s32 height = type_height;  // the highest of the type's and the values'
     while (peek(p)->kind != close) {
         Token *first = peek(p);
         bool named = !literal->is_array && first->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_EQUAL;
@@ -565,7 +567,7 @@ static Ast *parse_postfix(Parser *p) {
                 // (Vec2).{1} is no literal.
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, e->pos);
                 type->name = ((Ast_Name *)e)->name;
-                e = parse_literal(p, type, dot, e->start);
+                e = parse_literal(p, type, 0, dot, e->start);
             } else if ((after->kind == TOKEN_LBRACE || after->kind == TOKEN_LBRACKET) && e == call &&
                        !ast_in_parentheses(call) && call->callee->kind == AST_NAME &&
                        !ast_in_parentheses(call->callee)) {
@@ -575,11 +577,12 @@ static Ast *parse_postfix(Parser *p) {
                 // are, which the checker reads as types or constants
                 // (check_generic.cpp's bind_struct_argument). Neither the
                 // name nor the instance is in parentheses, as no type is.
+                // The literal keeps the call's height (p->height still).
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_INSTANCE, call->callee->pos);
                 type->name = ((Ast_Name *)call->callee)->name;
                 type->args = call->args;
                 type->end = call_end;
-                e = parse_literal(p, type, dot, e->start);
+                e = parse_literal(p, type, p->height, dot, e->start);
             } else {
                 error_expected_or_load(p, "a field's name");
                 return nullptr;

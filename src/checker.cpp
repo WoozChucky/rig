@@ -445,12 +445,15 @@ static Ast *alias_in_place(Ast *decl) {
     return decl;
 }
 
-// Whether `value`, a top-level constant's, may be an instance (spec 3.23)
-// if it's a call of a name, past any '*': it is when the callee, looked
-// up at the top level as resolve_global checks it, is a generic struct's
-// name, or none's (an unknown identifier, said when the constant is worked
-// out). A call of anything else is a value, never an alias; any other
-// value is no call, so this says nothing of it.
+// Whether `value`, a constant's, may be an instance (spec 3.23) if it's a
+// call of a name, past any '*': it is when the callee, looked up at the
+// top level, is a generic struct's name, or none's (an unknown identifier,
+// said when the constant is worked out). The top level is where a
+// top-level constant's callee is found as resolve_global checks it; a
+// local constant's is found in its scope when the constant is checked,
+// whose own check has said any mistake of its call. A call of anything
+// else is a value, never an alias; any other value is no call, so this
+// says nothing of it.
 static bool may_call_instance(Checker *c, Ast *value) {
     while (value->kind == AST_UNARY) value = ((Ast_Unary *)value)->operand;
     if (value->kind != AST_CALL) return true;

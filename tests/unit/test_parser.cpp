@@ -5008,5 +5008,20 @@ TEST(parses_instance_literals) {
     CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
     body_dump(&a, "r := (Pair(u8, u8)).{};", &errors);
     CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    // Only the call just read is the type: an index or a member after it
+    // makes something else, which is no type's name.
+    body_dump(&a, "r := Pair(u8, u8)[0].{};", &errors);
+    CHECK_STR(errors, "2:26: expected a field's name, found '{'\n");
+    body_dump(&a, "r := Pair(u8, u8).x.{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    // The literal is a level above its type's arguments as well as its
+    // values: an instance literal whose argument is a chain of 600 + is
+    // 602 levels high, so as the left of another such chain, in another
+    // instance's literal, it's too deep, though each chain fits alone.
+    const char *inner = nested_source(&a, "Box(y", " + y", 600, "", "", ").{}");
+    const char *chain = nested_source(&a, "", " + y", 600, "", "", "");
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := Box(", inner, 1, chain, "",
+                                             ").{};\n}\nBox :: struct (N: int) { }\n")),
+              TOO_DEEP);
     arena_free(&a);
 }

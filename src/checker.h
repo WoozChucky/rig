@@ -25,8 +25,9 @@
 //   share one set of names: a global can't take a procedure's ("'x' is
 //   already declared at PATH:L:C").
 // - A struct's name is a type, and so is a union's, an enum's or a type
-//   alias's (below): used as a value, it's "'Vec2' is a type, not a value".
-//   A name declared as anything else, written where a type goes, is "'foo'
+//   alias's (below): used as a value, it's "'Vec2' is a type, not a value"
+//   (a generic struct's name alone is no type: "'Map' is generic; write
+//   its arguments, as in Map(K, V)", Generic structs below). A name declared as anything else, written where a type goes, is "'foo'
 //   is not a type"; a name declared nowhere, "unknown type 'foo'". A
 //   built-in type's name always means the built-in type, so a struct, a
 //   union, an enum or an alias can't take one: "'u8' is a built-in type",
@@ -1532,8 +1533,8 @@
 //   expressions (written_type_of), so ==, a $T: Type argument and an
 //   alias's value take one, `Int_Pair :: Pair(int, int);`. Anywhere else
 //   the call is "'Pair(string, int)' is a type, not a value", at its name,
-//   once the instance is worked out, its own mistakes said instead
-//   (check_call, before any callee's check). Before a literal's '.', the
+//   once the instance is worked out, its count's or its arguments' mistakes
+//   said instead (check_call, before any callee's check). Before a literal's '.', the
 //   parser makes the call the literal's AST_TYPE_INSTANCE,
 //   `Pair(string, int).{"ann", 36}` (parser.cpp's parse_postfix). The
 //   generic's name alone where a value goes is the generic message too

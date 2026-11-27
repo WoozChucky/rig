@@ -15064,17 +15064,18 @@ TEST(instances_are_one_type_however_written) {
     // struct, is the one written where a type goes: compared with ==, named
     // by an alias, at the top level or in a body, the top level's used
     // before its declaration too (a struct's field, a global's type, a
-    // parameter's), in a generic procedure's instance naming its T, and in
-    // a top-level #run, one type per set of arguments however each is
-    // written.
+    // parameter's), a pointer to one as well, in a generic procedure's
+    // instance naming its T, and in a top-level #run, one type per set of
+    // arguments however each is written.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
-                                 "S :: struct { r: Early; }\n"
+                                 "S :: struct { r: Early; p: PR; }\n"
                                  "g: Early;\n"
                                  "use :: (x: Early) { }\n"
                                  "Early :: Ring(int, 4);\n"
+                                 "PR :: *Ring(int, 4);\n"
                                  "R4 :: Ring(int, 4);\n"
                                  "same_ring :: ($T: Type) -> bool { return Ring(T, 4) == Ring(int, 4); }\n"
                                  "RUN :: #run same_ring(int);\n"
@@ -15084,6 +15085,7 @@ TEST(instances_are_one_type_however_written) {
                                  "    c := R4 == Ring(int, 4);\n"
                                  "    d := Ring(int, 4) != Ring(s64, 4);\n"
                                  "    e := Ring(int, 4) == Ring(int, 5);\n"
+                                 "    pr := PR == *Ring(int, 2 + 2);\n"
                                  "    f := same_ring(int);\n"
                                  "    g := same_ring(s64);\n"
                                  "    L :: Ring(int, 2 + 2);\n"
@@ -15094,12 +15096,12 @@ TEST(instances_are_one_type_however_written) {
                                  &tree),
               "");
     Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
-    const char *compared[] = {"a", "b", "c", "d", "e"};
-    for (s64 k = 0; k < 5; k++) {
+    const char *compared[] = {"a", "b", "c", "d", "pr", "e"};
+    for (s64 k = 0; k < 6; k++) {
         Ast_Var *var = (Ast_Var *)find_local(body, compared[k]);
         CHECK(var->type == &type_bool);
         CHECK(var->value->is_constant);
-        CHECK_EQ(var->value->constant, k < 4 ? 1 : 0);
+        CHECK_EQ(var->value->constant, k < 5 ? 1 : 0);
     }
     Ast_Const *run = (Ast_Const *)top_level_named(tree, "RUN");
     CHECK(run->is_constant);
@@ -15118,6 +15120,8 @@ TEST(instances_are_one_type_however_written) {
     CHECK(local_type(tree, "main", "h") == m);
     CHECK(local_type(tree, "main", "k") == m);
     CHECK(((Ast_Struct *)top_level_named(tree, "S"))->declared->fields[0].type == m);
+    Type *pr = ((Ast_Struct *)top_level_named(tree, "S"))->declared->fields[1].type;
+    CHECK(pr && pr->kind == TYPE_POINTER && pr->pointee == m);
     CHECK(((Ast_Var *)top_level_named(tree, "g"))->type == m);
     CHECK(((Ast_Proc *)top_level_named(tree, "use"))->params[0]->type == m);
     Ast_Const *r4 = (Ast_Const *)top_level_named(tree, "R4");
