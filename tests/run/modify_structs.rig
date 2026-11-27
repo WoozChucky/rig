@@ -6,9 +6,10 @@
 // 200 * 2 without wrapping, is a Box(int), and its type information says
 // so; Ring makes a count below 1 one, so Ring(int, 0) holds one int, 8
 // bytes. List gives u8 the instance of int too: its field next: *List(T),
-// T being int there, gives the block int, and finds the instance being
-// made, which two List(u8) nodes, linked, are. The same compiled,
-// interpreted and in a top-level #run, whose Box(u8) holds 7 + 1000.
+// T being int there, gives the block int, which it leaves as it is, so
+// it finds the instance being made, which two List(u8) nodes, linked,
+// are. The same compiled, interpreted and in a top-level #run, whose
+// Box(u8) holds 7 and adds 1000 to it, which a u8 couldn't take.
 #import "Basic";
 
 Box :: struct (T: Type) #modify {
