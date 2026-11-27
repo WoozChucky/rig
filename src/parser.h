@@ -49,7 +49,7 @@
 //                                                                  '$', or is a name, with or without
 //                                                                  its '(...)', before ',' or ')', but
 //                                                                  size_of(...) and type_info(...)
-//   proc_type  = '(' [proc_param {',' proc_param}] ')'
+//   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
 //   block       = '{' statement* '}'
@@ -477,12 +477,12 @@
 // #run { }: a body can't hold any of them, and each can only start a
 // top-level declaration. A constant in column 1 (`N :: 5;`) is a local
 // constant, as an indented one is, a procedure type's alias (`Cb :: (n:
-// int) -> int;`) too. A struct's braces never closed end there
-// too, and at any #run or #if in column 1. The body is then taken to end
-// before the column-1 declarations (IDENT ':', ':=' or '::', a #load, a
-// #run or an #if) right before that point, at its own level: "expected
-// '}'" is reported at the first of them, and the top level resumes there,
-// so they're read as the globals, constants, loads, runs and #ifs they were
+// int) -> int;`) too. A struct's braces never closed end there too, and
+// at any #run or #if in column 1. The body is then taken to end before
+// the column-1 declarations (IDENT ':', ':=' or '::', a #load, a #run or
+// an #if) right before that point, at its own level: "expected '}'" is
+// reported at the first of them, and the top level resumes there, so
+// they're read as the globals, constants, loads, runs and #ifs they were
 // meant to be (an if's '}' forgotten, then globals). A #load among them, or
 // in the branch of an #if among them, isn't misplaced after all, so it
 // isn't reported. A struct is taken to end before the #loads in column 1

@@ -569,14 +569,16 @@ static Ast *parse_postfix(Parser *p) {
                 type->name = ((Ast_Name *)e)->name;
                 e = parse_literal(p, type, 0, dot, e->start);
             } else if ((after->kind == TOKEN_LBRACE || after->kind == TOKEN_LBRACKET) && e == call &&
-                       !ast_in_parentheses(call) && call->callee->kind == AST_NAME &&
-                       !ast_in_parentheses(call->callee)) {
+                       call->callee->kind == AST_NAME && !ast_in_parentheses(call->callee)) {
                 // The call was an instance of a generic struct, the
                 // literal's type (spec 3.23): Pair(string, int).{...}, at
                 // the name, its arguments the call's expressions as they
                 // are, which the checker reads as types or constants
                 // (check_generic.cpp's bind_struct_argument). Neither the
-                // name nor the instance is in parentheses, as no type is.
+                // name nor the instance is in parentheses, as no type is:
+                // the call is this loop's own, which nothing has put in
+                // parentheses, so (Pair(u8, u8)).{} is no literal, its call
+                // made by parse_primary's parentheses and so not `call`.
                 // The literal keeps the call's height (p->height still).
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_INSTANCE, call->callee->pos);
                 type->name = ((Ast_Name *)call->callee)->name;
@@ -833,7 +835,8 @@ static bool procedure_follows(Parser *p, s64 ahead) {
 // as variable_follows reads a variable's procedure type. So a procedure
 // whose body is missing keeps being one, said where its '{' should be:
 // `f :: () #caller_location;`, `f :: ()\n#run g();` and `f :: () -> int\n
-// g :: () {}` are "expected '{'". A '(' never closed is no alias either.
+// N :: 5;`, whose ';' only the next declaration reaches, are "expected
+// '{'". A '(' never closed is no alias either.
 static bool proc_type_alias_follows(Parser *p, s64 ahead) {
     s64 open = p->next + ahead;
     if (p->tokens[open].kind != TOKEN_LPAREN) return false;
@@ -1752,23 +1755,23 @@ static Ast_Block *parse_block(Parser *p) {
 //
 // A type's '*', '[]', '[N]', '[..]', a procedure type's '(' and an
 // instance's (Map(K, V), spec 3.23) are a level each of the compiler's
-// limit (MAX_DEPTH), counted with the levels of the
-// types and expressions the type is inside: the one level too many is "types
-// are nested too deeply (more than 1000 levels)", at its '*', its '[', or
-// an instance's name. That
-// needs >= below, not ==: parse_type_below opens size_of's, type_info's and
-// a cast's level unchecked, so the levels may already be one over when a
-// type is read there; a name is fine, a '*' isn't. A count is read inside
-// its '[N]' level, so [1][1]...int is a level per [1], however many, and a
-// type inside a count ([size_of(**int)]u8) adds its levels to the type
-// around it. The checker resolves a written type, and lays it out, by
-// recursing into what it's made of, and the stages after it walk written
-// types the same way, so ten thousand '*' would overflow the stack; counting
-// here means none of them ever sees a deeper one. The limit is on the types
-// a program writes. One the checker infers has none (each `p2 := *p1;` is a
-// pointer a level deeper than the last), and nothing recurses through it:
-// the checker builds it a level at a time, and the one stage that walks all
-// of its levels, naming it in a message, does so in a loop (type_name).
+// limit (MAX_DEPTH), counted with the levels of the types and expressions
+// the type is inside: the one level too many is "types are nested too
+// deeply (more than 1000 levels)", at its '*', its '[', or an instance's
+// name. That needs >= below, not ==: parse_type_below opens size_of's,
+// type_info's and a cast's level unchecked, so the levels may already be
+// one over when a type is read there; a name alone is fine, a '*' or an
+// instance isn't. A count is read inside its '[N]' level, so [1][1]...int
+// is a level per [1], however many, and a type inside a count
+// ([size_of(**int)]u8) adds its levels to the type around it. The checker
+// resolves a written type, and lays it out, by recursing into what it's
+// made of, and the stages after it walk written types the same way, so ten
+// thousand '*' would overflow the stack; counting here means none of them
+// ever sees a deeper one. The limit is on the types a program writes. One
+// the checker infers has none (each `p2 := *p1;` is a pointer a level
+// deeper than the last), and nothing recurses through it: the checker
+// builds it a level at a time, and the one stage that walks all of its
+// levels, naming it in a message, does so in a loop (type_name).
 static Ast_Type *parse_type_level(Parser *p);
 
 static Ast_Type *parse_type(Parser *p) {
@@ -1788,20 +1791,26 @@ static Ast_Type *parse_type(Parser *p) {
     return type;
 }
 
+// The index of the ')' that closes the '(' at token `open`, or -1 when a
+// ';' or the end of the file comes first: tokens only.
+static s64 closing_paren(Parser *p, s64 open) {
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
+        if (p->tokens[i].kind == TOKEN_LPAREN) depth++;
+        if (p->tokens[i].kind == TOKEN_RPAREN && --depth == 0) return i;
+    }
+    return -1;
+}
+
 // Whether the '(' the parser is at and its ')' are a procedure type's
 // parameters: the ')' is followed by '->'. After a '->', that's what tells
 // a procedure type as the one result, `-> (int) -> int`, from the results
 // in parentheses, `-> (int, int)` (parse_results). A '(' never closed before
 // a ';' or the end isn't one.
 static bool proc_type_follows(Parser *p) {
-    s64 depth = 0;
-    for (s64 i = p->next; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
-        Token_Kind kind = p->tokens[i].kind;
-        if (kind == TOKEN_LPAREN) depth++;
-        // A token follows: the last one is TOKEN_EOF.
-        if (kind == TOKEN_RPAREN && --depth == 0) return p->tokens[i + 1].kind == TOKEN_ARROW;
-    }
-    return false;
+    s64 close = closing_paren(p, p->next);
+    // A token follows the ')': the last one is TOKEN_EOF.
+    return close >= 0 && p->tokens[close + 1].kind == TOKEN_ARROW;
 }
 
 // Whether a type can start with a token of `kind`: a name, '*', '[', '('
@@ -1931,16 +1940,19 @@ static Ast_Type *parse_proc_type(Parser *p) {
     return type;
 }
 
-// The index of the ')' that closes the '(' at token `open`, or -1 when a
-// ';' or the end of the file comes first: tokens only, as
-// proc_type_follows reads them.
-static s64 closing_paren(Parser *p, s64 open) {
-    s64 depth = 0;
-    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
-        if (p->tokens[i].kind == TOKEN_LPAREN) depth++;
-        if (p->tokens[i].kind == TOKEN_RPAREN && --depth == 0) return i;
-    }
-    return -1;
+// An expression inside a type, an array's count or an instance's argument
+// (parse_instance_argument), the parser at its first token: no part of a
+// parameter's type, so a type in it declares nothing (Parser.in_param_type
+// off while it's read), and the height kept for the expression around the
+// type stays as it was.
+static Ast *parse_expression_in_type(Parser *p) {
+    s32 height = p->height;
+    bool in_param_type = p->in_param_type;
+    p->in_param_type = false;
+    Ast *e = parse_expression(p, 1);
+    p->in_param_type = in_param_type;
+    p->height = height;
+    return e;
 }
 
 // argument = type | expression
@@ -1950,13 +1962,14 @@ static s64 closing_paren(Parser *p, s64 open) {
 // (which parse_type_level refuses outside a procedure's parameter), or is a
 // name, with or without arguments of its own in parentheses, directly
 // followed by ',' or ')': Map(string, Map(int, *u8)). Any other is an
-// expression, read as an array's count is, a type in it declaring nothing:
-// 4, N + 1, .B, Mode.B, "hi", #type (int) -> int, #run f(), and size_of(T)
-// and type_info(T), the built-ins parse_primary knows by their name and
-// '(', which would otherwise look like instances. A bare name is
-// a written type whatever it names, a type's or a constant's: the checker
-// reads one where the struct takes a constant as the constant it names. A
-// '(' starts no type here, as a constant's value in parentheses may.
+// expression, read as an array's count is (parse_expression_in_type), a
+// type in it declaring nothing: 4, N + 1, .B, Mode.B, "hi", #type (int) ->
+// int, #run f(), and size_of(T) and type_info(T), the built-ins
+// parse_primary knows by their name and '(', which would otherwise look
+// like instances. A bare name is a written type whatever it names, a
+// type's or a constant's: the checker reads one where the struct takes a
+// constant as the constant it names. A '(' starts no type here, as a
+// constant's value in parentheses may.
 static Ast *parse_instance_argument(Parser *p) {
     Token_Kind kind = peek(p)->kind;
     bool type = kind == TOKEN_STAR || kind == TOKEN_LBRACKET || kind == TOKEN_DOLLAR;
@@ -1970,14 +1983,7 @@ static Ast *parse_instance_argument(Parser *p) {
         }
         type = p->tokens[after].kind == TOKEN_COMMA || p->tokens[after].kind == TOKEN_RPAREN;
     }
-    if (type) return parse_type(p);
-    s32 height = p->height;
-    bool in_param_type = p->in_param_type;
-    p->in_param_type = false;
-    Ast *argument = parse_expression(p, 1);
-    p->in_param_type = in_param_type;
-    p->height = height;
-    return argument;
+    return type ? (Ast *)parse_type(p) : parse_expression_in_type(p);
 }
 
 // An instance of a generic struct (spec 3.23), Map(string, int), the
@@ -2006,10 +2012,10 @@ static Ast_Type *parse_instance(Parser *p, Token *name) {
 
 // The type rule's alternatives: '*' type, '[' [expression | '..'] ']'
 // type, a procedure type, an instance (a level each, which parse_type
-// counted), a name, or '$' and a name. The type after a '*' or ']' goes back through
-// parse_type, so its levels are counted too; a count is read inside the
-// level its '[N]' opened, and no other, so its expression levels are
-// counted from there.
+// counted), a name, or '$' and a name. The type after a '*' or ']' goes
+// back through parse_type, so its levels are counted too; a count is read
+// inside the level its '[N]' opened, and no other, so its expression
+// levels are counted from there.
 //
 // '$T' declares a type parameter T (spec 7.11), a name the type stands for
 // in a generic procedure, which each call infers from its arguments: a type
@@ -2043,12 +2049,7 @@ static Ast_Type *parse_type_level(Parser *p) {
         if (kind == AST_TYPE_ARRAY) {
             // The count is an expression, no part of the parameter's type:
             // a type in it declares nothing.
-            s32 height = p->height;
-            bool in_param_type = p->in_param_type;
-            p->in_param_type = false;
-            type->count = parse_expression(p, 1);
-            p->in_param_type = in_param_type;
-            p->height = height;
+            type->count = parse_expression_in_type(p);
             if (!type->count) return nullptr;
         }
         if (!expect(p, TOKEN_RBRACKET)) return nullptr;
