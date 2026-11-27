@@ -382,7 +382,9 @@ struct Ir_Reloc {
 //     description (spec 3.16), and the arrays one points at,
 //     `type_info.N.members`, `type_info.N.parameters`,
 //     `type_info.N.results`, and an enum's `type_info.N.names` and
-//     `type_info.N.values`; laid out as a variable of bytes is,
+//     `type_info.N.values`, and each value a struct instance's
+//     `type_info.N.parameters` holds, `type_info.N.parameter.K` (one
+//     parameter's, no array); laid out as a variable of bytes is,
 //     relocations too, but never written, so the object file has them as a
 //     constant;
 //   - a string literal's constant bytes (type IR_VOID, has_layout not set):
@@ -391,8 +393,8 @@ struct Ir_Reloc {
 // false; printing, the backend and IR_PANIC all ask.
 struct Ir_Global {
     String name;            // "str.0", "const.0", "array.0", "string.0", "type_info.0" (and its arrays,
-                            // "type_info.0.members", ".parameters", ".results", ".names", ".values"), or a
-                            // Rig global's name
+                            // "type_info.0.members", ".parameters", ".results", ".names", ".values", and a
+                            // struct instance's parameters' values, ".parameter.0"), or a Rig global's name
     Ir_Type type;           // IR_VOID: bytes (a variable's, a constant's or a literal's); otherwise a
                             // variable of this type
     String bytes;           // IR_VOID: a literal's bytes, with a terminating zero; a variable's or a

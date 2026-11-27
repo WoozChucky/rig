@@ -1,0 +1,28 @@
+// Mistakes with type aliases (issue #227, spec 3.22): an alias, a local
+// one too, is a type, so no value and no procedure; aliases naming each
+// other, or an alias naming a pointer to itself, are a circle, said once
+// each; Type names types only while compiling; a built-in type's name,
+// which always means the built-in type, names no alias, at the top level
+// or in a body; and a value naming nothing is no type, but an unknown
+// identifier. An alias whose own check failed, or in a circle, has its
+// mistake said once: its uses say nothing more.
+Vec2 :: struct { x: float; }
+V :: Vec2;
+A :: B;
+B :: A;
+S :: *S;
+T_Alias :: Type;
+u8 :: s32;
+Nope :: Missing;
+Bad :: [-1]int;
+g: A;
+
+main :: () {
+    x := V;
+    y := V(1);
+    u8 :: s32;
+    p: S;
+    b: Bad;
+    L :: [2]int;
+    l := L;
+}

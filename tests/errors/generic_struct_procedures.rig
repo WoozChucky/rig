@@ -1,0 +1,77 @@
+// Generic procedures over generic structs (issue #227, spec 7.11): an
+// argument that isn't the instance its pattern names doesn't fit it,
+// written as the pattern is; once the instance is known, an argument
+// converts to its parameter's type as any does, a Vec(4) to a Vec(3) too.
+// The instances a generic's signature names are checked once, at the
+// generic, however often it's called: the name a generic struct's, the
+// count right, each type name known, but none of a refused instance's; a
+// name used before the $ that declares it, in an instance's argument too,
+// a constant parameter's as well. An instance in a generic's body naming
+// nothing is said though nothing calls it, and a call where its struct
+// takes a constant is a value. A type below an instance's argument that
+// can't match doesn't fit; a constant parameter left unbound is said as a
+// type parameter's is. A generic naming a refused struct makes no instance,
+// and what no instance's argument could bind is said at the generic.
+Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+Vec :: struct (N: int) { v: [N]float; }
+Vec2 :: struct { x: float; y: float; }
+
+map_add :: (m: *Map($K, $V), key: K, value: V) { m.count += 1; }
+ring_sum :: (r: Ring($T, $N)) -> T { t: T; for r.items { t += it; } return t; }
+dot :: (a: Vec($N), b: Vec(N)) -> float { return a.v[0] * b.v[0]; }
+
+bad :: (m: *Map($K)) { }
+bad2 :: (p: *Vec2($T)) { }
+bad3 :: (m: Map($K, Nope)) { }
+bad4 :: (m: Map(K, $V), k: $K) { }
+bad5 :: (v: $T) { x: Mapp(T, T); }
+bad6 :: (m: *Map(*Nope, int, int), x: $T) { }
+bad7 :: (b: Vec(N), c: Vec($N)) { }
+twice :: (n: int) -> int { return n * 2; }
+bad8 :: (v: $T) { x: Ring(T, nope(2)); }
+deref :: (m: Map(*$K, $V)) { }
+vec_n :: (v: Vec($N)) -> int { return N; }
+vecs :: (vs: ..Vec($N)) { }
+
+main :: () {
+    m: Map(string, int);
+    v: Vec2;
+    a: Vec(3);
+    c: Vec(4);
+    map_add(*v, 1, 2);
+    map_add(*m, 1, 2);
+    ring_sum(m);
+    dot(a, c);
+    bad(*m);
+    bad(*m);
+    bad2(*v);
+    bad3(m);
+    bad3(m);
+    deref(m);
+    vec_n(.{});
+    vecs();
+    vec_n(nope);
+    r4: Ring(int, 4);
+    gen(5);
+    gen2(5);
+    fp(r4);
+    fp(r4);
+}
+
+// A generic struct its own check refused makes a generic naming it in its
+// signature make no instance, whichever is declared first: its calls say
+// nothing more.
+Bad :: struct (N: []int) { v: int; }
+gen :: (b: Bad($N)) { }
+gen2 :: (b: Bad2($N)) { }
+Bad2 :: struct (N: []int) { v: int; }
+
+// Where the struct takes a constant, a written type that is neither a name
+// nor a call is no value, and a '$' in a call there is bound by nothing:
+// each said once, at the generic, called or not. A constant parameter's
+// name where it takes a type is no type, said once.
+fp :: (r: Ring(int, *$N)) { }
+fq :: (v: Vec([]$T)) { }
+fg :: (r: Ring($T, twice($M))) { }
+f3 :: (m: Map(N, int), $N: int) { }

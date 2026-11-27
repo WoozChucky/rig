@@ -1,0 +1,24 @@
+tests/errors/generic_struct_instances.rig:12:44: error: an array's count can't be negative (-2)
+    Ring :: struct (T: Type, N: int) { items: [N]T; }
+                                               ^
+    in 'Ring' with T = int, N = -2, used at tests/errors/generic_struct_instances.rig:20:8
+tests/errors/generic_struct_instances.rig:12:44: error: an array's count can't be negative (-1)
+    Ring :: struct (T: Type, N: int) { items: [N]T; }
+                                               ^
+    in 'Ring' with T = int, N = -1, used at tests/errors/generic_struct_instances.rig:16:20
+    in 'make' with T = int, called at tests/errors/generic_struct_instances.rig:22:10
+tests/errors/generic_struct_instances.rig:13:1: error: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)
+    Bad :: struct (T: Type) { b: Bad(T); }
+    ^
+    in 'Bad' with T = u8, used at tests/errors/generic_struct_instances.rig:21:8
+tests/errors/generic_struct_instances.rig:15:41: error: 'Box' is generic; write its arguments, as in Box(T)
+    Holds :: struct (T: Type) { r: *Ring(T, Box); }
+                                            ^
+    in 'Holds' with T = u8, used at tests/errors/generic_struct_instances.rig:24:8
+tests/errors/generic_struct_instances.rig:17:29: error: 'Box' is generic; write its arguments, as in Box(T)
+    take :: (a: $T) -> *Ring(T, Box) { return null; }
+                                ^
+    in 'take' with T = int, called at tests/errors/generic_struct_instances.rig:25:5
+tests/errors/generic_struct_instances.rig:23:18: error: 'Box' is generic; write its arguments, as in Box(T)
+        d: Ring(int, Box);
+                     ^

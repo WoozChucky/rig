@@ -5684,13 +5684,15 @@ TEST(only_used_types_are_described) {
                                                     "main :: () {\n"
                                                     "    t := type_info(Used);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 80 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\04\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
     CHECK(contains(ir, " reloc 48 @type_info.0.members\n"));
@@ -5762,11 +5764,13 @@ TEST(an_empty_view_makes_no_array) {
                                                     "    e := type_info(Empty);\n"
                                                     "    p := type_info(() -> int);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 80 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\05\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
@@ -5799,7 +5803,7 @@ TEST(a_unions_description_says_it_is_one) {
                                                     "    v := type_info(Value);\n"
                                                     "    e := type_info(Event);\n"
                                                     "}\n"));
-    CHECK(contains(ir, "const @type_info.0: 64 align 8 = \""
+    CHECK(contains(ir, "const @type_info.0: 80 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
@@ -5807,8 +5811,10 @@ TEST(a_unions_description_says_it_is_one) {
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\02\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\01\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
-    CHECK(contains(ir, "const @type_info.3: 64 align 8 = \""
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+    CHECK(contains(ir, "const @type_info.3: 80 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\08\\00\\00\\00\\00\\00\\00\\00"
                        "\\04\\00\\00\\00\\00\\00\\00\\00"
@@ -5816,8 +5822,10 @@ TEST(a_unions_description_says_it_is_one) {
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\02\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
-    CHECK(contains(ir, "const @type_info.5: 64 align 8 = \""
+    CHECK(contains(ir, "const @type_info.5: 80 align 8 = \""
                        "\\07\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
@@ -5825,7 +5833,9 @@ TEST(a_unions_description_says_it_is_one) {
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
                        "\\01\\00\\00\\00\\00\\00\\00\\00"
                        "\\00\\00\\00\\00\\00\\00\\00\\00"
-                       "\\01\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
+                       "\\01\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00"
+                       "\\00\\00\\00\\00\\00\\00\\00\\00\" reloc 32 @str."));
     arena_free(&a);
 }
 
@@ -7852,5 +7862,134 @@ TEST(instance_symbols_are_unique) {
     CHECK(contains(text, "define internal void @\"f$T$$$$int\"("));
     CHECK(contains(text, "define internal void @\"f$T$$$$int$2\"("));
     CHECK(!contains(text, "@\"f$T$$$$int.1\"("));
+    arena_free(&a);
+}
+
+// Issue #227: generic procedures over generic structs (spec 7.11).
+
+TEST(procedures_over_instances_are_named_by_them) {
+    // A generic procedure's instance bound through a struct instance, or to
+    // one, is named by it, its symbol made of that name as any instance's
+    // is: every byte that isn't a letter, a digit or '_' made '$', its last
+    // ')' dropped, so an instance's own ')' is a '$'.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a,
+                                      "Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }\n"
+                                      "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n"
+                                      "size_of_map :: (m: *Map($K, $V)) -> int { return m.count; }\n"
+                                      "ident :: (v: $T) -> T { return v; }\n"
+                                      "main :: () {\n"
+                                      "    a: Map(string, int);\n"
+                                      "    b: Map(int, *u8);\n"
+                                      "    x := size_of_map(*a);\n"
+                                      "    y := size_of_map(*b);\n"
+                                      "    p: Pair(int, int);\n"
+                                      "    q := ident(p);\n"
+                                      "}\n");
+    const char *symbols[] = {"size_of_map$K$string$V$int", "size_of_map$K$int$V$$u8", "ident$T$Pair$int$int$"};
+    const char *names[] = {"size_of_map(K = string, V = int)", "size_of_map(K = int, V = *u8)",
+                           "ident(T = Pair(int, int))"};
+    for (s64 i = 0; i < 3; i++) {
+        Ir_Proc *proc = ir_proc_named(m, symbols[i]);
+        CHECK(proc);
+        if (proc) CHECK_STR(proc->source_name, names[i]);
+    }
+    arena_free(&a);
+}
+
+// The module's global the relocation at `offset` in global `index` points
+// at, or -1 when nothing does.
+static s32 reloc_target(Ir_Module *m, s32 index, s64 offset) {
+    Array<Ir_Reloc> relocs = m->globals[index].relocs;
+    for (s64 i = 0; i < relocs.count; i++) {
+        if (relocs[i].offset == offset && !relocs[i].is_proc) return relocs[i].global;
+    }
+    return -1;
+}
+
+// The description, type_info.N, of the struct named `name` (spec 3.16):
+// the one whose name's relocation points at those bytes; -1 if none.
+static s32 struct_description(Ir_Module *m, const char *name) {
+    String wanted = str(name);
+    for (s64 i = 0; i < m->globals.count; i++) {
+        Ir_Global *g = &m->globals[i];
+        if (!g->has_layout || g->size != TYPE_INFO_STRUCT_SIZE || g->bytes.count == 0) continue;
+        if (g->bytes.data[TYPE_INFO_TAG_OFFSET] != TYPE_INFO_STRUCT) continue;
+        s32 text = reloc_target(m, (s32)i, TYPE_INFO_NAME_OFFSET + VIEW_DATA_OFFSET);
+        if (text < 0) continue;
+        String bytes = m->globals[text].bytes;  // the name, then its terminating zero
+        if (string_eq({bytes.data, bytes.count - 1}, wanted)) return (s32)i;
+    }
+    return -1;
+}
+
+TEST(struct_descriptions_hold_their_parameters) {
+    // A struct instance's description holds its arguments (spec 3.16,
+    // 3.23): parameters, a view of a read-only array of its own,
+    // type_info.N.parameters, an Any per parameter, in order. A type's Any
+    // is a *Type_Info, its value a global of its own holding the address of
+    // the bound type's description, int's here; a constant's is of the
+    // constant's type, its value a global holding it, 4. So the array has
+    // four relocations: each Any's type, *Type_Info's description and
+    // int's, and each Any's value. Any other struct's parameters are the
+    // empty view, zeros, and no array: Vec2's.
+    Arena a = arena_make();
+    Ir_Module *m = lower_with_preload(&a, "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+                                          "Vec2 :: struct { x: float; }\n"
+                                          "main :: () {\n"
+                                          "    a := type_info(Ring(int, 4));\n"
+                                          "    b := type_info(Vec2);\n"
+                                          "}\n");
+    s32 parameters = -1;
+    s64 arrays = 0;
+    for (s64 i = 0; i < m->globals.count; i++) {
+        String name = m->globals[i].name;
+        String suffix = str(".parameters");
+        if (name.count < suffix.count || !string_eq({name.data + name.count - suffix.count, suffix.count}, suffix)) {
+            continue;
+        }
+        arrays++;
+        parameters = (s32)i;
+    }
+    CHECK_EQ(arrays, 1);
+    s32 ring = struct_description(m, "Ring(int, 4)");
+    s32 vec2 = struct_description(m, "Vec2");
+    CHECK(ring >= 0);
+    CHECK(vec2 >= 0);
+    if (parameters < 0 || ring < 0 || vec2 < 0) {
+        arena_free(&a);
+        return;
+    }
+    // Ring(int, 4)'s view: a count of 2 and the array's address.
+    u64 count = 0;
+    memcpy(&count, m->globals[ring].bytes.data + TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_COUNT_OFFSET, 8);
+    CHECK_EQ(count, 2);
+    CHECK_EQ(reloc_target(m, ring, TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_DATA_OFFSET), parameters);
+    Ir_Global *array = &m->globals[parameters];
+    CHECK_EQ(array->size, 2 * ANY_SIZE);
+    CHECK_EQ(array->relocs.count, 4);
+    // T = int: a *Type_Info, whose value holds int's description's address.
+    s32 pointer_info = reloc_target(m, parameters, ANY_TYPE_OFFSET);
+    s32 t_value = reloc_target(m, parameters, ANY_VALUE_OFFSET);
+    // N = 4: an int, whose value is 4.
+    s32 int_info = reloc_target(m, parameters, ANY_SIZE + ANY_TYPE_OFFSET);
+    s32 n_value = reloc_target(m, parameters, ANY_SIZE + ANY_VALUE_OFFSET);
+    CHECK(pointer_info >= 0 && t_value >= 0 && int_info >= 0 && n_value >= 0);
+    if (pointer_info >= 0 && t_value >= 0 && int_info >= 0 && n_value >= 0) {
+        CHECK_EQ(m->globals[pointer_info].bytes.data[TYPE_INFO_TAG_OFFSET], TYPE_INFO_POINTER);
+        CHECK_EQ(reloc_target(m, pointer_info, TYPE_INFO_POINTER_TO_OFFSET), struct_description(m, "Type_Info"));
+        CHECK_EQ(m->globals[t_value].size, 8);
+        CHECK_EQ(reloc_target(m, t_value, 0), int_info);
+        CHECK_EQ(m->globals[int_info].bytes.data[TYPE_INFO_TAG_OFFSET], TYPE_INFO_INTEGER);
+        CHECK_EQ(m->globals[n_value].size, 8);
+        CHECK_EQ(m->globals[n_value].relocs.count, 0);
+        CHECK_EQ(m->globals[n_value].bytes.data[0], 4);
+        CHECK(m->globals[t_value].is_read_only);
+        CHECK(m->globals[n_value].is_read_only);
+    }
+    // Vec2's: the empty view, and no relocation for it.
+    memcpy(&count, m->globals[vec2].bytes.data + TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_COUNT_OFFSET, 8);
+    CHECK_EQ(count, 0);
+    CHECK_EQ(reloc_target(m, vec2, TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_DATA_OFFSET), -1);
     arena_free(&a);
 }

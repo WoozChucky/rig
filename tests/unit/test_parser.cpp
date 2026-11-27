@@ -1397,9 +1397,11 @@ TEST(parses_struct_literals) {
     CHECK_STR(errors, "2:23: a struct literal's fields are all named or all in order, not both\n");
     body_dump(&a, "v := Vec2.{1, y = 2};", &errors);
     CHECK_STR(errors, "2:19: a struct literal's fields are all named or all in order, not both\n");
-    // A literal's type is a name before the '.'.
-    body_dump(&a, "v := f().{1};", &errors);
-    CHECK_STR(errors, "2:14: expected a field's name, found '{'\n");
+    // A literal's type is a name before the '.', or a name with arguments,
+    // an instance's (parses_instance_literals): a call's result, a.f(), is
+    // none.
+    body_dump(&a, "v := a.f().{1};", &errors);
+    CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
     // A type is never in parentheses, so neither is a literal's.
     body_dump(&a, "v := (Vec2).{1};", &errors);
     CHECK_STR(errors, "2:17: expected a field's name, found '{'\n");
@@ -4706,8 +4708,8 @@ TEST(parses_type_parameters) {
 
 TEST(dollar_mistakes) {
     // Only a procedure declaration's parameter's type declares a type
-    // parameter: a '$' in any other type is refused at it, and a '$' where
-    // an expression starts is none.
+    // parameter: a '$' in any other type, an instance's argument in one
+    // too, is refused at it, and a '$' where an expression starts is none.
     Arena a = arena_make();
     String errors;
     const char *refused =
@@ -4727,6 +4729,9 @@ TEST(dollar_mistakes) {
         {"main :: () { x := cast($T) 1; }\n", 24},
         {"main :: () { x := type_info($T); }\n", 29},
         {"main :: () { x := #type $T; }\n", 25},
+        {"main :: () { x: Map($K, int); }\n", 21},
+        {"g: Map($K, int);\n", 8},
+        {"S :: struct { m: *Ring(int, $N); }\n", 29},
     };
     for (const Case &k : cases) {
         parse_src(&a, k.text, &errors);
@@ -4762,5 +4767,264 @@ TEST(parses_baked_parameters) {
         CHECK(file->procs[1]->params[0]->is_baked);
     }
     token_list_free(list);
+    arena_free(&a);
+}
+
+// Issue #227: type aliases (spec 3.22).
+
+TEST(parses_type_aliases) {
+    // Name :: Expression; stays a constant, which the checker makes an alias
+    // when its value names a type. After '::', a '(' whose signature reaches
+    // its ';' before any '{' or directive but #c_call is a procedure type's
+    // alias: a constant whose value is that procedure type, (type
+    // (proc-type ...)), at the top level and in a body.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(parse_src(&a,
+                        "Ints :: []int;\n"
+                        "Cb :: (code: int, name: string) -> bool;\n"
+                        "Raw :: (int) -> int #c_call;\n"
+                        "My_Int :: int;\n"
+                        "f :: (a: int) -> int { return a; }\n"
+                        "g :: (a: int) #foreign libc;\n"
+                        "main :: () { L :: (a: int) -> int; }\n",
+                        &errors),
+              "(const Ints (type (view int)))\n"
+              "(const Cb (type (proc-type (params int string) (returns bool))))\n"
+              "(const Raw (type (proc-type (params int) (returns int) (c_call))))\n"
+              "(const My_Int (name int))\n"
+              "(proc f (params (a int)) (returns int) (block (return (name a))))\n"
+              "(proc g (params (a int)) (foreign libc))\n"
+              "(proc main (params) (block (const L (type (proc-type (params int) (returns int))))))\n");
+    CHECK_STR(errors, "");
+    // In column 1 inside a body, a procedure type's alias is the body's
+    // constant, not a top-level procedure ending a body never closed.
+    CHECK_STR(parse_src(&a, "main :: () {\nCb :: (a: int) -> int;\n}\n", &errors),
+              "(proc main (params) (block (const Cb (type (proc-type (params int) (returns int))))))\n");
+    CHECK_STR(errors, "");
+    // Nor is one in a column-1 #if's branch inside a body: the #if is the
+    // body's statement, its branch holding the constant.
+    CHECK_STR(parse_src(&a, "main :: () {\n    x := 1;\n#if true { Cb :: (a: int) -> int; }\n}\n", &errors),
+              "(proc main (params) (block (var x _ (int 1)) (#if (bool true) (block (const Cb (type (proc-type "
+              "(params int) (returns int))))))))\n");
+    CHECK_STR(errors, "");
+    // After the ')', a directive or a '{' inside brackets or parentheses,
+    // an array's count's, is the signature's, not one that ends the look.
+    CHECK_STR(parse_src(&a, "Cb :: () -> [#run n()]u8;\nCc :: () -> [(S.{n = 2}).n]u8;\n", &errors),
+              "(const Cb (type (proc-type (params) (returns (array (run (call n)) u8)))))\n"
+              "(const Cc (type (proc-type (params) (returns (array (member (literal S (n (int 2))) n) u8)))))\n");
+    CHECK_STR(errors, "");
+    arena_free(&a);
+}
+
+TEST(alias_syntax_mistakes) {
+    // A procedure type's alias is read as a procedure type, with its
+    // messages: no default values, and no '$', which only a procedure's
+    // parameter has.
+    Arena a = arena_make();
+    String errors;
+    parse_src(&a, "Bad :: (a: int = 1) -> int;\n", &errors);
+    CHECK_STR(errors, "1:16: a procedure type can't have default values\n");
+    parse_src(&a, "Gen :: (a: $T) -> T;\n", &errors);
+    CHECK_STR(errors, "1:12: '$' declares a type parameter only in a procedure's parameter, as in "
+                      "max :: (a: $T, b: T) -> T\n");
+    // The look for the ';' stops at the next declaration, an identifier
+    // starting a line, then '::': a procedure whose body is missing keeps
+    // being one, said where its '{' should be, whatever ends the next
+    // declaration; a '(' not closed before it is no alias either, even
+    // when a ')' after it closes it, so a default value there is no
+    // procedure type's: the procedure's own messages.
+    parse_src(&a, "f :: () -> int\nN :: 5;\nmain :: () {}\n", &errors);
+    CHECK_STR(errors, "2:1: expected '{', found identifier 'N'\n");
+    parse_src(&a, "f :: () -> int\ng :: () {}\n", &errors);
+    CHECK_STR(errors, "2:1: expected '{', found identifier 'g'\n");
+    parse_src(&a, "f :: (a: int\nN :: 5;\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'N'\n");
+    parse_src(&a, "f :: (a: int = 1\nN :: 5);\n", &errors);
+    CHECK_STR(errors, "2:1: expected ')', found identifier 'N'\n2:7: expected ';', found ')'\n");
+    arena_free(&a);
+}
+
+// Issue #227: generic structs (spec 3.23).
+
+TEST(parses_generic_structs) {
+    // A struct with parameters in parentheses after its keyword is generic:
+    // each NAME: Type, dumped as a parameter is, (params (K Type) ...). A
+    // name followed by '(' where a type is written is an instance of one,
+    // (instance Map ...), each argument a type when it is written as only a
+    // type can be, or as a name, with or without its own arguments, before
+    // a ',' or the ')', and an expression otherwise: 4 + 1, a name with an
+    // operator after it, N + 1, Mode.B. A '[' starts a type, []int, [4]u8.
+    // size_of(...) and type_info(...) are expressions there, as everywhere,
+    // and so is #type. An empty '()' gives no arguments, for the checker to
+    // count. A field may hold an instance of its own struct, behind a
+    // pointer.
+    Arena a = arena_make();
+    Token_List *list = src("Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; }\n"
+                           "Ring :: struct (T: Type, N: int) { items: [N]T; next: *Ring(T, N); }\n"
+                           "m: Map(string, Map(int, *u8));\n"
+                           "r: Ring(int, 4 + 1);\n"
+                           "Vec2 :: struct { x: float; }\n"
+                           "p: Pad(size_of(u8), type_info(u8), #type (int) -> int);\n"
+                           "q: Ring(int, N + 1);\n"
+                           "t: Tag(Mode.B);\n"
+                           "b: Box([]int, [4]u8);\n"
+                           "e: Map();\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    CHECK_STR(ast_dump(&a, file),
+              "(struct Map (params (K Type) (V Type)) (keys (resizable K)) (values (resizable V)))\n"
+              "(struct Ring (params (T Type) (N int)) (items (array (name N) T)) (next (ptr (instance Ring T N))))\n"
+              "(var m (instance Map string (instance Map int (ptr u8))))\n"
+              "(var r (instance Ring int (binary + (int 4) (int 1))))\n"
+              "(struct Vec2 (x float))\n"
+              "(var p (instance Pad (size_of u8) (type_info u8) (type (proc-type (params int) (returns int)))))\n"
+              "(var q (instance Ring int (binary + (name N) (int 1))))\n"
+              "(var t (instance Tag (member (name Mode) B)))\n"
+              "(var b (instance Box (view int) (array (int 4) u8)))\n"
+              "(var e (instance Map))\n");
+    CHECK_EQ(file->globals.count, 10);
+    if (file->globals.count == 10) {
+        CHECK(((Ast_Struct *)file->globals[0])->is_generic);
+        CHECK(((Ast_Struct *)file->globals[1])->is_generic);
+        CHECK(!((Ast_Struct *)file->globals[4])->is_generic);
+        Ast_Type *p = ((Ast_Var *)file->globals[5])->type_expr;
+        CHECK_EQ(p->args.count, 3);
+        if (p->args.count == 3) {
+            CHECK_EQ(p->args[0]->kind, AST_SIZE_OF);
+            CHECK_EQ(p->args[1]->kind, AST_TYPE_INFO);
+            CHECK_EQ(p->args[2]->kind, AST_TYPE_VALUE);
+        }
+        // An instance is at its name; its arguments are each a written type
+        // or an expression, as read.
+        Ast_Type *m = ((Ast_Var *)file->globals[2])->type_expr;
+        CHECK_EQ(m->kind, AST_TYPE_INSTANCE);
+        CHECK_EQ(m->pos.col, 4);
+        CHECK_EQ(m->args.count, 2);
+        if (m->args.count == 2) {
+            CHECK_EQ(m->args[0]->kind, AST_TYPE_NAME);
+            CHECK_EQ(m->args[1]->kind, AST_TYPE_INSTANCE);
+        }
+        // Its '(' is a level, as a procedure type's is: a field's
+        // *Ring(T, N) reaches 2.
+        Ast_Struct *ring = (Ast_Struct *)file->globals[1];
+        CHECK_EQ(ring->fields.count, 2);
+        if (ring->fields.count == 2) CHECK_EQ(ring->fields[1]->type_expr->levels, 2);
+        Ast_Type *r = ((Ast_Var *)file->globals[3])->type_expr;
+        CHECK_EQ(r->args.count, 2);
+        if (r->args.count == 2) CHECK_EQ(r->args[1]->kind, AST_BINARY);
+        Ast_Type *q = ((Ast_Var *)file->globals[6])->type_expr;
+        CHECK_EQ(q->args.count, 2);
+        if (q->args.count == 2) CHECK_EQ(q->args[1]->kind, AST_BINARY);
+        Ast_Type *t = ((Ast_Var *)file->globals[7])->type_expr;
+        CHECK_EQ(t->args.count, 1);
+        if (t->args.count == 1) CHECK_EQ(t->args[0]->kind, AST_MEMBER);
+        Ast_Type *b = ((Ast_Var *)file->globals[8])->type_expr;
+        CHECK_EQ(b->args.count, 2);
+        if (b->args.count == 2) {
+            CHECK_EQ(b->args[0]->kind, AST_TYPE_VIEW);
+            CHECK_EQ(b->args[1]->kind, AST_TYPE_ARRAY);
+        }
+        CHECK_EQ(((Ast_Var *)file->globals[9])->type_expr->args.count, 0);
+    }
+    token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(instances_nest_at_most_max_depth) {
+    // An instance's '(' is a level, as '*' and '[' are: 1000 instances
+    // nested in each other's arguments parse; 1001 is one message, at the
+    // name one too many, and no crash.
+    Arena a = arena_make();
+    String errors = {};
+    parse_src(&a, nested_source(&a, "x: ", "W(", MAX_DEPTH, "int", ")", ";\n"), &errors);
+    CHECK_STR(errors, "");
+    parse_src(&a, nested_source(&a, "x: ", "W(", MAX_DEPTH + 1, "int", ")", ";\n"), &errors);
+    CHECK_STR(errors, types_too_deep(&a, 1, 4 + 2 * MAX_DEPTH));
+    arena_free(&a);
+}
+
+TEST(struct_parameter_mistakes) {
+    // A struct's parameters are all given by each instance: no '$', no
+    // 'using', no '..', no default value, for now, and no empty '()'. A
+    // union takes none, for now, nor a tagged one. Each gives the
+    // declaration up, at the token that breaks the rule.
+    Arena a = arena_make();
+    String errors;
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"S :: struct ($T: Type) { }\n",
+         "1:14: a struct's parameters take no '$': each instance gives them all, as in Map :: struct (K: Type, V: "
+         "Type)\n"},
+        {"S :: struct (using T: Type) { }\n", "1:14: a struct's parameter can't be 'using'\n"},
+        {"S :: struct (T: ..Type) { }\n", "1:17: a struct's parameter can't be '..'\n"},
+        {"S :: struct (T: Type = int) { }\n", "1:22: a struct's parameter can't have a default value, for now\n"},
+        {"S :: struct () { }\n",
+         "1:13: a struct with no parameters has no '()', as in Vec2 :: struct { x: float; }\n"},
+        {"U :: union (T: Type) { a: T; }\n", "1:12: a union can't take parameters, for now\n"},
+        {"U :: union #tagged (T: Type) { a: T; }\n", "1:20: a union can't take parameters, for now\n"},
+    };
+    for (const Case &k : cases) {
+        parse_src(&a, k.text, &errors);
+        CHECK_STR(errors, k.message);
+    }
+    arena_free(&a);
+}
+
+TEST(parses_instance_literals) {
+    // A name with arguments directly before a literal's '.' is an
+    // instance's, the literal's type: an AST_TYPE_INSTANCE at the name,
+    // whose arguments are the call's expressions as they are, a type's
+    // name a name, for the checker to read as types or constants. An
+    // array literal's elements may be of one. A type is never in
+    // parentheses, so neither is an instance's name, and a name reached
+    // through a member is no type's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "p := Pair(string, int).{\"a\", 1};", &errors),
+              "(block (var p _ (literal (instance Pair (name string) (name int)) (string \"a\") (int 1))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "q := Pair(u8, u8).[.{1, 2}];", &errors),
+              "(block (var q _ (literal-array (instance Pair (name u8) (name u8)) (literal _ (int 1) (int 2)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "r := Ring(int, N + 1).{};", &errors),
+              "(block (var r _ (literal (instance Ring (name int) (binary + (name N) (int 1))))))");
+    CHECK_STR(errors, "");
+    // The instance is at its name, and ends at the call's ')'.
+    Token_List *list = src("f :: () {\n    p := Pair(string, int).{};\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    Ast_Var *p = (Ast_Var *)file->procs[0]->body->statements[0];
+    Ast_Literal *literal = (Ast_Literal *)p->value;
+    CHECK_EQ(literal->kind, AST_LITERAL);
+    CHECK_EQ(literal->type_expr->kind, AST_TYPE_INSTANCE);
+    CHECK_EQ(literal->type_expr->pos.col, 10);
+    CHECK_EQ(literal->type_expr->end.col, 26);
+    CHECK_EQ(literal->start.col, 10);
+    token_list_free(list);
+    body_dump(&a, "r := (Pair)(u8, u8).{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    body_dump(&a, "r := a.Pair(u8, u8).{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    body_dump(&a, "r := (Pair(u8, u8)).{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    // Only the call just read is the type: an index or a member after it
+    // makes something else, which is no type's name.
+    body_dump(&a, "r := Pair(u8, u8)[0].{};", &errors);
+    CHECK_STR(errors, "2:26: expected a field's name, found '{'\n");
+    body_dump(&a, "r := Pair(u8, u8).x.{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    // The literal is a level above its type's arguments as well as its
+    // values: an instance literal whose argument is a chain of 600 + is
+    // 602 levels high, so as the left of another such chain, in another
+    // instance's literal, it's too deep, though each chain fits alone.
+    const char *inner = nested_source(&a, "Box(y", " + y", 600, "", "", ").{}");
+    const char *chain = nested_source(&a, "", " + y", 600, "", "", "");
+    CHECK_STR(check_source(&a, nested_source(&a, "main :: () {\n    y := 1;\n    x := Box(", inner, 1, chain, "",
+                                             ").{};\n}\nBox :: struct (N: int) { }\n")),
+              TOO_DEEP);
     arena_free(&a);
 }

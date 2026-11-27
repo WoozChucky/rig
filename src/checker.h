@@ -15,7 +15,8 @@
 // type and the member's value, as a constant does. checker.cpp checks
 // declarations and statements, check_expr.cpp expressions, check_run.cpp
 // #run and what it reaches, check_generic.cpp generic procedures'
-// instances; check.h is what they share.
+// instances, and generic structs' own checks and instances; check.h is
+// what they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
@@ -24,12 +25,15 @@
 //   structs, unions and enums are visible everywhere, in any order. They
 //   share one set of names: a global can't take a procedure's ("'x' is
 //   already declared at PATH:L:C").
-// - A struct's name is a type, and so is a union's or an enum's: used as a
-//   value, it's "'Vec2' is a type, not a value". A name declared as
-//   anything else, written where a type goes, is "'foo' is not a type"; a
-//   name declared nowhere, "unknown type 'foo'". A built-in type's name
-//   always means the built-in type, so a struct, a union or an enum can't
-//   take one: "'u8' is a built-in type", at its name.
+// - A struct's name is a type, and so is a union's, an enum's or a type
+//   alias's (below): used as a value, it's "'Vec2' is a type, not a value"
+//   (a generic struct's name alone is no type: "'Map' is generic; write
+//   its arguments, as in Map(K, V)", Generic structs below). A name
+//   declared as anything else, written where a type goes, is "'foo' is
+//   not a type"; a name declared nowhere, "unknown type 'foo'". A
+//   built-in type's name always means the built-in type, so a struct, a
+//   union, an enum or an alias can't take one: "'u8' is a built-in type",
+//   at its name.
 // - An enum and a constant are predeclared (spec 2.5), visible everywhere:
 //   Operating_System :: enum { WINDOWS :: 1; LINUX :: 2; }, the systems a
 //   program can be built for, and OS, the one it is (Ast_File.system, else
@@ -189,17 +193,18 @@
 //   null; a procedure (OP :: add;), as its own type: "'add' is a
 //   '(int, int) -> int', so a constant can't name it as a '(int) -> int'";
 //   or data: a string, or a struct or an array whose fields and elements
-//   are such values, nested to any depth (constant_data). Anything else is
-//   "the value of constant 'N' isn't known while compiling", at the first
-//   value inside e that isn't. A pointer, in data or alone, is null or a
-//   string literal's address: any cast (from a number, a procedure or a
-//   pointer variable), a procedure or a type's description (type_info(T))
-//   is "a constant's pointer can only be null or a string literal's
-//   address". A value converted to Any, or cast to one, is the same error:
-//   the Any holds its address. No part of a constant written in the source
-//   is a view, which would see memory of its own: "a constant can't hold a
-//   view; only a string or an array can be one" (a #run's baked view is the
-//   exception, below).
+//   are such values, nested to any depth (constant_data). A value that
+//   names a type makes N a type alias instead (Type aliases, below).
+//   Anything else is "the value of constant 'N' isn't known while
+//   compiling", at the first value inside e that isn't. A pointer, in data
+//   or alone, is null or a string literal's address: any cast (from a
+//   number, a procedure or a pointer variable), a procedure or a type's
+//   description (type_info(T)) is "a constant's pointer can only be null or
+//   a string literal's address". A value converted to Any, or cast to one,
+//   is the same error: the Any holds its address. No part of a constant
+//   written in the source is a view, which would see memory of its own: "a
+//   constant can't hold a view; only a string or an array can be one" (a
+//   #run's baked view is the exception, below).
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -452,7 +457,8 @@
 //   constant holding it, or a field or an element of one, which the global
 //   gets a copy of, its own to change.
 // - A top-level constant follows a local one's rules: a number, a bool,
-//   null, a procedure or data (`N :: Vec2.{1, 2};`).
+//   null, a procedure or data (`N :: Vec2.{1, 2};`), or a type, which
+//   makes it an alias (Type aliases, below).
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
@@ -1246,8 +1252,8 @@
 //   one: `[N]T`, `[]T` and `[..]T` (a '[' starts no expression) and
 //   `#type T` are an Ast_Type_Value; a name and `*X` are a name and an
 //   address as written, which name a type when the name's lookup finds a
-//   struct, an enum or an instance's type parameter (an Ast_Alias), or
-//   nothing while the name is a built-in type's
+//   struct, an enum, an instance's type parameter or a type alias (an
+//   Ast_Alias either), or nothing while the name is a built-in type's
 //   (check_expr.cpp's expr_names_type): a local `int := 5;` hides the type
 //   int there, `int == 5` comparing the local. A type in parentheses is
 //   none, as for a literal's type: `(int) == int` is "'int' is a type, not
@@ -1326,7 +1332,8 @@
 //   (check_generic.cpp's check_instance): each from the arguments whose
 //   parameter's type names it, in order, the first typed one fixing it, a
 //   pattern read through pointers, arrays' views' and resizable arrays'
-//   elements and procedure types' parts ("argument 1 of 'first' has type
+//   elements, procedure types' parts and generic structs' instances'
+//   arguments (below, "Generic structs") ("argument 1 of 'first' has type
 //   'int', which doesn't fit '[]$T'" where it can't match); untyped
 //   numbers alone give the default type of the type they meet at; an
 //   argument with no type of its own alone is "can't work out 'T' for
@@ -1429,6 +1436,219 @@
 //   call's proc is one; each instance is a procedure, keyed by its symbol
 //   (lower.cpp's proc_symbol), after the program's own procedures; no
 //   call holds an argument for a baked parameter.
+//
+// Type aliases (issue #227, spec 3.22).
+// - `Name :: e;` is a constant to the parser, which can't tell `X :: Y;`
+//   apart; a signature that reaches its ';' with no body and no directive
+//   but #c_call, `Cb :: (n: int) -> int;`, is one too, its value an
+//   Ast_Type_Value of the procedure type (parser.cpp's
+//   proc_type_alias_follows). A constant whose value names a type
+//   (check_expr.cpp's expr_names_type: a type's name, an alias's included,
+//   `*X`, a generic struct's instance, `Pair(int, int)`, or an
+//   Ast_Type_Value) is an alias: its value is checked as a type value
+//   (check_type_value, so a struct named there needs no layout), and the
+//   constant keeps an Ast_Alias at its name (Ast_Const.alias), its type
+//   Type (type_type), never is_constant nor is_data (checker.cpp's
+//   check_const_value).
+// - Every lookup that finds such a constant, in a scope or at the top level,
+//   gives its Ast_Alias in its place (find_name, check_lookup), so an alias
+//   is what an instance's type parameter is wherever a name is resolved: a
+//   written type (resolve_written, a struct's laid out where its name's
+//   would be), a type value, "'V' is a type, not a value" as a value, "'V'
+//   isn't a procedure, so it can't be called" as a callee, V.{...}, M.FREE
+//   (through_alias). It is the same type, not a new one: `V == Vec2` is
+//   true, and messages name the type, "'Vec2' has no field 'z'". find_name
+//   works a top-level constant that may be an alias, by lookup alone (its
+//   value, past any `*`, a type value, a call of a generic struct, or a
+//   name of a type, or of a constant that may be one in turn: checker.cpp's
+//   may_be_alias), out first (resolve_global), as check_lookup does, so an
+//   alias can be used before its declaration, in a struct's field or a
+//   global's type; any other, `C :: size_of(S);`, `C :: f(1);` with f a
+//   procedure, or `C :: D;` with D no alias, is "'C' is not a type" there,
+//   its value not worked out, so no circle. A local one is declared in
+//   order, as any local constant. A circle is a constant's, "'A' is
+//   defined in terms of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias
+//   dropped. An alias whose value needs an instance of a generic struct
+//   whose field names the alias, `Ptr :: *Node(int);` with `kids:
+//   [..]Ptr;`, is no circle: the generic's own check leaves the alias's
+//   name until the alias is worked out, and checks it then
+//   (check_generic.cpp's alias_under_way).
+// - An alias whose check failed, or that is in a circle, has no type, its
+//   mistake said once: its uses say nothing more (resolve_written,
+//   check_addressable). Nor do those of one naming a struct found in a
+//   circle or too big once every struct is laid out: what it names is made
+//   again then (check's made_again), null.
+// - Refused: an alias named as a built-in type, `u8 :: s32;`, which
+//   resolve_written would never find, "'u8' is a built-in type", at its
+//   name, at the top level and in a body; `X :: Type;`, as any type value
+//   of Type; a value naming nothing is checked as a value, "unknown
+//   identifier 'Missing'".
+// - What lowering may rely on: an alias has no code. Lowering records none
+//   for a debugger (lower.cpp's is_shown_constant, lower_statement), adds no
+//   debug type for one, and a #run's walk takes one as nothing to reach
+//   (check_run.cpp's walk_node).
+//
+// Generic structs (issue #227, spec 3.23).
+// - A struct with parameters, `Map :: struct (K: Type, V: Type) { ... }`
+//   (Ast_Struct.is_generic), is no type: it has none (Ast_Struct.declared
+//   stays null), and its name alone where a type goes is "'Map' is
+//   generic; write its arguments, as in Map(K, V)", at the name
+//   (checker.cpp's resolve_written). A union takes no parameters, for now
+//   (the parser says so).
+// - Its own check (check_generic.cpp's check_generic_struct), in check()'s
+//   pass over the declarations in its turn, or earlier by its first use,
+//   at the top level and with no chain, says once, instantiated or not,
+//   what its declaration says that doesn't depend on its arguments. First
+//   its parameters: one named as an earlier one is "'T' is already
+//   declared at PATH:L:C", at the later, and one named as a built-in type
+//   "'int' is a built-in type"; a parameter `NAME: Type` is a type
+//   parameter; any other's type is resolved and must be a number's, a
+//   bool's, an enum's or string, kept in the parameter's Ast.type ("a
+//   struct's parameter is a type, 'T: Type', or a constant of a number,
+//   bool, enum or string type, not '[]int'", at the type). Then its
+//   fields: one named as a parameter or as an earlier field across its
+//   braces is "'T' is already declared at PATH:L:C"; and their written
+//   types, the parameters taken as types and constants still to be known
+//   (check_generic_fields, a name at a time with at_generic_type_name:
+//   "unknown type 'Nope'", "'N' is not a type", "'void' is only a
+//   pointer's target, as in *void"; an instance's name, its count and a
+//   written type where it takes a constant, as in a generic procedure's
+//   signature, "'Vec2' isn't generic, so it takes no arguments"), array
+//   counts and instances' other arguments left to each instance; a name
+//   of an alias being worked out, whose value needs the generic, is
+//   checked once the alias is (finish_generic_fields). One whose own check
+//   said a mistake makes no instance (Ast_Struct.had_errors): its uses
+//   have no type and say nothing more, and one made before the mistake
+//   was found, by a field's type through an alias, is never laid out
+//   (instance_may_be_laid_out).
+// - An instance is written where a type goes, Map(string, int)
+//   (AST_TYPE_INSTANCE), worked out once per written type
+//   (check_written_instance, Ast_Type.instance_type): a name that is no
+//   generic struct's says what it is ("'Vec2' isn't generic, so it takes no
+//   arguments", "unknown type 'Nope'", "'main' is not a type"); the count
+//   ("'Map' takes 2 arguments, but 1 was given", at the name); then each
+//   argument bound to its parameter, in order (check_struct_instance). A
+//   type parameter takes a written type, resolved behind a pointer, or an
+//   expression naming a type (#type (int) -> int); anything else is
+//   "argument 1 of 'Map' must be a type, for 'K: Type'", at it. A constant
+//   parameter takes an expression, or a bare name the parser read as a
+//   type, checked as the value it names; one naming a type is "'int' is a
+//   type, not a value", one naming a generic struct "'Box' is generic;
+//   write its arguments, as in Box(T)", any other written type "'*int' is
+//   a type, not a value", but a name with arguments that names no generic
+//   struct, which is a call, checked as one (twice(2): never known while
+//   compiling; Nope(1), Mode(1): what the call's callee is; twice(nope):
+//   what its arguments' mistakes are); the value converts to the
+//   parameter's type as an argument does ("argument 2 of 'Ring' has type
+//   'string', which can't be converted to 'int'", "300 doesn't fit in
+//   'u8'") and must be known while compiling ("argument 2 of 'Ring' must
+//   be known while compiling, for 'N: int'"), checked where the instance is
+//   written, as an array's count is.
+// - Where a value goes (spec 5.20) an instance is a call, its callee a name
+//   not in parentheses whose lookup finds a generic struct
+//   (check_expr.cpp's generic_struct_called): it names a type
+//   (expr_names_type, written_as_type for may_be_alias), and is resolved as
+//   an AST_TYPE_INSTANCE made of the call, its arguments the call's
+//   expressions (written_type_of), so ==, a $T: Type argument and an
+//   alias's value take one, `Int_Pair :: Pair(int, int);`. Anywhere else
+//   the call is "'Pair(string, int)' is a type, not a value", at its name,
+//   once the instance is worked out, its count's or its arguments' mistakes
+//   said instead (check_call, before any callee's check). Before a
+//   literal's '.', the parser makes the call the literal's
+//   AST_TYPE_INSTANCE, `Pair(string, int).{"ann", 36}` (parser.cpp's
+//   parse_postfix). The generic's name alone where a value goes is the
+//   generic message too (check_named, name_is_place); a plain struct's
+//   call keeps "'Vec2' isn't a procedure, so it can't be called". One set
+//   of arguments is one type however it's written.
+// - Each distinct set of bindings (a type by its Type *, a constant by its
+//   type and value, a string's by its bytes, a float's by its bits, as for
+//   a procedure's: same_binding) makes one instance, program-wide, an
+//   Ast_Instance whose generic_struct and structure are set: the generic's
+//   tree copied (ast_clone), its bindings an Ast_Alias per type parameter
+//   and an Ast_Const per constant one (make_bindings), named
+//   Map(string, int), each binding's value as the
+//   program would write it (Ring(float32, 1), Labeled("hi"), Tag(Mode.B)),
+//   its copy named so, with a Type of its own of that name
+//   (new_struct_type), kept in the generic's cache (Ast_Struct.instances)
+//   and the program's list (Ast_File.struct_instances) before it's laid out,
+//   so a field naming its own instance, next: *List(T), finds it. Its Type
+//   is laid out where it's needed, as any struct's: by a written type unless
+//   behind a pointer (resolve_written), and in check()'s passes otherwise.
+// - Its copy, and each anonymous member's struct in it, has its record
+//   (Ast_Struct.instance), which resolve_struct and make_late_field enter
+//   (enter_instance) once the scopes are set aside, so its fields' types
+//   and counts see its bindings and only its: a parameter T hides a
+//   top-level T, and a procedure instance's T never reaches a struct
+//   instance laid out from inside it. An error there is followed by its
+//   chain, "    in 'Ring' with T = int, N = -2, used at PATH:L:C"
+//   (instance_line, Ast_Instance.shown), the procedure instances' lines
+//   after it when one made it. One holding itself by value is "'Bad(u8)'
+//   contains itself; it can hold a pointer to itself, *Bad(u8)", with its
+//   chain.
+// - Instances nest at most MAX_DEPTH deep, struct instances and
+//   procedure instances in one chain (spec 9.4): a struct instance to be
+//   made inside one MAX_DEPTH deep is refused where it's written, "'Grow'
+//   is instantiated more than 1000 levels deep, each instance's fields
+//   making the next" when the one that deep is a struct instance, "...
+//   each instance's body making the next" when it's a procedure instance,
+//   with the chain, and the written type has no type
+//   (make_struct_instance). Instances held by value are laid out inside one
+//   another, so they meet the declarations' nesting limit first
+//   (open_declaration), said once, naming the innermost; that copy is then
+//   done, with no type, never laid out again (resolve_struct).
+// - check(): the declarations pass checks a generic struct on its own and
+//   lays out any other; the late fields of every struct but a generic one
+//   are made, then each struct instance made so far is laid out and has its
+//   late fields made, in the order made, the list growing as they make more;
+//   the made_again pass makes their bindings and every struct's late fields
+//   again. The last pass lays out each struct instance the bodies and the
+//   #runs made, and checks the procedure instances' bodies, until neither
+//   list grows.
+// - A generic procedure takes any instance of a generic struct (spec
+//   7.11): a parameter's type that writes one, Map($K, $V), takes the
+//   instance of that struct its argument is (check_generic.cpp's
+//   match_type: t's copy is an instance's own, Ast_Struct.instance's
+//   structure, of the generic the pattern names), each argument read
+//   against the instance's binding at its index, a written type against a
+//   type binding's type at any depth, and a name that is all of an
+//   argument where the struct takes a constant against the constant. A $N
+//   there declares a constant parameter of the procedure, of that struct
+//   parameter's type (Generic_Binding.is_type false, its type from the
+//   start: bound once its value is set, is_bound), Ring($T, $N); a later
+//   N, Vec(N), is that constant. An argument that is an expression, or a
+//   name bound already, isn't read: the call's conversion says a mismatch
+//   ("argument 2 of 'dot' has type 'Vec(4)', which can't be converted to
+//   'Vec(3)'"). An argument that is no instance of that struct doesn't fit
+//   ("argument 1 of 'map_add' has type '*Vec2', which doesn't fit
+//   '*Map($K, $V)'"). The names walk_names meets in an instance carry
+//   where they are (Name_Place.of_instance, argument, in_instance).
+// - An instance in a generic procedure's signature is checked once, at the
+//   generic (at_generic_instance): its name a generic struct's ("'Vec2'
+//   isn't generic, so it takes no arguments", "unknown type 'Nope'"), its
+//   count ("'Map' takes 2 arguments, but 1 was given"), and the type names
+//   of its arguments where the struct takes a type, unless it said one of
+//   those mistakes or its struct's own check did, as a use then binds none
+//   of its arguments; one where it takes a constant, Ring(T, N + 1)'s or
+//   Ring(T, twice(2))'s, is each instance's to check, as an array's count
+//   is, but any other written type there is no value ("'*$N' is a type,
+//   not a value") and a '$' in a call there is bound by nothing ("a '$'
+//   where 'Ring' takes a constant is all of its argument, as in Ring($T,
+//   $N)"), said at the generic. The structs a signature names are checked
+//   before its mistakes are counted, so theirs stay their own
+//   (check_signature_structs), but a generic naming one whose own check
+//   said a mistake makes no instance, whichever is declared first. A name
+//   used before the $ that declares it, in an instance's argument too, is
+//   "'K' is used before '$K' declares it". In a generic's body, a name
+//   that is all of an instance's argument where its struct takes a
+//   constant is a value's, Ring(T, nope)'s nope, or a call's, Ring(T,
+//   nope(2))'s, and an instance's name declared nowhere is "unknown type
+//   'Mapp'" (check_generic.cpp's at_body_name). A generic struct's own
+//   check leaves its fields' instances' arguments and names to each
+//   instance still (add_type_name_step).
+// - What lowering may rely on: no generic struct is reached from any
+//   type; an instance is a struct as any other, laid out, its late fields
+//   made, its Type named as the instance. Nothing goes through the
+//   instances themselves (Ast_File.struct_instances).
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

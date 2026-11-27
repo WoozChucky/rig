@@ -59,9 +59,10 @@ struct Diagnostic {
                    // innermost and outermost ten when there are many: run.cpp's
                    // report_failure); empty for most
     String context;  // the instance chain of an error inside an instance of a generic procedure
-                     // (spec 7.11), printed after `lines`: "    in 'max' with T = Vec2, called at
-                     // PATH:L:C\n" per instance, innermost first (check_generic.cpp's
-                     // instance_context); empty for most
+                     // or struct (spec 7.11, 3.23), printed after `lines`: "    in 'max' with T =
+                     // Vec2, called at PATH:L:C\n" per instance ("..., used at PATH:L:C\n" for a
+                     // struct's), innermost first (check_generic.cpp's instance_context); empty
+                     // for most
 };
 
 // Zero-initialised ({}) is ready to use.

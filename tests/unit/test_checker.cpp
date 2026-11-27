@@ -7552,8 +7552,9 @@ TEST(preloads_type_info_is_laid_out_as_rig_writes_it) {
          {{"info", 0, "Type_Info"},
           {"name", TYPE_INFO_NAME_OFFSET, "string"},
           {"members", TYPE_INFO_MEMBERS_OFFSET, "[]Type_Info_Struct_Member"},
-          {"is_union", TYPE_INFO_STRUCT_IS_UNION_OFFSET, "bool"}},
-         4},
+          {"is_union", TYPE_INFO_STRUCT_IS_UNION_OFFSET, "bool"},
+          {"parameters", TYPE_INFO_STRUCT_PARAMETERS_OFFSET, "[]Any"}},
+         5},
         {"Type_Info_Struct_Member",
          TYPE_INFO_MEMBER_SIZE,
          TYPE_INFO_ALIGN,
@@ -12559,15 +12560,26 @@ static void tree_parts(Ast *n, Array<Ast *> *nodes, Array<const void *> *buffers
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE:
-    case AST_TYPE_PROC: {
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: {
         Ast_Type *t = (Ast_Type *)n;
         tree_parts(t->pointee, nodes, buffers);
         tree_parts(t->count, nodes, buffers);
         tree_parts(t->element, nodes, buffers);
         tree_list(t->params, nodes, buffers);
         tree_list(t->results, nodes, buffers);
+        tree_list(t->args, nodes, buffers);
         break;
     }
+    case AST_STRUCT:
+        tree_list(((Ast_Struct *)n)->params, nodes, buffers);
+        tree_list(((Ast_Struct *)n)->fields, nodes, buffers);
+        tree_parts(((Ast_Struct *)n)->tag_expr, nodes, buffers);
+        break;
+    case AST_FIELD:
+        tree_parts(((Ast_Field *)n)->type_expr, nodes, buffers);
+        tree_parts(((Ast_Field *)n)->anonymous, nodes, buffers);
+        break;
     case AST_BLOCK: tree_list(((Ast_Block *)n)->statements, nodes, buffers); break;
     case AST_CALL:
         tree_parts(((Ast_Call *)n)->callee, nodes, buffers);
@@ -12686,9 +12698,10 @@ static bool same_places(Ast *to, Ast *from) {
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE:
-    case AST_TYPE_PROC: {
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: {
         Ast_Type *t = (Ast_Type *)to, *f = (Ast_Type *)from;
-        return same_place(t->dots, f->dots) && t->levels == f->levels;
+        return same_place(t->dots, f->dots) && same_place(t->end, f->end) && t->levels == f->levels;
     }
     case AST_BLOCK: return same_place(((Ast_Block *)to)->end, ((Ast_Block *)from)->end);
     case AST_BINARY: return same_place(((Ast_Binary *)to)->end, ((Ast_Binary *)from)->end);
@@ -13650,8 +13663,10 @@ TEST(instance_errors_name_their_chain) {
 // The expected chain of `generic`'s instances from T = int to T = int
 // behind `depth` - 1 pointers, innermost first, each made at the call `at`
 // in the one before it, the first by main's call at `first`, capped as
-// instance_context caps it.
-static String pointer_chain(Arena *a, const char *generic, s64 depth, const char *at, const char *first) {
+// instance_context caps it. A struct's instances are "used at" where a
+// procedure's are "called at" (`how`).
+static String pointer_chain(Arena *a, const char *generic, s64 depth, const char *at, const char *first,
+                            const char *how = "called") {
     String expected = {};
     for (s64 d = depth; d >= 1; d--) {
         if (depth > 21 && d == depth - 10) {
@@ -13663,8 +13678,8 @@ static String pointer_chain(Arena *a, const char *generic, s64 depth, const char
         Array<u8> type = {};
         for (s64 i = 0; i < d - 1; i++) array_add(&type, (u8)'*');
         for (const char *p = "int"; *p; p++) array_add(&type, (u8)*p);
-        expected = string_printf(a, STR_FMT "    in '%s' with T = %.*s, called at test.rig:%s\n", STR_ARG(expected),
-                                 generic, (int)type.count, (const char *)type.data, d == 1 ? first : at);
+        expected = string_printf(a, STR_FMT "    in '%s' with T = %.*s, %s at test.rig:%s\n", STR_ARG(expected),
+                                 generic, (int)type.count, (const char *)type.data, how, d == 1 ? first : at);
         array_free(&type);
     }
     return expected;
@@ -14092,6 +14107,10 @@ TEST(generic_default_places_are_said_once) {
          "1:13: a parameter that declares '$T' can't have a default value, for now\n"},
         {"t :: ($M: int = 1, $N: int) -> int { return N; }",
          "1:15: a parameter that declares '$M' can't have a default value, for now\n"},
+        // A constant parameter declared through an instance takes none
+        // either.
+        {"u :: (r: Ring(int, $N) = .{}) -> int { return N; }\nRing :: struct (T: Type, N: int) { items: [N]T; }",
+         "1:24: a parameter that declares '$N' can't have a default value, for now\n"},
     };
     for (const Case &k : cases) {
         // Called with two types, and not called at all.
@@ -14104,5 +14123,1543 @@ TEST(generic_default_places_are_said_once) {
         String alone = string_printf(&a, "%s\nmain :: () { }\n", k.generic);
         CHECK_STR(check_source(&a, string_cstr(&a, alone)), k.message);
     }
+    arena_free(&a);
+}
+
+// Issue #227: type aliases (spec 3.22).
+
+TEST(aliases_are_the_types_they_name) {
+    // A constant whose value names a type is an alias: the same type under
+    // a second name, wherever a type is written or a type value goes, an
+    // alias's too (P :: *V;), a procedure type's written as a signature. At
+    // the top level one may be used before its declaration, in a struct's
+    // field, in a global's type and in an array's count there; in a body in
+    // order, a local one hiding the top level's of its name, and used where
+    // a value goes as a top-level one is. An enum's
+    // members are named through one (M.B). One in a generic's body is each
+    // instance's, naming its T. The constant keeps the alias, of type Type.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Vec2 :: struct { x: float; y: float; }\n"
+                                 "g: P;\n"
+                                 "buf: [size_of(V)]u8;\n"
+                                 "Buf :: struct { b: [size_of(V)]u8; }\n"
+                                 "V :: Vec2;\n"
+                                 "P :: *V;\n"
+                                 "Ints :: []int;\n"
+                                 "Cb :: (n: int) -> int;\n"
+                                 "My_Int :: int;\n"
+                                 "Holder :: struct { at: Later; }\n"
+                                 "Later :: Defined_After;\n"
+                                 "Defined_After :: struct { v: My_Int; }\n"
+                                 "Mode :: enum { A; B; }\n"
+                                 "M :: Mode;\n"
+                                 "twice :: (n: int) -> int { return n * 2; }\n"
+                                 "size_in :: ($T: Type) -> int { return size_of(T); }\n"
+                                 "first_two :: (xs: []$T) -> [2]T {\n"
+                                 "    Two :: [2]T;\n"
+                                 "    r: Two;\n"
+                                 "    r[0] = xs[0];\n"
+                                 "    r[1] = xs[1];\n"
+                                 "    return r;\n"
+                                 "}\n"
+                                 "main :: () {\n"
+                                 "    a: V = .{1, 2};\n"
+                                 "    p: P = *a;\n"
+                                 "    xs: Ints;\n"
+                                 "    f: Cb = twice;\n"
+                                 "    n: My_Int = 3;\n"
+                                 "    Local :: [2]V;\n"
+                                 "    arr: Local;\n"
+                                 "    lsame := Local == [2]Vec2;\n"
+                                 "    L2 :: Local;\n"
+                                 "    w: L2;\n"
+                                 "    LM :: Mode;\n"
+                                 "    lm := LM.B;\n"
+                                 "    ls := size_in(Local);\n"
+                                 "    same := V == Vec2;\n"
+                                 "    also := My_Int == int;\n"
+                                 "    differ := My_Int == s64;\n"
+                                 "    s :: size_of(Local);\n"
+                                 "    V :: int;\n"
+                                 "    hidden: V = 4;\n"
+                                 "    t := first_two(int.[4, 5, 6]);\n"
+                                 "    u := first_two(float.[1.5, 2.5]);\n"
+                                 "    m := M.B;\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Type *vec2 = ((Ast_Struct *)top_level_named(tree, "Vec2"))->declared;
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    CHECK(find_local(body, "a")->type == vec2);
+    Type *p = find_local(body, "p")->type;
+    CHECK(p && p->kind == TYPE_POINTER && p->pointee == vec2);
+    CHECK_STR(type_name(&a, find_local(body, "xs")->type), "[]int");
+    CHECK_STR(type_name(&a, find_local(body, "f")->type), "(int) -> int");
+    CHECK(find_local(body, "n")->type == &type_int);
+    CHECK_STR(type_name(&a, find_local(body, "arr")->type), "[2]Vec2");
+    // A local alias where a value goes, as the top level's is: compared,
+    // named by another alias, an enum's members named through it, and a
+    // $T argument.
+    CHECK_STR(type_name(&a, find_local(body, "w")->type), "[2]Vec2");
+    CHECK(find_local(body, "lm")->type == ((Ast_Enum *)top_level_named(tree, "Mode"))->declared);
+    CHECK(find_local(body, "ls")->type == &type_int);
+    Ast_Proc *size_in = (Ast_Proc *)top_level_named(tree, "size_in");
+    CHECK_EQ(size_in->instances.count, 1);
+    if (size_in->instances.count == 1) CHECK_STR(size_in->instances[0]->name, "size_in(T = [2]Vec2)");
+    const char *compared[] = {"lsame", "same", "also", "differ"};
+    for (s64 k = 0; k < 4; k++) {
+        Ast_Var *var = (Ast_Var *)find_local(body, compared[k]);
+        CHECK(var->type == &type_bool);
+        CHECK(var->value->is_constant);
+        CHECK_EQ(var->value->constant, k < 3 ? 1 : 0);
+    }
+    Ast_Const *s = (Ast_Const *)find_local(body, "s");
+    CHECK(s->is_constant);
+    CHECK_EQ(s->constant, 16);
+    CHECK(find_local(body, "hidden")->type == &type_int);
+    CHECK_STR(type_name(&a, find_local(body, "t")->type), "[2]int");
+    CHECK_STR(type_name(&a, find_local(body, "u")->type), "[2]float32");
+    CHECK(find_local(body, "m")->type == ((Ast_Enum *)top_level_named(tree, "Mode"))->declared);
+    Type *g = top_level_named(tree, "g")->type;
+    CHECK(g && g->kind == TYPE_POINTER && g->pointee == vec2);
+    Type *buf = top_level_named(tree, "buf")->type;
+    CHECK(buf && buf->kind == TYPE_ARRAY && buf->count == 8);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Buf"))->declared->size, 8);
+    Type *holder = ((Ast_Struct *)top_level_named(tree, "Holder"))->declared;
+    CHECK(holder->fields[0].type == ((Ast_Struct *)top_level_named(tree, "Defined_After"))->declared);
+    // The constant keeps its alias, at its name, of type Type; a local one
+    // too.
+    Ast_Const *v = (Ast_Const *)top_level_named(tree, "V");
+    CHECK(v->alias);
+    if (v->alias) {
+        CHECK(v->alias->aliased == vec2);
+        CHECK_EQ(v->alias->kind, AST_ALIAS);
+        CHECK(same_place(v->alias->pos, v->pos));
+    }
+    CHECK(v->type == &type_type);
+    CHECK(!v->is_constant);
+    Ast_Const *local = (Ast_Const *)find_local(body, "Local");
+    CHECK(local->alias);
+    if (local->alias) CHECK_STR(type_name(&a, local->alias->aliased), "[2]Vec2");
+    // A constant of any other value has none.
+    CHECK(!((Ast_Const *)find_local(body, "s"))->alias);
+    arena_free(&a);
+}
+
+TEST(alias_type_names) {
+    // An alias is the same type, so messages name the type as ever.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Vec2 :: struct { x: float; y: float; }\n"
+                           "V :: Vec2;\n"
+                           "main :: () { x := V.{z = 1}; }\n"),
+              "3:22: 'Vec2' has no field 'z'\n");
+    arena_free(&a);
+}
+
+TEST(alias_mistakes) {
+    // An alias is no value and no procedure; a circle is a constant's; Type
+    // is written nowhere; a built-in type's name could never name an alias,
+    // at the top level or in a body; a value naming nothing is no type.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"Vec2 :: struct { x: float; }\nV :: Vec2;\nmain :: () { x := V; }\n",
+         "3:19: 'V' is a type, not a value\n"},
+        {"Vec2 :: struct { x: float; }\nV :: Vec2;\nmain :: () { y := V(1); }\n",
+         "3:19: 'V' isn't a procedure, so it can't be called\n"},
+        {"A :: B;\nB :: A;\nmain :: () { }\n", "1:1: 'A' is defined in terms of itself\n"},
+        {"S :: *S;\nmain :: () { }\n", "1:1: 'S' is defined in terms of itself\n"},
+        {"T_Alias :: Type;\nmain :: () { }\n",
+         "1:12: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
+        {"u8 :: s32;\nmain :: () { }\n", "1:1: 'u8' is a built-in type\n"},
+        {"main :: () { u8 :: s32; }\n", "1:14: 'u8' is a built-in type\n"},
+        {"Nope :: Missing;\nmain :: () { }\n", "1:9: unknown identifier 'Missing'\n"},
+        // An alias whose own check failed, or that is in a circle, has its
+        // mistake said once: its uses say nothing more, as a type or as a
+        // value, at the top level or in a body.
+        {"A :: B;\nB :: A;\ng: A;\nmain :: () { a: A; }\n", "1:1: 'A' is defined in terms of itself\n"},
+        {"S :: *S;\nmain :: () { p: S; t := size_of(S); }\n", "1:1: 'S' is defined in terms of itself\n"},
+        {"V :: []Nope;\nmain :: () { g: V; x := V.{}; }\n", "1:8: unknown type 'Nope'\n"},
+        {"Bad :: [-1]int;\nmain :: () { x: Bad; }\n", "1:9: an array's count can't be negative (-1)\n"},
+        {"main :: () { X :: Type; y: X; }\n",
+         "1:19: 'Type' only names types while compiling; a *Type_Info describes one at run time\n"},
+        {"main :: () { L :: [2]Nope; m: L; }\n", "1:22: unknown type 'Nope'\n"},
+        {"V :: [2]Node;\nNode :: struct { n: Node; }\ng: V;\nmain :: () { }\n",
+         "2:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"},
+        // An alias of a struct found to contain itself once every struct is
+        // laid out has no type then (made again): its uses say nothing
+        // more, as the struct's own don't.
+        {"P :: *Node;\nNode :: struct { n: Node; }\nmain :: () { a: P = 5; b: *Node = 5; }\n",
+         "2:1: 'Node' contains itself; it can hold a pointer to itself, *Node\n"},
+        // A constant whose value can't name a type is no type where one is
+        // written, its value not worked out there: the struct it needs is
+        // in no circle.
+        {"S :: struct { a: C; }\nC :: size_of(S);\nmain :: () { }\n", "1:18: 'C' is not a type\n"},
+        // Nor is one whose value names a value, a procedure or a constant
+        // that is no alias: the name is followed by lookup alone, so a
+        // struct, a procedure or a global its value needs is in no circle.
+        {"S :: struct { f: K; }\nK :: N;\nN :: size_of(S);\nmain :: () { }\n", "1:18: 'K' is not a type\n"},
+        {"S :: struct { f: [2]C; }\nC :: D;\nD :: size_of(S);\nmain :: () { }\n", "1:21: 'C' is not a type\n"},
+        {"S :: struct { f: OP; }\nOP :: make;\nmake :: () -> S { s: S; return s; }\nmain :: () { }\n",
+         "1:18: 'OP' is not a type\n"},
+        {"S :: struct { f: OP; }\nOP :: add;\nadd :: (s: S) -> int { return 0; }\nmain :: () { }\n",
+         "1:18: 'OP' is not a type\n"},
+        {"f :: (a: K) {}\nK :: f;\nmain :: () { }\n", "1:10: 'K' is not a type\n"},
+        {"g: K;\nK :: g;\nmain :: () { }\n", "1:4: 'K' is not a type\n"},
+        // A local alias is no value either.
+        {"main :: () { L :: [2]int; x := L; }\n", "1:32: 'L' is a type, not a value\n"},
+    };
+    for (const Case &k : cases) CHECK_STR(check_source(&a, k.text), k.message);
+    // A chain of aliases too deep is said once, at the one too many: the
+    // use of its first says nothing more.
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { x: A0; }\n", chain_of(&a, "A%lld :: A%lld;\n", 0, 1000, 1),
+                                      "A1001 :: int;\n")),
+              needed_too_deeply(&a, 1003, "A1001"));
+    arena_free(&a);
+}
+
+// Issue #227: generic structs (spec 3.23).
+
+// The source every test of struct instances starts with: [..] needs
+// Preload (check_with_preload).
+static const char *GENERIC_STRUCTS = "Mode :: enum { A; B; }\n"
+                                     "Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }\n"
+                                     "Ring :: struct (T: Type, N: int) { items: [N]T; }\n";
+
+// GENERIC_STRUCTS, then `rest`, in the arena.
+static const char *with_generic_structs(Arena *a, const char *rest) {
+    return string_cstr(a, string_printf(a, "%s%s", GENERIC_STRUCTS, rest));
+}
+
+// The type of local `name` of procedure `proc` in tree, or null.
+static Type *local_type(Ast_File *tree, const char *proc, const char *name) {
+    Ast *local = find_local(((Ast_Proc *)top_level_named(tree, proc))->body, name);
+    return local ? local->type : nullptr;
+}
+
+TEST(struct_instances_are_one_per_set_of_arguments) {
+    // Each set of arguments makes one instance, which every use with that
+    // set shares, program-wide: a type by its Type, a constant by its type
+    // and value, however written (2 + 2, cast(u8) 4), so int and s64 are
+    // two, and float and float32 one. Each is named by its arguments, as
+    // the program would write them, and laid out as any struct, its fields
+    // of its parameters' types. A global and a signature above the generic
+    // use it before the declarations pass reaches it, which checks it then.
+    // A type argument may be any type, a struct's (resolved behind a
+    // pointer, with no layout: Node holds a Wrap(Node), which points at
+    // Node), an instance's, an array's, each written as types are.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 joined(&a,
+                                        "G0: Ring(int, 4);\n"
+                                        "first :: (r: *Ring(u8, 2)) -> u8 { return r.items[0]; }\n",
+                                        GENERIC_STRUCTS,
+                                        "G: Ring(int, 4);\n"
+                                        "SIZE :: 3;\n"
+                                        "Vec2 :: struct { x: float; y: float; }\n"
+                                        "Box :: struct (T: Type) { v: T; }\n"
+                                        "Wrap :: struct (T: Type) { p: *T; n: int; }\n"
+                                        "Node :: struct { v: int; w: Wrap(Node); }\n"
+                                        "main :: () {\n"
+                                        "    a: Map(string, int);\n"
+                                        "    b: Map(string, int);\n"
+                                        "    c: Map(int, string);\n"
+                                        "    r1: Ring(int, 4);\n"
+                                        "    r2: Ring(int, 2 + 2);\n"
+                                        "    r3: Ring(int, cast(u8) 4);\n"
+                                        "    r4: Ring(s64, 4);\n"
+                                        "    r5: Ring(float, 1);\n"
+                                        "    r6: Ring(float32, 1);\n"
+                                        "    r7: Ring(int, SIZE + 1);\n"
+                                        "    n1: Map(int, Map(string, *u8));\n"
+                                        "    n2: Map(int, Map(string, *u8));\n"
+                                        "    n3: Map(Vec2, [2]Vec2);\n"
+                                        "    v: Box(Vec2);\n"
+                                        "    bv: Box([]int);\n"
+                                        "    ba: Box([4]u8);\n"
+                                        "}\n"
+                                        "other :: () { m: Map(string, int); }\n"),
+                                 &tree),
+              "");
+    Type *a_type = local_type(tree, "main", "a");
+    CHECK(a_type && a_type->kind == TYPE_STRUCT);
+    CHECK(local_type(tree, "main", "b") == a_type);
+    CHECK(local_type(tree, "main", "c") != a_type);
+    CHECK(local_type(tree, "other", "m") == a_type);
+    Type *r1 = local_type(tree, "main", "r1");
+    CHECK(r1 && local_type(tree, "main", "r2") == r1 && local_type(tree, "main", "r3") == r1);
+    CHECK(top_level_named(tree, "G")->type == r1);
+    CHECK(top_level_named(tree, "G0")->type == r1);
+    Type *r4 = local_type(tree, "main", "r4"), *r5 = local_type(tree, "main", "r5");
+    CHECK(r4 != r1 && r5 != r1 && r5 != r4);
+    CHECK(local_type(tree, "main", "r6") == r5);
+    Ast_Proc *first = (Ast_Proc *)top_level_named(tree, "first");
+    CHECK_STR(type_name(&a, first->params[0]->type), "*Ring(u8, 2)");
+    CHECK_STR(type_name(&a, a_type), "Map(string, int)");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "c")), "Map(int, string)");
+    CHECK_STR(type_name(&a, r1), "Ring(int, 4)");
+    CHECK_STR(type_name(&a, r4), "Ring(s64, 4)");
+    CHECK_STR(type_name(&a, r5), "Ring(float32, 1)");
+    CHECK(local_type(tree, "main", "r7") == r1);
+    Type *n1 = local_type(tree, "main", "n1");
+    CHECK(n1 && local_type(tree, "main", "n2") == n1);
+    CHECK_STR(type_name(&a, n1), "Map(int, Map(string, *u8))");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "n3")), "Map(Vec2, [2]Vec2)");
+    Type *vec2 = ((Ast_Struct *)top_level_named(tree, "Vec2"))->declared;
+    Type *v = local_type(tree, "main", "v");
+    CHECK_STR(type_name(&a, v), "Box(Vec2)");
+    CHECK(v && v->size == 8 && v->fields.count == 1 && v->fields[0].type == vec2);
+    Type *bv = local_type(tree, "main", "bv"), *ba = local_type(tree, "main", "ba");
+    CHECK(bv && bv->size == 16);
+    CHECK(ba && ba->size == 4);
+    CHECK_STR(type_name(&a, ba), "Box([4]u8)");
+    Type *node = ((Ast_Struct *)top_level_named(tree, "Node"))->declared;
+    CHECK(node && node->size == 24 && node->fields.count == 2);
+    if (node && node->fields.count == 2) {
+        Type *wrap = node->fields[1].type;
+        CHECK_STR(type_name(&a, wrap), "Wrap(Node)");
+        CHECK(wrap && wrap->fields.count == 2 && wrap->fields[0].type && wrap->fields[0].type->pointee == node);
+    }
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Map"))->instances.count, 5);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Ring"))->instances.count, 4);
+    CHECK_EQ(tree->struct_instances.count, 13);
+    CHECK_EQ(a_type->size, 88);
+    CHECK_EQ(r1->size, 32);
+    CHECK_EQ(r5->size, 4);
+    CHECK_STR(type_name(&a, a_type->fields[0].type), "[..]string");
+    // The generic is no type: only its instances are.
+    CHECK(!((Ast_Struct *)top_level_named(tree, "Map"))->declared);
+    arena_free(&a);
+}
+
+TEST(struct_parameters_are_types_and_constants) {
+    // A parameter is a type, K: Type, or a constant of a number, a bool, an
+    // enum or a string, which the fields' counts may use; a constant
+    // argument converts to its parameter's type, .B meeting the enum, as
+    // Mode.B does, the one instance. size_of(T) is a constant argument, as
+    // everywhere, inside a generic struct too, and an expression that names
+    // a type, #type (int) -> int, a type argument.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "Grid :: struct (W: int, H: int, Cell: Type) {\n"
+                                                              "    cells: [W * H]Cell;\n"
+                                                              "    row: [W]u8;\n"
+                                                              "}\n"
+                                                              "Labeled :: struct (L: string) { n: int; }\n"
+                                                              "Tag :: struct (M: Mode) { n: int; }\n"
+                                                              "Flag :: struct (On: bool) { n: int; }\n"
+                                                              "Pad :: struct (N: int) { b: [N]u8; }\n"
+                                                              "Padded :: struct (T: Type) {\n"
+                                                              "    v: T;\n"
+                                                              "    pad: Pad(size_of(T));\n"
+                                                              "}\n"
+                                                              "Box :: struct (T: Type) { v: T; }\n"
+                                                              "main :: () {\n"
+                                                              "    g: Grid(2, 3, u8);\n"
+                                                              "    l: Labeled(\"hi\");\n"
+                                                              "    t: Tag(.B);\n"
+                                                              "    t2: Tag(Mode.B);\n"
+                                                              "    f: Flag(true);\n"
+                                                              "    c: Padded(int);\n"
+                                                              "    p: Pad(size_of(int));\n"
+                                                              "    b: Box(#type (int) -> int);\n"
+                                                              "}\n"),
+                                 &tree),
+              "");
+    Type *g = local_type(tree, "main", "g");
+    CHECK(g && g->size == 8);
+    CHECK_STR(type_name(&a, g), "Grid(2, 3, u8)");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "l")), "Labeled(\"hi\")");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "t")), "Tag(Mode.B)");
+    CHECK(local_type(tree, "main", "t2") == local_type(tree, "main", "t"));
+    CHECK_STR(type_name(&a, local_type(tree, "main", "f")), "Flag(true)");
+    Type *c = local_type(tree, "main", "c"), *p = local_type(tree, "main", "p");
+    CHECK(c && c->size == 16);
+    CHECK_STR(type_name(&a, p), "Pad(8)");
+    CHECK(c && c->fields.count == 2 && c->fields[1].type == p);
+    Type *b = local_type(tree, "main", "b");
+    CHECK_STR(type_name(&a, b), "Box((int) -> int)");
+    CHECK(b && b->fields.count == 1);
+    if (b && b->fields.count == 1) CHECK_STR(type_name(&a, b->fields[0].type), "(int) -> int");
+    arena_free(&a);
+}
+
+TEST(struct_instances_hold_themselves_behind_pointers) {
+    // An instance's field may point at its own instance, hold a resizable
+    // array of it, or hold another instance that points back at it: the
+    // one instance, found in the cache before it is laid out.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "List :: struct (T: Type) { value: T; next: *List(T); }\n"
+                                     "Tree :: struct (T: Type) { value: T; kids: [..]Tree(T); }\n"
+                                     "A :: struct (T: Type) { b: *B(T); }\n"
+                                     "B :: struct (T: Type) { a: A(T); n: T; }\n"
+                                     "main :: () { l: List(int); t: Tree(string); b: B(u8); }\n",
+                                 &tree),
+              "");
+    Type *l = local_type(tree, "main", "l");
+    CHECK(l && l->fields.count == 2);
+    if (l && l->fields.count == 2) {
+        Type *next = l->fields[1].type;
+        CHECK(next && next->kind == TYPE_POINTER && next->pointee == l);
+    }
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "List"))->instances.count, 1);
+    Type *t = local_type(tree, "main", "t");
+    CHECK(t && t->fields.count == 2 && t->fields[1].type && t->fields[1].type->element == t);
+    Type *b = local_type(tree, "main", "b");
+    CHECK(b && b->size == 16 && b->fields.count == 2);
+    if (b && b->fields.count == 2) {
+        Type *inner = b->fields[0].type;
+        CHECK_STR(type_name(&a, inner), "A(u8)");
+        CHECK(inner && inner->fields.count == 1 && inner->fields[0].type &&
+              inner->fields[0].type->pointee == b);
+    }
+    // An instance only ever taken behind a pointer before the bodies, by a
+    // global and a signature, is laid out all the same, after the
+    // declarations' late fields; and found to contain itself there, though
+    // only a plain struct's late field takes it.
+    CHECK_STR(check_with_preload(&a, "Only :: struct (T: Type) { a: T; b: T; }\n"
+                                     "g: *Only(int);\n"
+                                     "f :: (p: *Only(u8)) { }\n"
+                                     "main :: () { }\n",
+                                 &tree),
+              "");
+    Type *only = top_level_named(tree, "g")->type;
+    CHECK(only && only->kind == TYPE_POINTER && only->pointee);
+    if (only && only->pointee) CHECK(only->pointee->size == 16 && only->pointee->fields.count == 2);
+    Type *param = ((Ast_Proc *)top_level_named(tree, "f"))->params[0]->type;
+    CHECK(param && param->pointee && param->pointee->size == 2 && param->pointee->fields.count == 2);
+    // One only taken behind a pointer in a procedure instance's body,
+    // checked in that last pass, is laid out too: the pass goes round again
+    // for the instances its bodies made.
+    CHECK_STR(check_with_preload(&a, "Only :: struct (T: Type) { a: T; b: T; }\n"
+                                     "mk :: (v: $T) { p: *Only(T); }\n"
+                                     "main :: () { mk(cast(u8) 1); mk(1); }\n",
+                                 &tree),
+              "");
+    Ast_Struct *generic_only = (Ast_Struct *)top_level_named(tree, "Only");
+    CHECK_EQ(generic_only->instances.count, 2);
+    if (generic_only->instances.count == 2) {
+        Type *small = generic_only->instances[0]->structure->declared;
+        Type *big = generic_only->instances[1]->structure->declared;
+        CHECK_STR(type_name(&a, small), "Only(u8)");
+        CHECK(small && small->size == 2 && small->fields.count == 2);
+        CHECK_STR(type_name(&a, big), "Only(int)");
+        CHECK(big && big->size == 16 && big->fields.count == 2);
+    }
+    CHECK_STR(check_with_preload(&a, "Bad :: struct (T: Type) { b: Bad(T); }\n"
+                                     "Holder :: struct { p: *Bad(u8); }\n"
+                                     "main :: () { }\n"),
+              "1:1: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)\n"
+              "    in 'Bad' with T = u8, used at test.rig:2:24\n");
+    arena_free(&a);
+}
+
+TEST(struct_instances_see_only_their_bindings) {
+    // An instance's fields see its own parameters, which hide the top
+    // level's names (a struct T, a constant N), and nothing of the
+    // procedure instance that uses it: make_box's Box(u8) is the one Box(u8)
+    // whatever its T. An argument naming a constant is that constant, in an
+    // alias's value too (R, the one Ring(int, 3)). Leak(u8), first laid out
+    // inside make_box's instances, finds the top level's T, not the T each
+    // binds: one instance, 16 bytes. A using field of a parameter's type is
+    // the struct bound, not the top level's T, wherever a using walk looks
+    // for a name: through the instance, a pointer to it and a using
+    // parameter.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "T :: struct { g: int; }\n"
+                                                              "Inner :: struct { x: int; }\n"
+                                                              "W :: struct (T: Type) { using t: T; }\n"
+                                                              "reach :: (using v: *W(Inner)) { c := x; }\n"
+                                                              "Box :: struct (T: Type) { v: T; }\n"
+                                                              "Leak :: struct (X: Type) { v: T; w: X; }\n"
+                                                              "N :: 100;\n"
+                                                              "Buf :: struct (N: int) { b: [N]u8; }\n"
+                                                              "SIZE :: 3;\n"
+                                                              "R :: Ring(int, SIZE);\n"
+                                                              "make_box :: (v: $T) -> Box(u8) {\n"
+                                                              "    b: Box(u8);\n"
+                                                              "    l: Leak(u8);\n"
+                                                              "    return b;\n"
+                                                              "}\n"
+                                                              "main :: () {\n"
+                                                              "    x: Box(u8);\n"
+                                                              "    y: Buf(3);\n"
+                                                              "    r: Ring(int, SIZE);\n"
+                                                              "    r2: R;\n"
+                                                              "    p := make_box(\"s\");\n"
+                                                              "    q := make_box(1);\n"
+                                                              "    w: W(Inner);\n"
+                                                              "    wx := w.x;\n"
+                                                              "    pw := *w;\n"
+                                                              "    px := pw.x;\n"
+                                                              "    reach(*w);\n"
+                                                              "}\n"),
+                                 &tree),
+              "");
+    CHECK(local_type(tree, "main", "wx") == &type_int);
+    CHECK(local_type(tree, "main", "px") == &type_int);
+    CHECK(local_type(tree, "reach", "c") == &type_int);
+    Type *x = local_type(tree, "main", "x");
+    CHECK(x && x->size == 1);
+    Type *y = local_type(tree, "main", "y");
+    CHECK(y && y->size == 3);
+    Type *r = local_type(tree, "main", "r");
+    CHECK(r && r->size == 24);
+    CHECK_STR(type_name(&a, r), "Ring(int, 3)");
+    CHECK(local_type(tree, "main", "r2") == r);
+    CHECK(local_type(tree, "main", "p") == x);
+    CHECK(local_type(tree, "main", "q") == x);
+    Ast_Proc *make_box = (Ast_Proc *)top_level_named(tree, "make_box");
+    CHECK_EQ(make_box->instances.count, 2);
+    for (s64 i = 0; i < make_box->instances.count; i++) CHECK(make_box->instances[i]->proc->results[0]->type == x);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Box"))->instances.count, 1);
+    Ast_Struct *leak = (Ast_Struct *)top_level_named(tree, "Leak");
+    CHECK_EQ(leak->instances.count, 1);
+    if (leak->instances.count == 1) {
+        Type *l = leak->instances[0]->structure->declared;
+        CHECK(l && l->size == 16);
+        for (s64 i = 0; i < make_box->instances.count; i++) {
+            Ast *local = find_local(make_box->instances[i]->proc->body, "l");
+            CHECK(local && local->type == l);
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(struct_instances_bind_their_anonymous_members) {
+    // An anonymous member's fields see the instance's bindings too, at any
+    // depth, a late field's (a pointer's) among them: V(u16, 3) is a u8 tag
+    // and a 16-byte union, whose members are read through it.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a, "V :: struct (T: Type, N: int) {\n"
+                                     "    tag: u8;\n"
+                                     "    union { a: T; b: [N]u8; struct { p: *T; q: [N]T; }; };\n"
+                                     "}\n"
+                                     "main :: () { v: V(u16, 3); a := v.a; b := v.b; p := v.p; q := v.q; }\n",
+                                 &tree),
+              "");
+    Type *v = local_type(tree, "main", "v");
+    CHECK(v && v->size == 24);
+    CHECK_STR(type_name(&a, local_type(tree, "main", "a")), "u16");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "b")), "[3]u8");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "p")), "*u16");
+    CHECK_STR(type_name(&a, local_type(tree, "main", "q")), "[3]u16");
+    arena_free(&a);
+}
+
+TEST(struct_argument_mistakes) {
+    // An instance's arguments are counted, and each is bound to its
+    // parameter: a type to a type parameter, a constant known while
+    // compiling, converted, to a constant one. A generic struct's name
+    // alone is no type, and a plain struct takes no arguments.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"main :: () { x: Map(int); }\n", "4:17: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { x: Map(); }\n", "4:17: 'Map' takes 2 arguments, but 0 were given\n"},
+        {"Box :: struct (T: Type) { v: T; }\nmain :: () { x: Box(int, int); }\n",
+         "5:17: 'Box' takes 1 argument, but 2 were given\n"},
+        {"main :: () { x: Map; }\n", "4:17: 'Map' is generic; write its arguments, as in Map(K, V)\n"},
+        {"main :: () { x: *Map; }\n", "4:18: 'Map' is generic; write its arguments, as in Map(K, V)\n"},
+        {"Vec2 :: struct { x: float; }\nmain :: () { x: Vec2(int); }\n",
+         "5:17: 'Vec2' isn't generic, so it takes no arguments\n"},
+        {"main :: () { x: Map(3, int); }\n", "4:21: argument 1 of 'Map' must be a type, for 'K: Type'\n"},
+        {"main :: () { n := 4; x: Ring(int, n); }\n",
+         "4:35: argument 2 of 'Ring' must be known while compiling, for 'N: int'\n"},
+        {"main :: () { x: Ring(int, int); }\n", "4:27: 'int' is a type, not a value\n"},
+        // A generic struct's bare name is no type, as where a value goes.
+        {"Box :: struct (T: Type) { v: T; }\nmain :: () { x: Ring(int, Box); }\n",
+         "5:27: 'Box' is generic; write its arguments, as in Box(T)\n"},
+        {"main :: () { x: Ring(int, *int); }\n", "4:27: '*int' is a type, not a value\n"},
+        {"main :: () { x: Ring(int, *Ring(int, 2 + 2)); }\n", "4:27: '*Ring(int, 2 + 2)' is a type, not a value\n"},
+        {"Grid :: struct (W: int, H: int, C: Type) { }\nmain :: () { x: Ring(int, *Grid(1 + 1, 3, u8)); }\n",
+         "5:27: '*Grid(1 + 1, 3, u8)' is a type, not a value\n"},
+        {"main :: () { x: Ring(int, Ring(int, 2)); }\n", "4:27: 'Ring(int, 2)' is a type, not a value\n"},
+        // A name with arguments that names no generic struct is a call
+        // there, never known while compiling, or what its name is; its
+        // arguments are checked as any call's are.
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(2)); }\n",
+         "5:27: argument 2 of 'Ring' must be known while compiling, for 'N: int'\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(nope)); }\n",
+         "5:33: unknown identifier 'nope'\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(1, 2)); }\n",
+         "5:27: 'twice' takes 1 argument, but 2 were given\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(*int)); }\n",
+         "5:33: '*int' is a type, not a value\n"},
+        {"twice :: (n: int) -> int { return n * 2; }\nmain :: () { x: Ring(int, twice(twice(nope))); }\n",
+         "5:39: unknown identifier 'nope'\n"},
+        {"main :: () { x: Ring(int, Nope(1)); }\n", "4:27: unknown identifier 'Nope'\n"},
+        {"main :: () { x: Ring(int, Mode(1)); }\n", "4:27: 'Mode' isn't a procedure, so it can't be called\n"},
+        // A #run that fails says so, and nothing more, as in an array's
+        // count.
+        {"fail :: () -> int { a: [2]int; i := 2; return a[i]; }\nmain :: () { x: Ring(int, #run fail()); }\n",
+         "5:27: #run failed: runtime error: index 2 is out of bounds (count 2)\n"
+         "    in fail (test.rig:4:48)\n"
+         "    in #run (test.rig:5:27)\n"},
+        {"main :: () { x: Ring(int, \"a\"); }\n",
+         "4:27: argument 2 of 'Ring' has type 'string', which can't be converted to 'int'\n"},
+        {"Small :: struct (N: u8) { }\nmain :: () { x: Small(300); }\n", "5:23: 300 doesn't fit in 'u8'\n"},
+        {"main :: () { x: Nope(int); }\n", "4:17: unknown type 'Nope'\n"},
+        {"main :: () { x: main(int); }\n", "4:17: 'main' is not a type\n"},
+        // A generic whose own check failed makes no instance: its uses say
+        // nothing more.
+        {"Bad :: struct (V: []int) { }\nmain :: () { x: Bad(1); y: Bad(2); }\n",
+         "4:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        // A parameter's type that needs its own struct's instance is a
+        // circle, said once, at the generic.
+        {"S :: struct (N: S(1)) { }\nmain :: () { x: S(1); }\n", "4:1: 'S' is defined in terms of itself\n"},
+    };
+    for (const Case &k : cases) CHECK_STR(check_with_preload(&a, with_generic_structs(&a, k.text)), k.message);
+    arena_free(&a);
+}
+
+TEST(generic_structs_nest_at_most_max_depth) {
+    // A generic struct's own check is worked out inside what needs it, as a
+    // declaration is: each parameter's type an instance of the next is two
+    // levels, so S0 is at 0 and S500 at 1000, where its parameter's '(' is
+    // one too many. Shorter by one, the chain fits, its last mistake (a
+    // struct's instance is no parameter's type) said; longer, the one too
+    // deep is said, and checked in its own turn, from 0, where its own
+    // mistake is found. No crash either way.
+    Arena a = arena_make();
+    const char *link = "S%lld :: struct (N: S%lld(1)) { }\n";
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 499, 1),
+                                      "S500 :: struct (N: int) { }\n")),
+              "501:20: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string "
+              "type, not 'S500(1)'\n");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 500, 1),
+                                      "S501 :: struct (N: int) { }\n")),
+              joined(&a, needed_too_deeply(&a, 502, "S500"),
+                     "502:20: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or "
+                     "string type, not 'S501(1)'\n"));
+    arena_free(&a);
+}
+
+TEST(generic_struct_fields_nest_at_most_max_depth) {
+    // A generic struct's fields' types count too: a name in one is resolved
+    // inside its own check, as a declaration needed inside it. Each link's
+    // field, in an anonymous member's braces, a level above its *[]A, names
+    // an alias of a pointer to the next link's instance: eight levels a
+    // link, so the 125 links from S0 fit, and a 126th puts S125 too deep,
+    // said once, at it, and checked in its own turn, from 0. Counted
+    // without the field's levels, or without the braces', the 126 fit.
+    Arena a = arena_make();
+    const char *link = "S%lld :: struct (T: Type) { union { a: *[]A%lld; }; }\n";
+    const char *alias = "A%lld :: #type *S%lld(int);\n";
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 124, 1),
+                                      chain_of(&a, alias, 1, 125, 0), "S125 :: struct (T: Type) { }\n")),
+              "");
+    CHECK_STR(check_source(&a, joined(&a, "main :: () { }\n", chain_of(&a, link, 0, 125, 1),
+                                      chain_of(&a, alias, 1, 126, 0), "S126 :: struct (T: Type) { }\n")),
+              needed_too_deeply(&a, 127, "S125"));
+    arena_free(&a);
+}
+
+TEST(clones_structs_deep_and_unchecked) {
+    // A struct instance is a copy of its generic's tree, as an instance of
+    // a generic procedure is: a struct holding a using field of an
+    // instance, an array counted by a parameter, an anonymous member and a
+    // pointer to its own instance, copied before the program is checked,
+    // dumps as the original does, shares no node and no Array's buffer with
+    // it, keeps every place the parser gave each node, and checking the
+    // program leaves the copy unchecked.
+    Arena a = arena_make();
+    const char *text = "Base :: struct (T: Type) { id: T; }\n"
+                       "S :: struct (T: Type, N: int) { using base: Base(T); a: [N]T; union { i: int; f: float; }; "
+                       "p: *S(T, N); }\n"
+                       "main :: () { s: S(u8, 2); s.id = 1; }\n";
+    Diagnostics d = {};
+    Ast_File *file = load_program(&a, &d, str("test.rig"), str(text));
+    CHECK_STR(file->load_failure, "");
+    Ast_Struct *original = (Ast_Struct *)top_level_named(file, "S");
+    Ast_Struct *copy = (Ast_Struct *)ast_clone(&a, original);
+    CHECK_STR(ast_dump_node(&a, copy), string_cstr(&a, ast_dump_node(&a, original)));
+    CHECK(copy->is_generic);
+    Array<Ast *> original_nodes = {}, copy_nodes = {};
+    Array<const void *> original_buffers = {}, copy_buffers = {};
+    tree_parts(original, &original_nodes, &original_buffers);
+    tree_parts(copy, &copy_nodes, &copy_buffers);
+    CHECK_EQ(copy_nodes.count, original_nodes.count);
+    CHECK_EQ(copy_buffers.count, original_buffers.count);
+    CHECK(original_nodes.count > 15);
+    for (s64 i = 0; i < copy_nodes.count && i < original_nodes.count; i++) {
+        Ast *node = copy_nodes[i];
+        CHECK_EQ(node->kind, original_nodes[i]->kind);
+        if (node->kind == original_nodes[i]->kind) CHECK(same_places(node, original_nodes[i]));
+        for (s64 k = 0; k < original_nodes.count; k++) CHECK(node != original_nodes[k]);
+    }
+    for (s64 i = 0; i < copy_buffers.count; i++) {
+        for (s64 k = 0; k < original_buffers.count; k++) CHECK(copy_buffers[i] != original_buffers[k]);
+    }
+    check(file, &a, &d);
+    CHECK_STR(messages(&a, &d), "");
+    CHECK_EQ(original->instances.count, 1);
+    for (s64 i = 0; i < copy_nodes.count; i++) CHECK(copy_nodes[i]->type == nullptr);
+    CHECK(copy->resolve == RESOLVE_NOT_YET && !copy->declared && !copy->instance);
+    array_free(&original_nodes);
+    array_free(&original_buffers);
+    array_free(&copy_nodes);
+    array_free(&copy_buffers);
+    diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(generic_struct_declaration_mistakes) {
+    // What a generic struct's declaration says that doesn't depend on its
+    // arguments is its own mistake, said once, at the generic, with no
+    // chain, whether no use instantiates it or two uses would make two
+    // instances: two parameters of one name, a parameter named as a
+    // built-in type, a field named as a parameter or as another field
+    // across its braces, an anonymous member's too, and a field's type
+    // naming nothing, a constant parameter, void, or an instance that can
+    // be none. A generic with one makes no instance: its uses have no type
+    // and say nothing more.
+    Arena a = arena_make();
+    struct Case {
+        const char *declaration;
+        const char *uses;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"S :: struct (T: Type, T: Type) { }\n", "x: S(int, int); y: S(u8, u8);",
+         "1:23: 'T' is already declared at test.rig:1:14\n"},
+        {"S :: struct (int: Type) { }\n", "x: S(u8); y: S(u16);", "1:14: 'int' is a built-in type\n"},
+        {"S :: struct (T: Type) { T: int; }\n", "x: S(int); y: S(u8);",
+         "1:25: 'T' is already declared at test.rig:1:14\n"},
+        {"S :: struct (T: Type) { union { T: int; }; }\n", "x: S(int); y: S(u8);",
+         "1:33: 'T' is already declared at test.rig:1:14\n"},
+        {"S :: struct (T: Type) { a: T; a: int; }\n", "x: S(int); y: S(u8);",
+         "1:31: 'a' is already declared at test.rig:1:25\n"},
+        {"S :: struct (T: Type) { a: T; union { b: T; a: int; }; }\n", "x: S(int); y: S(u8);",
+         "1:45: 'a' is already declared at test.rig:1:25\n"},
+        {"S :: struct (T: Type) { a: Nope; }\n", "x: S(int); y: S(u8);", "1:28: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { a: *[]Nope; }\n", "x: S(int); y: S(u8);", "1:31: unknown type 'Nope'\n"},
+        {"S :: struct (N: int) { a: N; }\n", "x: S(1); y: S(2);", "1:27: 'N' is not a type\n"},
+        {"S :: struct (T: Type) { a: void; }\n", "x: S(int); y: S(u8);",
+         "1:28: 'void' is only a pointer's target, as in *void\n"},
+        // An instance in a field's type is checked as one in a generic
+        // procedure's signature is: its name a generic struct's, its count
+        // right, a written type where it takes a constant no value. A
+        // generic struct whose own check said a mistake can't be
+        // instantiated with it, so the field's generic makes no instance
+        // either. The instance's arguments are each instance's (below).
+        {"S :: struct (T: Type) { a: *Nope(T); }\n", "x: S(int); y: S(u8);", "1:29: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { a: *T(int); }\n", "x: S(int); y: S(u8);",
+         "1:29: 'T' isn't generic, so it takes no arguments\n"},
+        {"S :: struct (N: int) { a: *N(int); }\n", "x: S(1); y: S(2);", "1:28: 'N' is not a type\n"},
+        {"S :: struct (T: Type) { a: *Vec2(T); }\nVec2 :: struct { x: float; }\n", "x: S(int); y: S(u8);",
+         "1:29: 'Vec2' isn't generic, so it takes no arguments\n"},
+        {"S :: struct (T: Type) { a: *Map(T); }\nMap :: struct (K: Type, V: Type) { k: K; }\n",
+         "x: S(int); y: S(u8);", "1:29: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"S :: struct (T: Type) { a: *Ring(T, *int); }\nRing :: struct (T: Type, N: int) { items: [N]T; }\n",
+         "x: S(int); y: S(u8);", "1:37: '*int' is a type, not a value\n"},
+        {"S :: struct (T: Type) { a: *Bad(T); }\nBad :: struct (K: Type) { a: Nope; }\n", "x: S(int); y: S(u8);",
+         "2:30: unknown type 'Nope'\n"},
+        // A field said to clash has its type checked only when it holds a
+        // pointer or a view, as any struct's layout makes only a late one's.
+        {"S :: struct (T: Type) { a: T; a: Nope; }\n", "x: S(int); y: S(u8);",
+         "1:31: 'a' is already declared at test.rig:1:25\n"},
+        {"S :: struct (T: Type) { a: T; a: *Nope; }\n", "x: S(int); y: S(u8);",
+         "1:31: 'a' is already declared at test.rig:1:25\n1:35: unknown type 'Nope'\n"},
+        // A field's type that reaches an instance through an alias, behind
+        // a pointer or by value, before a later field's mistake is found:
+        // the instance is never laid out, so the mistake is said once, with
+        // no chain, and so is no mistake of the instance's own, [-1]T.
+        {"S :: struct (T: Type) { p: A; q: Nope; }\nA :: #type *S(int);\n", "x: S(int); y: S(u8);",
+         "1:34: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { p: A; a: int; a: int; }\nA :: #type *S(int);\n", "x: S(int); y: S(u8);",
+         "1:39: 'a' is already declared at test.rig:1:31\n"},
+        {"S :: struct (T: Type) { a: A; b: [-1]T; c: Nope; }\nA :: #type *S(int);\n", "x: S(int); y: S(u8);",
+         "1:44: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { a: *A; b: Nope; }\nA :: #type S(int);\n", "x: S(int); y: S(u8);",
+         "1:35: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { p: *A; q: Nope; }\nA :: #type [size_of(S(int))]u8;\n", "x: S(int); y: S(u8);",
+         "1:35: unknown type 'Nope'\n"},
+        // Or needed by an earlier part of the field's own type, whose later
+        // part has the mistake: the rest of that type is checked before the
+        // instance would be laid out, and it never is, so its own [-1]T
+        // isn't said either. A mistake earlier in that field counts too,
+        // with no field after it.
+        {"S :: struct (T: Type) { a: (A) -> Nope; }\nA :: #type [size_of(S(int))]u8;\n", "x: S(int); y: S(u8);",
+         "1:35: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { b: [-1]T; a: (A) -> Nope; }\nA :: #type [size_of(S(int))]u8;\n",
+         "x: S(int); y: S(u8);", "1:45: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { b: [-1]T; a: (Nope) -> A; }\nA :: #type [size_of(S(int))]u8;\n",
+         "x: S(int); y: S(u8);", "1:39: unknown type 'Nope'\n"},
+    };
+    for (const Case &k : cases) {
+        CHECK_STR(check_source(&a, joined(&a, k.declaration, "main :: () { }\n")), k.message);
+        Checked c = check_src(&a, joined(&a, k.declaration, "main :: () { ", k.uses, " }\n"));
+        CHECK_STR(sorted_messages(&a, &c), k.message);
+        CHECK_STR(type_of(&a, &c, "x"), "?");
+        CHECK_STR(type_of(&a, &c, "y"), "?");
+        token_list_free(c.list);
+    }
+    // None of that is a mistake where it's fine: a pointer to void, a
+    // parameter in a count and behind a pointer, a field named as a type of
+    // the top level, and fields of one name in two generics.
+    CHECK_STR(check_source(&a, "Vec2 :: struct { x: float; }\n"
+                               "S :: struct (T: Type, N: int) { p: *void; a: [N]T; s: *S(T, N); Vec2: T; }\n"
+                               "U :: struct (T: Type) { a: T; p: *void; }\n"
+                               "main :: () { s: S(int, 2); u: U(u8); }\n"),
+              "");
+    // First checked inside an instance, a procedure's whose signature names
+    // it, the generic's mistake is still its own: no chain.
+    CHECK_STR(check_source(&a, "g := make(1);\n"
+                               "make :: (v: $T) -> S(T) { s: S(T); return s; }\n"
+                               "S :: struct (T: Type) { a: Nope; }\n"
+                               "main :: () { }\n"),
+              "3:28: unknown type 'Nope'\n");
+    // So is one found by an instance's layout inside a procedure instance,
+    // while the generic's fields are still being checked: f(0)'s body
+    // needs S(int), whose generic's later field has the mistake.
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { p: *A; q: Nope; }\n"
+                               "A :: #type [#run f(0)]u8;\n"
+                               "f :: (v: $T) -> int { return size_of(S(int)); }\n"
+                               "main :: () { }\n"),
+              "1:35: unknown type 'Nope'\n");
+    arena_free(&a);
+}
+
+TEST(generic_struct_mistakes_are_only_its_own) {
+    // A name in a generic struct's field's type that is an alias is worked
+    // out there: the alias's own mistakes, and those of an instance its
+    // value lays out, are theirs, not the generic's, which still makes its
+    // instances, whichever order they're declared in. Each instance's and
+    // each use's mistakes are said.
+    Arena a = arena_make();
+    const char *generic = "S :: struct (T: Type, N: int) { p: *A; b: [N]T; }\n";
+    const char *uses = "main :: () { x: S(u8, 2); y: S(u8, -5); x.b[0] = \"no\"; }\n";
+    CHECK_STR(check_source(&a, joined(&a, generic, "A :: #type [Missing]u8;\n", uses)),
+              "1:44: an array's count can't be negative (-5)\n"
+              "    in 'S' with T = u8, N = -5, used at test.rig:3:30\n"
+              "2:13: unknown identifier 'Missing'\n"
+              "3:50: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, joined(&a, "A :: #type [Missing]u8;\n", generic, uses)),
+              "1:13: unknown identifier 'Missing'\n"
+              "2:44: an array's count can't be negative (-5)\n"
+              "    in 'S' with T = u8, N = -5, used at test.rig:3:30\n"
+              "3:50: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, joined(&a, generic, "A :: #type [size_of(S(int, -1))]u8;\n", uses)),
+              "1:44: an array's count can't be negative (-1)\n"
+              "    in 'S' with T = int, N = -1, used at test.rig:2:21\n"
+              "1:44: an array's count can't be negative (-5)\n"
+              "    in 'S' with T = u8, N = -5, used at test.rig:3:30\n"
+              "3:50: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { p: *A; b: T; }\n"
+                               "A :: #type *[g]u8;\n"
+                               "g :: 1 + \"a\";\n"
+                               "main :: () { x: S(u8); x.b = \"no\"; }\n"),
+              "3:8: '+' needs numbers, not 'string'\n"
+              "4:30: a value of type 'string' doesn't convert to 'u8' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(generic_struct_fields_reach_its_instances) {
+    // A field's type may reach an instance of its own generic through an
+    // alias, by value or behind a pointer, during the generic's own check:
+    // the generic's parameters are checked by then, so it's no circle, and
+    // the instance is the one every use shares.
+    Arena a = arena_make();
+    Checked c = check_src(&a, "S :: struct (T: Type) { v: T; a: *A; }\n"
+                              "A :: #type S(int);\n"
+                              "main :: () { x: S(int); }\n");
+    CHECK_STR(messages(&a, &c.list->diag), "");
+    CHECK_STR(type_of(&a, &c, "x"), "S(int)");
+    CHECK_EQ(((Ast_Struct *)global_named(&c, "S"))->instances.count, 1);
+    token_list_free(c.list);
+    CHECK_STR(check_source(&a, "List :: struct (T: Type) { a: A; b: T; }\n"
+                               "A :: #type *List(int);\n"
+                               "main :: () { x: List(int); x.a = *x; }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(aliases_of_instances_come_before_their_generics) {
+    // An alias of an instance declared before its generic checks the
+    // generic while it's worked out, and a field naming the alias is no
+    // circle, in either order (spec 4.8): the generic's own check leaves the
+    // alias's name until the alias is worked out (alias_under_way). So is
+    // one first needed by a global, a plain struct's field or a parameter,
+    // or reached through a second generic.
+    Arena a = arena_make();
+    const char *fine[] = {
+        "Ptr :: *Node(int);\nNode :: struct (T: Type) { v: T; kids: [..]Ptr; }\nmain :: () { x: Node(int); }\n",
+        "Node :: struct (T: Type) { v: T; kids: [..]Ptr; }\nPtr :: *Node(int);\nmain :: () { x: Node(int); }\n",
+        "Al :: *S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n",
+        "Al :: S(int); S :: struct (T: Type) { a: *Al; t: T; }\nmain :: () { x: Al; }\n",
+        "Al :: []S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n",
+        "g: Ptr;\nPtr :: *Node(int);\nNode :: struct (T: Type) { v: T; kids: [..]Ptr; }\nmain :: () { }\n",
+        "Holder :: struct { p: Ptr; }\nPtr :: *Node(int);\nNode :: struct (T: Type) { kids: [..]Ptr; }\n"
+        "main :: () { }\n",
+        "f :: (p: Ptr) { }\nPtr :: *Node(int);\nNode :: struct (T: Type) { kids: [..]Ptr; }\nmain :: () { }\n",
+        "Al :: *A(int); A :: struct (T: Type) { b: B(T); } B :: struct (T: Type) { p: Al; }\n"
+        "main :: () { x: A(int); }\n",
+        "BI :: B(int); AI :: A(int); A :: struct (T: Type) { b: *BI; } B :: struct (T: Type) { a: *AI; }\n"
+        "main :: () { x: A(int); y: B(int); }\n",
+    };
+    for (s64 i = 0; i < (s64)(sizeof(fine) / sizeof(fine[0])); i++) CHECK_STR(check_with_preload(&a, fine[i]), "");
+    // A mistake at the alias's name is still the generic's, said once, at
+    // it, with no chain, in either order, the alias on line 1 or on line 3:
+    // it's checked before either instance is laid out, and the generic
+    // makes no instance. In a resizable array, behind a pointer, by value
+    // with the alias's value an instance by value, and at two fields.
+    struct {
+        const char *alias, *generic, *uses, *expected;
+    } late[] = {
+        {"Ptr :: *Node(int);", "Node :: struct (T: Type) { v: T; kids: [..]Ptr(T); }",
+         "main :: () { a: Node(u8); b: Node(s8); }", "2:44: 'Ptr' isn't generic, so it takes no arguments\n"},
+        {"Ptr :: *Node(int);", "Node :: struct (T: Type) { v: T; kids: *Ptr(T); }",
+         "main :: () { a: Node(u8); b: Node(s8); }", "2:41: 'Ptr' isn't generic, so it takes no arguments\n"},
+        {"Ptr :: Node(int);", "Node :: struct (T: Type) { v: T; w: Ptr(T); }",
+         "main :: () { a: Node(u8); b: Node(s8); }", "2:37: 'Ptr' isn't generic, so it takes no arguments\n"},
+        {"A :: *S(int);", "S :: struct (T: Type) { a: *A(T); b: *A(T); }", "main :: () { a: S(u8); b: S(s8); }",
+         "2:29: 'A' isn't generic, so it takes no arguments\n"
+         "2:39: 'A' isn't generic, so it takes no arguments\n"},
+    };
+    for (s64 i = 0; i < (s64)(sizeof(late) / sizeof(late[0])); i++) {
+        String first = string_printf(&a, "%s\n%s\n\n%s\n", late[i].alias, late[i].generic, late[i].uses);
+        String after = string_printf(&a, "\n%s\n%s\n%s\n", late[i].generic, late[i].alias, late[i].uses);
+        CHECK_STR(check_source(&a, string_cstr(&a, first)), late[i].expected);
+        CHECK_STR(check_source(&a, string_cstr(&a, after)), late[i].expected);
+    }
+    // A real circle is still said, once: a value that needs itself, and a
+    // layout that needs the alias's value while it's worked out, in either
+    // order, with the instance whose layout needed it.
+    CHECK_STR(check_source(&a, "Box :: struct (T: Type) { v: T; }\nA :: *Box(A);\nmain :: () { }\n"),
+              "2:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "A :: *Box(A);\nBox :: struct (T: Type) { v: T; }\nmain :: () { }\n"),
+              "1:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "Box :: struct (T: Type) { v: T; }\nA :: Box(B); B :: Box(A);\nmain :: () { }\n"),
+              "2:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "A :: Box(B); B :: Box(A);\nBox :: struct (T: Type) { v: T; }\nmain :: () { }\n"),
+              "1:1: 'A' is defined in terms of itself\n");
+    CHECK_STR(check_source(&a, "Al :: [2]S(int); S :: struct (T: Type) { a: Al; t: T; }\nmain :: () { }\n"),
+              "1:1: 'Al' is defined in terms of itself\n"
+              "    in 'S' with T = int, used at test.rig:1:10\n");
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { a: Al; t: T; } Al :: [2]S(int);\nmain :: () { }\n"),
+              "1:40: 'Al' is defined in terms of itself\n"
+              "    in 'S' with T = int, used at test.rig:1:49\n");
+    arena_free(&a);
+}
+
+TEST(struct_instance_errors_name_their_chain) {
+    // A mistake that depends on an instance's arguments, a negative count
+    // or a layout that holds itself, is that instance's, followed by its
+    // chain: the instance's bindings and where it was used, then, for one
+    // made in a procedure instance's signature, that instance's line. Its
+    // body's Ring(T, -1) is the same instance: nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+                           "Bad :: struct (T: Type) { b: Bad(T); }\n"
+                           "make :: (v: $T) -> Ring(T, -1) { r: Ring(T, -1); return r; }\n"
+                           "main :: () {\n"
+                           "    a: Ring(int, -2);\n"
+                           "    b: Bad(u8);\n"
+                           "    c := make(1);\n"
+                           "}\n"),
+              "1:44: an array's count can't be negative (-2)\n"
+              "    in 'Ring' with T = int, N = -2, used at test.rig:5:8\n"
+              "1:44: an array's count can't be negative (-1)\n"
+              "    in 'Ring' with T = int, N = -1, used at test.rig:3:20\n"
+              "    in 'make' with T = int, called at test.rig:7:10\n"
+              "2:1: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)\n"
+              "    in 'Bad' with T = u8, used at test.rig:6:8\n");
+    // A generic struct's field's instance's arguments are each instance's
+    // to check, a name in them that is no type too, said with each chain.
+    CHECK_STR(check_source(&a, "Box :: struct (T: Type) { item: T; }\n"
+                               "S :: struct (T: Type) { a: Box(Nope); }\n"
+                               "main :: () { x: S(int); y: S(u8); }\n"),
+              "2:32: unknown type 'Nope'\n"
+              "    in 'S' with T = int, used at test.rig:3:17\n"
+              "2:32: unknown type 'Nope'\n"
+              "    in 'S' with T = u8, used at test.rig:3:28\n");
+    // A top-level constant first worked out inside an instance's layout, an
+    // array's count's, the global before it needing S(int), is the
+    // program's: its mistake has no chain.
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { a: [K]T; }\n"
+                               "g: S(int);\n"
+                               "K :: 1 + \"a\";\n"
+                               "main :: () { }\n"),
+              "3:8: '+' needs numbers, not 'string'\n");
+    arena_free(&a);
+}
+
+TEST(struct_instances_have_a_depth_limit) {
+    // Each instance's fields making the next, deeper, instance behind a
+    // pointer nests at most MAX_DEPTH instances: the one too many is
+    // refused where it's used, with the chain of the instances it's in, the
+    // innermost and outermost ten, and has no type.
+    Arena a = arena_make();
+    String expected = string_printf(&a,
+                                    "1:35: 'Grow' is instantiated more than 1000 levels deep, each instance's fields "
+                                    "making the next\n" STR_FMT,
+                                    STR_ARG(pointer_chain(&a, "Grow", 1000, "1:35", "2:17", "used")));
+    CHECK_STR(check_source(&a,
+                           "Grow :: struct (T: Type) { next: *Grow(*T); }\n"
+                           "main :: () { g: Grow(int); }\n"),
+              string_cstr(&a, expected));
+    // A procedure instance the fields of the struct instance that deep
+    // would make is refused too, with the same chain, made by fields too.
+    String fields_chain = pointer_chain(&a, "Grow", 1000, "2:35", "3:17", "used");
+    CHECK_STR(check_source(&a,
+                           "sz :: ($T: Type) -> int { return 1; }\n"
+                           "Grow :: struct (T: Type) { next: *Grow(*T); a: [#run sz(T)]u8; }\n"
+                           "main :: () { g: Grow(int); }\n"),
+              string_cstr(&a, string_printf(&a,
+                                            "2:35: 'Grow' is instantiated more than 1000 levels deep, each "
+                                            "instance's fields making the next\n" STR_FMT
+                                            "2:54: 'sz' is instantiated more than 1000 levels deep, each "
+                                            "instance's fields making the next\n" STR_FMT,
+                                            STR_ARG(fields_chain), STR_ARG(fields_chain))));
+    // Struct instances count with procedure instances: written in the code
+    // of a procedure instance MAX_DEPTH deep, whose instances' bodies each
+    // called the next, the struct's is refused where it's written, its
+    // signature's and its body's each, with that chain and the words the
+    // call it makes has.
+    String chain = pointer_chain(&a, "grow", 1000, "2:47", "3:14");
+    String body = str("is instantiated more than 1000 levels deep, each instance's body making the next\n");
+    CHECK_STR(check_source(&a,
+                           "Box :: struct (T: Type) { v: T; }\n"
+                           "grow :: (v: $T) -> Box(T) { b: Box(T); p: *T; grow(p); return b; }\n"
+                           "main :: () { grow(1); }\n"),
+              string_cstr(&a, string_printf(&a,
+                                            "2:20: 'Box' " STR_FMT STR_FMT "2:32: 'Box' " STR_FMT STR_FMT
+                                            "2:47: 'grow' " STR_FMT STR_FMT,
+                                            STR_ARG(body), STR_ARG(chain), STR_ARG(body), STR_ARG(chain),
+                                            STR_ARG(body), STR_ARG(chain))));
+    // Held by value, the instances are laid out inside one another, as
+    // declarations nest, and meet that limit first: one message, naming the
+    // innermost instance, with the chain of those whose layouts are under
+    // way, and no crash.
+    Checked c = check_src(&a, "Wrap :: struct (T: Type) { inner: Wrap(Wrap(T)); }\n"
+                              "main :: () { w: Wrap(int); }\n");
+    Diagnostics *d = &c.list->diag;
+    CHECK_EQ(d->messages.count, 1);
+    if (d->messages.count == 1) {
+        // At the generic's name, which the instances' copies share.
+        CHECK_EQ(d->messages[0].pos.line, 1);
+        CHECK_EQ(d->messages[0].pos.col, 1);
+        String message = d->messages[0].message;
+        String start = str("'Wrap(Wrap(");
+        String end = str("' is nested too deeply in the declarations that need it (more than 1000 levels)");
+        CHECK(message.count > start.count + end.count);
+        if (message.count > start.count + end.count) {
+            CHECK(string_eq(string_slice(message, 0, start.count), start));
+            CHECK(string_eq(string_slice(message, message.count - end.count, end.count), end));
+        }
+        // Its chain, line by line: 21, the eleventh counting those left out.
+        String context = d->messages[0].context;
+        Array<String> lines = {};
+        s64 line_start = 0;
+        for (s64 i = 0; i < context.count; i++) {
+            if (context.data[i] != '\n') continue;
+            array_add(&lines, string_slice(context, line_start, i - line_start));
+            line_start = i + 1;
+        }
+        CHECK_EQ(line_start, context.count);
+        CHECK_EQ(lines.count, 21);
+        if (lines.count == 21) {
+            String more = str("    ... ");
+            String instances = str(" more instances");
+            String eleventh = lines[10];
+            CHECK(eleventh.count > more.count + instances.count &&
+                  string_eq(string_slice(eleventh, 0, more.count), more) &&
+                  string_eq(string_slice(eleventh, eleventh.count - instances.count, instances.count), instances));
+            CHECK_STR(lines[20], "    in 'Wrap' with T = int, used at test.rig:2:17");
+        }
+        array_free(&lines);
+    }
+    token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(instances_are_one_type_however_written) {
+    // An instance written where a value goes, as a call of the generic
+    // struct, is the one written where a type goes: compared with ==, named
+    // by an alias, at the top level or in a body, the top level's used
+    // before its declaration too (a struct's field, a global's type, a
+    // parameter's), a pointer to one as well, in a generic procedure's
+    // instance naming its T, and in a top-level #run, one type per set of
+    // arguments however each is written.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+                                 "S :: struct { r: Early; p: PR; }\n"
+                                 "g: Early;\n"
+                                 "use :: (x: Early) { }\n"
+                                 "Early :: Ring(int, 4);\n"
+                                 "PR :: *Ring(int, 4);\n"
+                                 "R4 :: Ring(int, 4);\n"
+                                 "same_ring :: ($T: Type) -> bool { return Ring(T, 4) == Ring(int, 4); }\n"
+                                 "RUN :: #run same_ring(int);\n"
+                                 "main :: () {\n"
+                                 "    a := Ring(int, 4) == Ring(int, 2 + 2);\n"
+                                 "    b := Ring(int, 4) == Ring(int, cast(u8) 4);\n"
+                                 "    c := R4 == Ring(int, 4);\n"
+                                 "    d := Ring(int, 4) != Ring(s64, 4);\n"
+                                 "    e := Ring(int, 4) == Ring(int, 5);\n"
+                                 "    pr := PR == *Ring(int, 2 + 2);\n"
+                                 "    f := same_ring(int);\n"
+                                 "    g := same_ring(s64);\n"
+                                 "    L :: Ring(int, 2 + 2);\n"
+                                 "    h: L;\n"
+                                 "    k: R4;\n"
+                                 "    m: Ring(int, 4);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    const char *compared[] = {"a", "b", "c", "d", "pr", "e"};
+    for (s64 k = 0; k < 6; k++) {
+        Ast_Var *var = (Ast_Var *)find_local(body, compared[k]);
+        CHECK(var->type == &type_bool);
+        CHECK(var->value->is_constant);
+        CHECK_EQ(var->value->constant, k < 5 ? 1 : 0);
+    }
+    Ast_Const *run = (Ast_Const *)top_level_named(tree, "RUN");
+    CHECK(run->is_constant);
+    CHECK_EQ(run->constant, 1);
+    // Each instance of same_ring returns the constant its T makes.
+    Ast_Proc *same_ring = (Ast_Proc *)top_level_named(tree, "same_ring");
+    CHECK_EQ(same_ring->instances.count, 2);
+    for (s64 i = 0; i < same_ring->instances.count; i++) {
+        Ast_Instance *inst = same_ring->instances[i];
+        Ast_Return *ret = (Ast_Return *)inst->proc->body->statements[0];
+        CHECK(ret->values[0]->is_constant);
+        CHECK_EQ(ret->values[0]->constant, string_eq(inst->name, str("same_ring(T = int)")) ? 1 : 0);
+    }
+    Type *m = local_type(tree, "main", "m");
+    CHECK_STR(type_name(&a, m), "Ring(int, 4)");
+    CHECK(local_type(tree, "main", "h") == m);
+    CHECK(local_type(tree, "main", "k") == m);
+    CHECK(((Ast_Struct *)top_level_named(tree, "S"))->declared->fields[0].type == m);
+    Type *pr = ((Ast_Struct *)top_level_named(tree, "S"))->declared->fields[1].type;
+    CHECK(pr && pr->kind == TYPE_POINTER && pr->pointee == m);
+    CHECK(((Ast_Var *)top_level_named(tree, "g"))->type == m);
+    CHECK(((Ast_Proc *)top_level_named(tree, "use"))->params[0]->type == m);
+    Ast_Const *r4 = (Ast_Const *)top_level_named(tree, "R4");
+    CHECK(r4->alias && r4->alias->aliased == m);
+    CHECK(r4->type == &type_type);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Ring"))->instances.count, 3);
+    // A float argument is compared by its bits, as a generic procedure's
+    // is (same_binding): -0.0 and 0.0 are two instances, though -0.0 ==
+    // 0.0, and 0.5 written two ways is one.
+    CHECK_STR(check_with_preload(&a,
+                                 "F :: struct (V: float64) { n: int; }\n"
+                                 "main :: () {\n"
+                                 "    a := F(-0.0) == F(0.0);\n"
+                                 "    b := F(0.5) == F(1.0 / 2.0);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    Ast_Var *zeros = (Ast_Var *)find_local(body, "a");
+    Ast_Var *halves = (Ast_Var *)find_local(body, "b");
+    CHECK(zeros->value->is_constant && zeros->value->constant == 0);
+    CHECK(halves->value->is_constant && halves->value->constant == 1);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "F"))->instances.count, 3);
+    arena_free(&a);
+}
+
+TEST(instance_value_mistakes) {
+    // An instance is a type, not a value, at its name, said after its own
+    // mistakes: its count, each of its arguments'. In parentheses it is one
+    // still, but a generic's name in them is none: called, it's a callee as
+    // any struct's is. Compared, the other operand must be a type. The
+    // generic's name alone is no type, where a value goes too. A plain
+    // struct called keeps its message. An alias's value names no
+    // parameter: outside an instance, T is no name.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"main :: () { x := Pair(string, int); }\n", "3:19: 'Pair(string, int)' is a type, not a value\n"},
+        {"main :: () { x := (Pair(string, int)); }\n", "3:20: 'Pair(string, int)' is a type, not a value\n"},
+        {"main :: () { x := (Pair)(string, int); }\n", "3:20: 'Pair' isn't a procedure, so it can't be called\n"
+                                                       "3:26: 'string' is a type, not a value\n"
+                                                       "3:34: 'int' is a type, not a value\n"},
+        {"main :: () { y := Pair(string, int) == 3; }\n",
+         "3:37: '==' compares a type only with a type, as in T == int\n"},
+        {"main :: () { z := Pair; }\n", "3:19: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        {"main :: () { Pair = 1; }\n", "3:14: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        {"size_in :: ($T: Type) -> int { return size_of(T); }\nmain :: () { n := size_in(Pair); }\n",
+         "4:27: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        {"main :: () { w := Pair(string).{}; }\n", "3:19: 'Pair' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { w := Pair(string); }\n", "3:19: 'Pair' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { v := Pair(1, 2) == Pair(int, int); }\n",
+         "3:24: argument 1 of 'Pair' must be a type, for 'A: Type'\n"
+         "3:27: argument 2 of 'Pair' must be a type, for 'B: Type'\n"},
+        {"main :: () { x := Pair(string, Nope); }\n", "3:32: unknown identifier 'Nope'\n"},
+        {"main :: () { u := Vec2(1); }\n", "3:19: 'Vec2' isn't a procedure, so it can't be called\n"},
+        // An instance's parameters aren't read from outside it, for now:
+        // through a value or a pointer, a parameter's name is no field, and
+        // the instance itself, before a '.', is a type, not a value.
+        {"main :: () { m: Pair(int, int); x := m.A; p := *m; y := p.A; z := Pair(int, int).A; }\n",
+         "3:40: 'Pair(int, int)' has no field 'A'\n"
+         "3:59: 'Pair(int, int)' has no field 'A'\n"
+         "3:67: 'Pair(int, int)' is a type, not a value\n"},
+        {"show :: (v: $T) { }\nmain :: () { show(Pair(int, int)); }\n",
+         "4:19: 'Pair(int, int)' is a type, not a value\n"},
+        {"Pairs :: Pair(T, T);\nmain :: () { }\n",
+         "3:15: unknown identifier 'T'\n3:18: unknown identifier 'T'\n"},
+        {"M :: Pair;\nmain :: () { }\n", "3:6: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        // A name with arguments before a literal's '.' is an instance's, and
+        // one that names no generic struct is no type.
+        {"f :: () -> int { return 1; }\nmain :: () { v := f().{1}; }\n", "4:19: 'f' is not a type\n"},
+        {"main :: () { v := Vec2(1).{1}; }\n", "3:19: 'Vec2' isn't generic, so it takes no arguments\n"},
+        // An alias whose instance has a mistake names no type: its uses say
+        // nothing more.
+        {"Int_Pair :: Pair(int, Nope);\nmain :: () { x: Int_Pair; y := Int_Pair.{}; }\n",
+         "3:23: unknown identifier 'Nope'\n"},
+        // A constant whose value calls a name that is none may be an
+        // instance: it had its own mistake said, so its uses say nothing
+        // more, before its declaration or after. A call of a procedure is a
+        // value, so its uses are no type, whether it's worked out yet or
+        // not, and no circle.
+        {"K :: nope(1);\nmain :: () { x: K; }\n", "3:6: unknown identifier 'nope'\n"},
+        {"S :: struct { a: K; }\nK :: nope(1);\nmain :: () { }\n", "4:6: unknown identifier 'nope'\n"},
+        {"S :: struct { a: K; }\nK :: f(1);\nf :: (n: int) -> int { return n; }\nmain :: () { x: K; }\n",
+         "3:18: 'K' is not a type\n"
+         "4:6: the value of constant 'K' isn't known while compiling\n"
+         "6:17: 'K' is not a type\n"},
+        {"K :: f(v);\nv: K;\nf :: (n: int) -> int { return n; }\nmain :: () { }\n",
+         "3:6: the value of constant 'K' isn't known while compiling\n"
+         "4:4: 'K' is not a type\n"},
+        // In parentheses an instance is a value, compared or as a
+        // constant's value too.
+        {"main :: () { x := (Pair(int, int)) == Pair(int, int); }\n",
+         "3:20: 'Pair(int, int)' is a type, not a value\n"},
+        {"P :: (Pair(int, int));\nmain :: () { }\n", "3:7: 'Pair(int, int)' is a type, not a value\n"},
+        // A local of the generic's name hides it, as a callee.
+        {"main :: () { Pair := 1; x := Pair(int, int); }\n",
+         "3:30: 'Pair' isn't a procedure, so it can't be called\n"
+         "3:35: 'int' is a type, not a value\n"
+         "3:40: 'int' is a type, not a value\n"},
+    };
+    for (const Case &k : cases) {
+        CHECK_STR(check_with_preload(&a, joined(&a,
+                                                "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n"
+                                                "Vec2 :: struct { x: float; }\n",
+                                                k.text)),
+                  k.message);
+    }
+    arena_free(&a);
+}
+
+// Issue #227: generic procedures over generic structs (spec 7.11, 3.23).
+
+// The source every test of inference through instances starts with: [..]
+// needs Preload (check_with_preload).
+static const char *STRUCT_PROCEDURES =
+    "Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }\n"
+    "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+    "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n"
+    "Vec :: struct (N: int) { v: [N]float; }\n"
+    "Vec2 :: struct { x: float; y: float; }\n"
+    "map_add :: (m: *Map($K, $V), key: K, value: V) { array_add(*m.keys, key); array_add(*m.values, value); "
+    "m.count += 1; }\n"
+    "ring_sum :: (r: Ring($T, $N)) -> T { t: T; for r.items { t += it; } return t; }\n"
+    "ring_size :: (r: *Ring($T, $N)) -> int { a: [N]T; return a.count; }\n"
+    "firsts :: (ps: []Pair($A, $B)) -> A { return ps[0].first; }\n"
+    "swap :: (p: Pair($A, $B)) -> Pair(B, A) { return .{p.second, p.first}; }\n"
+    "dot :: (a: Vec($N), b: Vec(N)) -> float { t: float; for 0..N-1 { t += a.v[it] * b.v[it]; } return t; }\n"
+    "map_count :: (using m: *Map($K, $V)) -> int { return count; }\n";
+
+TEST(inference_reads_through_instances) {
+    // A pattern binds its parameters through an instance of a generic
+    // struct: *Map($K, $V) takes K and V from a *Map(string, int), a view
+    // of Pair($A, $B) from an array of Pair(int, string)'s; a $N written
+    // where the struct takes a constant declares a constant parameter of
+    // the procedure, of that parameter's type, bound to the instance's
+    // value, which its body uses as any constant, an array's count too, and
+    // which a later Vec(N) uses. A using parameter of one reaches its
+    // fields. A constant parameter has the struct parameter's type, a
+    // string's, an enum's, a u8's, a bool's or a float's too, each value
+    // its own instance; and a type is matched below an instance's argument,
+    // a pointer's target or another instance's argument. An argument that is
+    // an expression, Ring(T, N + 1)'s, is each instance's: a Ring(u8, 4).
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 joined(&a, STRUCT_PROCEDURES,
+                                        "Labeled :: struct (S: string) { n: int; }\n"
+                                        "Mode :: enum { A; B; }\n"
+                                        "Tag :: struct (M: Mode) { n: int; }\n"
+                                        "Small :: struct (N: u8) { a: [N]u8; }\n"
+                                        "Flag :: struct (F: bool) { n: int; }\n"
+                                        "Scaled :: struct (S: float) { n: int; }\n"
+                                        "Box :: struct (T: Type) { item: T; }\n"
+                                        "name_of :: (l: Labeled($S)) -> string { return S; }\n"
+                                        "tag_of :: (t: Tag($M)) -> Mode { return M; }\n"
+                                        "small_n :: (s: Small($N)) -> u8 { return N; }\n"
+                                        "flag_of :: (f: Flag($F)) -> bool { return F; }\n"
+                                        "scale_of :: (s: Scaled($S)) -> float { return S; }\n"
+                                        "key_size :: (m: Map(*$K, int)) -> int { return size_of(K); }\n"
+                                        "deref :: (b: Box(*$T)) -> T { return b.item.*; }\n"
+                                        "second_of :: (m: *Map($K, Pair($A, $B))) -> B { return m.values[0].second; }\n"
+                                        "ring_count :: (m: Map(Ring($T, $N), int)) -> int { return N; }\n"
+                                        "grow :: (r: Ring($T, $N)) -> Ring(T, N + 1) { g: Ring(T, N + 1); return g; }\n"
+                                        "main :: () {\n"
+                                        "    m: Map(string, int);\n"
+                                        "    r: Ring(u8, 3);\n"
+                                        "    ps: [2]Pair(int, string);\n"
+                                        "    q: Pair(int, bool);\n"
+                                        "    a: Vec(3);\n"
+                                        "    b: Vec(3);\n"
+                                        "    map_add(*m, \"a\", 1);\n"
+                                        "    map_add(*m, \"b\", 2);\n"
+                                        "    s := ring_sum(r);\n"
+                                        "    n := ring_size(*r);\n"
+                                        "    f := firsts(ps);\n"
+                                        "    w := swap(q);\n"
+                                        "    d := dot(a, b);\n"
+                                        "    k := map_count(*m);\n"
+                                        "    o1 := name_of(Labeled(\"hi\").{});\n"
+                                        "    o2 := name_of(Labeled(\"ho\").{});\n"
+                                        "    o3 := name_of(Labeled(\"hi\").{});\n"
+                                        "    o4 := tag_of(Tag(Mode.B).{});\n"
+                                        "    o5 := small_n(Small(3).{});\n"
+                                        "    o6 := flag_of(Flag(true).{});\n"
+                                        "    o7 := scale_of(Scaled(1.5).{});\n"
+                                        "    pm: Map(*u8, int);\n"
+                                        "    o8 := key_size(pm);\n"
+                                        "    bx: Box(*int);\n"
+                                        "    o9 := deref(bx);\n"
+                                        "    nm: Map(int, Pair(string, bool));\n"
+                                        "    o10 := second_of(*nm);\n"
+                                        "    rm: Map(Ring(u8, 4), int);\n"
+                                        "    o11 := ring_count(rm);\n"
+                                        "    o12 := grow(r);\n"
+                                        "}\n"),
+                                 &tree),
+              "");
+    // Each generic's instances, in the order they're made, by name.
+    struct Instances {
+        const char *generic;
+        s64 count;
+        const char *names[2];
+    };
+    const Instances instances[] = {
+        {"map_add", 1, {"map_add(K = string, V = int)"}},
+        {"ring_sum", 1, {"ring_sum(T = u8, N = 3)"}},
+        {"ring_size", 1, {"ring_size(T = u8, N = 3)"}},
+        {"firsts", 1, {"firsts(A = int, B = string)"}},
+        {"swap", 1, {"swap(A = int, B = bool)"}},
+        {"dot", 1, {"dot(N = 3)"}},
+        {"map_count", 1, {"map_count(K = string, V = int)"}},
+        {"name_of", 2, {"name_of(S = \"hi\")", "name_of(S = \"ho\")"}},
+        {"tag_of", 1, {"tag_of(M = Mode.B)"}},
+        {"small_n", 1, {"small_n(N = 3)"}},
+        {"flag_of", 1, {"flag_of(F = true)"}},
+        {"scale_of", 1, {"scale_of(S = 1.5)"}},
+        {"key_size", 1, {"key_size(K = u8)"}},
+        {"deref", 1, {"deref(T = int)"}},
+        {"second_of", 1, {"second_of(K = int, A = string, B = bool)"}},
+        {"ring_count", 1, {"ring_count(T = u8, N = 4)"}},
+        {"grow", 1, {"grow(T = u8, N = 3)"}},
+    };
+    for (const Instances &k : instances) {
+        Ast_Proc *generic = (Ast_Proc *)top_level_named(tree, k.generic);
+        CHECK_EQ(generic->instances.count, k.count);
+        if (generic->instances.count != k.count) continue;
+        for (s64 i = 0; i < k.count; i++) CHECK_STR(generic->instances[i]->name, k.names[i]);
+    }
+    const char *names[] = {"s",  "n",  "f",  "w",  "d",  "k",   "o1",  "o2", "o3",
+                           "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11", "o12"};
+    const char *types[] = {"u8",     "int",  "int", "Pair(bool, int)", "float32", "int", "string", "string", "string",
+                           "Mode",   "u8",   "bool", "float32",        "int",     "int", "bool",   "int",
+                           "Ring(u8, 4)"};
+    for (s64 i = 0; i < 18; i++) {
+        Type *t = local_type(tree, "main", names[i]);
+        CHECK_STR(t ? type_name(&a, t) : str("?"), types[i]);
+    }
+    arena_free(&a);
+}
+
+TEST(inference_through_instances_mistakes) {
+    // An argument that isn't the instance its pattern names doesn't fit
+    // it, the pattern as written; once the instance is known, an argument
+    // converts to its parameter's type as any does. The instances a
+    // generic's signature names are checked once, at the generic, called
+    // or not, twice too: the name a generic struct's, the count right,
+    // each argument's type name known; a name used before the $ that
+    // declares it, in an instance's argument too. An instance in a
+    // generic's body naming nothing is said by the walk over its names. A
+    // constant parameter of an instance's argument left unbound is said as
+    // a type parameter's is.
+    Arena a = arena_make();
+    struct Case {
+        const char *body;
+        const char *declarations;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"map_add(*v, 1, 2);", "",
+         "13:74: argument 1 of 'map_add' has type '*Vec2', which doesn't fit '*Map($K, $V)'\n"},
+        {"map_add(*m, 1, 2);", "",
+         "13:78: argument 2 of 'map_add' has type 'int', which can't be converted to 'string'\n"},
+        {"ring_sum(m);", "",
+         "13:75: argument 1 of 'ring_sum' has type 'Map(string, int)', which doesn't fit 'Ring($T, $N)'\n"},
+        {"dot(a, c);", "", "13:73: argument 2 of 'dot' has type 'Vec(4)', which can't be converted to 'Vec(3)'\n"},
+        {"bad(*m); bad(*m);", "bad :: (m: *Map($K)) { }\n", "14:13: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"bad2(*v);", "bad2 :: (p: *Vec2($T)) { }\n", "14:14: 'Vec2' isn't generic, so it takes no arguments\n"},
+        {"bad3(m); bad3(m);", "bad3 :: (m: Map($K, Nope)) { }\n", "14:21: unknown type 'Nope'\n"},
+        {"", "bad4 :: (m: Map(K, $V), k: $K) { }\n", "14:17: 'K' is used before '$K' declares it\n"},
+        {"", "bad5 :: (v: $T) { x: Mapp(T, T); }\n", "14:22: unknown type 'Mapp'\n"},
+        // An instance refused, its count wrong or its struct's own check
+        // said a mistake, says nothing of its arguments, at any depth, as a
+        // use binds none of them; nor does one whose name is no generic
+        // struct's.
+        {"", "bad6 :: (m: Map(Nope), x: $T) { }\n", "14:13: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"", "bad7 :: (m: *Map(*Nope, int, int), x: $T) { }\n", "14:14: 'Map' takes 2 arguments, but 3 were given\n"},
+        {"", "Dup :: struct (T: Type, T: Type) { a: int; }\nbad8 :: (m: Dup(Nope, $X)) { }\n",
+         "14:25: 'T' is already declared at test.rig:14:16\n"},
+        {"", "Dup :: struct (T: Type, T: Type) { a: int; }\nbad9 :: (y: Dup(int)) { }\n",
+         "14:25: 'T' is already declared at test.rig:14:16\n"},
+        {"", "Bad :: struct (K: Type) { a: Nope; }\nbad10 :: (m: *Bad(*Nope), x: $T) { }\n",
+         "14:30: unknown type 'Nope'\n"},
+        {"", "bad11 :: (m: Nope($K)) { }\n", "14:14: unknown type 'Nope'\n"},
+        {"", "bad12 :: (y: $T, x: T(int)) { }\n", "14:21: 'T' isn't generic, so it takes no arguments\n"},
+        {"", "bad13 :: ($N: int, y: N(int)) { }\n", "14:23: 'N' is not a type\n"},
+        {"", "bad14 :: (y: main(Nope)) { }\n", "14:14: 'main' is not a type\n"},
+        // A constant parameter's name used before its $ in an instance's
+        // argument, as in a count.
+        {"", "bad15 :: (b: Vec(N), c: Vec($N)) { }\n", "14:18: 'N' is used before '$N' declares it\n"},
+        // A name with arguments where the struct takes a constant is a
+        // call, each instance's to check; in a body, it and a bare name
+        // there are values, their names unknown identifiers.
+        {"", "twice :: (n: int) -> int { return n * 2; }\nbad16 :: (r: Ring($T, twice(Nope))) { }\n", ""},
+        {"", "twice :: (n: int) -> int { return n * 2; }\n"
+             "bad17 :: (v: $T) { x: Ring(T, nope(2)); y: Ring(T, nope2); z: Ring(T, twice(nope3)); }\n",
+         "15:31: unknown identifier 'nope'\n15:52: unknown identifier 'nope2'\n"
+         "15:77: unknown identifier 'nope3'\n"},
+        // A type below an instance's argument that can't match.
+        {"deref(m);", "deref :: (m: Map(*$K, $V)) { }\n",
+         "13:72: argument 1 of 'deref' has type 'Map(string, int)', which doesn't fit 'Map(*$K, $V)'\n"},
+        // A constant parameter of an instance's argument still unbound: its
+        // place's argument has no type of its own, or there's none, or its
+        // own check failed (said).
+        {"vec_n(.{});", "vec_n :: (v: Vec($N)) -> int { return N; }\n",
+         "13:72: can't work out 'N' for 'vec_n': argument 1 has no type of its own\n"},
+        {"vecs();", "vecs :: (vs: ..Vec($N)) { }\n", "13:66: can't work out 'N' for 'vecs': no argument gives it\n"},
+        {"vec_n(nope);", "vec_n :: (v: Vec($N)) -> int { return N; }\n", "13:72: unknown identifier 'nope'\n"},
+        // An untyped number at an instance's place is matched as its
+        // default type, which is no instance.
+        {"vec_n(5);", "vec_n :: (v: Vec($N)) -> int { return N; }\n",
+         "13:72: argument 1 of 'vec_n' has type 'int', which doesn't fit 'Vec($N)'\n"},
+        // An argument that is an expression binds nothing: the call's
+        // conversion says a mismatch, and its value is each instance's to
+        // check, followed by the struct instance's line and the procedure
+        // instance's.
+        {"r2: Ring(int, 2); x4: Ring(int, 4); fill(r2, *x4);",
+         "fill :: (a: Ring($T, $N), b: *Ring(T, N + 1)) { }\n",
+         "13:111: argument 2 of 'fill' has type '*Ring(int, 4)', which can't be converted to '*Ring(int, 3)'\n"},
+        {"r2: Ring(int, 2); shrink(r2);",
+         "shrink :: (r: Ring($T, $N)) -> Ring(T, N - 10) { s: Ring(T, N - 10); return s; }\n",
+         "2:44: an array's count can't be negative (-8)\n"
+         "    in 'Ring' with T = int, N = -8, used at test.rig:14:32\n"
+         "    in 'shrink' with T = int, N = 2, called at test.rig:13:84\n"},
+        // A generic struct its own check refused makes a generic naming it
+        // in its signature make no instance, whichever is declared first:
+        // its calls say nothing more. The struct's own mistakes are never
+        // the generic's, whichever is checked first: a generic naming a
+        // struct whose field's alias has a mistake is called as any.
+        {"gen2(5); gen2(.{});", "Bad :: struct (N: []int) { v: int; }\ngen2 :: (b: Bad($N)) { }\n",
+         "14:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"gen2(5); gen2(.{});", "gen2 :: (b: Bad($N)) { }\nBad :: struct (N: []int) { v: int; }\n",
+         "15:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"r: Ring(int, 2); gen3(null, r);",
+         "Bad :: struct (N: []int) { v: int; }\ngen3 :: (b: *Bad($N), c: Ring(int, N)) { }\n",
+         "14:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"f9(null);", "Bad :: struct (T: Type, S: []int) { a: T; }\nf9 :: (m: *Bad(int), v: $T) { }\n",
+         "14:28: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"f9(null);", "f9 :: (m: *Bad(int), v: $T) { }\nBad :: struct (T: Type, S: []int) { a: T; }\n",
+         "15:28: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"f10(null);",
+         "Bad :: struct (T: Type) { p: *A; }\nA :: #type [Missing]u8;\nf10 :: (m: *Bad(int), v: $T) { }\n",
+         "13:66: 'f10' takes 2 arguments, but 1 was given\n15:13: unknown identifier 'Missing'\n"},
+        {"f10(null);",
+         "f10 :: (m: *Bad(int), v: $T) { }\nBad :: struct (T: Type) { p: *A; }\nA :: #type [Missing]u8;\n",
+         "13:66: 'f10' takes 2 arguments, but 1 was given\n16:13: unknown identifier 'Missing'\n"},
+        // So with its body's walk, which a #run may need before the
+        // struct's turn.
+        {"y := f11(1, 2);",
+         "X :: #run f11(1);\nf11 :: (v: $T) -> int { b: *Bad(T); return 1; }\nBad :: struct (K: Type) { p: *A; }\n"
+         "A :: #type [Missing]u8;\n",
+         "13:71: 'f11' takes 1 argument, but 2 were given\n17:13: unknown identifier 'Missing'\n"},
+        // Where the struct takes a constant, a written type that is neither
+        // a name nor a call is no value whatever the generic's parameters
+        // are, and a '$' in a call there is bound by nothing: each said once,
+        // at the generic, called or not, which then makes no instance.
+        {"r4: Ring(int, 4); fp(r4); fp(r4);", "fp :: (r: Ring(int, *$N)) { }\n",
+         "14:21: '*$N' is a type, not a value\n"},
+        {"r4: Ring(u8, 4); fh(r4, 1.5); fh(r4, 1);", "fh :: (r: Ring($T, *$N), x: N) { }\n",
+         "14:20: '*$N' is a type, not a value\n"},
+        {"", "fq :: (v: Vec([]$T)) { }\n", "14:15: '[]$T' is a type, not a value\n"},
+        {"", "fn :: (r: Ring(int, *N), $N: int) { }\n", "14:21: '*N' is a type, not a value\n"},
+        {"r4: Ring(u8, 4); fk(r4);", "fk :: (r: Ring($T, Pair($A, int))) { }\n",
+         "14:20: 'Pair($A, int)' is a type, not a value\n"},
+        {"r4: Ring(u8, 4); fg(r4);", "twice :: (n: int) -> int { return n * 2; }\nfg :: (r: Ring($T, twice($M))) { }\n",
+         "15:26: a '$' where 'Ring' takes a constant is all of its argument, as in Ring($T, $N)\n"},
+        // A constant parameter's name where the struct takes a type is no
+        // type, said once; in a call where it takes a constant, a value used
+        // before its $.
+        {"", "f3 :: (m: Map(N, int), $N: int) { }\n", "14:15: 'N' is not a type\n"},
+        {"", "twice :: (n: int) -> int { return n * 2; }\nf3b :: (r: Ring(int, twice(N)), $N: int) { }\n",
+         "15:28: 'N' is used before '$N' declares it\n"},
+    };
+    for (const Case &k : cases) {
+        String text = string_printf(&a,
+                                    "%smain :: () { m: Map(string, int); v: Vec2; a: Vec(3); c: Vec(4); %s }\n%s",
+                                    STRUCT_PROCEDURES, k.body, k.declarations);
+        CHECK_STR(check_with_preload(&a, string_cstr(&a, text)), k.message);
+    }
+    arena_free(&a);
+}
+
+TEST(inference_through_an_instance_that_lost_a_binding) {
+    // A struct instance whose type binding is found in a circle after it
+    // was made, by a global's type or a field's, keeps its type, as a
+    // struct holding a pointer to one does, but the binding has none: a
+    // call whose pattern reads that binding binds nothing from it and says
+    // nothing more, whatever its pattern, as the circle was said.
+    Arena a = arena_make();
+    const char *pair = "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n";
+    const char *circle = "3:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n";
+    const char *programs[] = {
+        "G: Pair(*Bad, int);\nBad :: struct { b: Bad; }\nf :: (p: Pair(*$A, $B)) {}\nmain :: () { f(G); }\n",
+        "G: *Pair(*Bad, int);\nBad :: struct { b: Bad; }\nf :: (p: *Pair(*$A, $B)) {}\nmain :: () { f(G); }\n",
+        "G: Pair(*Bad, int);\nBad :: struct { b: Bad; }\nf :: (p: Pair($A, $B)) {}\nmain :: () { f(G); }\n",
+    };
+    for (const char *program : programs) CHECK_STR(check_source(&a, joined(&a, pair, program)), circle);
+    CHECK_STR(check_source(&a, joined(&a, pair,
+                                      "H :: struct { p: Pair(*Bad, int); }\nBad :: struct { b: Bad; }\n"
+                                      "f :: (p: Pair($A, $B)) {}\ng :: (p: Pair(*$A, $B)) {}\n"
+                                      "main :: () { h: H; f(h.p); g(h.p); }\n")),
+              circle);
     arena_free(&a);
 }

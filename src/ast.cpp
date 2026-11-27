@@ -73,11 +73,23 @@ static void dump_results(Array<u8> *buffer, Array<Ast_Type *> results) {
 }
 
 // (ptr int), (array (int 3) int) with the count as written, (view int),
-// (resizable int), (proc-type (params int) (returns int) (c_call)), or a
-// name. A procedure type whose last parameter is ..T has it as (.. T):
-// (params int (.. int)).
+// (resizable int), (proc-type (params int) (returns int) (c_call)),
+// (instance Map string (ptr u8)), or a name. A procedure type whose last
+// parameter is ..T has it as (.. T): (params int (.. int)). An instance's
+// arguments are each a written type or an expression, dumped as either is:
+// (instance Ring int (binary + (int 4) (int 1))) for Ring(int, 4 + 1), and
+// (instance Ring T N) for Ring(T, N), whose names the parser read as types.
 static void dump_type(Array<u8> *buffer, Ast_Type *type) {
     switch (type->kind) {
+    case AST_TYPE_INSTANCE:
+        out(buffer, "(instance ");
+        out(buffer, type->name);
+        for (s64 i = 0; i < type->args.count; i++) {
+            out(buffer, " ");
+            dump(buffer, type->args[i]);
+        }
+        out(buffer, ")");
+        break;
     case AST_TYPE_PROC:
         out(buffer, "(proc-type (params");
         for (s64 i = 0; i < type->params.count; i++) {
@@ -188,6 +200,7 @@ static void dump(Array<u8> *buffer, Ast *node) {
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE:
     case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE:
         dump_type(buffer, (Ast_Type *)node);
         break;
     case AST_BLOCK: {
@@ -412,7 +425,9 @@ static void dump(Array<u8> *buffer, Ast *node) {
         // A using field says so first: (using entity Entity).
         // A tagged union's has its tag's type after the name, as an enum's
         // has its integer type, _ for none: (union #tagged Shape _ (circle
-        // Circle) (empty void)).
+        // Circle) (empty void)). A generic struct's parameters come first,
+        // each as a parameter prints: (struct Map (params (K Type) (V
+        // Type)) (keys (resizable K))).
         Ast_Struct *s = (Ast_Struct *)node;
         out(buffer, s->is_tagged ? "(union #tagged" : s->is_union ? "(union" : "(struct");
         if (s->name.count) {
@@ -426,6 +441,14 @@ static void dump(Array<u8> *buffer, Ast *node) {
             } else {
                 out(buffer, "_");
             }
+        }
+        if (s->params.count) {
+            out(buffer, " (params");
+            for (s64 i = 0; i < s->params.count; i++) {
+                out(buffer, " ");
+                dump(buffer, s->params[i]);
+            }
+            out(buffer, ")");
         }
         for (s64 i = 0; i < s->fields.count; i++) {
             out(buffer, " ");
@@ -628,9 +651,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
         break;
     }
     case AST_ALIAS:
-        // (alias T): an instance's type parameter, which the checker makes
-        // and no tree holds, as a built-in procedure isn't in one either:
-        // the case is here so the switch covers every Ast_Kind.
+        // (alias T): an instance's type parameter (spec 7.11) or a type
+        // alias, V :: Vec2; (spec 3.22, Ast_Const.alias), which the checker
+        // makes and no tree's statements hold (a constant's dump shows its
+        // value, not its alias), as a built-in procedure isn't in one
+        // either: the case is here so the switch covers every Ast_Kind.
         out(buffer, "(alias ");
         out(buffer, ((Ast_Alias *)node)->name);
         out(buffer, ")");
@@ -638,10 +663,10 @@ static void dump(Array<u8> *buffer, Ast *node) {
     }
 }
 
-// Copying a procedure's tree (ast_clone). Each node is copied field by
-// field: what the parser wrote, its children copied in turn; what the
-// checker writes is left zero, as ast_new leaves it, but for the -1 the
-// parser itself puts in a member's index.
+// Copying a procedure's tree or a struct's (ast_clone). Each node is
+// copied field by field: what the parser wrote, its children copied in
+// turn; what the checker writes is left zero, as ast_new leaves it, but for
+// the -1 the parser itself puts in a member's index.
 
 // A new node of from's struct and kind, at its places, nothing else set.
 template<typename T>
@@ -727,7 +752,8 @@ Ast *ast_clone(Arena *a, Ast *node) {
     case AST_TYPE_ARRAY:
     case AST_TYPE_VIEW:
     case AST_TYPE_RESIZABLE:
-    case AST_TYPE_PROC: {
+    case AST_TYPE_PROC:
+    case AST_TYPE_INSTANCE: {
         Ast_Type *from = (Ast_Type *)node;
         Ast_Type *to = node_like(a, from);
         to->name = from->name;
@@ -741,6 +767,8 @@ Ast *ast_clone(Arena *a, Ast *node) {
         to->is_variadic = from->is_variadic;
         to->dots = from->dots;
         to->declares = from->declares;
+        to->args = clone_list(a, from->args);
+        to->end = from->end;
         return to;
     }
     case AST_BLOCK: {
@@ -1024,14 +1052,35 @@ Ast *ast_clone(Arena *a, Ast *node) {
         to->through = from->through;
         return to;
     }
-    case AST_STRUCT:
-    case AST_FIELD:
+    case AST_STRUCT: {
+        // A generic struct, for its instance (spec 3.23), or an anonymous
+        // member's struct in it.
+        Ast_Struct *from = (Ast_Struct *)node;
+        Ast_Struct *to = node_like(a, from);
+        to->name = from->name;
+        to->fields = clone_list(a, from->fields);
+        to->is_union = from->is_union;
+        to->is_tagged = from->is_tagged;
+        to->tag_expr = clone_type(a, from->tag_expr);
+        to->params = clone_list(a, from->params);
+        to->is_generic = from->is_generic;
+        return to;
+    }
+    case AST_FIELD: {
+        Ast_Field *from = (Ast_Field *)node;
+        Ast_Field *to = node_like(a, from);
+        to->name = from->name;
+        to->type_expr = clone_type(a, from->type_expr);
+        to->anonymous = (Ast_Struct *)ast_clone(a, from->anonymous);
+        to->is_using = from->is_using;
+        return to;
+    }
     case AST_ENUM:
     case AST_LOAD:
     case AST_BUILTIN:
     case AST_ALIAS: break;
     }
-    RIG_ASSERT(!"not a node a procedure holds");
+    RIG_ASSERT(!"not a node a procedure or a struct holds");
     return nullptr;
 }
 
@@ -1121,7 +1170,10 @@ System host_system() {
 }
 
 bool ast_in_parentheses(Ast *e) {
-    return e->start.line != e->pos.line || e->start.col != e->pos.col;
+    // A call is at its '(', and starts where its callee does unless it is
+    // in parentheses itself.
+    Position at = e->kind == AST_CALL ? ((Ast_Call *)e)->callee->start : e->pos;
+    return e->start.line != at.line || e->start.col != at.col;
 }
 
 bool ast_is_build_program(Ast_File *file) {

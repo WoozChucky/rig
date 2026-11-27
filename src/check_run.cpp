@@ -305,6 +305,7 @@ static bool walk_node(Reach *r, Ast *node) {
     case AST_CONST: {
         Ast_Const *constant = (Ast_Const *)node;
         if (!constant->type || constant->had_errors) return false;
+        if (constant->alias) return true;  // a type (spec 3.22): no code, nothing to reach
         reach_type(r, constant->type);
         array_add(nodes, constant->value);
         return true;

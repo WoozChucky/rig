@@ -13,7 +13,8 @@
 // passed as a '..T' parameter's arguments), members without their enum
 // (.FREE), code run while compiling (#run e), and types written where a
 // value goes ([]int == [..]int, #type (int) -> int).
-// And structs, unions and enums, declared at the top level, the files a
+// And structs, unions and enums, declared at the top level, a struct with
+// parameters too, whose instances a type names (Map(string, int)), the files a
 // program loads (#load "PATH";), named there too, and the code it runs while
 // compiling for its effect (#run e; and #run { ... }), there too. And code
 // compiled for one system and not another (#if c { ... } else { ... }), at
@@ -90,7 +91,9 @@ enum Ast_Kind : u8 {
     AST_SWITCH,        // Ast_Switch: if x == { case 1; ... }  if #complete m == { ... } (spec 6.14)
     AST_CASE,          // Ast_Case: case 1; statements  case; statements
     AST_TYPE_VALUE,    // Ast_Type_Value: a type written where a value goes, [N]T []T [..]T #type T (spec 5.20)
-    AST_ALIAS,         // Ast_Alias: a name for a type: an instance's type parameter (spec 7.11)
+    AST_ALIAS,         // Ast_Alias: a name for a type: an instance's type parameter (spec 7.11), or a
+                       // type alias, V :: Vec2; (spec 3.22, Ast_Const.alias)
+    AST_TYPE_INSTANCE,  // Ast_Type: Map(string, int), an instance of a generic struct (spec 3.23)
 };
 
 // How a value becomes an Any where the checker converts it (spec 3.16).
@@ -120,10 +123,11 @@ struct Ast {
                        // Type * it denotes here (check_expr.cpp's type_value)
 };
 
-// A type as written. Its node is at its first token: the name, the '*', an
-// array's, a view's or a resizable array's '[', or a procedure type's '('.
+// A type as written. Its node is at its first token: the name (an
+// instance's too), the '*', an array's, a view's or a resizable array's
+// '[', or a procedure type's '('.
 struct Ast_Type : Ast {
-    String name;        // AST_TYPE_NAME
+    String name;        // AST_TYPE_NAME; AST_TYPE_INSTANCE: the generic struct's
     Ast_Type *pointee;  // AST_TYPE_POINTER
     Ast *count;         // AST_TYPE_ARRAY: N in [N]T, an expression the checker needs to be a constant
     Ast_Type *element;  // AST_TYPE_ARRAY, AST_TYPE_VIEW and AST_TYPE_RESIZABLE: T in [N]T, []T and [..]T
@@ -141,6 +145,13 @@ struct Ast_Type : Ast {
     Position dots;              // AST_TYPE_PROC: where that '..' is written
     bool declares;              // AST_TYPE_NAME written $T in a parameter's type: declares type parameter T
                                 // (spec 7.11), at the '$'
+    Array<Ast *> args;          // AST_TYPE_INSTANCE: its arguments, each a written type (an Ast_Type) or an
+                                // expression, as the parser read them (spec 3.23)
+    Position end;               // AST_TYPE_INSTANCE: its ')', where a message's copy of its last argument
+                                // ends
+    Type *instance_type;        // AST_TYPE_INSTANCE: the instance, once worked out (check_generic.cpp's
+                                // check_written_instance); null when it has none, its mistake said
+    bool instance_checked;      // ... its arguments checked, once, as count_checked
 };
 
 struct Ast_Param : Ast {
@@ -265,32 +276,52 @@ struct Ast_Proc : Ast {
 
 // A name for a type: an instance's type parameter, T bound to int in
 // max(T = int) (spec 7.11), found between the scopes and the top level
-// while the instance is checked (check_generic.cpp's instance_binding).
-// pos is the $T it binds. Made by the checker, written nowhere.
+// while the instance is checked (check_generic.cpp's instance_binding),
+// pos the $T it binds; or a type alias, `V :: Vec2;` (spec 3.22), the
+// constant's own (Ast_Const.alias), found wherever the constant is, pos its
+// name. Made by the checker, written nowhere.
 struct Ast_Alias : Ast {
     String name;
     Type *aliased;  // null when it has no type once every struct is laid out (checker.cpp's
                     // made_again): a struct in it was found in a circle, or too big
 };
 
+struct Ast_Struct;
+struct Generic_Fields;
+
 // One instance of a generic procedure (spec 7.11): the generic's tree
 // copied (ast_clone), its type parameters bound, checked and compiled as
 // any procedure. The checker makes one per distinct set of bindings, the
 // first time a call needs it (check_generic.cpp's make_instance), and
 // keeps it in its generic's `instances` and the program's
-// (Ast_File.instances).
+// (Ast_File.instances). Or one instance of a generic struct (spec 3.23),
+// Map(string, int): the struct's tree copied, its parameters bound, laid
+// out as any struct, made the first time a written type needs it
+// (check_generic.cpp's make_struct_instance) and kept in its generic's
+// `instances` and the program's (Ast_File.struct_instances). generic and
+// proc are null for a struct's, generic_struct and structure for a
+// procedure's.
 struct Ast_Instance {
     Ast_Proc *generic;
     Ast_Proc *proc;            // the copy that is checked and compiled
+    Ast_Struct *generic_struct;  // a generic struct's instance: the generic
+    Ast_Struct *structure;     // its copy, laid out as any struct, named Map(string, int); its Type is
+                               // the copy's `declared`
     Array<Ast *> bindings;     // an Ast_Alias per type parameter, an Ast_Const per constant one ($N: int,
                                // its value folded, a string's its data), in the order the generic
                                // declares them
-    String name;               // max(T = int): its name in the debugger and the interpreter's frames
-    String symbol;             // max$T$int: its procedure's symbol, unique in the program
-    Position called_at;        // the start of the call that made it
-    Ast_Instance *made_in;     // the instance whose signature, defaults or body holds that call; null
+    String name;               // max(T = int): its name in the debugger and the interpreter's frames; a
+                               // struct's, Map(string, int), its type's
+    String symbol;             // max$T$int: its procedure's symbol, unique in the program; a struct's
+                               // has none
+    String shown;              // "K = string, V = int": the bindings as its chain line writes them, as
+                               // made (check_generic.cpp's instance_line)
+    Position called_at;        // the start of the call that made it; a struct's: the written instance's
+                               // name, where it was used
+    Ast_Instance *made_in;     // the instance whose signature, defaults, body or fields hold the call or
+                               // written type that made it; null
     s32 depth;                 // 1 when made outside any instance, made_in's + 1 otherwise
-    bool had_errors;           // its signature's check reported an error (checker.cpp's
+    bool had_errors;           // a procedure's: its signature's check reported an error (checker.cpp's
                                // resolve_signature): every call with its bindings gets no type and
                                // says nothing more (check_generic.cpp's check_instance)
     String context;            // the chain an error inside it is followed by (check_generic.cpp's
@@ -337,12 +368,14 @@ struct Ast_Const : Ast {
                           // a struct or array literal (a baked view's, its elements' array); a
                           // pointer's string literal; null when that's a field or element a literal
                           // leaves out, so the value is zero
-    Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
+    Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it; a local one's is
+                          // RESOLVE_DONE once check_const has worked it out, so resolve_written
+                          // takes one with no type as having had its mistake said
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
+    Ast_Alias *alias;     // its value names a type (spec 3.22): the alias the checker made of it, at its
+                          // name, which every lookup finds in its place; null for any other constant
 };
-
-struct Ast_Struct;
 
 // A field of a struct or a member of a union: `x: float;`, at its name. Its
 // type is in Ast.type once the checker has worked it out. Or an anonymous
@@ -370,6 +403,14 @@ struct Ast_Field : Ast {
 // name is a type, usable anywhere, before its declaration too. An anonymous
 // member's fields are an Ast_Struct too, with no name, at its keyword
 // (Ast_Field.anonymous).
+//
+// A struct with parameters, `Map :: struct (K: Type, V: Type) { ... }`, is
+// generic (spec 3.23): it is no type, and has none (`declared` stays
+// null). Each distinct set of arguments a written type gives it,
+// Map(string, int), makes an instance (Ast_Instance), a copy of its tree
+// (ast_clone) with its parameters bound, which is a struct as any other,
+// named as the instance. Its own check (check_generic.cpp's
+// check_generic_struct) uses `resolve`.
 struct Ast_Struct : Ast {
     String name;                // empty for an anonymous member's
     Array<Ast_Field *> fields;  // in order, which is their order in memory (a union's all at 0, a
@@ -380,13 +421,33 @@ struct Ast_Struct : Ast {
                                 // out, inside its outer struct's layout, and done after
     Type *declared;             // its type: made when the checker collects the top level's names,
                                 // so a pointer can name it before its layout is known; null once
-                                // it's found to contain itself. An anonymous member's is made by
-                                // its outer struct's layout, and is null when that one's is
+                                // it's found to contain itself, or too big. An anonymous member's is
+                                // made by its outer struct's layout, and is null when that one's is.
+                                // A generic struct has none; an instance's copy has its own, made
+                                // with the copy (check_generic.cpp's make_struct_instance, by
+                                // checker.cpp's new_struct_type), null when its generic said a
+                                // mistake of its own or when it's nested too deeply to lay out
     bool is_union;              // union { ... }: every member at offset 0 (spec 3.19)
     bool is_tagged;             // union #tagged { ... } (spec 3.20): a tag, then its members over each
                                 // other; is_union is false
     Ast_Type *tag_expr;         // the tag's type written after #tagged, or null: the smallest that
                                 // counts the members
+    Array<Ast_Param *> params;  // (K: Type, V: Type): a generic struct's parameters, each a type one or a
+                                // constant one, whose type its own check keeps in the parameter's
+                                // Ast.type; empty otherwise
+    bool is_generic;            // params were written: it is no type, only its instances are; cleared on
+                                // an instance's copy
+    Array<Ast_Instance *> instances;  // a generic struct's instances, the program's one cache of them, in
+                                      // the order made (check_generic.cpp's find_instance)
+    Ast_Instance *instance;     // an instance's copy, and each anonymous member's struct in it: its
+                                // record, whose bindings its fields see; null otherwise. Only the copy
+                                // itself is its record's `structure`
+    bool had_errors;            // a generic struct's own check said a mistake: it makes no instance from
+                                // then on, and one made before it, through an alias a field's type
+                                // names, is never laid out (check_generic.cpp's instance_may_be_laid_out)
+    Generic_Fields *field_check;  // a generic struct's: what's left of its own check of its fields while
+                                  // it's under way, or of the names in them that wait for an alias
+                                  // (check_generic.cpp's check_generic_fields); null otherwise
 };
 
 // An enum's declaration (spec 3.18), `Mode :: enum { ALLOCATE; RESIZE; }`
@@ -619,8 +680,8 @@ struct Ast_Call : Ast {
 struct Ast_Name : Ast {
     String name;
     Ast *decl;  // what it means, found by the checker: an Ast_Var, Ast_Const, Ast_Param or Ast_Proc,
-                // or an Ast_Struct, an Ast_Enum or an instance's Ast_Alias (spec 7.11), whose name
-                // is a type, not a value (reported),
+                // or an Ast_Struct, an Ast_Enum, an instance's Ast_Alias (spec 7.11) or a type
+                // alias's (spec 3.22), whose name is a type, not a value (reported),
                 // or an Ast_Builtin, which only a call's callee may name (spec 3.17)
     Ast *through;  // a using parameter's field (spec 3.21): the chain it means, e.position, whose innermost
                    // operand is an Ast_Name naming the parameter; decl is the parameter. Null otherwise
@@ -889,8 +950,8 @@ struct Ast_File {
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
     // Preload's, found by the checker (checker.cpp's declare_top_level), spec
-    // 7.10, 3.17 and 7.2; all null without Preload, whose programs have no
-    // context, no resizable arrays and no caller locations:
+    // 7.10, 3.17, 7.2 and 3.16; all null without Preload, whose programs have
+    // no context, no resizable arrays, no caller locations and no Type_Info:
     Type *context_type;        // Preload's Context struct: what context is, and push_context takes
     Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
                                // #c_call procedure pushes for itself
@@ -906,6 +967,8 @@ struct Ast_File {
     Type *source_code_location_type;  // Preload's Source_Code_Location (spec 7.2): a call's place, what
                                       // a default #caller_location is and what a built-in procedure
                                       // passes its helper (lower_builtin_call); null without Preload
+    Type *type_info_type;  // Preload's Type_Info (spec 3.16), for the *Type_Info a parameter's Any holds;
+                           // null without Preload
     // The predeclared enum Operating_System (spec 2.5), OS's type: made once
     // per tree, at 0:0 in the tree's arena, by the first checker to declare
     // the predeclared names (checker.cpp's declare_predeclared), a decider's
@@ -916,13 +979,21 @@ struct Ast_File {
     // checker made them: check()'s last bodies, and lowering's procedures
     // after the program's own.
     Array<Ast_Instance *> instances;
+    // Every instance of a generic struct (spec 3.23), in the order the
+    // checker made them: check()'s last pass lays out each it hasn't yet.
+    // No later stage goes through them: lowering and the backend find each
+    // through the types that use it.
+    Array<Ast_Instance *> struct_instances;
 };
 
 // Whether node e was written in parentheses, (e): they leave no node, but
 // move its start to the outermost '(' (parser.cpp's parse_primary). A type
 // in parentheses is no type, so (Vec2).{1} is no literal (the parser's
 // parse_postfix), and an enum's name in them is no enum's, so (Mode).FREE
-// is no member (check_expr.cpp's check_member).
+// is no member (check_expr.cpp's check_member). It answers for the forms a
+// type takes where a value goes (spec 5.20): a name, a type value, *X, and
+// a call, a generic struct's instance's form, which is at its '(' and so
+// is in them when it doesn't start where its callee does, (Pair(int, int)).
 bool ast_in_parentheses(Ast *e);
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler
@@ -961,16 +1032,19 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
 
 // A deep copy of `node`, any node a procedure holds (the procedure itself,
 // its parameters, its results' types, its body, and every statement,
-// expression and type in them), as the parser made it, in arena a: what a
-// generic procedure's instance is made from (spec 7.11), since the checker
+// expression and type in them) or a struct does (its parameters, its
+// fields, an anonymous member's struct, and every type in them), as the
+// parser made it, in arena a: what a generic procedure's instance is made
+// from (spec 7.11), and a generic struct's (spec 3.23), since the checker
 // writes types and declarations into the tree it checks. Strings and
 // positions are shared, being never written; every child node and every
 // Array is new, the checker appending to some. Every field the checker
 // fills is left zero (types, constants, declarations found, resolve states,
 // an #if's decision, ...), so the copy starts unchecked, as the generic's
 // own nodes, never checked, are. A body's block points at its copied
-// procedure. A node only the top level has (a struct, an enum, a #load) is
-// never in one.
+// procedure. A node only the top level has (an enum, a #load) is never
+// in a procedure or a struct, so it's never copied; a struct is, but only
+// as the node copied itself, with its anonymous members' structs.
 Ast *ast_clone(Arena *a, Ast *node);
 
 // The binary operator a compound assignment applies: TOKEN_PLUS for
@@ -1024,7 +1098,11 @@ Token_Kind compound_operator(Token_Kind op);
 //   (proc-type (params))   ()
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
-// type as written ((x float) for x: float). An enum prints as
+// type as written ((x float) for x: float), a generic one with its
+// parameters first, (struct Map (params (K Type) (V Type)) (keys
+// (resizable K))). An instance of one prints as (instance Map string (ptr
+// u8)), each argument as a type prints or as an expression does: (instance
+// Ring int (binary + (int 4) (int 1))). An enum prints as
 // (enum Small u8 (A) (B (int 5))), its integer type as written or _ for
 // none, each member with its value when it has one (a written one, or
 // the number the checker gave it); an enum_flags as

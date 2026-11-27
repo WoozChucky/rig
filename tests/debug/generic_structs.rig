@@ -1,0 +1,36 @@
+// A debugger's view of generic structs (bin/run-tests runs it under gdb
+// with generic_structs.gdb and under cdb with generic_structs.cdb). Each
+// instance is a struct type of its own (spec 3.23, 10.7), named as the
+// instance is, Pair(int, bool), at its generic's line, its fields typed
+// with its arguments: a Ring(int, 3)'s items an array of 3 int64s, a
+// List(int)'s next a pointer to List(int) itself, which both debuggers
+// follow, head.next.value in gdb, head.next->value in cdb. Both say
+// struct before the name, as for any struct: gdb's whatis and ptype
+// `struct Pair(int, bool)`, cdb's dv /t `struct Pair(int, bool) p`, and
+// cdb's ?? of a struct shows an array field by its count and first
+// element, `items : [3] 0n0`. gdb reads a struct's name as C++ would
+// before it shows it, so it shows Box(*u8), whose one argument is a
+// pointer to a named type, as `Box* u8`, a declaration of a pointer to
+// Box; whatis/r shows the name as it is, `struct Box(*u8)`, as cdb does.
+// An alias is the same type under a second name, with no debug type of
+// its own and no local either: p, declared an Int_Pair, shows as a
+// Pair(int, bool), r, declared a Local_Ring, as a Ring(int, 3), and
+// neither alias is among the locals or the types.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+Pair :: struct (A: Type, B: Type) { first: A; second: B; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+List :: struct (T: Type) { value: T; next: *List(T); }
+Box :: struct (T: Type) { v: T; }
+Int_Pair :: Pair(int, bool);
+
+main :: () {
+    Local_Ring :: Ring(int, 3);
+    p: Int_Pair = .{7, true};
+    r: Local_Ring;
+    for 0..2 { r.items[it] = it * 10; }
+    tail: List(int) = .{2, null};
+    head: List(int) = .{1, *tail};
+    b: Box(*u8);
+    printf("%lld %lld %lld\n", p.first, r.items[2], head.next.value);
+}

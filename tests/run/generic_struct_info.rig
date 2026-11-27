@@ -1,0 +1,64 @@
+// Struct instances described (issue #227, spec 3.16, 3.23): an
+// instance's Type_Info_Struct is named as the instance, Map(string, int),
+// and its parameters hold its arguments, an Any each, in order: a type as
+// its description, a *Type_Info, read through a cast, never printed (an
+// address differs from run to run); a constant as its value, an int, a
+// string, an enum, a bool or a float. An argument that is an instance is
+// described as one. Any other struct's parameters are empty, a plain
+// struct's and an anonymous member's in an instance alike. The #run says
+// the same while compiling (spec 7.8), its output the build's. Then, in
+// main alone: an instance's layout may hold a #run that sees its
+// parameters, and a constant of an instance's type may be a #run's value.
+#import "Basic";
+
+Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+Labeled :: struct (S: string) { n: int; }
+Mode :: enum { A; B; }
+Tag :: struct (M: Mode) { n: int; }
+Flag :: struct (F: bool) { n: int; }
+Scaled :: struct (S: float) { n: int; }
+Vec2 :: struct { x: float; y: float; }
+Holder :: struct (T: Type) { union { a: T; b: int; }; }
+
+// A buffer of N bytes, rounded up to a multiple of 8 while compiling.
+Buf :: struct (N: int) { data: [#run round_up(N)]u8; }
+round_up :: (n: int) -> int { return (n + 7) & ~7; }
+
+make_ring :: () -> Ring(int, 3) {
+    r: Ring(int, 3);
+    for 0..2 { r.items[it] = it + 1; }
+    return r;
+}
+
+R :: #run make_ring();
+
+#run show();
+
+// Parameter i of the struct t describes.
+parameter :: (t: *Type_Info, i: int) -> Any {
+    return (cast(*Type_Info_Struct) t).parameters[i];
+}
+
+show :: () {
+    info := cast(*Type_Info_Struct) type_info(Map(string, int));
+    print("{} {}\n", info.name, info.parameters.count);
+    k := info.parameters[0];
+    print("{} {}\n", (cast(**Type_Info) k.value_pointer).*.tag, k.type == type_info(*Type_Info));
+    n := parameter(type_info(Ring(int, 4)), 1);
+    print("{} {}\n", n, n.type == type_info(int));
+    print("{} {} {} {}\n", parameter(type_info(Labeled("hi")), 0), parameter(type_info(Tag(.B)), 0),
+        parameter(type_info(Flag(true)), 0), parameter(type_info(Scaled(0.5)), 0));
+    v := parameter(type_info(Map(int, Ring(u8, 2))), 1);
+    ring := cast(*Type_Info_Struct) (cast(**Type_Info) v.value_pointer).*;
+    print("{}\n", ring.name);
+    print("{}\n", (cast(*Type_Info_Struct) type_info(Vec2)).parameters.count);
+    holder := cast(*Type_Info_Struct) type_info(Holder(u8));
+    print("{} {}\n", holder.parameters.count, (cast(*Type_Info_Struct) holder.members[0].type).parameters.count);
+}
+
+main :: () {
+    show();
+    print("{}\n", size_of(Buf(5)));
+    print("{}\n", R);
+}

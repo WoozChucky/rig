@@ -2204,12 +2204,12 @@ static bool backend_build(Backend *b, Ir_Module *m, Target t, bool optimize, Are
     // is empty (the variable is the global's memory itself), attached to the
     // LLVM global (!dbg). What the compiler makes (str.N, string.N, array.N,
     // const.N, and type_info.N with its .members, .parameters, .results,
-    // .names and .values arrays) has no Rig type, and none of its own: a
-    // constant's const.N gets that constant's variable instead, from the
-    // constants (describe_constants, and declare_variables for a body's), one
-    // per declaration of it lowered: each copy of deferred code declares it
-    // again (declare_variables). One holding a view's elements, or an
-    // expression #run's value, has none.
+    // .names and .values arrays and its .parameter.K values) has no Rig
+    // type, and none of its own: a constant's const.N gets that constant's
+    // variable instead, from the constants (describe_constants, and
+    // declare_variables for a body's), one per declaration of it lowered:
+    // each copy of deferred code declares it again (declare_variables). One
+    // holding a view's elements, or an expression #run's value, has none.
     for (s64 i = 0; b->debug && i < m->globals.count; i++) {
         Ir_Global *g = &m->globals[i];
         if (!g->rig_type) continue;

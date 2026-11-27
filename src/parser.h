@@ -7,6 +7,7 @@
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
 //               | IDENT '::' ('struct' | 'union') members           a struct or a union and its fields
+//               | IDENT '::' 'struct' struct_params members         a generic struct (spec 3.23)
 //               | IDENT '::' 'union' '#tagged' [IDENT] '{' {IDENT ':' type ';'} '}'
 //                                                                   a tagged union: its tag's type, its members
 //               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
@@ -14,10 +15,14 @@
 //               | IDENT ':' type ['=' (expression | '---')] ';'     a global variable
 //               | IDENT ':=' expression ';'                         a global variable
 //               | IDENT '::' expression ';'                         a constant
+//               | IDENT '::' proc_type ';'                          a procedure type's alias (spec 3.22)
 //               | '#load' STRING ';'                                another file of the program
 //               | '#import' STRING ';'                              a module that ships with rig
 //               | run                                               code run while compiling
 //               | if_directive                                      conditional: its blocks hold top_level*
+//   struct_params = '(' IDENT ':' type {',' IDENT ':' type} ')'
+//                                                                  K: Type, a type parameter; any other,
+//                                                                  a constant one
 //   members     = '{' {member} '}'
 //   member      = ['using'] IDENT ':' type ';'                     'using': its struct's fields reached as
 //                                                                  this one's (spec 3.21)
@@ -37,8 +42,13 @@
 //                                                                  the expression: a default value
 //   type        = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
 //               | proc_type | IDENT                                (*void: a pointer to anything)
+//               | IDENT '(' [argument {',' argument}] ')'          an instance of a generic struct
 //               | '$' IDENT                                        a type parameter's declaration, only
 //                                                                  in a param's type (spec 7.11)
+//   argument    = type | expression                                a type when it starts with '*', '[' or
+//                                                                  '$', or is a name, with or without
+//                                                                  its '(...)', before ',' or ')', but
+//                                                                  size_of(...) and type_info(...)
 //   proc_type   = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
@@ -49,6 +59,7 @@
 //   declaration = IDENT ':' type ['=' (expression | '---')] ';'
 //               | IDENT ':=' expression ';'
 //               | IDENT '::' expression ';'
+//               | IDENT '::' proc_type ';'
 //   multi_var   = IDENT ',' IDENT {',' IDENT} ':=' expression ';'
 //   assignment  = expression ('=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>=')
 //                 expression ';'
@@ -72,7 +83,8 @@
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
 //   postfix     = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
 //                           | '.' '*' | '.' IDENT
-//                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name: the literal's type)
+//                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name, or a call of
+//                                                                      one: the literal's type)
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
 //               | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
@@ -98,6 +110,18 @@
 // has no type written, and takes the one it meets. Named and in order don't
 // mix: "a struct literal's fields are all named or all in order, not both",
 // at the first that breaks the pattern.
+//
+// A struct may take parameters (spec 3.23), `Map :: struct (K: Type, V:
+// Type) { ... }`: types, and constants of the types the checker allows,
+// which every instance gives, so none is written with '$', 'using', '..'
+// or a default value, and empty parentheses are none. An instance is
+// written where a type goes as the struct's name and its arguments,
+// `Map(string, int)`, `Ring(int, N + 1)`, each a type or an expression, by
+// how it is written (parser.cpp's parse_instance_argument). Where a value
+// goes it stays a call, which the checker tells apart (spec 5.20), but
+// before a literal's '.', `Pair(string, int).{"ann", 36}`, it's the
+// literal's type, its arguments the call's expressions (parser.cpp's
+// parse_postfix). A union takes no parameters, for now.
 //
 // Unions (spec 3.19) are declared as structs are, `Value :: union { i: s64;
 // f: float64; }`, at the top level only ("unions can only be declared at the
@@ -284,7 +308,13 @@
 // At the top level, after '::', a procedure's parameter list starts with
 // '(' ')', '(' IDENT ':', '(' IDENT ':=', '(' '..', '(' 'using' or '(' '$'
 // (a baked parameter, spec 7.11); any other '(' begins a constant's value,
-// so `N :: (1 + 2);` is a constant. A name followed by ':' or ':=' and then
+// so `N :: (1 + 2);` is a constant. In a body as at the top level, a
+// signature that reaches its ';' before any '{' or directive but #c_call
+// (`Cb :: (n: int) -> int;`, parser.cpp's proc_type_alias_follows) is a
+// procedure type's alias, a constant whose value is that procedure type,
+// which the checker makes an alias (spec 3.22); a signature followed by
+// any other directive and then its ';' (`f :: () #caller_location;`) is a
+// procedure whose '{' is missing. A name followed by ':' or ':=' and then
 // a signature with a body or a directive other than #load, #run and #if
 // after it (`greet : () {`) is a procedure with its '::' mistyped:
 // "expected '::', found ':'"; a name, ':' and a procedure type followed by
@@ -446,12 +476,13 @@
 // #if's, right inside one) declares a procedure or a struct, or holds a
 // #run { }: a body can't hold any of them, and each can only start a
 // top-level declaration. A constant in column 1 (`N :: 5;`) is a local
-// constant, as an indented one is. A struct's braces never closed end there
-// too, and at any #run or #if in column 1. The body is then taken to end
-// before the column-1 declarations (IDENT ':', ':=' or '::', a #load, a
-// #run or an #if) right before that point, at its own level: "expected
-// '}'" is reported at the first of them, and the top level resumes there,
-// so they're read as the globals, constants, loads, runs and #ifs they were
+// constant, as an indented one is, a procedure type's alias (`Cb :: (n:
+// int) -> int;`) too. A struct's braces never closed end there too, and
+// at any #run or #if in column 1. The body is then taken to end before
+// the column-1 declarations (IDENT ':', ':=' or '::', a #load, a #run or
+// an #if) right before that point, at its own level: "expected '}'" is
+// reported at the first of them, and the top level resumes there, so
+// they're read as the globals, constants, loads, runs and #ifs they were
 // meant to be (an if's '}' forgotten, then globals). A #load among them, or
 // in the branch of an #if among them, isn't misplaced after all, so it
 // isn't reported. A struct is taken to end before the #loads in column 1

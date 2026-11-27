@@ -597,10 +597,10 @@ static Ast_Literal *void_member_value(Checker *c, Type *t, String name, Position
 
 // The declaration a name found as `decl` stands for where an enum's or a
 // tagged union's members are named through it (Mode.FREE, Shape.empty): an
-// instance's type parameter bound to an enum or a named struct (spec 7.11)
-// stands for that type's declaration, so T.FREE is Mode.FREE in
-// reset(T = Mode); anything else for itself, a binding that lost its type
-// (made again, checker.cpp's made_again) too.
+// instance's type parameter bound to an enum or a named struct (spec 7.11),
+// or a type alias of one (spec 3.22), stands for that type's declaration, so
+// T.FREE is Mode.FREE in reset(T = Mode); anything else for itself, a
+// binding that lost its type (made again, checker.cpp's made_again) too.
 static Ast *through_alias(Ast *decl) {
     if (!decl || decl->kind != AST_ALIAS) return decl;
     Type *t = ((Ast_Alias *)decl)->aliased;
@@ -1080,9 +1080,17 @@ static Type *check_named(Checker *c, Ast_Name *name, Ast *decl, Using_Name *thro
         }
         return proc->type;  // null when a part of its signature was an error, reported
     }
-    // An instance's type parameter (spec 7.11) is a type as a struct's name
-    // is: "'T' is a type, not a value".
+    // An instance's type parameter (spec 7.11) and a type alias (spec 3.22)
+    // are types as a struct's name is: "'T' is a type, not a value". A
+    // generic struct's name alone is no type (spec 3.23), and says so as
+    // where a type goes.
     case AST_STRUCT:
+        if (((Ast_Struct *)decl)->is_generic) {
+            report_generic_struct(c, (Ast_Struct *)decl, name->pos);
+            return nullptr;
+        }
+        report_type_as_value(c, name);
+        return nullptr;
     case AST_ENUM:
     case AST_ALIAS: report_type_as_value(c, name); return nullptr;
     // A built-in procedure (spec 3.17) has no procedure type, each call
@@ -1611,6 +1619,27 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
     return true;
 }
 
+// The generic struct `name` names where a value goes (spec 3.23), or null:
+// looked up as a value's name is (check_lookup), so a local of the struct's
+// name hides it, and a built-in type's name never one, as it always means
+// the type (spec 3.1).
+static Ast_Struct *generic_struct_named(Checker *c, String name) {
+    Ast *decl = type_from_name(name) ? nullptr : check_lookup(c, name, nullptr);
+    if (!decl || decl->kind != AST_STRUCT || !((Ast_Struct *)decl)->is_generic) return nullptr;
+    return (Ast_Struct *)decl;
+}
+
+// The generic struct a call names as its callee (spec 3.23, 5.20), whose
+// instance, Map(string, int), it is, or null. The parser can't tell it
+// from a call of a procedure: the callee's name, never in parentheses, as
+// no type's is, is looked up as a callee's is (generic_struct_named).
+static Ast_Struct *generic_struct_called(Checker *c, Ast *e) {
+    if (e->kind != AST_CALL) return nullptr;
+    Ast *callee = ((Ast_Call *)e)->callee;
+    if (callee->kind != AST_NAME || ast_in_parentheses(callee)) return nullptr;
+    return generic_struct_named(c, ((Ast_Name *)callee)->name);
+}
+
 // A call: the callee (check_callee), then the arguments, whose own mistakes
 // are reported even when the callee is wrong, after its: in source order (a
 // spread argument's operand by check_spread_argument). A built-in's call is
@@ -1651,6 +1680,18 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
 // Type parameter takes a type: an argument that names one is checked as a
 // type value (check_type_value), so it says nothing more.
 static Type *check_call(Checker *c, Ast_Call *call) {
+    // A call of a generic struct is its instance (spec 3.23), a type, which
+    // is no value here: "'Map(string, int)' is a type, not a value", at its
+    // name, where a type's name used as a value is said, once the instance
+    // is worked out, its own mistakes (its count, its arguments') said
+    // instead.
+    Ast_Struct *generic_struct = generic_struct_called(c, call);
+    if (generic_struct) {
+        Position at = call->callee->pos;
+        Type *t = check_struct_instance(c, generic_struct, call->args, at, at);
+        if (t) diag_error(c->diag, at, "'" STR_FMT "' is a type, not a value", STR_ARG(type_name(c->arena, t)));
+        return nullptr;
+    }
     bool known = check_callee(c, call);
     bool generic = known && call->proc && call->proc->is_generic;
     bool broken = known && call->proc && call->proc->is_broken;
@@ -2440,29 +2481,44 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 }
 
 // Types where a value goes (spec 5.20). A type written as a value, []int or
-// #type (int) -> int, is an Ast_Type_Value; a name and *X are a name and an
-// address as written, and whether they name a type is the name's lookup's
-// to say: a struct's, an enum's or an instance's type parameter's (spec
-// 7.11), or none while the name is a built-in type's, so a local `int :=
-// 5;` hides the type int, as it hides any top-level name (spec 4.7). A type
-// in parentheses is no type, as nowhere else is one: (int) is a value. Only
-// the places that take a type check one as such (check_type_value), for
-// now == and != between two types (check_binary), and a $T: Type
-// parameter's argument (check_generic_call). A type value is never a value
-// at run time: it has type Type, never a constant (Ast.is_constant stays
-// false, so nothing folds or lowers it), the type it denotes kept in
-// Ast.constant's bits for type_value.
+// #type (int) -> int, is an Ast_Type_Value. A name and *X are a name and an
+// address as written, and a generic struct's instance, Map(string, int), is
+// a call of it (spec 3.23): whether each names a type is the name's
+// lookup's to say. A name is a type when it's a struct's, an enum's, an
+// instance's type parameter's (spec 7.11) or a type alias's (spec 3.22),
+// and a call when its callee's is a generic struct's
+// (generic_struct_called); a built-in type's name is the type while the
+// lookup finds nothing of that name, so a local `int := 5;` hides the type
+// int, as it hides any top-level name (spec 4.7). A type in parentheses is
+// no type, as nowhere else is one: (int) is a value. Only the places that
+// take a type check one as such (check_type_value), for now == and !=
+// between two types (check_binary), a $T: Type parameter's argument
+// (check_generic_call), a generic struct's type argument
+// (check_generic.cpp's bind_struct_argument), and a constant's value,
+// which makes it an alias (checker.cpp's check_const_value). A type value
+// is never a value at run time: it has type Type, never a constant
+// (Ast.is_constant stays false, so nothing folds or lowers it), the type
+// it denotes kept in Ast.constant's bits for type_value.
 
-bool expr_names_type(Checker *c, Ast *e) {
+bool written_as_type(Ast *e) {
     // A type is never in parentheses, as a literal's isn't ((Vec2).{1}):
     // (int) is a value, refused as one.
     if (ast_in_parentheses(e)) return false;
-    if (e->kind == AST_TYPE_VALUE) return true;
-    if (e->kind == AST_UNARY) {
-        Ast_Unary *u = (Ast_Unary *)e;
-        return u->op == TOKEN_STAR && expr_names_type(c, u->operand);
+    if (e->kind == AST_TYPE_VALUE || e->kind == AST_NAME) return true;
+    // A call of a name may be a generic struct's instance (spec 3.23).
+    if (e->kind == AST_CALL) {
+        Ast *callee = ((Ast_Call *)e)->callee;
+        return callee->kind == AST_NAME && !ast_in_parentheses(callee);
     }
-    if (e->kind != AST_NAME) return false;
+    return e->kind == AST_UNARY && ((Ast_Unary *)e)->op == TOKEN_STAR && written_as_type(((Ast_Unary *)e)->operand);
+}
+
+bool expr_names_type(Checker *c, Ast *e) {
+    if (!written_as_type(e)) return false;
+    // *X names a type when X does.
+    while (e->kind == AST_UNARY) e = ((Ast_Unary *)e)->operand;
+    if (e->kind == AST_TYPE_VALUE) return true;
+    if (e->kind == AST_CALL) return generic_struct_called(c, e) != nullptr;
     String name = ((Ast_Name *)e)->name;
     Ast *decl = check_lookup(c, name, nullptr);
     if (!decl) return type_from_name(name) != nullptr;
@@ -2470,14 +2526,29 @@ bool expr_names_type(Checker *c, Ast *e) {
 }
 
 // The type e, which expr_names_type holds for, would be written as where a
-// type goes: an Ast_Type_Value's own, or one made here for a name or *X,
-// at the same places, so resolving it says what a written type would.
+// type goes: an Ast_Type_Value's own, or one made here for a name, *X or a
+// generic struct's call, at the same places, so resolving it says what a
+// written type would. A call is an instance, AST_TYPE_INSTANCE, at its
+// name, its arguments the call's expressions as they are, which the
+// instance's check reads as types or constants (check_generic.cpp's
+// bind_struct_argument), as a literal's instance's are. It has no `end`:
+// a message writes out as written only types the parser read
+// (check_generic.cpp's written_type_text: a parameter's, an instance's
+// argument written as a type), never one made here, whose messages name
+// its Type.
 static Ast_Type *written_type_of(Checker *c, Ast *e) {
     if (e->kind == AST_TYPE_VALUE) return ((Ast_Type_Value *)e)->type_expr;
     if (e->kind == AST_UNARY) {
         Ast_Type *pointer = ast_new<Ast_Type>(c->arena, AST_TYPE_POINTER, e->pos);
         pointer->pointee = written_type_of(c, ((Ast_Unary *)e)->operand);
         return pointer;
+    }
+    if (e->kind == AST_CALL) {
+        Ast_Call *call = (Ast_Call *)e;
+        Ast_Type *instance = ast_new<Ast_Type>(c->arena, AST_TYPE_INSTANCE, call->callee->pos);
+        instance->name = ((Ast_Name *)call->callee)->name;
+        instance->args = call->args;
+        return instance;
     }
     Ast_Type *named = ast_new<Ast_Type>(c->arena, AST_TYPE_NAME, e->pos);
     named->name = ((Ast_Name *)e)->name;
@@ -2952,8 +3023,15 @@ static bool name_is_place(Checker *c, Ast_Name *name, bool for_writing) {
         break;
     case AST_BUILTIN: what = "a procedure"; break;  // built into the language (spec 3.17)
     case AST_STRUCT:
+        // A generic struct's name alone is no type at all (spec 3.23).
+        if (((Ast_Struct *)decl)->is_generic) {
+            report_generic_struct(c, (Ast_Struct *)decl, name->pos);
+            return false;
+        }
+        report_type_as_value(c, name);
+        return false;
     case AST_ENUM:
-    case AST_ALIAS: report_type_as_value(c, name); return false;  // a type parameter's too (spec 7.11)
+    case AST_ALIAS: report_type_as_value(c, name); return false;  // a type parameter's, an alias's too
     default: RIG_ASSERT(!"not a declaration");
     }
     diag_error(c->diag, name->pos, for_writing ? "can't assign to '" STR_FMT "': it's %s"
@@ -3102,6 +3180,10 @@ bool check_addressable(Checker *c, Ast *e, bool for_writing) {
             report_parameter_in_default(c, name);
             return false;
         }
+        // A constant with no type had its own mistake said, or is in the
+        // circle being said (`S :: *S;`, resolve_global): as any value of
+        // no type, it says nothing more.
+        if (decl->kind == AST_CONST && !decl->type) return false;
         if (!name_is_place(c, name, for_writing)) return false;
         name->type = decl->type;
         return decl->type != nullptr;
@@ -3383,12 +3465,13 @@ static bool declares_name(Ast_Struct *s, String name) {
 
 // Whether struct s's declaration may hold `name`, at any depth: a field of
 // that name, in an anonymous member too (spec 3.19), or a using field whose
-// struct may hold it, that struct found by the name written, at the top
-// level, as its layout finds it. A using field whose type is written any
-// other way, or names no struct declared (an error, a builtin type), may:
-// its layout says what it is. Each struct is followed once (`seen`), which
-// ends a cycle of using fields. Only names are read, so nothing is laid out
-// or made here.
+// struct may hold it, that struct found by the name written, as its layout
+// finds it: among a struct instance's bindings, whose parameters hide the
+// top level's names (spec 3.23), else at the top level. A using field whose
+// type is written any other way, or names no struct declared or bound (an
+// error, a builtin type, a pointer bound), may: its layout says what it
+// is. Each struct is followed once (`seen`), which ends a cycle of using
+// fields. Only names are read, so nothing is laid out or made here.
 static bool may_hold_name(Checker *c, Ast_Struct *s, String name, Array<Ast_Struct *> *seen) {
     for (s64 i = 0; i < seen->count; i++) {
         if ((*seen)[i] == s) return false;
@@ -3405,6 +3488,16 @@ static bool may_hold_name(Checker *c, Ast_Struct *s, String name, Array<Ast_Stru
         Ast_Type *written = field->type_expr;
         if (written->kind == AST_TYPE_POINTER) written = written->pointee;
         if (written->kind != AST_TYPE_NAME || type_from_name(written->name)) return true;
+        // In a struct instance's copy, a parameter hides the top level's
+        // name (spec 3.23): its struct is the one bound, and anything else
+        // bound may hold the name.
+        Ast *binding = s->instance ? instance_binding(s->instance, written->name) : nullptr;
+        if (binding) {
+            Type *bound = binding->kind == AST_ALIAS ? ((Ast_Alias *)binding)->aliased : nullptr;
+            if (!bound || bound->kind != TYPE_STRUCT || !bound->decl) return true;
+            if (may_hold_name(c, bound->decl, name, seen)) return true;
+            continue;
+        }
         Ast **decl = table_get(&c->top_level, written->name);
         if (!decl || (*decl)->kind != AST_STRUCT) return true;
         if (may_hold_name(c, (Ast_Struct *)*decl, name, seen)) return true;

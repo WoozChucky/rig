@@ -929,6 +929,13 @@ check('the grammar colours the type of a literal, a cast and size_of', () => {
     assertScopes('v := Vec2 .{1, 2};', { v: null, Vec2: TYPE, '.': 'punctuation.accessor.rig' });
     assertScopes('w := Vec2. {3, 4};', { w: null, Vec2: TYPE });
     assertScopes('a := int .[1, 2];', { a: null, int: PRIMITIVE });
+    // A generic struct's instance before a literal is a type, its arguments
+    // coloured as anywhere, one's own parentheses too (spec 3.23); a call
+    // followed by no literal stays a call.
+    assertScopes('p := Pair(string, int).{"a", 1};', { p: null, Pair: TYPE, string: PRIMITIVE, int: PRIMITIVE });
+    assertScopes('r := Ring(int, 3) .[];', { Ring: TYPE, int: PRIMITIVE });
+    assertScopes('m := Map(int, Map(string, *u8)).{};', { Map: [TYPE, 'entity.name.function.call.rig'], u8: PRIMITIVE });
+    assertScopes('n := twice(2) + 1;', { twice: 'entity.name.function.call.rig' });
     // A keyword before an untyped literal stays a keyword; a range and a
     // dereference aren't literals.
     assertScopes('return .{a, b};', { return: 'keyword.control.rig', a: null });
@@ -1206,11 +1213,34 @@ check('the grammar colours a signature that starts with a type parameter', () =>
     });
 });
 
+// Type aliases (issue #227, spec 3.22): a signature that ends at its ';',
+// with no body and no directive but #c_call, is a procedure type's alias,
+// its name a type's, and so is a constant whose value is written with
+// #type; with a body, or #foreign, it's a procedure. A parenthesised
+// constant stays a constant.
+check('the grammar colours a procedure type\'s alias as a type', () => {
+    assertScopes('Cb :: (code: int, name: string) -> bool;', {
+        Cb: TYPE,
+        int: PRIMITIVE,
+        string: PRIMITIVE,
+        bool: PRIMITIVE,
+    });
+    assertScopes('Raw :: (int) -> int #c_call;', { Raw: TYPE });
+    // A type written with #type is an alias's value too.
+    assertScopes('Cb :: #type (int) -> int;', { Cb: TYPE, '#type': 'keyword.other.directive.rig', int: [PRIMITIVE, PRIMITIVE] });
+    assertScopes('    P :: #type *Vec2;', { P: TYPE, Vec2: TYPE });
+    assertScopes('    Cb :: () -> int; // a callback', { Cb: TYPE });
+    assertScopes('greet :: (name: string) {', { greet: 'entity.name.function.rig' });
+    assertScopes('g :: (a: int) #foreign libc;', { g: 'entity.name.function.rig' });
+    assertScopes('N :: (1 + 2);', { N: 'variable.other.constant.rig' });
+});
+
 // Every program of tests/run and tests/build (the build programs and the
 // programs they build), through the grammar: no line breaks it, the
 // parameters, fields and results written `name: Type` of every procedure and
 // struct get their type coloured, and nothing is coloured as a type but the
-// names its structs and enums are declared with.
+// names its structs, unions and enums are declared with, its $T parameters,
+// its generic structs' type parameters and its type aliases.
 check('the grammar colours the types in every program of tests/run and tests/build', () => {
     const files = [];
     const walk = (dir) => {
@@ -1243,27 +1273,73 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     const typeNames = new Set();
     for (const source of [...sources.values(), ...modules]) {
         for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:struct|union|enum|enum_flags)\b/g)) typeNames.add(m[1]);
-        // And a generic procedure's type parameters, $T (spec 7.11).
+        // And a generic procedure's type parameters, $T (spec 7.11), and a
+        // generic struct's, K in `Map :: struct (K: Type, V: Type)` (spec
+        // 3.23), as `keys: [..]K;` colours its K as a type.
         for (const m of source.matchAll(/\$([A-Za-z_]\w*)/g)) typeNames.add(m[1]);
+        for (const m of source.matchAll(/\b[A-Za-z_]\w*\s*::\s*struct\s*\(([^)]*)\)/g)) {
+            for (const p of m[1].matchAll(/([A-Za-z_]\w*)\s*:\s*Type\b/g)) typeNames.add(p[1]);
+        }
     }
     assert.ok(typeNames.has('Vec2') && typeNames.has('Node') && typeNames.has('Mode'));
+    // And a type alias's name (spec 3.22), as `v: V` colours its V as a
+    // type, learned from the given sources into `names`: a constant whose
+    // value is a type written with #type, or a procedure type written on one
+    // line as a signature (its '(' holding nothing or starting with a
+    // parameter, or its ')' followed by '->', as the grammar's rule reads
+    // it) with no body and no directive but #c_call; or one whose value is
+    // a name, after any '*' and '[...]', that is a type's, or such a name
+    // with arguments, a generic struct's instance, `Int_Pair ::
+    // Pair(int, int);` (spec 3.23). NAME :: X; is an alias when X is a
+    // type: a built-in one, or one of the names known, an alias's included,
+    // declared in any order, so the look goes on until it finds no more. A
+    // constant naming a value, `ADD :: add;` or `VERBOSE :: true;`, is
+    // none, nor is a value in parentheses, `N :: (1 + 2);`.
+    const builtIn = new RegExp(`^(?:${grammar().repository.types.match})$`);
+    const learnAliases = (from, names) => {
+        const aliases = [];   // [NAME, X] of each NAME :: X;, after any '*' and '[...]'
+        for (const source of from) {
+            for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:\*\s*|\[[^\][]*\]\s*)*([A-Za-z_]\w*)\s*(?:\([^;{}\n]*\)\s*)?;/g)) aliases.push([m[1], m[2]]);
+            for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*#type\b/g)) names.add(m[1]);
+            const signature = /^[ \t]*([A-Za-z_]\w*)[ \t]*::[ \t]*\((?:[ \t]*\)|[ \t]*(?:using[ \t]+)?\$?[A-Za-z_]\w*[ \t]*:(?!:)|[^;{#\n]*\)[ \t]*->)[^;{#\n]*(?:#c_call\b[^;{#\n]*)?;/gm;
+            for (const m of source.matchAll(signature)) names.add(m[1]);
+        }
+        for (let found = true; found; ) {
+            found = false;
+            for (const [name, value] of aliases) {
+                if (names.has(name) || !(builtIn.test(value) || names.has(value))) continue;
+                names.add(name);
+                found = true;
+            }
+        }
+    };
+    // The modules' aliases may be named by any program that imports them;
+    // a program's own only by it, so a local alias of one (`x :: s8;`)
+    // doesn't let another colour its x as a type.
+    const shared = new Set(typeNames);
+    learnAliases(modules, shared);
+    assert.ok(!shared.has('TABLE_VALUE_OFFSET'), 'TABLE_VALUE_OFFSET is learned as a type');
 
     const typeScopes = new Set([TYPE, PRIMITIVE, 'support.type.rig']);
     const checked = {};   // file -> procedure -> the parameters and results checked
     for (const [file, source] of sources) {
         const name = path.relative(root, file).replace(/\\/g, '/');
+        const names = new Set(shared);
+        learnAliases([source], names);
         let lines;
         assert.doesNotThrow(() => (lines = tokenize(source)), name);
         lines.forEach((tokenized, n) => {
             const where = `${name}:${n + 1}: ${tokenized.text}`;
             const text = tokenized.text;
-            // Each name coloured as a type is a struct's, a union's or an enum's.
+            // Each name coloured as a type is a struct's, a union's, an
+            // enum's, a $T parameter's, a generic struct's type
+            // parameter's or a type alias's.
             // (A word in a string may be split by an escape: \there.)
             for (const m of text.matchAll(/\b[A-Za-z_]\w*\b/g)) {
                 const scopes = tokenized.scopes[m.index];
                 if (scopes[scopes.length - 1] !== TYPE) continue;
                 assert.strictEqual(scopeAt(tokenized, m.index, m[0].length), TYPE, where);
-                assert.ok(typeNames.has(m[0]), `${where}: ${m[0]} is coloured as a type`);
+                assert.ok(names.has(m[0]), `${where}: ${m[0]} is coloured as a type`);
             }
             const procedure = /^\s*([A-Za-z_]\w*)\s*::\s*\(/.exec(text);
             const count = (what) => {

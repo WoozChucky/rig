@@ -20,8 +20,8 @@ struct Parser {
     Position expression_start;  // where the outermost expression being read starts
     s32 blocks;                 // the blocks open around the next token, top-level #if branches included
     s32 branches;               // the top-level #if branches open around the next token (also in blocks)
-    s32 type_levels;            // the type levels (*, [], [N] and a procedure type's '(') open around
-                                // the next token
+    s32 type_levels;            // the type levels (*, [], [N], a procedure type's '(' and an
+                                // instance's) open around the next token
     s32 deepest;                // the most levels reached since take_deepest last restarted it
     s32 body_deepest;           // the most levels reached in the body being read, the body's own
                                 // blocks open around each counted too, not the top-level #if
@@ -74,8 +74,9 @@ struct Parser {
 // with each operator, though the parser itself doesn't recurse to build it
 // (the checker does, to check it).
 //
-// A type's levels are each '*', '[]', '[N]' and procedure type's '(' in it
-// (parse_type): ***int is 3, [][4]*u8 is 3, (*int) -> int 2, a name none.
+// A type's levels are each '*', '[]', '[N]', procedure type's '(' and
+// instance's '(' in it (parse_type): ***int is 3, [][4]*u8 is 3, (*int) ->
+// int 2, Map(int, *u8) 2, a name none.
 //
 // Types and expressions nest inside each other: an array's count is an
 // expression inside its '[N]' level, and size_of(T), type_info(T) and
@@ -184,7 +185,7 @@ static Token *expect(Parser *p, Token_Kind kind) {
 static Ast *parse_expression(Parser *p, int min_precedence);
 static Ast *parse_unary(Parser *p);
 static Ast_Type *parse_type(Parser *p);
-static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start);
+static Ast *parse_literal(Parser *p, Ast_Type *type_expr, s32 type_height, Token *dot, Position start);
 static bool parameters_follow(Parser *p, s64 open);
 static bool starts_global(Parser *p);
 static bool c_style_literal_follows(Parser *p);
@@ -325,12 +326,14 @@ static Ast *parse_type_info(Parser *p) {
 }
 
 // A type written where a value goes (spec 5.20), its Ast_Type_Value at
-// `at`, its '[' or its '#type': the type that follows, read a level down as
+// `at`, its '[', its '#type' or a procedure type's alias's '('
+// (parse_constant, spec 3.22): the type that follows, read a level down as
 // size_of's is (parse_type_below), so it's a leaf of the expression around
-// it. The caller is past the '#type', or still at the '[', which begins
-// the type. A literal never follows one: in []int.{1} the '.' after a type
-// value, which is no name (only an Ast_Name is a literal's type), is
-// parse_postfix's "expected a field's name".
+// it, or the whole of an alias's value. The caller is past the '#type', or
+// still at the '[' or the '(', which begins the type. A literal never
+// follows one: in []int.{1} the '.' after a type value, which is no name
+// (only an Ast_Name, or a call of one, an instance's, is a literal's
+// type), is parse_postfix's "expected a field's name".
 static Ast *parse_type_value(Parser *p, Token *at) {
     Ast_Type_Value *value = ast_new<Ast_Type_Value>(p->arena, AST_TYPE_VALUE, at->pos);
     value->type_expr = parse_type_below(p);
@@ -437,7 +440,7 @@ static Ast *parse_primary(Parser *p) {
     case TOKEN_DOT:
         if (peek(p, 1)->kind == TOKEN_LBRACE || peek(p, 1)->kind == TOKEN_LBRACKET) {
             Token *dot = advance(p);
-            return parse_literal(p, nullptr, dot, dot->pos);
+            return parse_literal(p, nullptr, 0, dot, dot->pos);
         }
         if (peek(p, 1)->kind == TOKEN_IDENT) {
             Token *dot = advance(p);
@@ -479,16 +482,18 @@ static Ast *parse_primary(Parser *p) {
 // when '=' follows it (x == 1 is a value in order). An array's are in
 // order, with no names. The literal is at its '.' and starts at `start`
 // (its type's name, or the '.'); it's a level above its values, as a call
-// is above its arguments. Which fields there are, how many elements, and
+// is above its arguments, and above its type's, `type_height` (an
+// instance's arguments, 0 for a name or no type), which the checker walks
+// as it does the values. Which fields there are, how many elements, and
 // what each value converts to, is the checker's business.
-static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position start) {
+static Ast *parse_literal(Parser *p, Ast_Type *type_expr, s32 type_height, Token *dot, Position start) {
     Token *open = advance(p);  // the '{' or '['
     Ast_Literal *literal = ast_new<Ast_Literal>(p->arena, AST_LITERAL, dot->pos);
     literal->start = start;
     literal->type_expr = type_expr;
     literal->is_array = open->kind == TOKEN_LBRACKET;
     Token_Kind close = literal->is_array ? TOKEN_RBRACKET : TOKEN_RBRACE;
-    s32 height = 0;  // the highest value's
+    s32 height = type_height;  // the highest of the type's and the values'
     while (peek(p)->kind != close) {
         Token *first = peek(p);
         bool named = !literal->is_array && first->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_EQUAL;
@@ -524,11 +529,16 @@ static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position s
 // (a.b).c, p.*.x is the field x of what p points at, and a[i].x[j] is
 // ((a[i]).x)[j]. A '.' after a name and followed by '{' or '[' makes the
 // name a type, of the literal that follows: a struct's (Vec2.{1, 2}), or an
-// array's whose elements are of that type (int.[1, 2]); after anything
-// else, a name in parentheses included, it's "expected a field's name". The
-// lexer reads a '*' after a '.' alone (lexer.h), so p.*=5 is p.* = 5.
+// array's whose elements are of that type (int.[1, 2]); so does one after a
+// call of a name, which is then a generic struct's instance (spec 3.23),
+// Pair(string, int).{"ann", 36}; after anything else, a name in parentheses
+// included, (Pair)(u8, u8) and a.Pair(u8, u8) too, it's "expected a field's
+// name". The lexer reads a '*' after a '.' alone (lexer.h), so p.*=5 is
+// p.* = 5.
 static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
+    Ast_Call *call = nullptr;  // the last call read, and where its ')' is
+    Position call_end = {};
     for (;;) {
         if (!e) return nullptr;
         if (peek(p)->kind == TOKEN_DOT) {
@@ -557,7 +567,24 @@ static Ast *parse_postfix(Parser *p) {
                 // (Vec2).{1} is no literal.
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, e->pos);
                 type->name = ((Ast_Name *)e)->name;
-                e = parse_literal(p, type, dot, e->start);
+                e = parse_literal(p, type, 0, dot, e->start);
+            } else if ((after->kind == TOKEN_LBRACE || after->kind == TOKEN_LBRACKET) && e == call &&
+                       call->callee->kind == AST_NAME && !ast_in_parentheses(call->callee)) {
+                // The call was an instance of a generic struct, the
+                // literal's type (spec 3.23): Pair(string, int).{...}, at
+                // the name, its arguments the call's expressions as they
+                // are, which the checker reads as types or constants
+                // (check_generic.cpp's bind_struct_argument). Neither the
+                // name nor the instance is in parentheses, as no type is:
+                // the call is this loop's own, which nothing has put in
+                // parentheses, so (Pair(u8, u8)).{} is no literal, its call
+                // made by parse_primary's parentheses and so not `call`.
+                // The literal keeps the call's height (p->height still).
+                Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_INSTANCE, call->callee->pos);
+                type->name = ((Ast_Name *)call->callee)->name;
+                type->args = call->args;
+                type->end = call_end;
+                e = parse_literal(p, type, p->height, dot, e->start);
             } else {
                 error_expected_or_load(p, "a field's name");
                 return nullptr;
@@ -582,7 +609,7 @@ static Ast *parse_postfix(Parser *p) {
             continue;
         }
         if (peek(p)->kind != TOKEN_LPAREN) return e;
-        Ast_Call *call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
+        call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
         advance(p);
         call->start = e->start;
         call->callee = e;
@@ -599,7 +626,10 @@ static Ast *parse_postfix(Parser *p) {
                 advance(p);
             }
         }
-        if (!set_height(p, height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
+        if (!set_height(p, height + 1)) return nullptr;
+        Token *close = expect(p, TOKEN_RPAREN);
+        if (!close) return nullptr;
+        call_end = close->pos;
         e = call;
     }
 }
@@ -795,6 +825,63 @@ static bool procedure_follows(Parser *p, s64 ahead) {
             (next == TOKEN_IDENT && (after == TOKEN_COLON || after == TOKEN_COLON_EQUAL)));
 }
 
+// Whether the '(' `ahead` tokens on, after IDENT '::', begins a procedure
+// type's alias (spec 3.22), `Cb :: (code: int, name: string) -> bool;`,
+// rather than a procedure or a constant's value in parentheses: the '('
+// begins a signature (procedure_follows, or its ')' is followed by '->', as
+// `(int) -> int`'s is), and after that ')', outside parentheses and
+// brackets, a ';' comes before any '{', any directive but #c_call, the
+// next declaration (an identifier starting a line, then '::') or the end,
+// as variable_follows reads a variable's procedure type. So a procedure
+// whose body is missing keeps being one, said where its '{' should be:
+// `f :: () #caller_location;`, `f :: ()\n#run g();` and `f :: () -> int\n
+// N :: 5;`, whose ';' only the next declaration reaches, are "expected
+// '{'". A '(' never closed is no alias either.
+static bool proc_type_alias_follows(Parser *p, s64 ahead) {
+    s64 open = p->next + ahead;
+    if (p->tokens[open].kind != TOKEN_LPAREN) return false;
+    // The ')' that closes it.
+    s64 close = -1;
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;  // open >= 2: a name and '::' came before
+        if (i > open && starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) {
+            return false;
+        }
+        if (t->kind == TOKEN_LPAREN) depth++;
+        if (t->kind == TOKEN_RPAREN && --depth == 0) {
+            close = i;
+            break;
+        }
+    }
+    // A token follows the ')': the last one is TOKEN_EOF.
+    if (close < 0 || (!procedure_follows(p, ahead) && p->tokens[close + 1].kind != TOKEN_ARROW)) return false;
+    depth = 0;
+    for (s64 i = close + 1; p->tokens[i].kind != TOKEN_EOF; i++) {
+        Token *t = &p->tokens[i];
+        bool starts_line = p->tokens[i - 1].pos.line != t->pos.line;
+        if (starts_line && t->kind == TOKEN_IDENT && p->tokens[i + 1].kind == TOKEN_COLON_COLON) return false;
+        switch (t->kind) {
+        case TOKEN_LPAREN:
+        case TOKEN_LBRACKET: depth++; break;
+        case TOKEN_RPAREN:
+        case TOKEN_RBRACKET: depth--; break;
+        case TOKEN_LBRACE:
+            if (depth <= 0) return false;
+            break;
+        case TOKEN_DIRECTIVE:
+            if (depth <= 0 && !is_directive(t, "c_call")) return false;
+            break;
+        case TOKEN_SEMICOLON:
+            if (depth <= 0) return true;
+            break;
+        default: break;
+        }
+    }
+    return false;
+}
+
 // Whether the token `ahead` of the next one starts a type's declaration
 // after its '::': 'struct', 'union', 'enum' or 'enum_flags' (spec 3.18,
 // 3.19).
@@ -810,6 +897,8 @@ static bool type_declaration_follows(Parser *p, s64 ahead) {
 // struct's, a union's or an enum's braces), a body that was never closed.
 // A constant (`N :: 5;`) isn't, in column 1 or not: it's a local constant,
 // a statement of the body, and indentation means nothing to the language.
+// Nor is a procedure type's alias (`Cb :: (a: int) -> int;`,
+// proc_type_alias_follows), which is a constant too.
 // Procedures, structs, unions and enums are declared only at the top
 // level, so none can be a statement; nor can #run { ... }, which only the
 // top level has (a #run in a body takes an expression, and a block isn't
@@ -824,7 +913,7 @@ static bool starts_declaration(Parser *p) {
     if (is_directive(t, "run")) return t->pos.col == 1 && peek(p, 1)->kind == TOKEN_LBRACE;
     if (is_directive(t, "if")) return t->pos.col == 1 && branch_declares_top_level(p);
     return t->kind == TOKEN_IDENT && t->pos.col == 1 && peek(p, 1)->kind == TOKEN_COLON_COLON &&
-           (procedure_follows(p, 2) || type_declaration_follows(p, 2));
+           ((procedure_follows(p, 2) && !proc_type_alias_follows(p, 2)) || type_declaration_follows(p, 2));
 }
 
 // Whether a branch of the #if chain at the next token declares a procedure
@@ -836,7 +925,8 @@ static bool starts_declaration(Parser *p) {
 // indentation says (an #if written after a body whose '}' was forgotten).
 // A branch of an #if right inside a branch counts too (`#if OS == .. {
 // #if DEBUG { f :: () {} } }`), at any depth: its braces are a branch's
-// as well. A block in a branch isn't one, nor is anything in it.
+// as well. A block in a branch isn't one, nor is anything in it, nor a
+// procedure type's alias, a constant (proc_type_alias_follows).
 // The chain ends at a '}' that closes a branch with no else after it, or
 // at the end of the file. A brace in a condition (`#if X == .{1} {`) can
 // end the look early, and the #if is then a statement, as without such a
@@ -863,7 +953,8 @@ static bool branch_declares_top_level(Parser *p) {
         } else if (at_branch_level && is_directive(t, "if")) {
             opens_branch = true;
         } else if (at_branch_level && t->kind == TOKEN_IDENT && peek(p, ahead + 1)->kind == TOKEN_COLON_COLON &&
-                   (procedure_follows(p, ahead + 2) || type_declaration_follows(p, ahead + 2))) {
+                   ((procedure_follows(p, ahead + 2) && !proc_type_alias_follows(p, ahead + 2)) ||
+                    type_declaration_follows(p, ahead + 2))) {
             return true;
         } else if (at_branch_level && is_directive(t, "run") && peek(p, ahead + 1)->kind == TOKEN_LBRACE) {
             return true;
@@ -873,12 +964,16 @@ static bool branch_declares_top_level(Parser *p) {
 }
 
 // The value of the constant `name` after its '::': expression ';'. The
-// caller read IDENT '::' and made sure no procedure follows.
+// caller read IDENT '::' and made sure no procedure follows. A procedure
+// type's alias (proc_type_alias_follows, spec 3.22) is a constant whose
+// value is that procedure type, written where a value goes as `#type` would
+// write it: an Ast_Type_Value at its '(', read by parse_proc_type, its
+// names dropped, its '=' and '$' refused there.
 static Ast *parse_constant(Parser *p, Token *name) {
     Ast_Const *constant = ast_new<Ast_Const>(p->arena, AST_CONST, name->pos);
     constant->name = name->text;
     take_deepest(p);
-    constant->value = parse_expression(p, 1);
+    constant->value = proc_type_alias_follows(p, 0) ? parse_type_value(p, peek(p)) : parse_expression(p, 1);
     constant->levels = take_deepest(p);
     if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
     return constant;
@@ -933,8 +1028,9 @@ static Ast *parse_local_declaration(Parser *p) {
     Token *colons = advance(p);
     if (colons->kind != TOKEN_COLON_COLON) return parse_variable(p, name, colons);
     // `helper :: () {`: parentheses that are a signature's, not a
-    // constant's value in parentheses (N :: (2 + 3) * 4;).
-    if (peek(p)->kind == TOKEN_LPAREN && parameters_follow(p, p->next)) {
+    // constant's value in parentheses (N :: (2 + 3) * 4;), nor a procedure
+    // type's alias (Cb :: (a: int) -> int;), which is a constant.
+    if (peek(p)->kind == TOKEN_LPAREN && !proc_type_alias_follows(p, 0) && parameters_follow(p, p->next)) {
         diag_error(p->diag, name->pos, "procedures can only be declared at the top level, for now");
         return nullptr;
     }
@@ -1648,7 +1744,7 @@ static Ast_Block *parse_block(Parser *p) {
 }
 
 // type = '*' type | '[' expression ']' type | '[' ']' type | '[' '..' ']' type
-//        | proc_type | IDENT
+//        | proc_type | IDENT | IDENT '(' [argument {',' argument}] ')'
 //
 // [N]T is an array of N T's, N any expression (the checker needs it to be
 // a constant); []T a view of T's; [..]T a resizable array of T's (spec
@@ -1657,28 +1753,33 @@ static Ast_Block *parse_block(Parser *p) {
 // checker needs Preload for it. The height kept for the expression around a
 // type, if any, stays as it was: a count's isn't part of it.
 //
-// A type's '*', '[]', '[N]', '[..]' and a procedure type's '(' are a level
-// each of the compiler's limit (MAX_DEPTH), counted with the levels of the
-// types and expressions the type is inside: the one level too many is "types
-// are nested too deeply (more than 1000 levels)", at its '*' or '['. That
-// needs >= below, not ==: parse_type_below opens size_of's, type_info's and
-// a cast's level unchecked, so the levels may already be one over when a
-// type is read there; a name is fine, a '*' isn't. A count is read inside
-// its '[N]' level, so [1][1]...int is a level per [1], however many, and a
-// type inside a count ([size_of(**int)]u8) adds its levels to the type
-// around it. The checker resolves a written type, and lays it out, by
-// recursing into what it's made of, and the stages after it walk written
-// types the same way, so ten thousand '*' would overflow the stack; counting
-// here means none of them ever sees a deeper one. The limit is on the types
-// a program writes. One the checker infers has none (each `p2 := *p1;` is a
-// pointer a level deeper than the last), and nothing recurses through it:
-// the checker builds it a level at a time, and the one stage that walks all
-// of its levels, naming it in a message, does so in a loop (type_name).
+// A type's '*', '[]', '[N]', '[..]', a procedure type's '(' and an
+// instance's (Map(K, V), spec 3.23) are a level each of the compiler's
+// limit (MAX_DEPTH), counted with the levels of the types and expressions
+// the type is inside: the one level too many is "types are nested too
+// deeply (more than 1000 levels)", at its '*', its '[', or an instance's
+// name. That needs >= below, not ==: parse_type_below opens size_of's,
+// type_info's and a cast's level unchecked, so the levels may already be
+// one over when a type is read there; a name alone is fine, a '*' or an
+// instance isn't. A count is read inside its '[N]' level, so [1][1]...int
+// is a level per [1], however many, and a type inside a count
+// ([size_of(**int)]u8) adds its levels to the type around it. The checker
+// resolves a written type, and lays it out, by recursing into what it's
+// made of, and the stages after it walk written types the same way, so ten
+// thousand '*' would overflow the stack; counting here means none of them
+// ever sees a deeper one. The limit is on the types a program writes. One
+// the checker infers has none (each `p2 := *p1;` is a pointer a level
+// deeper than the last), and nothing recurses through it: the checker
+// builds it a level at a time, and the one stage that walks all of its
+// levels, naming it in a message, does so in a loop (type_name).
 static Ast_Type *parse_type_level(Parser *p);
 
 static Ast_Type *parse_type(Parser *p) {
     Token *t = peek(p);
-    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET && t->kind != TOKEN_LPAREN) return parse_type_level(p);
+    bool instance = t->kind == TOKEN_IDENT && peek(p, 1)->kind == TOKEN_LPAREN;
+    if (t->kind != TOKEN_STAR && t->kind != TOKEN_LBRACKET && t->kind != TOKEN_LPAREN && !instance) {
+        return parse_type_level(p);
+    }
     if (open_levels(p) >= MAX_DEPTH) {
         diag_error(p->diag, t->pos, "types are nested too deeply (more than %d levels)", MAX_DEPTH);
         return nullptr;
@@ -1690,20 +1791,26 @@ static Ast_Type *parse_type(Parser *p) {
     return type;
 }
 
+// The index of the ')' that closes the '(' at token `open`, or -1 when a
+// ';' or the end of the file comes first: tokens only.
+static s64 closing_paren(Parser *p, s64 open) {
+    s64 depth = 0;
+    for (s64 i = open; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
+        if (p->tokens[i].kind == TOKEN_LPAREN) depth++;
+        if (p->tokens[i].kind == TOKEN_RPAREN && --depth == 0) return i;
+    }
+    return -1;
+}
+
 // Whether the '(' the parser is at and its ')' are a procedure type's
 // parameters: the ')' is followed by '->'. After a '->', that's what tells
 // a procedure type as the one result, `-> (int) -> int`, from the results
 // in parentheses, `-> (int, int)` (parse_results). A '(' never closed before
 // a ';' or the end isn't one.
 static bool proc_type_follows(Parser *p) {
-    s64 depth = 0;
-    for (s64 i = p->next; p->tokens[i].kind != TOKEN_EOF && p->tokens[i].kind != TOKEN_SEMICOLON; i++) {
-        Token_Kind kind = p->tokens[i].kind;
-        if (kind == TOKEN_LPAREN) depth++;
-        // A token follows: the last one is TOKEN_EOF.
-        if (kind == TOKEN_RPAREN && --depth == 0) return p->tokens[i + 1].kind == TOKEN_ARROW;
-    }
-    return false;
+    s64 close = closing_paren(p, p->next);
+    // A token follows the ')': the last one is TOKEN_EOF.
+    return close >= 0 && p->tokens[close + 1].kind == TOKEN_ARROW;
 }
 
 // Whether a type can start with a token of `kind`: a name, '*', '[', '('
@@ -1833,12 +1940,82 @@ static Ast_Type *parse_proc_type(Parser *p) {
     return type;
 }
 
+// An expression inside a type, an array's count or an instance's argument
+// (parse_instance_argument), the parser at its first token: no part of a
+// parameter's type, so a type in it declares nothing (Parser.in_param_type
+// off while it's read), and the height kept for the expression around the
+// type stays as it was.
+static Ast *parse_expression_in_type(Parser *p) {
+    s32 height = p->height;
+    bool in_param_type = p->in_param_type;
+    p->in_param_type = false;
+    Ast *e = parse_expression(p, 1);
+    p->in_param_type = in_param_type;
+    p->height = height;
+    return e;
+}
+
+// argument = type | expression
+//
+// An instance's argument (spec 3.23), the parser at its first token. It is
+// a written type when it starts as only a type can, with '*', '[' or '$'
+// (which parse_type_level refuses outside a procedure's parameter), or is a
+// name, with or without arguments of its own in parentheses, directly
+// followed by ',' or ')': Map(string, Map(int, *u8)). Any other is an
+// expression, read as an array's count is (parse_expression_in_type), a
+// type in it declaring nothing: 4, N + 1, .B, Mode.B, "hi", #type (int) ->
+// int, #run f(), and size_of(T) and type_info(T), the built-ins
+// parse_primary knows by their name and '(', which would otherwise look
+// like instances. A bare name is a written type whatever it names, a
+// type's or a constant's: the checker reads one where the struct takes a
+// constant as the constant it names. A '(' starts no type here, as a
+// constant's value in parentheses may.
+static Ast *parse_instance_argument(Parser *p) {
+    Token_Kind kind = peek(p)->kind;
+    bool type = kind == TOKEN_STAR || kind == TOKEN_LBRACKET || kind == TOKEN_DOLLAR;
+    String text = peek(p)->text;
+    bool builtin = string_eq(text, str("size_of")) || string_eq(text, str("type_info"));
+    if (kind == TOKEN_IDENT && !(builtin && peek(p, 1)->kind == TOKEN_LPAREN)) {
+        s64 after = p->next + 1;
+        if (p->tokens[after].kind == TOKEN_LPAREN) {
+            s64 close = closing_paren(p, after);
+            after = close < 0 ? after : close + 1;  // a token follows the ')': the last one is TOKEN_EOF
+        }
+        type = p->tokens[after].kind == TOKEN_COMMA || p->tokens[after].kind == TOKEN_RPAREN;
+    }
+    return type ? (Ast *)parse_type(p) : parse_expression_in_type(p);
+}
+
+// An instance of a generic struct (spec 3.23), Map(string, int), the
+// parser past its name, at the '(': an AST_TYPE_INSTANCE at the name, its
+// arguments in order (parse_instance_argument), kept with its ')'. Whether
+// the name is a generic struct's, and how many arguments it takes, is the
+// checker's to say.
+static Ast_Type *parse_instance(Parser *p, Token *name) {
+    advance(p);  // the '('
+    Ast_Type *instance = ast_new<Ast_Type>(p->arena, AST_TYPE_INSTANCE, name->pos);
+    instance->name = name->text;
+    if (peek(p)->kind != TOKEN_RPAREN) {
+        for (;;) {
+            Ast *argument = parse_instance_argument(p);
+            if (!argument) return nullptr;
+            array_add(&instance->args, argument);
+            if (peek(p)->kind != TOKEN_COMMA) break;
+            advance(p);
+        }
+    }
+    Token *close = expect(p, TOKEN_RPAREN);
+    if (!close) return nullptr;
+    instance->end = close->pos;
+    return instance;
+}
+
 // The type rule's alternatives: '*' type, '[' [expression | '..'] ']'
-// type, a procedure type (a level each, which parse_type counted), a name,
-// or '$' and a name. The type after a '*' or ']' goes back through
-// parse_type, so its levels are counted too; a count is read inside the
-// level its '[N]' opened, and no other, so its expression levels are
-// counted from there.
+// type, a procedure type, an instance (a level each, which parse_type
+// counted), a name, or '$' and a name. The type after a '*' or ']' goes
+// back through parse_type, so its levels are counted too; a count is read
+// inside the level its '[N]' opened, and no other, so its expression
+// levels are counted from there.
 //
 // '$T' declares a type parameter T (spec 7.11), a name the type stands for
 // in a generic procedure, which each call infers from its arguments: a type
@@ -1872,12 +2049,7 @@ static Ast_Type *parse_type_level(Parser *p) {
         if (kind == AST_TYPE_ARRAY) {
             // The count is an expression, no part of the parameter's type:
             // a type in it declares nothing.
-            s32 height = p->height;
-            bool in_param_type = p->in_param_type;
-            p->in_param_type = false;
-            type->count = parse_expression(p, 1);
-            p->in_param_type = in_param_type;
-            p->height = height;
+            type->count = parse_expression_in_type(p);
             if (!type->count) return nullptr;
         }
         if (!expect(p, TOKEN_RBRACKET)) return nullptr;
@@ -1903,6 +2075,7 @@ static Ast_Type *parse_type_level(Parser *p) {
     }
     if (t->kind == TOKEN_IDENT) {
         advance(p);
+        if (peek(p)->kind == TOKEN_LPAREN) return parse_instance(p, t);
         Ast_Type *named = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, t->pos);
         named->name = t->text;
         return named;
@@ -2343,11 +2516,70 @@ static bool parse_members(Parser *p, Ast_Struct *s) {
     return true;
 }
 
-// struct = ('struct' | 'union' ['#tagged' [IDENT]]) members
+// struct_params = '(' struct_param {',' struct_param} ')'
+// struct_param  = IDENT ':' type
+//
+// A generic struct's parameters (spec 3.23), the parser at the '(' after
+// 'struct': each a name and its type, `K: Type` a type parameter, any other
+// a constant one, which the checker says it may be. Every instance gives
+// them all, so none is written as a procedure's may be: "a struct's
+// parameters take no '$': each instance gives them all, as in Map :: struct
+// (K: Type, V: Type)", at the '$'; "a struct's parameter can't be
+// 'using'", at the 'using'; "a struct's parameter can't be '..'", at the
+// '..'; "a struct's parameter can't have a default value, for now", at the
+// '=', as a procedure's '$' parameter can't, for now. A struct with none is
+// written without them: "a struct with no parameters has no '()', as in
+// Vec2 :: struct { x: float; }", at the '('. Each gives the declaration up:
+// false.
+static bool parse_struct_params(Parser *p, Ast_Struct *s) {
+    Token *open = advance(p);
+    if (peek(p)->kind == TOKEN_RPAREN) {
+        diag_error(p->diag, open->pos, "a struct with no parameters has no '()', as in Vec2 :: struct { x: float; }");
+        return false;
+    }
+    for (;;) {
+        Token *t = peek(p);
+        if (t->kind == TOKEN_DOLLAR) {
+            diag_error(p->diag, t->pos,
+                       "a struct's parameters take no '$': each instance gives them all, as in Map :: struct (K: "
+                       "Type, V: Type)");
+            return false;
+        }
+        if (t->kind == TOKEN_USING) {
+            diag_error(p->diag, t->pos, "a struct's parameter can't be 'using'");
+            return false;
+        }
+        Token *name = expect(p, TOKEN_IDENT);
+        if (!name || !expect(p, TOKEN_COLON)) return false;
+        if (peek(p)->kind == TOKEN_DOT_DOT) {
+            diag_error(p->diag, peek(p)->pos, "a struct's parameter can't be '..'");
+            return false;
+        }
+        Ast_Param *param = ast_new<Ast_Param>(p->arena, AST_PARAM, name->pos);
+        param->name = name->text;
+        param->type_expr = parse_whole_type(p);
+        if (!param->type_expr) return false;
+        if (peek(p)->kind == TOKEN_EQUAL) {
+            diag_error(p->diag, peek(p)->pos, "a struct's parameter can't have a default value, for now");
+            return false;
+        }
+        array_add(&s->params, param);
+        if (peek(p)->kind != TOKEN_COMMA) break;
+        advance(p);
+    }
+    s->is_generic = true;
+    return expect(p, TOKEN_RPAREN) != nullptr;
+}
+
+// struct = ('struct' [struct_params] | 'union' ['#tagged' [IDENT]]) members
 //
 // A struct's declaration, or a union's (spec 3.19), after IDENT '::' (the
 // caller read them, and saw 'struct' or 'union'): its fields as
 // parse_members reads them, the members of the grammar (parser.h).
+//
+// A struct with parameters is generic (spec 3.23, parse_struct_params). A
+// union takes none, for now, nor does a tagged one: "a union can't take
+// parameters, for now", at the '(', the declaration given up.
 //
 // `union #tagged` declares a tagged union (spec 3.20): a name after the
 // directive is its tag's type, only a name, as an enum's integer type is
@@ -2376,6 +2608,13 @@ static Ast *parse_struct(Parser *p, Token *name) {
             s->tag_expr = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, type->pos);
             s->tag_expr->name = type->text;
         }
+    }
+    if (peek(p)->kind == TOKEN_LPAREN) {
+        if (s->is_union || s->is_tagged) {
+            diag_error(p->diag, peek(p)->pos, "a union can't take parameters, for now");
+            return nullptr;
+        }
+        if (!parse_struct_params(p, s)) return nullptr;
     }
     if (!parse_members(p, s)) return nullptr;
     if (s->is_tagged && !s->fields.count) {
@@ -2540,6 +2779,7 @@ static Ast *parse_run(Parser *p) {
 //           | IDENT '::' struct
 //           | IDENT '::' enum                                 enum or enum_flags
 //           | IDENT '::' expression ';'                       a constant
+//           | IDENT '::' proc_type ';'                        a procedure type's alias
 //           | IDENT ':' type ['=' (expression | '---')] ';'   a global variable
 //           | IDENT ':=' expression ';'                       a global variable
 //           | load                                            #load or #import
@@ -2548,9 +2788,12 @@ static Ast *parse_run(Parser *p) {
 //
 // After '::', a procedure's parameters start with '(' ')', '(' IDENT ':',
 // '(' IDENT ':=' or '(' '..'. Any other '(' begins a constant's value in
-// parentheses: N :: (1 + 2); is a constant. A global variable is written as
-// a local one; whether its value is known while compiling is the checker's
-// to say.
+// parentheses: N :: (1 + 2); is a constant. A signature that reaches its
+// ';' before any '{' or directive but #c_call is a procedure type's alias
+// (proc_type_alias_follows, spec 3.22), `Cb :: (n: int) -> int;`: a
+// constant whose value is that type, as it is in a body. A global variable
+// is written as a local one; whether its value is known while compiling is
+// the checker's to say.
 //
 // ':' or ':=' followed by a signature (`greet : () {`, `greet := () {`) is
 // a procedure's declaration with its '::' mistyped, so it's reported as
@@ -2608,7 +2851,7 @@ static Ast *parse_declaration(Parser *p) {
         return var;
     }
     if (!expect(p, TOKEN_COLON_COLON)) return nullptr;
-    if (procedure_follows(p, 0)) return parse_procedure(p, name);
+    if (procedure_follows(p, 0) && !proc_type_alias_follows(p, 0)) return parse_procedure(p, name);
     if (peek(p)->kind == TOKEN_STRUCT || peek(p)->kind == TOKEN_UNION) return parse_struct(p, name);
     if (peek(p)->kind == TOKEN_ENUM || peek(p)->kind == TOKEN_ENUM_FLAGS) return parse_enum(p, name);
     return parse_constant(p, name);
