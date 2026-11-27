@@ -7,5 +7,6 @@ type = struct Ring(int, 3)
 type = struct List(int) {
     int value;
     struct List(int) *next;
+16:	struct Pair(int, bool);
 exited normally
 !.debug_names not created by gdb

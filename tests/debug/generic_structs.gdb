@@ -6,4 +6,5 @@ whatis r
 print r.items
 print head.next.value
 ptype head
+info types Pair
 continue

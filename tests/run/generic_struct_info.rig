@@ -4,7 +4,8 @@
 // its description, a *Type_Info, read through a cast, never printed (an
 // address differs from run to run); a constant as its value, an int, a
 // string, an enum, a bool or a float. An argument that is an instance is
-// described as one. Any other struct's parameters are empty. The #run says
+// described as one. Any other struct's parameters are empty, a plain
+// struct's and an anonymous member's in an instance alike. The #run says
 // the same while compiling (spec 7.8), its output the build's. Then, in
 // main alone: an instance's layout may hold a #run that sees its
 // parameters, and a constant of an instance's type may be a #run's value.
@@ -18,6 +19,7 @@ Tag :: struct (M: Mode) { n: int; }
 Flag :: struct (F: bool) { n: int; }
 Scaled :: struct (S: float) { n: int; }
 Vec2 :: struct { x: float; y: float; }
+Holder :: struct (T: Type) { union { a: T; b: int; }; }
 
 // A buffer of N bytes, rounded up to a multiple of 8 while compiling.
 Buf :: struct (N: int) { data: [#run round_up(N)]u8; }
@@ -51,6 +53,8 @@ show :: () {
     ring := cast(*Type_Info_Struct) (cast(**Type_Info) v.value_pointer).*;
     print("{}\n", ring.name);
     print("{}\n", (cast(*Type_Info_Struct) type_info(Vec2)).parameters.count);
+    holder := cast(*Type_Info_Struct) type_info(Holder(u8));
+    print("{} {}\n", holder.parameters.count, (cast(*Type_Info_Struct) holder.members[0].type).parameters.count);
 }
 
 main :: () {

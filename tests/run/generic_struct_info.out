@@ -4,5 +4,6 @@ STRING true
 hi B true 0.5
 Ring(u8, 2)
 0
+1 0
 8
 {items = [1, 2, 3]}
