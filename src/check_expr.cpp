@@ -1619,18 +1619,25 @@ static bool check_generic_call(Checker *c, Ast_Call *call) {
     return true;
 }
 
+// The generic struct `name` names where a value goes (spec 3.23), or null:
+// looked up as a value's name is (check_lookup), so a local of the struct's
+// name hides it, and a built-in type's name never one, as it always means
+// the type (spec 3.1).
+static Ast_Struct *generic_struct_named(Checker *c, String name) {
+    Ast *decl = type_from_name(name) ? nullptr : check_lookup(c, name, nullptr);
+    if (!decl || decl->kind != AST_STRUCT || !((Ast_Struct *)decl)->is_generic) return nullptr;
+    return (Ast_Struct *)decl;
+}
+
 // The generic struct a call names as its callee (spec 3.23, 5.20), whose
 // instance, Map(string, int), it is, or null. The parser can't tell it
 // from a call of a procedure: the callee's name, never in parentheses, as
-// no type's is, is looked up as a callee's is (check_lookup), so a local of
-// the struct's name hides it.
+// no type's is, is looked up as a callee's is (generic_struct_named).
 static Ast_Struct *generic_struct_called(Checker *c, Ast *e) {
     if (e->kind != AST_CALL) return nullptr;
     Ast *callee = ((Ast_Call *)e)->callee;
     if (callee->kind != AST_NAME || ast_in_parentheses(callee)) return nullptr;
-    Ast *decl = check_lookup(c, ((Ast_Name *)callee)->name, nullptr);
-    if (!decl || decl->kind != AST_STRUCT || !((Ast_Struct *)decl)->is_generic) return nullptr;
-    return (Ast_Struct *)decl;
+    return generic_struct_named(c, ((Ast_Name *)callee)->name);
 }
 
 // A call: the callee (check_callee), then the arguments, whose own mistakes

@@ -14675,6 +14675,9 @@ TEST(struct_argument_mistakes) {
         {"main :: () { n := 4; x: Ring(int, n); }\n",
          "4:35: argument 2 of 'Ring' must be known while compiling, for 'N: int'\n"},
         {"main :: () { x: Ring(int, int); }\n", "4:27: 'int' is a type, not a value\n"},
+        // A generic struct's bare name is no type, as where a value goes.
+        {"Box :: struct (T: Type) { v: T; }\nmain :: () { x: Ring(int, Box); }\n",
+         "5:27: 'Box' is generic; write its arguments, as in Box(T)\n"},
         {"main :: () { x: Ring(int, *int); }\n", "4:27: '*int' is a type, not a value\n"},
         {"main :: () { x: Ring(int, *Ring(int, 2 + 2)); }\n", "4:27: '*Ring(int, 2 + 2)' is a type, not a value\n"},
         {"Grid :: struct (W: int, H: int, C: Type) { }\nmain :: () { x: Ring(int, *Grid(1 + 1, 3, u8)); }\n",

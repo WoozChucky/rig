@@ -1924,13 +1924,6 @@ static String struct_parameter_text(Checker *c, Ast_Param *param) {
                          STR_ARG(written_type_text(c, param->type_expr)));
 }
 
-// Whether `name`, where a value goes, names a generic struct: looked up as
-// a value's name is (check_lookup), a built-in type's name never one.
-static bool names_generic_struct(Checker *c, String name) {
-    Ast *decl = type_from_name(name) ? nullptr : check_lookup(c, name, nullptr);
-    return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic;
-}
-
 // Instance argument `arg`, as written (parse_instance_argument), as the
 // expression it is in a call read as an instance: an expression as it is,
 // a bare name as a name, a name with arguments that names no generic
@@ -1962,7 +1955,7 @@ static Ast *call_argument(Checker *c, Ast *arg) {
         name->name = written->name;
         return name;
     }
-    if (written->kind == AST_TYPE_INSTANCE && !names_generic_struct(c, written->name)) {
+    if (written->kind == AST_TYPE_INSTANCE && !generic_struct_named(c, written->name)) {
         return instance_as_call(c, written);
     }
     Ast_Type_Value *value = ast_new<Ast_Type_Value>(c->arena, AST_TYPE_VALUE, written->pos);
@@ -1983,18 +1976,20 @@ static Ast *call_argument(Checker *c, Ast *arg) {
 // - A constant parameter takes an expression, or a bare name the parser
 //   read as a type, which is the name of a value here, looked up and
 //   checked as one, at its place: "'int' is a type, not a value" when it
-//   names a type, as a type's name where a value goes is. A name with
-//   arguments that names no generic struct is a call, twice(2), checked as
-//   any call is, its callee and its arguments (instance_as_call: "unknown
-//   identifier 'Nope'", "'Mode' isn't a procedure, so it can't be called"),
-//   and which, calling a procedure, is never known while compiling:
-//   "argument 2 of 'Ring' must be known while compiling, for 'N: int'", at
-//   it. Any other written type, a generic struct's instance too, is "'*int'
-//   is a type, not a value", at it. The value, its own check saying no
-//   mistake, converts to the parameter's type and must be known while
-//   compiling (bake_constant). It's checked where the instance is written,
-//   as an array's count is (a local there is in sight, and no constant),
-//   needing no context, as a count doesn't (checker.cpp's
+//   names a type, as a type's name where a value goes is, and "'Box' is
+//   generic; write its arguments, as in Box(T)" when it names a generic
+//   struct, which is no type (spec 3.23), as where a value goes. A name
+//   with arguments that names no generic struct is a call, twice(2),
+//   checked as any call is, its callee and its arguments (instance_as_call:
+//   "unknown identifier 'Nope'", "'Mode' isn't a procedure, so it can't be
+//   called"), and which, calling a procedure, is never known while
+//   compiling: "argument 2 of 'Ring' must be known while compiling, for 'N:
+//   int'", at it. Any other written type, a generic struct's instance too,
+//   is "'*int' is a type, not a value", at it. The value, its own check
+//   saying no mistake, converts to the parameter's type and must be known
+//   while compiling (bake_constant). It's checked where the instance is
+//   written, as an array's count is (a local there is in sight, and no
+//   constant), needing no context, as a count doesn't (checker.cpp's
 //   check_array_count).
 static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 index, Generic_Binding *b) {
     Ast_Param *param = generic->params[index];
@@ -2014,11 +2009,14 @@ static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 
     }
     if (is_written_type(arg)) {
         Ast_Type *written = (Ast_Type *)arg;
-        if (written->kind == AST_TYPE_INSTANCE && !names_generic_struct(c, written->name)) {
+        if (written->kind == AST_TYPE_INSTANCE && !generic_struct_named(c, written->name)) {
             arg = instance_as_call(c, written);  // checked below, as any call
         } else if (written->kind != AST_TYPE_NAME) {
             diag_error(c->diag, written->pos, "'" STR_FMT "' is a type, not a value",
                        STR_ARG(written_type_text(c, written)));
+            return false;
+        } else if (Ast_Struct *named = generic_struct_named(c, written->name)) {
+            report_generic_struct(c, named, written->pos);
             return false;
         } else {
             Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
