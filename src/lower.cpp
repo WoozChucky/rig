@@ -4215,12 +4215,12 @@ static void describe_enum_members(Lowering *l, u8 *bytes, Array<Ir_Reloc> *reloc
 // name and members, whether it's a union (an anonymous member's type has
 // an empty name, as its member has), and an instance's parameters
 // (describe_parameters), an instance's name being its own, Map(string,
-// int); a tagged union's name, its tag
-// type's description, the tag's offset (0) and its members, as a struct's;
-// a procedure type's parameters' and results' descriptions (a ..T
-// parameter's []T), #c_call and whether its last parameter is a ..T; an
-// enum's name, its integer type's description, whether it's an
-// enum_flags, and its members' names and values. Its names' str.N and its
+// int); a tagged union's name, its tag type's description, the tag's
+// offset (0) and its members, as a struct's; a procedure type's
+// parameters' and results' descriptions (a ..T parameter's []T), #c_call
+// and whether its last parameter is a ..T; an enum's name, its integer
+// type's description, whether it's an enum_flags, and its members' names
+// and values. Its names' str.N and its
 // arrays' globals are made first; the descriptions it points at are asked
 // for through type_info_global, which only queues them. The relocations go
 // in increasing offset, as the backend wants. The bytes are put in the
@@ -5322,9 +5322,9 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     l->no_case = -1;
     l->block = -1;
     // The tree's context, a [..]T's allocator type and Preload's Type_Info,
-    // as ir_lower takes them; none without a tree. Not __save_command_line: main, which takes
-    // C's argc and argv, never runs while compiling (spec 7.8), so a call
-    // of __save_command_line here is an ordinary call.
+    // as ir_lower takes them; none without a tree. Not __save_command_line:
+    // main, which takes C's argc and argv, never runs while compiling (spec
+    // 7.8), so a call of __save_command_line here is an ordinary call.
     if (file) {
         l->context_type = file->context_type;
         l->default_context = file->default_context;

@@ -215,11 +215,11 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // struct's name's is. In an instance of a generic procedure, a type
 // parameter's name is the type it's bound to (spec 7.11, Ast_Alias), and a
 // type alias's name is the type it names, wherever (spec 3.22); one that
-// failed, its mistake said, says nothing more where it's used. Type,
-// the type of types (spec 5.20), is written nowhere it resolves (a $T:
-// Type parameter's type never is, check_generic.cpp's takes_a_type):
-// "'Type' only names types while compiling; a *Type_Info describes one at
-// run time".
+// failed, its mistake said, says nothing more where it's used. Type, the
+// type of types (spec 5.20), is written nowhere it resolves (a $T: Type
+// parameter's type never is, check_generic.cpp's takes_a_type): "'Type'
+// only names types while compiling; a *Type_Info describes one at run
+// time".
 //
 // behind_pointer: the type is what a pointer points at, or a view's or a
 // resizable array's elements, which lie elsewhere: a struct named right
@@ -466,14 +466,14 @@ static bool may_call_instance(Checker *c, Ast *value) {
 // Whether the top-level constant `constant` may be an alias (spec 3.22),
 // told by lookup alone, nothing worked out: its value, past any '*', is a
 // type written as a value, a call of a generic struct or of none, its
-// instance (spec 3.23, may_call_instance), or a name that is a struct's, an enum's, a built-in type's,
-// none's (an unknown identifier, said when the constant is
-// worked out), or a constant's that is an alias, is under way (a circle,
-// which working it out says), had its own mistake said, or may be an alias
-// in turn. A name of a variable, a procedure or a constant that is no alias
-// makes it none. Its value is looked up at the top level only, as
-// resolve_global checks it, no scopes open. A chain longer than the top
-// level has names goes round a circle, which working it out says.
+// instance (spec 3.23, may_call_instance), or a name that is a struct's,
+// an enum's, a built-in type's, none's (an unknown identifier, said when
+// the constant is worked out), or a constant's that is an alias, is under
+// way (a circle, which working it out says), had its own mistake said, or
+// may be an alias in turn. A name of a variable, a procedure or a constant
+// that is no alias makes it none. Its value is looked up at the top level
+// only, as resolve_global checks it, no scopes open. A chain longer than
+// the top level has names goes round a circle, which working it out says.
 static bool may_be_alias(Checker *c, Ast_Const *constant) {
     for (s64 steps = 0; steps <= c->top_level.count; steps++) {
         // A call of anything but a generic struct is a value, worked out
@@ -950,14 +950,15 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
 // alias's signature) makes the constant an alias (spec 3.22): the same
 // type under a second name, checked as a type value (check_type_value, so
 // a struct named there needs no layout), kept in an Ast_Alias at the
-// constant's name (Ast_Const.alias), which every lookup
-// finds in the constant's place (find_name, check_lookup), so it is a type
-// wherever #226's instance bindings are. The constant's type is Type, and
-// it has no value at run time: nothing lowers it. A built-in type's name
-// always means the built-in type (resolve_written looks there first), so
-// an alias of that name could never be named: "'u8' is a built-in type",
-// at its name, and it is none. A name declared nowhere names no type: it's
-// checked as a value, "unknown identifier 'Missing'".
+// constant's name (Ast_Const.alias), which every lookup finds in the
+// constant's place (find_name, check_lookup), so it is a type wherever a
+// generic procedure instance's type parameter is (spec 7.11, an
+// Ast_Alias too). The constant's type is Type, and it has no value at run
+// time: nothing lowers it. A built-in type's name always means the
+// built-in type (resolve_written looks there first), so an alias named as
+// one could never be named: "'u8' is a built-in type", at its name, and it
+// is none. A name declared nowhere names no type: it's checked as a value,
+// "unknown identifier 'Missing'".
 static void check_const_value(Checker *c, Ast_Const *constant) {
     Ast *value = constant->value;
     if (expr_names_type(c, value)) {

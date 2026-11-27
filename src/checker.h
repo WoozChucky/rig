@@ -15,7 +15,8 @@
 // type and the member's value, as a constant does. checker.cpp checks
 // declarations and statements, check_expr.cpp expressions, check_run.cpp
 // #run and what it reaches, check_generic.cpp generic procedures'
-// instances; check.h is what they share.
+// instances, and generic structs' own checks and instances; check.h is
+// what they share.
 //
 // The rules (spec 6.1, 6.4 and 6.5, which record the calls made here):
 //
@@ -27,8 +28,9 @@
 // - A struct's name is a type, and so is a union's, an enum's or a type
 //   alias's (below): used as a value, it's "'Vec2' is a type, not a value"
 //   (a generic struct's name alone is no type: "'Map' is generic; write
-//   its arguments, as in Map(K, V)", Generic structs below). A name declared as anything else, written where a type goes, is "'foo'
-//   is not a type"; a name declared nowhere, "unknown type 'foo'". A
+//   its arguments, as in Map(K, V)", Generic structs below). A name
+//   declared as anything else, written where a type goes, is "'foo' is
+//   not a type"; a name declared nowhere, "unknown type 'foo'". A
 //   built-in type's name always means the built-in type, so a struct, a
 //   union, an enum or an alias can't take one: "'u8' is a built-in type",
 //   at its name.
@@ -191,17 +193,18 @@
 //   null; a procedure (OP :: add;), as its own type: "'add' is a
 //   '(int, int) -> int', so a constant can't name it as a '(int) -> int'";
 //   or data: a string, or a struct or an array whose fields and elements
-//   are such values, nested to any depth (constant_data). Anything else is
-//   "the value of constant 'N' isn't known while compiling", at the first
-//   value inside e that isn't. A pointer, in data or alone, is null or a
-//   string literal's address: any cast (from a number, a procedure or a
-//   pointer variable), a procedure or a type's description (type_info(T))
-//   is "a constant's pointer can only be null or a string literal's
-//   address". A value converted to Any, or cast to one, is the same error:
-//   the Any holds its address. No part of a constant written in the source
-//   is a view, which would see memory of its own: "a constant can't hold a
-//   view; only a string or an array can be one" (a #run's baked view is the
-//   exception, below).
+//   are such values, nested to any depth (constant_data). A value that
+//   names a type makes N a type alias instead (Type aliases, below).
+//   Anything else is "the value of constant 'N' isn't known while
+//   compiling", at the first value inside e that isn't. A pointer, in data
+//   or alone, is null or a string literal's address: any cast (from a
+//   number, a procedure or a pointer variable), a procedure or a type's
+//   description (type_info(T)) is "a constant's pointer can only be null or
+//   a string literal's address". A value converted to Any, or cast to one,
+//   is the same error: the Any holds its address. No part of a constant
+//   written in the source is a view, which would see memory of its own: "a
+//   constant can't hold a view; only a string or an array can be one" (a
+//   #run's baked view is the exception, below).
 // - The condition of if and while is a bool: "the condition of 'if' must
 //   be a bool, not 'int'".
 // - for a..b: the ends are integers meeting as an arithmetic operator's
@@ -454,7 +457,8 @@
 //   constant holding it, or a field or an element of one, which the global
 //   gets a copy of, its own to change.
 // - A top-level constant follows a local one's rules: a number, a bool,
-//   null, a procedure or data (`N :: Vec2.{1, 2};`).
+//   null, a procedure or data (`N :: Vec2.{1, 2};`), or a type, which
+//   makes it an alias (Type aliases, below).
 // - Both are checked where they're first needed (in another's value, or in
 //   source order), so their order doesn't matter: in `A :: B + 1; B :: 2;`
 //   A is 3. A value that needs itself, directly or through others, is "'A'
@@ -1460,19 +1464,24 @@
 //   may_be_alias), out first (resolve_global), as check_lookup does, so an
 //   alias can be used before its declaration, in a struct's field or a
 //   global's type; any other, `C :: size_of(S);`, `C :: f(1);` with f a
-//   procedure, or `C :: D;` with D no alias, is "'C' is not a type"
-//   there, its value not worked out, so no circle. A local one is declared in order, as
-//   any local constant. A circle is a constant's, "'A' is defined in terms
-//   of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias dropped.
+//   procedure, or `C :: D;` with D no alias, is "'C' is not a type" there,
+//   its value not worked out, so no circle. A local one is declared in
+//   order, as any local constant. A circle is a constant's, "'A' is
+//   defined in terms of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias
+//   dropped. An alias whose value needs an instance of a generic struct
+//   whose field names the alias, `Ptr :: *Node(int);` with `kids:
+//   [..]Ptr;`, is none: the generic's own check passes over the alias
+//   being worked out (check_generic.cpp's alias_under_way).
 // - An alias whose check failed, or that is in a circle, has no type, its
 //   mistake said once: its uses say nothing more (resolve_written,
 //   check_addressable). Nor do those of one naming a struct found in a
 //   circle or too big once every struct is laid out: what it names is made
 //   again then (check's made_again), null.
-// - Refused: an alias of a built-in type's name, which resolve_written
-//   would never find, "'u8' is a built-in type", at its name, at the top
-//   level and in a body; `X :: Type;`, as any type value of Type; a value
-//   naming nothing is checked as a value, "unknown identifier 'Missing'".
+// - Refused: an alias named as a built-in type, `u8 :: s32;`, which
+//   resolve_written would never find, "'u8' is a built-in type", at its
+//   name, at the top level and in a body; `X :: Type;`, as any type value
+//   of Type; a value naming nothing is checked as a value, "unknown
+//   identifier 'Missing'".
 // - What lowering may rely on: an alias has no code. Lowering records none
 //   for a debugger (lower.cpp's is_shown_constant, lower_statement), adds no
 //   debug type for one, and a #run's walk takes one as nothing to reach
@@ -1487,17 +1496,18 @@
 //   (the parser says so).
 // - Its own check (check_generic.cpp's check_generic_struct), in check()'s
 //   pass over the declarations in its turn, or earlier by its first use,
-//   at the top level and with no chain: a parameter `NAME: Type` is a type
+//   at the top level and with no chain, says once, instantiated or not,
+//   what its declaration says that doesn't depend on its arguments. First
+//   its parameters: one named as an earlier one is "'T' is already
+//   declared at PATH:L:C", at the later, and one named as a built-in type
+//   "'int' is a built-in type"; a parameter `NAME: Type` is a type
 //   parameter; any other's type is resolved and must be a number's, a
 //   bool's, an enum's or string, kept in the parameter's Ast.type ("a
 //   struct's parameter is a type, 'T: Type', or a constant of a number,
-//   bool, enum or string type, not '[]int'", at the type). Then what its
-//   declaration says that doesn't depend on its arguments, said once here,
-//   instantiated or not: a parameter named as an earlier one, and a field
-//   named as a parameter or as an earlier field across its braces, "'T' is
-//   already declared at PATH:L:C", at the later; a parameter named as a
-//   built-in type, "'int' is a built-in type"; its fields' written types,
-//   the parameters taken as types and constants still to be known
+//   bool, enum or string type, not '[]int'", at the type). Then its
+//   fields: one named as a parameter or as an earlier field across its
+//   braces is "'T' is already declared at PATH:L:C"; and their written
+//   types, the parameters taken as types and constants still to be known
 //   (check_generic_fields, a name at a time with at_generic_type_name:
 //   "unknown type 'Nope'", "'N' is not a type", "'void' is only a
 //   pointer's target, as in *void"; an instance's name, its count and a
@@ -1520,15 +1530,17 @@
 //   "argument 1 of 'Map' must be a type, for 'K: Type'", at it. A constant
 //   parameter takes an expression, or a bare name the parser read as a
 //   type, checked as the value it names; one naming a type is "'int' is a
-//   type, not a value", any other written type "'*int' is a type, not a
-//   value", but a name with arguments that names no generic struct, which
-//   is a call, checked as one (twice(2): never known while compiling;
-//   Nope(1), Mode(1): what the call's callee is; twice(nope): what its
-//   arguments' mistakes are); the value converts to the parameter's type as an argument does
-//   ("argument 2 of 'Ring' has type 'string', which can't be converted to
-//   'int'", "300 doesn't fit in 'u8'") and must be known while compiling
-//   ("argument 2 of 'Ring' must be known while compiling, for 'N: int'"),
-//   checked where the instance is written, as an array's count is.
+//   type, not a value", one naming a generic struct "'Box' is generic;
+//   write its arguments, as in Box(T)", any other written type "'*int' is
+//   a type, not a value", but a name with arguments that names no generic
+//   struct, which is a call, checked as one (twice(2): never known while
+//   compiling; Nope(1), Mode(1): what the call's callee is; twice(nope):
+//   what its arguments' mistakes are); the value converts to the
+//   parameter's type as an argument does ("argument 2 of 'Ring' has type
+//   'string', which can't be converted to 'int'", "300 doesn't fit in
+//   'u8'") and must be known while compiling ("argument 2 of 'Ring' must
+//   be known while compiling, for 'N: int'"), checked where the instance is
+//   written, as an array's count is.
 // - Where a value goes (spec 5.20) an instance is a call, its callee a name
 //   not in parentheses whose lookup finds a generic struct
 //   (check_expr.cpp's generic_struct_called): it names a type
@@ -1538,19 +1550,20 @@
 //   alias's value take one, `Int_Pair :: Pair(int, int);`. Anywhere else
 //   the call is "'Pair(string, int)' is a type, not a value", at its name,
 //   once the instance is worked out, its count's or its arguments' mistakes
-//   said instead (check_call, before any callee's check). Before a literal's '.', the
-//   parser makes the call the literal's AST_TYPE_INSTANCE,
-//   `Pair(string, int).{"ann", 36}` (parser.cpp's parse_postfix). The
-//   generic's name alone where a value goes is the generic message too
-//   (check_named, name_is_place); a plain struct's call keeps "'Vec2' isn't
-//   a procedure, so it can't be called". One set of arguments is one type
-//   however it's written.
+//   said instead (check_call, before any callee's check). Before a
+//   literal's '.', the parser makes the call the literal's
+//   AST_TYPE_INSTANCE, `Pair(string, int).{"ann", 36}` (parser.cpp's
+//   parse_postfix). The generic's name alone where a value goes is the
+//   generic message too (check_named, name_is_place); a plain struct's
+//   call keeps "'Vec2' isn't a procedure, so it can't be called". One set
+//   of arguments is one type however it's written.
 // - Each distinct set of bindings (a type by its Type *, a constant by its
-//   type and value, a string's by its bytes, as for a procedure's) makes one
-//   instance, program-wide, an Ast_Instance whose generic_struct and
-//   structure are set: the generic's tree copied (ast_clone), its
-//   bindings an Ast_Alias per type parameter and an Ast_Const per constant
-//   one (make_bindings), named Map(string, int), each binding's value as the
+//   type and value, a string's by its bytes, a float's by its bits, as for
+//   a procedure's: same_binding) makes one instance, program-wide, an
+//   Ast_Instance whose generic_struct and structure are set: the generic's
+//   tree copied (ast_clone), its bindings an Ast_Alias per type parameter
+//   and an Ast_Const per constant one (make_bindings), named
+//   Map(string, int), each binding's value as the
 //   program would write it (Ring(float32, 1), Labeled("hi"), Tag(Mode.B)),
 //   its copy named so, with a Type of its own of that name
 //   (new_struct_type), kept in the generic's cache (Ast_Struct.instances)
@@ -1620,13 +1633,15 @@
 //   $N)"), said at the generic. The structs a signature names are checked
 //   before its mistakes are counted, so theirs stay their own
 //   (check_signature_structs), but a generic naming one whose own check
-//   said a mistake makes no instance, whichever is declared first. In a
-//   generic's body, a name there is a value's or a call's. A name
+//   said a mistake makes no instance, whichever is declared first. A name
 //   used before the $ that declares it, in an instance's argument too, is
-//   "'K' is used before '$K' declares it". In a generic's body an
-//   instance's name declared nowhere is "unknown type 'Mapp'". A generic
-//   struct's own check leaves its fields' instances' arguments and names
-//   to each instance still (add_type_name_step).
+//   "'K' is used before '$K' declares it". In a generic's body, a name
+//   that is all of an instance's argument where its struct takes a
+//   constant is a value's, Ring(T, nope)'s nope, or a call's, Ring(T,
+//   nope(2))'s, and an instance's name declared nowhere is "unknown type
+//   'Mapp'" (check_generic.cpp's at_body_name). A generic struct's own
+//   check leaves its fields' instances' arguments and names to each
+//   instance still (add_type_name_step).
 // - What lowering may rely on: no generic struct is reached from any
 //   type; an instance is a struct as any other, laid out, its late fields
 //   made, its Type named as the instance. Nothing goes through the

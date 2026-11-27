@@ -603,14 +603,15 @@ void enter_instance(Checker *c, Ast_Instance *inst);
 
 // A generic struct's own check (spec 3.23), once, in check()'s pass over
 // the declarations in its turn or earlier by its first use, at the top
-// level, its mistakes with no chain: each parameter `NAME: Type` is a type
-// parameter; any other's type is resolved, and must be a number's, a
-// bool's, an enum's or string, kept in the parameter's Ast.type for each
-// instance's argument to convert to: "a struct's parameter is a type, 'T:
-// Type', or a constant of a number, bool, enum or string type, not
-// '[]int'", at the type. Then its parameters' and fields' names, each
-// declared once ("'T' is already declared at PATH:L:C"), no parameter a
-// built-in type's ("'int' is a built-in type"), and its fields' types, the
+// level, its mistakes with no chain. First its parameters' names, each
+// declared once ("'T' is already declared at PATH:L:C"), none a built-in
+// type's ("'int' is a built-in type"); then their types: each parameter
+// `NAME: Type` is a type parameter, and any other's type is resolved, and
+// must be a number's, a bool's, an enum's or string, kept in the
+// parameter's Ast.type for each instance's argument to convert to: "a
+// struct's parameter is a type, 'T: Type', or a constant of a number,
+// bool, enum or string type, not '[]int'", at the type. Then its fields'
+// names, each declared once, none a parameter's, and their types, the
 // parameters taken as types and constants still to be known ("unknown type
 // 'Nope'", "'N' is not a type"). One that said a mistake makes no instance
 // (Ast_Struct.had_errors): its uses have no type and say nothing more. An

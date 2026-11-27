@@ -474,16 +474,15 @@ static bool at_generic_instance(Generic_Type_Check *check, Ast_Type *written) {
 // generic struct's field (check_generic_fields), its type parameters taken
 // as types still to be known: every other type name resolved as where it's
 // written anywhere (checker.cpp's resolve_written, behind a pointer, so a
-// struct's layout isn't needed), and void refused
-// but as a pointer's target (`place.pointee`), as resolve_type and
-// resolve_element refuse it, so "unknown type 'Foo'" and "'void' is only a
-// pointer's target, as in *void" are said once, here, not once per
-// instance. Nothing is written into the generic's nodes, which every
-// instance copies unchecked: an array's count is an expression, checked by
-// writing its types into it, so it's each instance's to check, its
-// mistakes said once per instance, and nothing in it is looked at here. A
-// constant parameter's name is no type: "'N' is not a type", as
-// resolve_written says of a constant's.
+// struct's layout isn't needed), and void refused but as a pointer's
+// target (`place.pointee`), as resolve_type and resolve_element refuse it,
+// so "unknown type 'Foo'" and "'void' is only a pointer's target, as in
+// *void" are said once, here, not once per instance. Nothing is written
+// into the generic's nodes, which every instance copies unchecked: an
+// array's count is an expression, checked by writing its types into it, so
+// it's each instance's to check, its mistakes said once per instance, and
+// nothing in it is looked at here. A constant parameter's name is no type:
+// "'N' is not a type", as resolve_written says of a constant's.
 //
 // A name that may be an alias is worked out first, as find_name works it
 // out: what that says is the alias's own mistake, or an instance's that its
@@ -1007,7 +1006,8 @@ static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Bin
                 if (!match_type(c, (Ast_Type *)arg, aliased, bindings, lost)) return false;
                 continue;
             }
-            Generic_Binding *b = arg->kind == AST_TYPE_NAME ? binding_named(bindings, ((Ast_Type *)arg)->name) : nullptr;
+            Generic_Binding *b =
+                arg->kind == AST_TYPE_NAME ? binding_named(bindings, ((Ast_Type *)arg)->name) : nullptr;
             if (!b || b->is_type || is_bound(b)) continue;
             Ast_Const *constant = (Ast_Const *)bound;
             if (constant->type != b->type) return false;

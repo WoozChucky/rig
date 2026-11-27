@@ -442,7 +442,9 @@ struct Ast_Struct : Ast {
     Ast_Instance *instance;     // an instance's copy, and each anonymous member's struct in it: its
                                 // record, whose bindings its fields see; null otherwise. Only the copy
                                 // itself is its record's `structure`
-    bool had_errors;            // a generic struct's own check said a mistake: it makes no instance
+    bool had_errors;            // a generic struct's own check said a mistake: it makes no instance from
+                                // then on, and one made before it, through an alias a field's type
+                                // names, is never laid out (check_generic.cpp's instance_may_be_laid_out)
     Generic_Fields *field_check;  // a generic struct's: what's left of its own check of its fields while
                                   // it's under way (check_generic.cpp's check_generic_fields); null
                                   // otherwise
@@ -948,8 +950,8 @@ struct Ast_File {
     String load_failure;    // why the program couldn't be loaded at all (above): Preload not found or not read;
                             // empty when it was
     // Preload's, found by the checker (checker.cpp's declare_top_level), spec
-    // 7.10, 3.17 and 7.2; all null without Preload, whose programs have no
-    // context, no resizable arrays and no caller locations:
+    // 7.10, 3.17, 7.2 and 3.16; all null without Preload, whose programs have
+    // no context, no resizable arrays, no caller locations and no Type_Info:
     Type *context_type;        // Preload's Context struct: what context is, and push_context takes
     Ast_Var *default_context;  // Preload's global default_context: main's and a #run's, and the one a
                                // #c_call procedure pushes for itself
@@ -1040,8 +1042,9 @@ T *ast_new(Arena *a, Ast_Kind kind, Position pos) {
 // fills is left zero (types, constants, declarations found, resolve states,
 // an #if's decision, ...), so the copy starts unchecked, as the generic's
 // own nodes, never checked, are. A body's block points at its copied
-// procedure. A node only the top level has (an enum, a #load), a struct
-// but as itself, is never in one.
+// procedure. A node only the top level has (an enum, a #load) is never
+// in a procedure or a struct, so it's never copied; a struct is, but only
+// as the node copied itself, with its anonymous members' structs.
 Ast *ast_clone(Arena *a, Ast *node);
 
 // The binary operator a compound assignment applies: TOKEN_PLUS for

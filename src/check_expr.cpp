@@ -2481,23 +2481,24 @@ static Type *check_tag_test(Ast_Binary *b, Type *t, Ast *value, s32 member) {
 }
 
 // Types where a value goes (spec 5.20). A type written as a value, []int or
-// #type (int) -> int, is an Ast_Type_Value; a name and *X are a name and an
-// address as written, and a generic struct's instance, Map(string, int), a
-// call of it (spec 3.23), and whether they name a type is the name's
-// lookup's to say: a struct's, an enum's, an instance's type parameter's
-// (spec 7.11) or a type alias's (spec 3.22), a generic struct's as a
-// call's callee (generic_struct_called), or none while the name is a
-// built-in type's, so a local `int := 5;` hides the type int, as it hides
-// any top-level name (spec 4.7). A type in parentheses is no type, as
-// nowhere else is one: (int) is a value. Only the places that take a type
-// check one as such (check_type_value), for now == and != between two
-// types (check_binary), a $T: Type parameter's argument
-// (check_generic_call), a generic struct's type argument (check_generic.cpp's
-// bind_struct_argument), and a constant's value, which makes it an alias
-// (checker.cpp's check_const_value). A type value is never a value
-// at run time: it has type Type, never a constant (Ast.is_constant stays
-// false, so nothing folds or lowers it), the type it denotes kept in
-// Ast.constant's bits for type_value.
+// #type (int) -> int, is an Ast_Type_Value. A name and *X are a name and an
+// address as written, and a generic struct's instance, Map(string, int), is
+// a call of it (spec 3.23): whether each names a type is the name's
+// lookup's to say. A name is a type when it's a struct's, an enum's, an
+// instance's type parameter's (spec 7.11) or a type alias's (spec 3.22),
+// and a call when its callee's is a generic struct's
+// (generic_struct_called); a built-in type's name is the type while the
+// lookup finds nothing of that name, so a local `int := 5;` hides the type
+// int, as it hides any top-level name (spec 4.7). A type in parentheses is
+// no type, as nowhere else is one: (int) is a value. Only the places that
+// take a type check one as such (check_type_value), for now == and !=
+// between two types (check_binary), a $T: Type parameter's argument
+// (check_generic_call), a generic struct's type argument
+// (check_generic.cpp's bind_struct_argument), and a constant's value,
+// which makes it an alias (checker.cpp's check_const_value). A type value
+// is never a value at run time: it has type Type, never a constant
+// (Ast.is_constant stays false, so nothing folds or lowers it), the type
+// it denotes kept in Ast.constant's bits for type_value.
 
 bool written_as_type(Ast *e) {
     // A type is never in parentheses, as a literal's isn't ((Vec2).{1}):
@@ -3468,9 +3469,9 @@ static bool declares_name(Ast_Struct *s, String name) {
 // finds it: among a struct instance's bindings, whose parameters hide the
 // top level's names (spec 3.23), else at the top level. A using field whose
 // type is written any other way, or names no struct declared or bound (an
-// error, a builtin type, a pointer bound), may: its layout says what it is. Each struct is followed once (`seen`), which
-// ends a cycle of using fields. Only names are read, so nothing is laid out
-// or made here.
+// error, a builtin type, a pointer bound), may: its layout says what it
+// is. Each struct is followed once (`seen`), which ends a cycle of using
+// fields. Only names are read, so nothing is laid out or made here.
 static bool may_hold_name(Checker *c, Ast_Struct *s, String name, Array<Ast_Struct *> *seen) {
     for (s64 i = 0; i < seen->count; i++) {
         if ((*seen)[i] == s) return false;

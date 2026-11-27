@@ -14567,11 +14567,12 @@ TEST(struct_instances_see_only_their_bindings) {
     // level's names (a struct T, a constant N), and nothing of the
     // procedure instance that uses it: make_box's Box(u8) is the one Box(u8)
     // whatever its T. An argument naming a constant is that constant, in an
-    // alias's value too (R, the one Ring(int, 3)). Leak(u8), first laid out inside make_box's instances, finds the top
-    // level's T, not the T each binds: one instance, 16 bytes. A using
-    // field of a parameter's type is the struct bound, not the top level's
-    // T, wherever a using walk looks for a name: through the instance, a
-    // pointer to it and a using parameter.
+    // alias's value too (R, the one Ring(int, 3)). Leak(u8), first laid out
+    // inside make_box's instances, finds the top level's T, not the T each
+    // binds: one instance, 16 bytes. A using field of a parameter's type is
+    // the struct bound, not the top level's T, wherever a using walk looks
+    // for a name: through the instance, a pointer to it and a using
+    // parameter.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a, with_generic_structs(&a, "T :: struct { g: int; }\n"
