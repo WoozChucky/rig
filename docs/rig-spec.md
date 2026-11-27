@@ -4370,7 +4370,7 @@ example.rig:5:8: error: 'Box' refused T = string: no strings in a box
 
 **Types whose layout is under way.** A block holds a type as a handle, which it compares and assigns without looking inside, so it may be given a type still being laid out: with `Wrap :: struct (T: Type) #modify { return T != bool; } { p: *T; }`, `Node :: struct { v: int; w: Wrap(Node); }` is laid out as without the block, 16 bytes, though `Node`'s layout needs `Wrap(Node)`, and so its block's run, before it is done. Only `type_info` looks inside a type: a block that takes `type_info` of a `Type` value, anywhere in it, has each type it is given described, and so laid out (section 3.16), before it runs. Given a `Node` being laid out, that is a circle: with `return type_info(T).size > 0;` as `Wrap`'s block, `Node` is `'Node' is defined in terms of itself`, at its name, followed by the line of the instance whose block needed the layout, `    in 'Wrap' with T = Node, used at PATH:L:C`.
 
-**In a `#run`, type information and the debugger.** A use in a `#run`'s code, or in code a `#run` reaches, gives the block its set as any use does, and runs it only when no use gave that set before; the `#run` then calls or holds the instance of the bindings the block left, and its value is baked as any is (section 7.8): `R :: #run make_box();`, for a `make_box :: () -> Box(u8)` returning `.{9}`, is a `Box(int)` holding 9. An instance's description (section 3.16) is its final one: `type_info(Box(u8))` describes `Box(int)`, named `Box(int)`, its parameter an `Any` of `int`'s description, in the program and in a `#run` alike. A block that inspects the type it is given reads the same descriptions: `Fields` below takes only a struct of two fields. The program has no code of the block's, so a debugger never stops in it, and sees only the instances, named by their final bindings, in symbols, frames and debug types (section 10.7): `widen(cast(u8) 3)` and `widen(4)` stop in the one `widen(T = int)`, and a `Box(u8)` shows as a `Box(int)`.
+**In a `#run`, type information and the debugger.** A use in a `#run`'s code, or in code a `#run` reaches, gives the block its set as any use does, and runs it only when no use gave that set before; the `#run` then calls or holds the instance of the bindings the block left, and its value is baked as any is (section 7.8): `R :: #run make_box();`, for a `make_box :: () -> Box(u8)` returning `.{300}`, is a `Box(int)` holding 300, which no `u8` holds. An instance's description (section 3.16) is its final one: `type_info(Box(u8))` describes `Box(int)`, named `Box(int)`, its parameter an `Any` of `int`'s description, in the program and in a `#run` alike. A block that inspects the type it is given reads the same descriptions: `Fields` below takes only a struct of two fields. The program has no code of the block's, so a debugger never stops in it, and sees only the instances, named by their final bindings, in symbols, frames and debug types (section 10.7): `widen(cast(u8) 3)` and `widen(4)` stop in the one `widen(T = int)`, and a `Box(u8)` shows as a `Box(int)`.
 
 ```rig
 #import "Basic";
@@ -4386,7 +4386,7 @@ Fields :: struct (T: Type) #modify {
 
 Vec2 :: struct { x: float; y: float; }
 
-make_box :: () -> Box(u8) { return .{9}; }
+make_box :: () -> Box(u8) { return .{300}; }
 
 R :: #run make_box();
 
@@ -4399,7 +4399,7 @@ main :: () {
 
 ```text
 Box(int) true
-8 {v = 9}
+8 {v = 300}
 ```
 
 ## 8. Runtime checks
