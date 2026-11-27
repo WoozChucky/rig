@@ -4153,9 +4153,10 @@ static bool holds_own_mistake(Diagnostics *d, Array<Ast_Const *> note_of, Ast_Co
 // own (check_generic_names), may be. Whether X has a mistake of its own is
 // worked out once for each instance its notes are said in
 // (holds_own_mistake), not for each note, and the notes are withdrawn
-// together, in one pass (diag_withdraw); nothing sorts the messages before
-// (the driver prints them only once check() is done). Frees the list.
-// Returns how many of the notes it withdrew were said before check() began,
+// together, in one pass (diag_withdraw); nothing sorts the messages before:
+// the driver prints them once check() is done, and a #run's exit() before
+// that prints them only after calling this (withdraw_at_exit). Frees the
+// list. Returns how many notes it withdrew were said before check() began,
 // index < said_before: a decider's, which check()'s return leaves out.
 static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
     Ast_File *file = c->file;
@@ -4205,6 +4206,16 @@ static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
     return withdrawn_before;
 }
 
+// Diagnostics.at_exit while check() runs. A #run's code that calls C's
+// exit() ends the process inside check(), and the messages found by then
+// are printed as it ends (diag_print_at_exit): the notes that repeat a
+// constant's own mistake are withdrawn first, as check()'s end would, from
+// the state reached by then. A constant not worked out yet has said no
+// mistake of its own, so its notes stay.
+static void withdraw_at_exit(void *checker) {
+    withdraw_repeated_not_a_type((Checker *)checker, 0);
+}
+
 bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     s64 errors_before = d->error_count;
     s64 said_before = d->messages.count;  // the messages said before, a decider's among them
@@ -4214,6 +4225,8 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     c.world = world ? world : compile_time_new(d);
     c.file = file;
     c.lost_a_file = file->lost_a_file;
+    d->at_exit = withdraw_at_exit;
+    d->at_exit_data = &c;
 
     // First every name (declare_top_level), saying what's wrong with them.
     Array<Ast *> declarations = ast_declarations(file);
@@ -4360,6 +4373,8 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // said was counted in errors_before, so it's added back: check() says
     // whether it said an error of its own.
     s64 withdrawn_before = withdraw_repeated_not_a_type(&c, said_before);
+    d->at_exit = nullptr;
+    d->at_exit_data = nullptr;
     free_checker_fields(&c);
     if (!world) compile_time_free(c.world);
     return d->error_count + withdrawn_before == errors_before;

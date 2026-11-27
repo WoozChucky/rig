@@ -1004,7 +1004,8 @@ struct Ast_File {
     // written, in the order said (Constant_Not_A_Type): kept on the tree,
     // not the Checker, so a decider's notes (a struct a top-level #if's
     // condition lays out) wait for check() too, which withdraws the ones
-    // that repeat X's own mistake and frees the list.
+    // that repeat X's own mistake and frees the list, at its end or as a
+    // #run's exit() ends the process (checker.cpp's withdraw_at_exit).
     Array<Constant_Not_A_Type> constants_not_types;
 };
 

@@ -163,13 +163,17 @@ static Diagnostics *printed_at_exit;
 // from inside the checker or a top-level run, where rig would print what it
 // found only later: they come out here instead, before the C runtime's own
 // end flushes the streams, and after what the runs printed (diag_print
-// flushes stdout first). It runs too when rig itself exits meanwhile (out
-// of memory, say), and printing allocates: the pointer is cleared first, so
-// an exit from inside it (out of memory again) prints nothing more.
+// flushes stdout first). The checker's at_exit, set while it runs, takes
+// back the messages it would have withdrawn at its end (checker.cpp's
+// withdraw_at_exit) before they're sorted. It runs too when rig itself
+// exits meanwhile (out of memory, say), and printing allocates, as at_exit
+// may: the pointer is cleared first, so an exit from inside it (out of
+// memory again) prints nothing more.
 static void print_at_exit() {
     Diagnostics *d = printed_at_exit;
     printed_at_exit = nullptr;
     if (!d) return;
+    if (d->at_exit) d->at_exit(d->at_exit_data);
     diag_sort(d);
     diag_print(d);
 }

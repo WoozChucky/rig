@@ -75,6 +75,12 @@ struct Diagnostics {
                      // empty: none. The checker sets it to the chain of the instance being checked
                      // (check_generic.cpp's enter_instance), and lowering to the chain of the
                      // instance whose body it lowers (lower.cpp's lower_body)
+    void (*at_exit)(void *data);  // called with at_exit_data by the atexit handler
+                                  // (diag_print_at_exit) before it sorts and prints the messages;
+                                  // null: nothing. check() sets it while it runs, to withdraw first
+                                  // the notes that repeat a constant's own mistake (checker.cpp's
+                                  // withdraw_at_exit)
+    void *at_exit_data;
 };
 
 // Registers a file; the result is its index, for Position.file. The text
@@ -124,7 +130,8 @@ void diag_print(Diagnostics *d);
 
 // Until called again with null: a process that ends before rig prints its
 // diagnostics (exit() in a #run, spec 7.8) prints d's first, sorted, as
-// diag_print does, from an atexit handler registered once.
+// diag_print does, from an atexit handler registered once, after calling
+// d's at_exit, if it's set (Diagnostics.at_exit).
 void diag_print_at_exit(Diagnostics *d);
 
 // Frees the messages and the file list.
