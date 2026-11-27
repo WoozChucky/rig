@@ -317,7 +317,8 @@ struct Ast_Instance {
                                // made (check_generic.cpp's instance_line)
     Position called_at;        // the start of the call that made it; a struct's: the written instance's
                                // name, where it was used
-    Ast_Instance *made_in;     // the instance whose signature, defaults or body holds that call; null
+    Ast_Instance *made_in;     // the instance whose signature, defaults, body or fields hold the call or
+                               // written type that made it; null
     s32 depth;                 // 1 when made outside any instance, made_in's + 1 otherwise
     bool had_errors;           // a procedure's: its signature's check reported an error (checker.cpp's
                                // resolve_signature): every call with its bindings gets no type and

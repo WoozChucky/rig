@@ -1925,14 +1925,18 @@ static s64 closing_paren(Parser *p, s64 open) {
 // name, with or without arguments of its own in parentheses, directly
 // followed by ',' or ')': Map(string, Map(int, *u8)). Any other is an
 // expression, read as an array's count is, a type in it declaring nothing:
-// 4, N + 1, .B, Mode.B, "hi", #type (int) -> int, #run f(). A bare name is
+// 4, N + 1, .B, Mode.B, "hi", #type (int) -> int, #run f(), and size_of(T)
+// and type_info(T), the built-ins parse_primary knows by their name and
+// '(', which would otherwise look like instances. A bare name is
 // a written type whatever it names, a type's or a constant's: the checker
 // reads one where the struct takes a constant as the constant it names. A
 // '(' starts no type here, as a constant's value in parentheses may.
 static Ast *parse_instance_argument(Parser *p) {
     Token_Kind kind = peek(p)->kind;
     bool type = kind == TOKEN_STAR || kind == TOKEN_LBRACKET || kind == TOKEN_DOLLAR;
-    if (kind == TOKEN_IDENT) {
+    String text = peek(p)->text;
+    bool builtin = string_eq(text, str("size_of")) || string_eq(text, str("type_info"));
+    if (kind == TOKEN_IDENT && !(builtin && peek(p, 1)->kind == TOKEN_LPAREN)) {
         s64 after = p->next + 1;
         if (p->tokens[after].kind == TOKEN_LPAREN) {
             s64 close = closing_paren(p, after);

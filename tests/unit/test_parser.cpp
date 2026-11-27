@@ -4848,14 +4848,17 @@ TEST(parses_generic_structs) {
     // name followed by '(' where a type is written is an instance of one,
     // (instance Map ...), each argument a type when it is written as only a
     // type can be, or as a name, with or without its own arguments, before
-    // a ',' or the ')', and an expression otherwise: 4 + 1. A field may hold
-    // an instance of its own struct, behind a pointer.
+    // a ',' or the ')', and an expression otherwise: 4 + 1. size_of(...)
+    // and type_info(...) are expressions there, as everywhere, and so is
+    // #type. A field may hold an instance of its own struct, behind a
+    // pointer.
     Arena a = arena_make();
     Token_List *list = src("Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; }\n"
                            "Ring :: struct (T: Type, N: int) { items: [N]T; next: *Ring(T, N); }\n"
                            "m: Map(string, Map(int, *u8));\n"
                            "r: Ring(int, 4 + 1);\n"
-                           "Vec2 :: struct { x: float; }\n");
+                           "Vec2 :: struct { x: float; }\n"
+                           "p: Pad(size_of(u8), type_info(u8), #type (int) -> int);\n");
     Ast_File *file = parse(list->tokens, &a, &list->diag);
     CHECK_STR(messages(&a, &list->diag), "");
     CHECK_STR(ast_dump(&a, file),
@@ -4863,12 +4866,20 @@ TEST(parses_generic_structs) {
               "(struct Ring (params (T Type) (N int)) (items (array (name N) T)) (next (ptr (instance Ring T N))))\n"
               "(var m (instance Map string (instance Map int (ptr u8))))\n"
               "(var r (instance Ring int (binary + (int 4) (int 1))))\n"
-              "(struct Vec2 (x float))\n");
-    CHECK_EQ(file->globals.count, 5);
-    if (file->globals.count == 5) {
+              "(struct Vec2 (x float))\n"
+              "(var p (instance Pad (size_of u8) (type_info u8) (type (proc-type (params int) (returns int)))))\n");
+    CHECK_EQ(file->globals.count, 6);
+    if (file->globals.count == 6) {
         CHECK(((Ast_Struct *)file->globals[0])->is_generic);
         CHECK(((Ast_Struct *)file->globals[1])->is_generic);
         CHECK(!((Ast_Struct *)file->globals[4])->is_generic);
+        Ast_Type *p = ((Ast_Var *)file->globals[5])->type_expr;
+        CHECK_EQ(p->args.count, 3);
+        if (p->args.count == 3) {
+            CHECK_EQ(p->args[0]->kind, AST_SIZE_OF);
+            CHECK_EQ(p->args[1]->kind, AST_TYPE_INFO);
+            CHECK_EQ(p->args[2]->kind, AST_TYPE_VALUE);
+        }
         // An instance is at its name; its arguments are each a written type
         // or an expression, as read.
         Ast_Type *m = ((Ast_Var *)file->globals[2])->type_expr;
@@ -4889,6 +4900,19 @@ TEST(parses_generic_structs) {
         if (r->args.count == 2) CHECK_EQ(r->args[1]->kind, AST_BINARY);
     }
     token_list_free(list);
+    arena_free(&a);
+}
+
+TEST(instances_nest_at_most_max_depth) {
+    // An instance's '(' is a level, as '*' and '[' are: 1000 instances
+    // nested in each other's arguments parse; 1001 is one message, at the
+    // name one too many, and no crash.
+    Arena a = arena_make();
+    String errors = {};
+    parse_src(&a, nested_source(&a, "x: ", "W(", MAX_DEPTH, "int", ")", ";\n"), &errors);
+    CHECK_STR(errors, "");
+    parse_src(&a, nested_source(&a, "x: ", "W(", MAX_DEPTH + 1, "int", ")", ";\n"), &errors);
+    CHECK_STR(errors, types_too_deep(&a, 1, 4 + 2 * MAX_DEPTH));
     arena_free(&a);
 }
 

@@ -47,8 +47,9 @@
 //                                                                  in a param's type (spec 7.11)
 //   argument    = type | expression                                a type when it starts with '*', '[' or
 //                                                                  '$', or is a name, with or without
-//                                                                  its '(...)', before ',' or ')'
-//   proc_type   = '(' [proc_param {',' proc_param}] ')'
+//                                                                  its '(...)', before ',' or ')', but
+//                                                                  size_of(...) and type_info(...)
+//   proc_type  = '(' [proc_param {',' proc_param}] ')'
 //                   ['->' (type | '(' type {',' type} ')')] ['#c_call']
 //   proc_param  = [IDENT ':'] ['..'] type                         '..': a '..T' parameter, the last
 //   block       = '{' statement* '}'

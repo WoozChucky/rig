@@ -545,10 +545,11 @@ void check_generic_names(Checker *c, Ast_Proc *generic);
 
 // The lines an error inside instance inst is followed by (spec 7.11,
 // Diagnostic.context): "    in 'max' with T = Vec2, called at
-// main.rig:12:5\n" for it, then for the instance whose signature,
-// defaults or body made it, and so on out to the one made outside any
-// instance. Of more than 21, the innermost and outermost ten, "    ... N
-// more instances\n" between them.
+// main.rig:12:5\n" for it, or, for a generic struct's (spec 3.23), "    in
+// 'Ring' with T = int, N = 4, used at main.rig:5:8\n", then for the
+// instance whose signature, defaults, body or fields made it, and so on out
+// to the one made outside any instance. Of more than 21, the innermost and
+// outermost ten, "    ... N more instances\n" between them.
 String instance_context(Checker *c, Ast_Instance *inst);
 
 // The instance of generic a call with arguments `args`, checked already,

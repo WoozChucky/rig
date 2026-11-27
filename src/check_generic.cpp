@@ -39,7 +39,7 @@ static void add_generic_parameter(Array<Generic_Binding> *declared, String name,
 
 // Where a name walk_names meets is.
 struct Name_Place {
-    bool in_count;  // inside an array's count, at any depth: an expression, each instance's to check
+    bool in_count;  // inside an array's count or an instance's argument, at any depth: each instance's to check
     bool pointee;   // a type name that is a pointer's target, *T's T (not *[]T's)
 };
 
@@ -178,7 +178,10 @@ static void walk_names(Ast *node, Name_Place place, void (*action)(void *data, A
 
 // At a type parameter a written type declares, $T: adds it to the
 // Array<Generic_Binding> `data` is (collect_type_parameters). An array's
-// count declares none.
+// count declares none, and nor, for now, does an instance's argument,
+// though the parser reads a $T there in a parameter's type (parser.cpp's
+// parse_instance_argument): no type parameter is inferred through an
+// instance yet.
 static void at_declared_type(void *data, Ast *name, Name_Place place) {
     if (name->kind != AST_TYPE_NAME || place.in_count) return;
     Ast_Type *written = (Ast_Type *)name;
@@ -368,7 +371,8 @@ struct Signature_Check {
 // constant parameter's written before the $ that declares it, [N]int or
 // [size_of(T)]int before $N or $T, is "'N' is used before '$N' declares
 // it", at the use (check_count_name). The rest of the count is each
-// instance's to check.
+// instance's to check. An instance's argument, Box(T), is walked as a
+// count is (walk_names).
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
 static void at_signature_name(void *data, Ast *name, Name_Place place) {
@@ -377,8 +381,10 @@ static void at_signature_name(void *data, Ast *name, Name_Place place) {
     Array<Signature_Name> *names = check->names;
     if (place.in_count) {
         // A $T never sits in a count: the parser declares none there
-        // (parse_type_level). Checking `declares` anyway doesn't lean on
-        // that: one there would be no use of its name.
+        // (parse_type_level). It may sit in an instance's argument, Box($T)
+        // (parse_instance_argument), where it declares nothing, for now
+        // (at_declared_type): checking `declares` keeps it from being taken
+        // for a use of its name.
         if (name->kind == AST_NAME || !((Ast_Type *)name)->declares) {
             check_count_name(c, name_text(name), name->pos, check->declared, names);
         }
@@ -1387,6 +1393,13 @@ static String struct_parameter_text(Checker *c, Ast_Param *param) {
                          STR_ARG(written_type_text(c, param->type_expr)));
 }
 
+// Whether `name`, where a value goes, names a generic struct: looked up as
+// a value's name is (check_lookup), a built-in type's name never one.
+static bool names_generic_struct(Checker *c, String name) {
+    Ast *decl = type_from_name(name) ? nullptr : check_lookup(c, name, nullptr);
+    return decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic;
+}
+
 // Binds the index-th parameter of generic struct `generic`, its binding b,
 // to argument `arg`, as written (parse_instance_argument): true when it's
 // bound; false after saying why it can't be, or when the argument's own
@@ -1400,12 +1413,18 @@ static String struct_parameter_text(Checker *c, Ast_Param *param) {
 // - A constant parameter takes an expression, or a bare name the parser
 //   read as a type, which is the name of a value here, looked up and
 //   checked as one, at its place: "'int' is a type, not a value" when it
-//   names a type, as a type's name where a value goes is. Any other written
-//   type is "'*int' is a type, not a value", at it. The value converts to
-//   the parameter's type and must be known while compiling (bake_constant).
-//   It's checked where the instance is written, as an array's count is (a
-//   local there is in sight, and no constant), needing no context, as a
-//   count doesn't (checker.cpp's check_array_count).
+//   names a type, as a type's name where a value goes is. A name with
+//   arguments that names no generic struct is a call, twice(2), whose
+//   callee is checked as a call's is ("unknown identifier 'Nope'", "'Mode'
+//   isn't a procedure, so it can't be called"), and which, calling one, is
+//   never known while compiling: "argument 2 of 'Ring' must be known while
+//   compiling, for 'N: int'", at it. Any other written type, a generic
+//   struct's instance too, is "'*int' is a type, not a value", at it. The
+//   value converts to the parameter's type and must be known while
+//   compiling (bake_constant). It's checked where the instance is written,
+//   as an array's count is (a local there is in sight, and no constant),
+//   needing no context, as a count doesn't (checker.cpp's
+//   check_array_count).
 static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 index, Generic_Binding *b) {
     Ast_Param *param = generic->params[index];
     if (b->is_type) {
@@ -1424,6 +1443,21 @@ static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 
     }
     if (is_written_type(arg)) {
         Ast_Type *written = (Ast_Type *)arg;
+        if (written->kind == AST_TYPE_INSTANCE && !names_generic_struct(c, written->name)) {
+            // A call, read as an instance: what its callee is said as a
+            // call's is (check_expr.cpp's check_callee), or, for a
+            // procedure, that no call is known while compiling.
+            Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
+            name->name = written->name;
+            Ast_Call *call = ast_new<Ast_Call>(c->arena, AST_CALL, written->pos);
+            call->callee = name;
+            if (check_callee(c, call)) {
+                diag_error(c->diag, written->pos,
+                           "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
+                           (long long)(index + 1), STR_ARG(generic->name), STR_ARG(struct_parameter_text(c, param)));
+            }
+            return false;
+        }
         if (written->kind != AST_TYPE_NAME) {
             diag_error(c->diag, written->pos, "'" STR_FMT "' is a type, not a value",
                        STR_ARG(written_type_text(c, written)));
