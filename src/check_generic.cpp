@@ -361,6 +361,42 @@ static bool at_first_dollar(void *data, Ast *name, Name_Place) {
     return true;
 }
 
+// The names of generic struct `generic`'s parameters, in order, joined by
+// ", ", each after a '$' when `dollar` is set, for a message's example:
+// "K, V", or "$K, $V".
+static String parameter_names(Checker *c, Ast_Struct *generic, bool dollar) {
+    Array<u8> names = {};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        if (i > 0) add_text(&names, str(", "));
+        if (dollar) add_text(&names, str("$"));
+        add_text(&names, generic->params[i]->name);
+    }
+    String result = string_copy(c->arena, {names.data, names.count});
+    array_free(&names);
+    return result;
+}
+
+// The generic struct the name of written instance `written`, Map in
+// Map(string, int), names where it's written (find_name), or null after
+// saying why it names none: a built-in type's name always means the type
+// (spec 3.1), as where checker.cpp's resolve_written looks first, so it
+// and any other type's name are "'Vec2' isn't generic, so it takes no
+// arguments", and a name that is no type is what resolve_type_name says
+// ("unknown type 'Nope'", "'main' is not a type"). The arguments aren't
+// looked at. A use (check_written_instance) and a generic's own check
+// (at_generic_instance) look it up so; instance_generic, which says
+// nothing, looks only at the top level, where a walk over a signature or
+// a generic's body finds a generic struct.
+static Ast_Struct *written_generic(Checker *c, Ast_Type *written) {
+    Ast *decl = type_from_name(written->name) ? nullptr : find_name(c, written->name);
+    if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) return (Ast_Struct *)decl;
+    if (resolve_type_name(c, written, true)) {
+        diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
+                   STR_ARG(written->name));
+    }
+    return nullptr;
+}
+
 // Whether the arguments of `written`, an instance of generic struct
 // `generic` giving one per parameter, are values where it takes a constant,
 // as far as the generic's own check can tell (at_generic_instance); if not,
@@ -374,16 +410,10 @@ static bool constant_arguments(Checker *c, Ast_Struct *generic, Ast_Type *writte
             Ast_Type *dollar = nullptr;
             walk_names(argument, Name_Place{}, at_first_dollar, &dollar);
             if (!dollar) continue;
-            Array<u8> example = {};
-            for (s64 j = 0; j < generic->params.count; j++) {
-                add_text(&example, str(j > 0 ? ", $" : "$"));
-                add_text(&example, generic->params[j]->name);
-            }
             diag_error(c->diag, dollar->pos,
-                       "a '$' where '" STR_FMT "' takes a constant is all of its argument, as in " STR_FMT "(%.*s)",
-                       STR_ARG(generic->name), STR_ARG(generic->name), (int)example.count,
-                       (const char *)example.data);
-            array_free(&example);
+                       "a '$' where '" STR_FMT "' takes a constant is all of its argument, as in " STR_FMT
+                       "(" STR_FMT ")",
+                       STR_ARG(generic->name), STR_ARG(generic->name), STR_ARG(parameter_names(c, generic, true)));
         } else {
             diag_error(c->diag, argument->pos, "'" STR_FMT "' is a type, not a value",
                        STR_ARG(written_type_text(c, argument)));
@@ -428,19 +458,12 @@ static bool at_generic_instance(Generic_Type_Check *check, Ast_Type *written) {
     } else if (is_type_parameter(check->declared, written->name) && !type_from_name(written->name)) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
                    STR_ARG(written->name));
-    } else {
-        Ast *decl = type_from_name(written->name) ? nullptr : find_name(c, written->name);
-        if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
-            Ast_Struct *generic = (Ast_Struct *)decl;
-            check_generic_struct(c, generic);
-            if (generic->had_errors || generic->resolve != RESOLVE_DONE) {
-                check->said = true;
-            } else if (count_struct_arguments(c, generic, written->args.count, written->pos)) {
-                arguments = constant_arguments(c, generic, written);
-            }
-        } else if (resolve_type_name(c, written, true)) {
-            diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
-                       STR_ARG(written->name));
+    } else if (Ast_Struct *generic = written_generic(c, written)) {
+        check_generic_struct(c, generic);
+        if (generic->had_errors || generic->resolve != RESOLVE_DONE) {
+            check->said = true;
+        } else if (count_struct_arguments(c, generic, written->args.count, written->pos)) {
+            arguments = constant_arguments(c, generic, written);
         }
     }
     check->said |= c->diag->error_count != errors;
@@ -1907,14 +1930,8 @@ void check_generic_struct(Checker *c, Ast_Struct *generic) {
 }
 
 void report_generic_struct(Checker *c, Ast_Struct *generic, Position at) {
-    Array<u8> example = {};
-    for (s64 i = 0; i < generic->params.count; i++) {
-        if (i > 0) add_text(&example, str(", "));
-        add_text(&example, generic->params[i]->name);
-    }
-    diag_error(c->diag, at, "'" STR_FMT "' is generic; write its arguments, as in " STR_FMT "(%.*s)",
-               STR_ARG(generic->name), STR_ARG(generic->name), (int)example.count, (const char *)example.data);
-    array_free(&example);
+    diag_error(c->diag, at, "'" STR_FMT "' is generic; write its arguments, as in " STR_FMT "(" STR_FMT ")",
+               STR_ARG(generic->name), STR_ARG(generic->name), STR_ARG(parameter_names(c, generic, false)));
 }
 
 // The text of struct parameter `param` as written, for a message: "N:
@@ -2136,19 +2153,8 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
 Type *check_written_instance(Checker *c, Ast_Type *written) {
     if (written->instance_checked) return written->instance_type;
     written->instance_checked = true;
-    // A built-in type's name always means the built-in type, as where
-    // checker.cpp's resolve_written looks first.
-    Ast *decl = type_from_name(written->name) ? nullptr : find_name(c, written->name);
-    if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
-        written->instance_type =
-            check_struct_instance(c, (Ast_Struct *)decl, written->args, written->pos, written->pos);
-    } else if (resolve_type_name(c, written, true)) {
-        // A type, but no generic struct's: it takes no arguments, which
-        // aren't looked at. Anything else said what it is
-        // (resolve_type_name).
-        diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
-                   STR_ARG(written->name));
-    }
+    Ast_Struct *generic = written_generic(c, written);
+    if (generic) written->instance_type = check_struct_instance(c, generic, written->args, written->pos, written->pos);
     return written->instance_type;
 }
 
