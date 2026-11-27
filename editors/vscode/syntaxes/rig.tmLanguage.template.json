@@ -192,7 +192,7 @@
                     }
                 },
                 {
-                    "comment": "name :: #type ... is a type alias (spec 3.22), its value a type written where a value goes, Cb :: #type (int) -> int;. Its name is a type's, as a signature alias's is. An alias whose value is a type written without #type, V :: Vec2;, is the next rule's.",
+                    "comment": "name :: #type ... is a type alias (spec 3.22), its value a type written where a value goes, Cb :: #type (int) -> int;. Its name is a type's, as a signature alias's is. One written without #type is the first rule's when its value is a procedure type, Cb :: (n: int) -> int;, and the next rule's when its value surely or likely names a type, P :: *Node;, V :: Vec2;; any other, VEC :: VECTOR;, is coloured as a constant.",
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=#type\\b)",
                     "captures": {
                         "1": {
@@ -204,8 +204,8 @@
                     }
                 },
                 {
-                    "comment": "NAME :: VALUE; is a type alias (spec 3.22), its name and VALUE coloured as types, when VALUE is surely a type: it starts with '*' or '[' and goes on to a name (a constant's '*' takes an address, which is never known while compiling, and an expression never starts with '['), or it's a built-in type's name. Or when VALUE is a name that starts with a capital and has a lowercase letter, Vec2, Int_Pair, with or without an instance's arguments, Pair(int, bool): a heuristic, since a constant naming a value, ADD :: add;, SAME :: SQUARES;, MINE :: OS;, can't be told from it by its text alone, and a call of a capitalised procedure, R :: Repeat(3);, is taken for an instance. One line, up to its ';'.",
-                    "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=(?:(?:\\*\\s*|\\[[^\\]\\[;]*\\]\\s*)+[A-Za-z_][A-Za-z0-9_]*|\\b(?:@TYPES@)\\b|[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*)\\s*(?:\\((?:[^();]|\\([^();]*\\))*\\)\\s*)?;)",
+                    "comment": "NAME :: VALUE; is a type alias (spec 3.22), its name and VALUE coloured as types, when VALUE is surely a type: it starts with '*' or '[' and goes on to a name (a constant's '*' takes an address, which is never known while compiling, and an expression never starts with '['), or it's a built-in type's name. Or when VALUE is a name that starts with a capital and has a lowercase letter, Vec2, Int_Pair, with or without an instance's arguments, Pair(int, bool), in which instances nest two deep at most, Box(Pair(int, Box(u8))) (a regex can't count its parentheses), with a deeper one coloured as a constant: a heuristic, since a constant naming a value, ADD :: add;, SAME :: SQUARES;, MINE :: OS;, can't be told from it by its text alone, and a call of a capitalised procedure, R :: Repeat(3);, is taken for an instance. One line, up to its ';'.",
+                    "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=(?:(?:\\*\\s*|\\[[^\\]\\[;]*\\]\\s*)+[A-Za-z_][A-Za-z0-9_]*|\\b(?:@TYPES@)\\b|[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*)\\s*(?:\\((?:[^();]|\\((?:[^();]|\\([^();]*\\))*\\))*\\)\\s*)?;)",
                     "beginCaptures": {
                         "1": {
                             "name": "entity.name.type.rig"

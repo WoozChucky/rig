@@ -1239,12 +1239,12 @@ check('the grammar colours a procedure type\'s alias as a type', () => {
 // value is surely a type when it starts with '*' or '[' and goes on to a
 // name, or is a built-in type, and taken for one when it's a name that
 // starts with a capital and has a lowercase letter, with or without an
-// instance's arguments. A value whose name is in capitals or starts
-// lowercase, called or not, a literal or a member is a constant's; a call
-// of a capitalised procedure, R :: Repeat(3);, is taken for an instance,
-// an accepted mistake. In an instance's arguments, a constant parameter, N
-// in *Ring(T, N), is still coloured as a type: its text is a type
-// parameter's, T.
+// instance's arguments, in which instances nest two deep at most. A value
+// whose name is in capitals or starts lowercase, called or not, a literal
+// or a member is a constant's; a call of a capitalised procedure, R ::
+// Repeat(3);, is taken for an instance, an accepted mistake. In an
+// instance's arguments, a constant parameter, N in *Ring(T, N), is still
+// coloured as a type: its text is a type parameter's, T.
 check('the grammar colours an alias of a named type as a type', () => {
     const CONSTANT = 'variable.other.constant.rig';
     assertScopes('V :: Vec2;', { V: TYPE, Vec2: TYPE });
@@ -1256,6 +1256,10 @@ check('the grammar colours an alias of a named type as a type', () => {
     assertScopes('R4 :: Ring(int, 4); // four', { R4: TYPE, Ring: TYPE, int: PRIMITIVE });
     assertScopes('Ptr :: *Node(int);', { Ptr: TYPE, Node: TYPE });
     assertScopes('B :: Box(Pair(int, bool));', { B: TYPE, Box: TYPE, Pair: TYPE, int: PRIMITIVE, bool: PRIMITIVE });
+    assertScopes('B :: Box(Pair(int, Box(u8)));', { B: TYPE, Box: TYPE, Pair: TYPE, int: PRIMITIVE, u8: PRIMITIVE });
+    // Instances nest two deep in the arguments at most: a deeper one is
+    // taken for a constant's value.
+    assertScopes('B :: Box(Box(Box(Box(u8))));', { B: CONSTANT });
     assertScopes('Rp :: *Ring(T, N);', { Rp: TYPE, Ring: TYPE, T: TYPE, N: TYPE });
     // Prefixes stack, and an array's length may be a constant's name.
     assertScopes('Q :: **Node;', { Q: TYPE, Node: TYPE });
