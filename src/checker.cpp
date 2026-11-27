@@ -2265,7 +2265,16 @@ static void check_return(Checker *c, Ast_Return *ret) {
         array_add(&ret->values, (Ast *)none);
     }
     if (proc->modify_of && ret->values.count != 2) {
-        for (s64 i = 0; i < ret->values.count; i++) check_expression(c, ret->values[i]);
+        // A written type is a value in the block (check_value's rule), so
+        // `return int, "a", 1;` says only the count.
+        for (s64 i = 0; i < ret->values.count; i++) {
+            Ast *value = ret->values[i];
+            if (expr_names_type(c, value)) {
+                check_type_value(c, value);
+            } else {
+                check_expression(c, value);
+            }
+        }
         diag_error(c->diag, ret->pos,
                    "a #modify block returns a bool, and may add a message, as in return T != string, \"sum needs "
                    "numbers\";");

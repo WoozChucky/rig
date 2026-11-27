@@ -100,7 +100,7 @@ struct Checker {
                                  // elsewhere. Set by check_body for the block's own body only, and set
                                  // aside with the scopes (checker.cpp's leave_scopes), so a procedure the
                                  // block calls, or a declaration worked out inside it, is checked with it
-                                 // null
+                                 // null; and by check_run, so a #run's operand in the block is too
 };
 
 // A type or constant parameter of a generic procedure (spec 7.11), $T or
@@ -697,9 +697,14 @@ void report_generic_struct(Checker *c, Ast_Struct *generic, Position at);
 // declared names, places, kinds and constant types are read, so a list
 // already bound serves. True when none of it said a mistake; false after
 // one (Ast_Modify.had_errors), for the caller to make the generic's, and
-// while the check is under way: a use from inside the block asked for its
-// own generic.
-bool check_modify(Checker *c, Ast_Modify *modify, Array<Generic_Binding> declared);
+// while the check is under way: a use from inside the block, or from code
+// it reaches, asked for its own generic, "'sum' can't be used in its own
+// #modify, which decides its instances", at `at`, the use, `name` the
+// generic's; the check under way then has that error. While a top-level
+// #if's condition is decided (Checker.deciding), the block isn't checked
+// (a later use or the pass over the bodies checks it, every name known):
+// true then.
+bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Array<Generic_Binding> declared);
 
 // In check()'s pass over the bodies, generic procedure or struct `generic`'s
 // #modify block, if it has one that no use has checked yet (check_modify),

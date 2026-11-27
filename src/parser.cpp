@@ -2266,10 +2266,11 @@ static bool parse_generic_modify(Parser *p, Ast_Modify **modify) {
 // '{'", as before #foreign, and the ';' must follow it. A generic
 // procedure may have a #modify block after its #c_call and #no_abc (spec
 // 7.12, parse_generic_modify), and then its body must follow: any directive
-// there is "expected '{'", but a second #modify. On a procedure that isn't
-// generic, one that read no '$', it's "#modify is for a generic procedure
-// or struct, ...", at it. Any other directive but these is "unknown
-// directive '#foo'".
+// there is "expected '{'", but a second #modify, and a #load or an #import,
+// "#load can only be at the top level" as after a signature. On a
+// procedure that isn't generic, one that read no '$', it's "#modify is for
+// a generic procedure or struct, ...", at it. Any other directive but
+// these is "unknown directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, C's bare '..'
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign

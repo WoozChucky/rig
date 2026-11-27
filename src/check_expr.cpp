@@ -1841,8 +1841,11 @@ static Type *check_unary(Checker *c, Ast_Unary *u) {
     if (u->op == TOKEN_STAR) {
         if (!check_addressable(c, u->operand, false)) return nullptr;
         // The only place of type Type is such a variable's name: no
-        // pointer, field or element holds a type.
+        // pointer, field or element holds a type, nor does an instance's
+        // parameter or local (check_generic.cpp's infer_bindings refuses a
+        // Type value as a type parameter's).
         if (u->operand->type == &type_type) {
+            RIG_ASSERT(u->operand->kind == AST_NAME);
             diag_error(c->diag, u->operand->pos, "can't take the address of '" STR_FMT "': it's a 'Type'",
                        STR_ARG(((Ast_Name *)u->operand)->name));
             return nullptr;

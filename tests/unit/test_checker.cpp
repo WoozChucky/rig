@@ -15881,6 +15881,15 @@ TEST(modify_block_mistakes) {
         {"return values.count > 0;", true, 38, "unknown identifier 'values'"},
         {"T = 5;", false, 35, "a value of type 'int' doesn't convert to 'Type' implicitly"},
         {"main();", false, 21, "main is where the program starts; #modify can't call it"},
+        // The variables are declared in the block's own scope.
+        {"T := 1;", false, 31, "'T' is already declared at test.rig:1:17"},
+        {"x := T + 1;", false, 38, "'+' needs numbers, not 'Type'"},
+        // A written type is a value among a miscounted return's values too.
+        {"return int, \"a\", 1;", true, 31, returns},
+        // A #run is code of its own, not the block's: a type written there
+        // is no value.
+        {"t := #run int;", false, 41, "'int' is a type, not a value"},
+        {"K :: #run int;", false, 41, "'int' is a type, not a value"},
     };
     const char *calls[] = {"a: []int; f(a); f(a);", ""};
     for (const Case &k : cases) {
@@ -15893,5 +15902,157 @@ TEST(modify_block_mistakes) {
                       string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, k.message)));
         }
     }
+    arena_free(&a);
+}
+
+TEST(modify_block_mistakes_in_what_it_uses) {
+    // A block's mistakes in what it calls, said once whether the generic is
+    // called twice or never. No instance takes a Type value, which exists
+    // only while compiling: one that would bind a type parameter is
+    // refused, and a variable of type Type is no $U: Type's argument. A
+    // procedure the block calls is checked as anywhere, so a type written
+    // there is no value, and one with a mistake makes the block's. The
+    // block can't use its own generic, nor can what it calls.
+    Arena a = arena_make();
+    const char *no_instance = "a value of type 'Type' can't be an argument of 'g'; type_info(T) describes the type";
+    const char *own = "'f' can't be used in its own #modify, which decides its instances";
+    struct Case {
+        const char *block;    // the block's code, before its `return true;`
+        const char *after;    // declarations after main, from line 3
+        const char *at;       // where its one message is, "L:C"
+        const char *message;
+    };
+    // The block starts at column 24 of `f :: (v: $T) #modify { `.
+    const Case cases[] = {
+        {"n := g(T);", "g :: (v: $U) -> int { return 1; }", "1:31", no_instance},
+        {"n := g(int);", "g :: (v: $U) -> int { return 1; }", "1:31", no_instance},
+        {"n := g(T, int);", "g :: (v: ..$U) -> int { return 1; }", "1:31", no_instance},
+        {"t := g(T);", "g :: (v: $U) -> U { return v; }", "1:31", no_instance},
+        {"n := h(T); m := h(int);", "h :: ($U: Type) -> int { return 1; }", "1:31",
+         "argument 1 of 'h' must be known while compiling, for '$U: Type'"},
+        {"n := helper();", "helper :: () -> int { t := int; return 1; }", "3:28", "'int' is a type, not a value"},
+        {"n := helper();", "helper :: () -> int { return \"a\"; }", "3:30",
+         "a value of type 'string' doesn't convert to 'int' implicitly"},
+        {"f(1);", "", "1:24", own},
+        {"helper();", "helper :: () { f(true); }", "3:16", own},
+    };
+    const char *calls[] = {"f(1); f(2);", ""};
+    for (const Case &k : cases) {
+        for (const char *call : calls) {
+            const char *text = string_cstr(&a, string_printf(&a,
+                                                             "f :: (v: $T) #modify { %s return true; } { }\n"
+                                                             "main :: () { %s }\n%s\n",
+                                                             k.block, call, k.after));
+            CHECK_STR(check_with_preload(&a, text), string_cstr(&a, string_printf(&a, "%s: %s\n", k.at, k.message)));
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(modify_variables_of_constants_and_structs) {
+    // A constant parameter is a variable of its constant's type, a
+    // procedure's $N: int, an instance's argument's N (Ring($T, $N)) and a
+    // generic struct's N: int alike; a generic struct's block is checked
+    // once too, used or not. A block that takes no type_info of a Type
+    // value doesn't describe types.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "ring :: (v: $T, $N: int) #modify { k := N + 1; return true; } { }\n"
+                                 "Ring :: struct (T: Type, N: int) #modify { if N < 1 { N = 1; } return T != u8; } "
+                                 "{ items: [N]T; }\n"
+                                 "first :: (r: Ring($T, $N)) #modify { N = 2; return true; } { }\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "");
+    Ast_Modify *modifies[] = {((Ast_Proc *)top_level_named(file, "ring"))->modify,
+                              ((Ast_Struct *)top_level_named(file, "Ring"))->modify,
+                              ((Ast_Proc *)top_level_named(file, "first"))->modify};
+    for (Ast_Modify *modify : modifies) {
+        CHECK(modify != nullptr);
+        if (!modify) continue;
+        CHECK_EQ(modify->resolve, RESOLVE_DONE);
+        CHECK(!modify->had_errors);
+        CHECK(!modify->describes);
+        CHECK_EQ(modify->vars.count, 2);
+        if (modify->vars.count != 2) continue;
+        CHECK_STR(modify->vars[0]->name, "T");
+        CHECK(modify->vars[0]->type == &type_type);
+        CHECK_STR(modify->vars[1]->name, "N");
+        CHECK(modify->vars[1]->type == &type_int);
+    }
+    CHECK(!((Ast_Struct *)top_level_named(file, "Ring"))->had_errors);
+    Array<Ast *> &statements = modifies[0]->proc->body->statements;
+    CHECK(statements.count > 0 && statements[0]->type == &type_int);  // k
+    arena_free(&a);
+}
+
+TEST(modify_struct_block_mistakes) {
+    // A generic struct's block mistake is said once, as the struct's own,
+    // used or not, from a body or from a global's type in the declarations
+    // pass; then the struct makes no instance, and its uses say nothing
+    // more.
+    Arena a = arena_make();
+    const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
+                           "type_info(T).size";
+    const char *box = "Box :: struct (T: Type) #modify { x: T; return true; } { v: T; }\n";
+    const char *uses[] = {"main :: () { b: Box(int); c: Box(int); }\n", "main :: () { }\n"};
+    for (const char *use : uses) {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, joined(&a, box, use), &file),
+                  string_cstr(&a, string_printf(&a, "1:38: %s\n", variable)));
+        CHECK(((Ast_Struct *)top_level_named(file, "Box"))->had_errors);
+    }
+    CHECK_STR(check_with_preload(&a, joined(&a, "g: Box(int);\n", box, "main :: () { }\n")),
+              string_cstr(&a, string_printf(&a, "2:38: %s\n", variable)));
+    // A constant parameter is a variable of its constant's type.
+    CHECK_STR(check_with_preload(&a, "Ring :: struct (T: Type, N: int) #modify { s: string = N; return true; } "
+                                     "{ items: [N]T; }\n"
+                                     "main :: () { r: Ring(int, 2); }\n"),
+              "1:56: a value of type 'int' doesn't convert to 'string' implicitly\n");
+    // A struct's block can't use its own struct either.
+    const char *grows[] = {"main :: () { g: Grow(int); }\n", "main :: () { }\n"};
+    for (const char *use : grows) {
+        CHECK_STR(check_with_preload(&a, joined(&a, "Grow :: struct (T: Type) #modify { return Grow(int) != T; } "
+                                                    "{ v: T; }\n",
+                                                use)),
+                  "1:43: 'Grow' can't be used in its own #modify, which decides its instances\n");
+    }
+    arena_free(&a);
+}
+
+TEST(modify_blocks_are_checked_at_their_first_use) {
+    // A block is checked the first time an instance is asked for, before
+    // one is found or made: a use before the generic, whose block has a
+    // mistake, makes no instance, so the bodies and fields that would fail
+    // for its bindings say nothing. The block is the generic's own code,
+    // its mistakes said with no chain, even when an instance's body asks
+    // first, here through a constant's #run in the declarations pass.
+    Arena a = arena_make();
+    const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
+                           "type_info(T).size";
+    CHECK_STR(check_with_preload(&a, "main :: () { a: []int; f(a); b: Box(int); }\n"
+                                     "f :: (values: []$T) #modify { x: T; return true; } { y: T = \"s\"; }\n"
+                                     "Box :: struct (T: Type) #modify { x: T; return true; } "
+                                     "{ v: T; w: [0 - size_of(T)]u8; }\n"),
+              string_cstr(&a, string_printf(&a, "2:34: %s\n3:38: %s\n", variable, variable)));
+    CHECK_STR(check_with_preload(&a, "K :: #run wrap(1);\n"
+                                     "wrap :: (v: $T) -> int { a: []T; f(a); return 1; }\n"
+                                     "f :: (values: []$T) #modify { main(); return true; } { }\n"
+                                     "main :: () { }\n"),
+              "3:21: main is where the program starts; #modify can't call it\n");
+    // A use while a top-level #if's condition is decided doesn't check the
+    // block, whose names may be declared in a top-level #if: a later use
+    // does, every name known.
+    CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) #modify { return K; } { v: T; }\n"
+                                     "#if Box(u8) == Box(u8) { A :: 1; }\n"
+                                     "#if true { K :: true; }\n"
+                                     "main :: () { b: Box(int); }\n"),
+              "");
+    CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) #modify { helper(); return T != Later; } { v: T; }\n"
+                                     "#if Box(u8) == Box(u8) { Later :: struct { a: int; } }\n"
+                                     "helper :: () { }\n"
+                                     "main :: () { b: Box(int); }\n"),
+              "");
     arena_free(&a);
 }

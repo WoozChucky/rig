@@ -1683,10 +1683,16 @@
 //   program starts; #modify can't call it", at the #modify. Any mistake
 //   sets Ast_Modify.had_errors and the generic's had_errors: it makes no
 //   instance, and its uses say nothing more. A procedure's other parameters
-//   aren't in its scope: no call's arguments exist when it runs.
+//   aren't in its scope: no call's arguments exist when it runs. A use of
+//   the generic from the block, or from code it reaches, finds the check
+//   under way: "'sum' can't be used in its own #modify, which decides its
+//   instances", at the use, the block's mistake. A use while a top-level
+//   #if's condition is decided doesn't check the block, whose names may be
+//   declared in a top-level #if: a later use or the bodies pass does.
 // - Checker.modify is set while the block's own body is checked, and set
 //   aside with the scopes, so a procedure it calls, or a declaration worked
-//   out inside it, is checked as anywhere. In it:
+//   out inside it, is checked as anywhere; and for a #run's operand
+//   (check_run.cpp's check_run), code run on its own. In it:
 //   - a written type where a value goes (expr_names_type) is a value of type
 //     Type wherever a value goes (check_value gives it to check_type_value);
 //   - a local's whole type may be Type, with a value: `t: Type;` and `t:
@@ -1708,8 +1714,13 @@
 //     describes it, as in type_info(T).size", at the name; `*T` is "can't
 //     take the address of 'T': it's a 'Type'"; a Type value meeting an Any
 //     is "a value of type 'Type' can't be an 'Any'; type_info(T) describes
-//     the type", at the value; any other use gets the messages any value of
-//     its type gets;
+//     the type", at the value; one at a place where a generic's call would
+//     bind a type parameter from it is "a value of type 'Type' can't be an
+//     argument of 'g'; type_info(T) describes the type", and a variable of
+//     type Type as a $U: Type's argument is "argument 1 of 'h' must be known
+//     while compiling, for '$U: Type'" (check_generic.cpp's infer_bindings
+//     and bake_argument), so no instance has a Type parameter; any other use
+//     gets the messages any value of its type gets;
 //   - `return b;` gives an empty message: check_return appends a string ""
 //     at the return, so the return holds two values from then on; any other
 //     count is "a #modify block returns a bool, and may add a message, as in

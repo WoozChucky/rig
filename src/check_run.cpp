@@ -629,14 +629,20 @@ Type *check_run(Checker *c, Ast_Run *run) {
     s64 errors = c->diag->error_count;
     // Its operand is code that runs, with the run's own context (spec
     // 7.10), wherever the #run is: in a #c_call body too, and in a default
-    // value, which needs no caller's context for it.
+    // value, which needs no caller's context for it. In a #modify block too
+    // it's code of its own, run by itself, not as the block (spec 7.12):
+    // the block's rules are set aside for it (Checker.modify), so a written
+    // type in it is no value, as anywhere else.
     bool outer_in_code = c->in_code, outer_contextless = c->contextless, outer_needs = c->needs_context;
+    Ast_Modify *outer_modify = c->modify;
     c->in_code = true;
     c->contextless = false;
+    c->modify = nullptr;
     Type *checked = check_value(c, operand);
     c->in_code = outer_in_code;
     c->contextless = outer_contextless;
     c->needs_context = outer_needs;
+    c->modify = outer_modify;
     if (!checked) return nullptr;
     check_default_type(c, operand);
     Type *t = operand->type;
