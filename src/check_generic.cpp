@@ -1666,22 +1666,35 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
 // else in check()'s pass over the bodies (check_generic_modify). A mistake
 // there is the generic's, which then makes no instance.
 
+void report_used_in_own_modify(Checker *c, String name, Position at) {
+    diag_error(c->diag, at, "'" STR_FMT "' can't be used in its own #modify, which decides its instances",
+               STR_ARG(name));
+}
+
 bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Array<Generic_Binding> declared) {
+    // While a top-level #if's condition is decided, there's no compile-time
+    // world to run the block in (spec 4.9), so the use is refused, for now,
+    // as a #run there is (check_run.cpp's check_run), and makes no
+    // instance. And a lookup knows only what's outside every top-level #if
+    // (checker.h), so the block isn't checked here, but by a later use or
+    // in the pass over the bodies, with every name it may use known.
+    if (c->deciding) {
+        diag_error(c->diag, at, "a top-level #if's condition can't run code while compiling, for now");
+        return false;
+    }
     if (modify->resolve == RESOLVE_DONE) return !modify->had_errors;
     // Under way: a use from inside the block, or from code it reaches, asks
     // for its own generic's instance, which the block decides. Said at the
-    // use, so the check under way has an error: the generic's.
+    // use, so the check under way has an error: the generic's. (A use in a
+    // body already under way when the check began, that the block reaches
+    // again, is found by the walk instead: check_reached_body.)
     if (modify->resolve == RESOLVE_UNDER_WAY) {
-        diag_error(c->diag, at, "'" STR_FMT "' can't be used in its own #modify, which decides its instances",
-                   STR_ARG(name));
+        report_used_in_own_modify(c, name, at);
         return false;
     }
-    // While a top-level #if's condition is decided, a lookup knows only
-    // what's outside every top-level #if (checker.h), so the block isn't
-    // checked here, but by a later use or in the pass over the bodies, with
-    // every name it may use known. The use goes on as though it had none.
-    if (c->deciding) return true;
     modify->resolve = RESOLVE_UNDER_WAY;
+    Modify_Check check = {name, at, c->resolving.count, c->modify_check};
+    c->modify_check = &check;
     // The generic's own code, in no instance: its mistakes are said with no
     // chain, whichever use asked for the check first.
     Ast_Instance *outer_instance = c->instance;
@@ -1703,6 +1716,7 @@ bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Arra
     bool fine = check_proc_signature(c, proc) && check_reached_body(c, proc, modify->pos) && reach_modify(c, modify);
     modify->had_errors = !fine || c->diag->error_count != errors;
     modify->resolve = RESOLVE_DONE;
+    c->modify_check = check.outer;
     enter_instance(c, outer_instance);
     c->diag->context = outer_context;
     return !modify->had_errors;
@@ -2143,7 +2157,9 @@ static Ast *call_argument(Checker *c, Ast *arg) {
 //   doesn't, resolve_type_value; void refused), or an expression that names
 //   a type (check_expr.cpp's expr_names_type: #type (int) -> int), checked
 //   as a type value. Any other expression, checked first, is "argument 1 of
-//   'Map' must be a type, for 'K: Type'", at it.
+//   'Map' must be a type, for 'K: Type'", at it, but a #modify block's
+//   variable of type Type (spec 7.12), "argument 1 of 'Map' must be known
+//   while compiling, for 'K: Type'".
 // - A constant parameter takes an expression, or a bare name the parser
 //   read as a type, which is the name of a value here, looked up and
 //   checked as one, at its place: "'int' is a type, not a value" when it
@@ -2173,9 +2189,14 @@ static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 
             b->type = check_type_value(c, arg);
             return b->type != nullptr;
         }
-        if (!check_value(c, arg)) return false;
-        diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must be a type, for '" STR_FMT "'",
-                   (long long)(index + 1), STR_ARG(generic->name), STR_ARG(struct_parameter_text(c, param)));
+        Type *t = check_value(c, arg);
+        if (!t) return false;
+        // A #modify block's Type value that no written type gives (spec
+        // 7.12), a variable's, holds its type only when the block runs, as
+        // for a $T: Type's argument (bake_argument).
+        const char *wanted = t == &type_type ? "be known while compiling" : "be a type";
+        diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must %s, for '" STR_FMT "'",
+                   (long long)(index + 1), STR_ARG(generic->name), wanted, STR_ARG(struct_parameter_text(c, param)));
         return false;
     }
     if (is_written_type(arg)) {

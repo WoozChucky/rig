@@ -2253,10 +2253,26 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
 // return holds both values from here on. Any other count of values is "a
 // #modify block returns a bool, and may add a message, as in return T !=
 // string, \"sum needs numbers\";", at the 'return'.
+//
+// The values of a return refused, each checked for its own mistakes alone.
+// A written type is a value in a #modify block (check_value's rule), so
+// `return int, "a", 1;` there, or a deferred `return int;`, says only the
+// return's mistake.
+static void check_refused_return_values(Checker *c, Ast_Return *ret) {
+    for (s64 i = 0; i < ret->values.count; i++) {
+        Ast *value = ret->values[i];
+        if (c->modify && expr_names_type(c, value)) {
+            check_type_value(c, value);
+        } else {
+            check_expression(c, value);
+        }
+    }
+}
+
 static void check_return(Checker *c, Ast_Return *ret) {
     if (c->deferring) {
         diag_error(c->diag, ret->pos, "can't return from a deferred statement");
-        for (s64 i = 0; i < ret->values.count; i++) check_expression(c, ret->values[i]);
+        check_refused_return_values(c, ret);
         return;
     }
     Ast_Proc *proc = c->proc;
@@ -2265,16 +2281,7 @@ static void check_return(Checker *c, Ast_Return *ret) {
         array_add(&ret->values, (Ast *)none);
     }
     if (proc->modify_of && ret->values.count != 2) {
-        // A written type is a value in the block (check_value's rule), so
-        // `return int, "a", 1;` says only the count.
-        for (s64 i = 0; i < ret->values.count; i++) {
-            Ast *value = ret->values[i];
-            if (expr_names_type(c, value)) {
-                check_type_value(c, value);
-            } else {
-                check_expression(c, value);
-            }
-        }
+        check_refused_return_values(c, ret);
         diag_error(c->diag, ret->pos,
                    "a #modify block returns a bool, and may add a message, as in return T != string, \"sum needs "
                    "numbers\";");
@@ -3231,12 +3238,30 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // everything needed since the body (the end of c->resolving) is in the
 // circle, marked as resolve_global marks it, so the globals in it lose
 // their types and the bodies in it have errors.
+//
+// But a body that was under way before a #modify block's check began, one
+// the block's code reaches again, led to the use of the generic that asked
+// for that check (spec 7.12): the circle runs through the use, and the
+// block's code reaches its own generic's. That is said as such, "'sum'
+// can't be used in its own #modify, which decides its instances", at the
+// use, as it is when the block is checked before the body. The circle is
+// marked all the same.
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     if (proc->is_broken) return false;
     if (!proc->body) return !proc->had_errors;  // a foreign procedure, C's code, or a #compiler one
     if (proc->body_resolve == RESOLVE_UNDER_WAY || proc->body_resolve == RESOLVE_CYCLE) {
         if (proc->body_resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
+            // The outermost check that began after the body: the first one
+            // its use asked for.
+            s64 body = c->resolving.count - 1;
+            while (c->resolving[body] != (Ast *)proc->body) body--;
+            Modify_Check *asked = nullptr;
+            for (Modify_Check *m = c->modify_check; m && m->resolving > body; m = m->outer) asked = m;
+            if (asked) {
+                report_used_in_own_modify(c, asked->name, asked->at);
+            } else {
+                diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
+            }
         }
         mark_circle(c, proc->body);
         return false;

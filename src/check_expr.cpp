@@ -3382,11 +3382,13 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
 // In a #modify block (spec 7.12), type_info(t) of a variable t of type Type
 // describes the type t holds when the block runs: `of` is t's name, checked
 // as a value, and the block describes types (Ast_Modify.describes), so the
-// types it's given are described before each run.
+// types it's given are described before each run. Its argument is where a
+// type goes, so a built-in type's name means that type there, as in `x:
+// int;` (resolve_type_name), even after `int := u8;`.
 static Type *check_type_info(Checker *c, Ast_Type_Info *info) {
     Ast_Type *written = info->type_expr;
     Ast *variable = nullptr;
-    if (c->modify && written->kind == AST_TYPE_NAME && !written->declares) {
+    if (c->modify && written->kind == AST_TYPE_NAME && !written->declares && !type_from_name(written->name)) {
         Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
         name->name = written->name;
         if (names_type_variable(c, name)) variable = name;

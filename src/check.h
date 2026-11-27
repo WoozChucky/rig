@@ -10,6 +10,18 @@
 #include "checker.h"
 #include "run.h"
 
+// A #modify block's check under way (spec 7.12, check_generic.cpp's
+// check_modify), on the stack while it lasts: whose it is, the use that
+// asked for it, and how many declarations were under way then. A body under
+// way that its check reaches again, one of those, is the one that use is
+// in (checker.cpp's check_reached_body).
+struct Modify_Check {
+    String name;          // its generic's
+    Position at;          // the use that asked for the check
+    s64 resolving;        // c->resolving.count when it started
+    Modify_Check *outer;  // the check under way around it, if any
+};
+
 struct Checker {
     Arena *arena;
     Diagnostics *diag;
@@ -101,6 +113,8 @@ struct Checker {
                                  // aside with the scopes (checker.cpp's leave_scopes), so a procedure the
                                  // block calls, or a declaration worked out inside it, is checked with it
                                  // null; and by check_run, so a #run's operand in the block is too
+    Modify_Check *modify_check;  // the innermost #modify block's check under way (check_generic.cpp's
+                                 // check_modify), each around it its `outer`; null for none
 };
 
 // A type or constant parameter of a generic procedure (spec 7.11), $T or
@@ -700,11 +714,19 @@ void report_generic_struct(Checker *c, Ast_Struct *generic, Position at);
 // while the check is under way: a use from inside the block, or from code
 // it reaches, asked for its own generic, "'sum' can't be used in its own
 // #modify, which decides its instances", at `at`, the use, `name` the
-// generic's; the check under way then has that error. While a top-level
-// #if's condition is decided (Checker.deciding), the block isn't checked
-// (a later use or the pass over the bodies checks it, every name known):
-// true then.
+// generic's (report_used_in_own_modify); the check under way then has that
+// error. While a top-level #if's condition is decided (Checker.deciding),
+// the use is refused, "a top-level #if's condition can't run code while
+// compiling, for now", at `at`, and the block isn't checked (a later use or
+// the pass over the bodies checks it, every name known): false then.
 bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Array<Generic_Binding> declared);
+
+// "'sum' can't be used in its own #modify, which decides its instances", at
+// `at`, a use of generic `name` from its block or from code the block
+// reaches, found while the block's check is under way: by check_modify, or
+// by checker.cpp's check_reached_body, for a body the use is in that was
+// under way before the check began.
+void report_used_in_own_modify(Checker *c, String name, Position at);
 
 // In check()'s pass over the bodies, generic procedure or struct `generic`'s
 // #modify block, if it has one that no use has checked yet (check_modify),

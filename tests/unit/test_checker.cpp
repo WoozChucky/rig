@@ -15839,12 +15839,23 @@ TEST(modify_blocks_are_checked_once_at_the_generic) {
         Ast *aliased = ((Ast_Var *)statements[4])->value;
         CHECK(aliased->is_constant);
         CHECK_EQ(aliased->constant, 1);
+        // type_info(T) reads the variable T when the block runs: no
+        // description is known while compiling.
+        Ast *info = ((Ast_Var *)statements[5])->value;
+        CHECK_EQ(info->kind, AST_TYPE_INFO);
+        if (info->kind == AST_TYPE_INFO) {
+            Ast *of = ((Ast_Type_Info *)info)->of;
+            CHECK(of != nullptr && of->kind == AST_NAME);
+            if (of && of->kind == AST_NAME) CHECK_STR(((Ast_Name *)of)->name, "T");
+            CHECK(((Ast_Type_Info *)info)->described == nullptr);
+        }
         // A return of the bool alone gives an empty message.
         Ast_Return *ret = (Ast_Return *)statements[6];
         CHECK_EQ(ret->values.count, 2);
         if (ret->values.count == 2) {
             CHECK_EQ(ret->values[1]->kind, AST_STRING);
             CHECK(ret->values[1]->type == &type_string);
+            if (ret->values[1]->kind == AST_STRING) CHECK_EQ(((Ast_String *)ret->values[1])->value.count, 0);
         }
     }
     arena_free(&a);
@@ -15884,6 +15895,9 @@ TEST(modify_block_mistakes) {
         // The variables are declared in the block's own scope.
         {"T := 1;", false, 31, "'T' is already declared at test.rig:1:17"},
         {"x := T + 1;", false, 38, "'+' needs numbers, not 'Type'"},
+        // A written type is a value in a deferred return's values too: only
+        // the return is said.
+        {"defer { return int; }", false, 39, "can't return from a deferred statement"},
         // A written type is a value among a miscounted return's values too.
         {"return int, \"a\", 1;", true, 31, returns},
         // A #run is code of its own, not the block's: a type written there
@@ -15912,10 +15926,13 @@ TEST(modify_block_mistakes_in_what_it_uses) {
     // refused, and a variable of type Type is no $U: Type's argument. A
     // procedure the block calls is checked as anywhere, so a type written
     // there is no value, and one with a mistake makes the block's. The
-    // block can't use its own generic, nor can what it calls.
+    // block can't use its own generic, nor can what it calls. Either way f
+    // makes no instance, whose body would say y's mistake.
     Arena a = arena_make();
     const char *no_instance = "a value of type 'Type' can't be an argument of 'g'; type_info(T) describes the type";
     const char *own = "'f' can't be used in its own #modify, which decides its instances";
+    const char *box = "Box :: struct (T: Type) { v: T; }";
+    const char *unknown_box = "argument 1 of 'Box' must be known while compiling, for 'T: Type'";
     struct Case {
         const char *block;    // the block's code, before its `return true;`
         const char *after;    // declarations after main, from line 3
@@ -15930,6 +15947,9 @@ TEST(modify_block_mistakes_in_what_it_uses) {
         {"t := g(T);", "g :: (v: $U) -> U { return v; }", "1:31", no_instance},
         {"n := h(T); m := h(int);", "h :: ($U: Type) -> int { return 1; }", "1:31",
          "argument 1 of 'h' must be known while compiling, for '$U: Type'"},
+        // A generic struct's instance is none either, written as a value.
+        {"b := Box(T);", box, "1:33", unknown_box},
+        {"t := T; b := Box(t);", box, "1:41", unknown_box},
         {"n := helper();", "helper :: () -> int { t := int; return 1; }", "3:28", "'int' is a type, not a value"},
         {"n := helper();", "helper :: () -> int { return \"a\"; }", "3:30",
          "a value of type 'string' doesn't convert to 'int' implicitly"},
@@ -15940,12 +15960,50 @@ TEST(modify_block_mistakes_in_what_it_uses) {
     for (const Case &k : cases) {
         for (const char *call : calls) {
             const char *text = string_cstr(&a, string_printf(&a,
-                                                             "f :: (v: $T) #modify { %s return true; } { }\n"
+                                                             "f :: (v: $T) #modify { %s return true; } "
+                                                             "{ y: T = \"s\"; }\n"
                                                              "main :: () { %s }\n%s\n",
                                                              k.block, call, k.after));
-            CHECK_STR(check_with_preload(&a, text), string_cstr(&a, string_printf(&a, "%s: %s\n", k.at, k.message)));
+            Ast_File *file = nullptr;
+            CHECK_STR(check_with_preload(&a, text, &file),
+                      string_cstr(&a, string_printf(&a, "%s: %s\n", k.at, k.message)));
+            Ast_Proc *f = (Ast_Proc *)top_level_named(file, "f");
+            CHECK(f->modify->had_errors);
+            CHECK(f->had_errors);
         }
     }
+    // A procedure checked before the block, its mistake said in its own
+    // turn, still makes the block's: f(1) makes no instance.
+    {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a,
+                                     "helper :: () -> int { t := int; return 1; }\n"
+                                     "f :: (v: $T) #modify { n := helper(); return true; } { y: T = \"s\"; }\n"
+                                     "main :: () { helper(); f(1); }\n",
+                                     &file),
+                  "1:28: 'int' is a type, not a value\n");
+        Ast_Proc *f = (Ast_Proc *)top_level_named(file, "f");
+        CHECK(f->modify->had_errors);
+        CHECK(f->had_errors);
+    }
+    // A body already under way when its use of f asks for the block's
+    // check, which reaches that body again, is the same mistake, said at
+    // the use whatever the order: helper's body before f's block, and a
+    // constant's #run that reaches a body using A, whose block calls it.
+    for (const char *call : calls) {
+        CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a,
+                                                                       "helper :: () { f(true); }\n"
+                                                                       "f :: (v: $T) #modify { helper(); return "
+                                                                       "true; } { y: T = \"s\"; }\n"
+                                                                       "main :: () { %s }\n",
+                                                                       call))),
+                  string_cstr(&a, string_printf(&a, "1:16: %s\n", own)));
+    }
+    CHECK_STR(check_with_preload(&a, "K :: #run helper();\n"
+                                     "helper :: () -> int { x: A(u8); return 1; }\n"
+                                     "A :: struct (T: Type) #modify { helper(); return true; } { v: T; }\n"
+                                     "main :: () { }\n"),
+              "2:26: 'A' can't be used in its own #modify, which decides its instances\n");
     arena_free(&a);
 }
 
@@ -15954,11 +16012,13 @@ TEST(modify_variables_of_constants_and_structs) {
     // procedure's $N: int, an instance's argument's N (Ring($T, $N)) and a
     // generic struct's N: int alike; a generic struct's block is checked
     // once too, used or not. A block that takes no type_info of a Type
-    // value doesn't describe types.
+    // value doesn't describe types: type_info(int) is a written type's
+    // description, known while compiling.
     Arena a = arena_make();
     Ast_File *file = nullptr;
     CHECK_STR(check_with_preload(&a,
-                                 "ring :: (v: $T, $N: int) #modify { k := N + 1; return true; } { }\n"
+                                 "ring :: (v: $T, $N: int) #modify { k := N + 1; i := type_info(int); return true; } "
+                                 "{ }\n"
                                  "Ring :: struct (T: Type, N: int) #modify { if N < 1 { N = 1; } return T != u8; } "
                                  "{ items: [N]T; }\n"
                                  "first :: (r: Ring($T, $N)) #modify { N = 2; return true; } { }\n"
@@ -15983,7 +16043,56 @@ TEST(modify_variables_of_constants_and_structs) {
     }
     CHECK(!((Ast_Struct *)top_level_named(file, "Ring"))->had_errors);
     Array<Ast *> &statements = modifies[0]->proc->body->statements;
-    CHECK(statements.count > 0 && statements[0]->type == &type_int);  // k
+    CHECK(statements.count > 1 && statements[0]->type == &type_int);  // k
+    if (statements.count > 1) {
+        Ast_Type_Info *info = (Ast_Type_Info *)((Ast_Var *)statements[1])->value;  // i
+        CHECK(info->of == nullptr);
+        CHECK(info->described == &type_int);
+    }
+    arena_free(&a);
+}
+
+TEST(modify_describes_types_only_through_type_info_of_a_variable) {
+    // A block that takes type_info of a Type value describes types: a
+    // written type in it is held as its description, which the walk lays
+    // out, so comparing T with a struct whose layout needs the block's
+    // check is that struct's circle, said once. A block that only compares
+    // holds types as handles, and lays nothing out.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Node :: struct { l: List(int); }\n"
+                                 "List :: struct (T: Type) #modify { x := type_info(T); return T != Node; } "
+                                 "{ v: int; }\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "1:1: 'Node' is defined in terms of itself\n");
+    CHECK(((Ast_Struct *)top_level_named(file, "List"))->modify->describes);
+    CHECK_STR(check_with_preload(&a,
+                                 "Node :: struct { l: List(int); }\n"
+                                 "List :: struct (T: Type) #modify { return T != Node; } { v: int; }\n"
+                                 "main :: () { n: Node; }\n",
+                                 &file),
+              "");
+    CHECK(!((Ast_Struct *)top_level_named(file, "List"))->modify->describes);
+    // A built-in type's name always means it where a type goes, a local of
+    // its name hiding it only where a value goes: type_info(int) is int's
+    // description, the local not read.
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (v: $T) #modify { int := u8; x: int = 300; i := type_info(int); "
+                                 "return true; } { }\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "");
+    Ast_Modify *modify = ((Ast_Proc *)top_level_named(file, "f"))->modify;
+    CHECK(!modify->describes);
+    Array<Ast *> &statements = modify->proc->body->statements;
+    CHECK_EQ(statements.count, 4);
+    if (statements.count == 4) {
+        Ast_Type_Info *info = (Ast_Type_Info *)((Ast_Var *)statements[2])->value;
+        CHECK(info->of == nullptr);
+        CHECK(info->described == &type_int);
+    }
     arena_free(&a);
 }
 
@@ -16005,6 +16114,14 @@ TEST(modify_struct_block_mistakes) {
     }
     CHECK_STR(check_with_preload(&a, joined(&a, "g: Box(int);\n", box, "main :: () { }\n")),
               string_cstr(&a, string_printf(&a, "2:38: %s\n", variable)));
+    // A declaration worked out from inside the block is checked as
+    // anywhere: a global the block first needs, in the declarations pass,
+    // takes no written type as its value.
+    CHECK_STR(check_with_preload(&a, "b: Box(int);\n"
+                                     "Box :: struct (T: Type) #modify { x := g; return true; } { v: T; }\n"
+                                     "g := int;\n"
+                                     "main :: () { }\n"),
+              "3:6: 'int' is a type, not a value\n");
     // A constant parameter is a variable of its constant's type.
     CHECK_STR(check_with_preload(&a, "Ring :: struct (T: Type, N: int) #modify { s: string = N; return true; } "
                                      "{ items: [N]T; }\n"
@@ -16041,18 +16158,35 @@ TEST(modify_blocks_are_checked_at_their_first_use) {
                                      "f :: (values: []$T) #modify { main(); return true; } { }\n"
                                      "main :: () { }\n"),
               "3:21: main is where the program starts; #modify can't call it\n");
-    // A use while a top-level #if's condition is decided doesn't check the
-    // block, whose names may be declared in a top-level #if: a later use
-    // does, every name known.
+    // A use while a top-level #if's condition is decided is refused, for
+    // now, each one: the block would run there. It doesn't check the block,
+    // whose names may be declared in a top-level #if: a later use does, or
+    // the bodies pass, every name known, and says a mistake there once.
+    const char *deciding = "2:5: a top-level #if's condition can't run code while compiling, for now\n"
+                           "2:16: a top-level #if's condition can't run code while compiling, for now\n";
     CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) #modify { return K; } { v: T; }\n"
                                      "#if Box(u8) == Box(u8) { A :: 1; }\n"
                                      "#if true { K :: true; }\n"
                                      "main :: () { b: Box(int); }\n"),
-              "");
+              deciding);
     CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) #modify { helper(); return T != Later; } { v: T; }\n"
-                                     "#if Box(u8) == Box(u8) { Later :: struct { a: int; } }\n"
+                                     "#if Box(u8) == Box(u8) { A :: 1; }\n"
+                                     "#if true { Later :: struct { a: int; } }\n"
                                      "helper :: () { }\n"
                                      "main :: () { b: Box(int); }\n"),
-              "");
+              deciding);
+    const char *mains[] = {"main :: () { b: Box(int); }\n", "main :: () { }\n"};
+    for (const char *main : mains) {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, joined(&a,
+                                                "Box :: struct (T: Type) #modify { x: T; return K; } "
+                                                "{ v: T; w: [0 - size_of(T)]u8; }\n"
+                                                "#if Box(u8) == Box(u8) { A :: 1; }\n"
+                                                "#if true { K :: true; }\n",
+                                                main),
+                                     &file),
+                  string_cstr(&a, string_printf(&a, "1:38: %s\n%s", variable, deciding)));
+        CHECK(((Ast_Struct *)top_level_named(file, "Box"))->had_errors);
+    }
     arena_free(&a);
 }

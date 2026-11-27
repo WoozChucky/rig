@@ -58,15 +58,18 @@ tests/errors/modify_mistakes.rig:35:47: error: a value of type 'Type' can't be a
 tests/errors/modify_mistakes.rig:36:50: error: argument 1 of 'bakes' must be known while compiling, for '$U: Type'
     bakes_a_variable :: (v: $T) #modify { n := bakes(T); return true; } { }
                                                      ^
-tests/errors/modify_mistakes.rig:38:34: error: 'uses_itself' can't be used in its own #modify, which decides its instances
+tests/errors/modify_mistakes.rig:37:49: error: argument 1 of 'Wrap' must be known while compiling, for 'T: Type'
+    boxes_a_variable :: (v: $T) #modify { w := Wrap(T); return true; } { }
+                                                    ^
+tests/errors/modify_mistakes.rig:39:34: error: 'uses_itself' can't be used in its own #modify, which decides its instances
     uses_itself :: (v: $T) #modify { uses_itself(1); return true; } { }
                                      ^
-tests/errors/modify_mistakes.rig:39:38: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
+tests/errors/modify_mistakes.rig:40:38: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
     Box :: struct (T: Type) #modify { x: T; return true; } { v: T; }
                                          ^
-tests/errors/modify_mistakes.rig:40:56: error: a value of type 'int' doesn't convert to 'string' implicitly
+tests/errors/modify_mistakes.rig:41:56: error: a value of type 'int' doesn't convert to 'string' implicitly
     Ring :: struct (T: Type, N: int) #modify { s: string = N; return true; } { items: [N]T; }
                                                            ^
-tests/errors/modify_mistakes.rig:44:34: error: 'int' is a type, not a value
+tests/errors/modify_mistakes.rig:45:34: error: 'int' is a type, not a value
     names_a_type :: () -> int { t := int; return 1; }
                                      ^

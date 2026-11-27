@@ -1272,24 +1272,26 @@
 //   while compiling; a *Type_Info describes one at run time", at the type
 //   (checker.cpp's resolve_written), but a #modify block's local (below).
 // - Only == and != and a $T: Type parameter's argument take type values
-//   for now, outside a #modify block (below). For == and != (check_type_comparison), with either operand
-//   naming a type, both must ("'==' compares a type only with a type, as
-//   in T == int", at the operator), and the result is a constant bool, 1
-//   for == when they're the same type (one Type *), for != when they
-//   aren't: `int == s64` is false, `float == float32` true, so `#if`
-//   decides on one and a constant may be one. A $T: Type's argument is
+//   for now, outside a #modify block (below). For == and !=
+//   (check_type_comparison), with either operand naming a type, both must
+//   ("'==' compares a type only with a type, as in T == int", at the
+//   operator), and the result is a constant bool, 1 for == when they're
+//   the same type (one Type *), for != when they aren't: `int == s64` is
+//   false, `float == float32` true, so `#if` decides on one and a constant
+//   may be one (in a #modify block, one with a variable of type Type is no
+//   constant, below). A $T: Type's argument is
 //   checked as a type value when it names a type (check_expr.cpp's
 //   check_generic_call). Anywhere else a type is "'Vec2' is a type, not a
 //   value" as ever, at a name (`*Vec2` at Vec2), and "'[]int' is a type,
 //   not a value" at an Ast_Type_Value's start, its type named as messages
 //   name types.
 // - What lowering may rely on: no node of type Type is lowered, outside a
-//   #modify block (below). A type
-//   value has type Type and is never a constant (Ast.is_constant false),
-//   the type it denotes in Ast.constant's bits (type_value); a comparison
-//   of types is a constant bool, its operand_type Type, lowered as its
-//   constant. A #run's walk takes a node of type Type as a leaf
-//   (check_run.cpp's walk_expression).
+//   #modify block (below). A type value has type Type and is never a
+//   constant (Ast.is_constant false), the type it denotes in Ast.constant's
+//   bits (type_value); a comparison of two written types is a constant
+//   bool, its operand_type Type, lowered as its constant (in a #modify
+//   block one with a variable of type Type isn't, below). A #run's walk
+//   takes a node of type Type as a leaf (check_run.cpp's walk_expression).
 //
 // Generic procedures (issue #226, spec 7.11).
 // - A procedure whose parameters' types declare a type parameter, $T, or
@@ -1686,9 +1688,13 @@
 //   aren't in its scope: no call's arguments exist when it runs. A use of
 //   the generic from the block, or from code it reaches, finds the check
 //   under way: "'sum' can't be used in its own #modify, which decides its
-//   instances", at the use, the block's mistake. A use while a top-level
-//   #if's condition is decided doesn't check the block, whose names may be
-//   declared in a top-level #if: a later use or the bodies pass does.
+//   instances", at the use, the block's mistake; so does the walk that
+//   finds a body under way since before the check began, which led to the
+//   use (checker.cpp's check_reached_body). A use while a top-level #if's
+//   condition is decided is refused, for now: "a top-level #if's condition
+//   can't run code while compiling, for now", at the use, and no instance.
+//   It doesn't check the block, whose names may be declared in a top-level
+//   #if: a later use or the bodies pass does.
 // - Checker.modify is set while the block's own body is checked, and set
 //   aside with the scopes, so a procedure it calls, or a declaration worked
 //   out inside it, is checked as anywhere; and for a #run's operand
@@ -1708,7 +1714,8 @@
 //   - type_info(t) of a variable t of type Type is that variable's
 //     description, read when the block runs (Ast_Type_Info.of, described
 //     null), and sets Ast_Modify.describes; it is no constant address
-//     (type_info_address);
+//     (type_info_address); a built-in type's name there means the type,
+//     a local of its name hiding it only where a value goes;
 //   - a written type naming such a variable, `x: T;`, `size_of(T)`, `[]T`,
 //     is "'T' is a variable of type 'Type', not a type; type_info(T)
 //     describes it, as in type_info(T).size", at the name; `*T` is "can't
@@ -1719,8 +1726,10 @@
 //     argument of 'g'; type_info(T) describes the type", and a variable of
 //     type Type as a $U: Type's argument is "argument 1 of 'h' must be known
 //     while compiling, for '$U: Type'" (check_generic.cpp's infer_bindings
-//     and bake_argument), so no instance has a Type parameter; any other use
-//     gets the messages any value of its type gets;
+//     and bake_argument), as a generic struct's T: Type's is ("argument 1
+//     of 'Box' must be known while compiling, for 'T: Type'",
+//     bind_struct_argument), so no instance has a Type parameter; any
+//     other use gets the messages any value of its type gets;
 //   - `return b;` gives an empty message: check_return appends a string ""
 //     at the return, so the return holds two values from then on; any other
 //     count is "a #modify block returns a bool, and may add a message, as in

@@ -7,12 +7,12 @@
 // The procedure's other parameters aren't in it, no call's arguments
 // existing when it runs, and it can't call main. A local can't take a
 // variable's name. No instance takes a Type value, so none binds a type
-// parameter, and a #run in the block is code of its own, where a type is
-// no value. What it calls is checked as anywhere, and must have no
-// mistakes; neither it nor what it calls can use its own generic. A
-// generic struct's block is checked as a procedure's, used or not. A
-// generic whose block has a mistake makes no instance: main's uses say
-// nothing more.
+// parameter, nor is one a struct's argument, and a #run in the block is
+// code of its own, where a type is no value. What it calls is checked as
+// anywhere, and must have no mistakes; neither it nor what it calls can
+// use its own generic. A generic struct's block is checked as a
+// procedure's, used or not. A generic whose block has a mistake makes no
+// instance: main's uses say nothing more.
 
 decided :: (v: $T) #modify { #if T == int { } return true; } { }
 as_type :: (v: $T) #modify { x: T; return true; } { }
@@ -34,6 +34,7 @@ added :: (v: $T) #modify { x := T + 1; return true; } { }
 runs_a_type :: (v: $T) #modify { t := #run int; return true; } { }
 passes_a_type :: (v: $T) #modify { n := takes(T); return true; } { }
 bakes_a_variable :: (v: $T) #modify { n := bakes(T); return true; } { }
+boxes_a_variable :: (v: $T) #modify { w := Wrap(T); return true; } { }
 calls_a_mistake :: (v: $T) #modify { n := names_a_type(); return true; } { }
 uses_itself :: (v: $T) #modify { uses_itself(1); return true; } { }
 Box :: struct (T: Type) #modify { x: T; return true; } { v: T; }
@@ -42,6 +43,7 @@ Ring :: struct (T: Type, N: int) #modify { s: string = N; return true; } { items
 takes :: (v: $U) -> int { return 1; }
 bakes :: ($U: Type) -> int { return 1; }
 names_a_type :: () -> int { t := int; return 1; }
+Wrap :: struct (T: Type) { v: T; }
 
 main :: () {
     decided(1);
@@ -65,6 +67,7 @@ main :: () {
     runs_a_type(1);
     passes_a_type(1);
     bakes_a_variable(1);
+    boxes_a_variable(1);
     calls_a_mistake(1);
     uses_itself(1);
     b: Box(int);
