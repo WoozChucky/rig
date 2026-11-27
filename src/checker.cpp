@@ -4115,12 +4115,12 @@ static bool inside_declaration(Position at, Ast_Const *k) {
 
 // Whether constant k, which has no type, has a mistake of its own said in
 // its declaration, in no instance or in `instance`, the chain one of its
-// notes was said in: an error inside it that is no recorded note, or a
-// note of a constant that has a type, `X :: cast(Y) 1;` with `Y :: 5;`.
-// That one is never withdrawn, so k's answer doesn't wait on it, nor is it
-// k's own note, k having none. A note of a constant with no type, k's or
-// another's, isn't k's mistake. note_of[m] is the constant message m is a
-// note of, null for any other message.
+// notes was said in: an error inside it that is no recorded note, or a note
+// of a constant that has a type, `X :: cast(Y) 1;` with `Y :: 5;`. That one
+// is never withdrawn, so k's answer doesn't wait on it, nor is it k's own
+// note, k having none. A note of a constant with no type, k's or another's,
+// isn't k's mistake. note_of[m] is the constant message m is a note of,
+// null for any other message.
 static bool holds_own_mistake(Diagnostics *d, Array<Ast_Const *> note_of, Ast_Const *k, String instance) {
     for (s64 m = 0; m < d->messages.count; m++) {
         Diagnostic *said = &d->messages[m];
@@ -4134,18 +4134,18 @@ static bool holds_own_mistake(Diagnostics *d, Array<Ast_Const *> note_of, Ast_Co
 // At the end of check(): withdraws each "'X' is not a type" recorded of a
 // constant (Ast_File.constants_not_types, resolve_type_name) whose constant
 // has no type and whose declaration holds a mistake of its own
-// (holds_own_mistake), said there, which the note only repeats (`X :: 1 +
-// "a";`, `X :: (int);`, `X :: cast(Y) 1;` with `Y :: 5;`). It's decided
-// here, from the final state alone, so a use before X's declaration and one
-// after it get the same, and nothing the checker did between the note and
-// here changes (had_errors, a generic struct's refusals). A note of a
-// constant with no type is no constant's own mistake, said of itself, `X ::
-// cast(X) 1;`, or of another, `X :: cast(Y) 1;` with `Y :: 1 + "a";`; nor
-// is a mistake in another declaration its value names, `X :: K + 1;` with
-// `K :: 1 + "a";`; and a constant that fails only through its use, a circle
-// through a struct's field, `S :: struct { a: C; } g: S; C :: g.a;`, has
-// none: their notes stay. A circle of constants is said once, at its first
-// (spec 4.8), so only that one's notes go. Each instance of a generic
+// (holds_own_mistake), said there, which the note only repeats
+// (`X :: 1 + "a";`, `X :: (int);`, `X :: cast(Y) 1;` with `Y :: 5;`). It's
+// decided here, from the final state alone, so a use before X's declaration
+// and one after it get the same, and nothing the checker did between the
+// note and here changes (had_errors, a generic struct's refusals). A note
+// of a constant with no type is no constant's own mistake, said of itself,
+// `X :: cast(X) 1;`, or of another, `X :: cast(Y) 1;` with `Y :: 1 + "a";`;
+// nor is a mistake in another declaration its value names, `X :: K + 1;`
+// with `K :: 1 + "a";`; and a constant that fails only through its use, a
+// circle through a struct's field, `S :: struct { a: C; } g: S; C :: g.a;`,
+// has none: their notes stay. A circle of constants is said once, at its
+// first (spec 4.8), so only that one's notes go. Each instance of a generic
 // procedure clones its local constants at the same places, so a message
 // said in an instance (Diagnostic.context) is X's own only when said in the
 // note's: another instance's X is another constant. One said in none, a

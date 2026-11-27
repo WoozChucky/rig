@@ -1465,14 +1465,13 @@
 //   alias can be used before its declaration, in a struct's field or a
 //   global's type; any other, `C :: size_of(S);` or `C :: D;` with D no
 //   alias, is "'C' is not a type" there, its value not worked out, so no
-//   circle. A local one is declared in
-//   order, as any local constant. A circle is a constant's, "'A' is
-//   defined in terms of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias
-//   dropped. An alias whose value needs an instance of a generic struct
-//   whose field names the alias, `Ptr :: *Node(int);` with `kids:
-//   [..]Ptr;`, is no circle: the generic's own check leaves the alias's
-//   name until the alias is worked out, and checks it then
-//   (check_generic.cpp's alias_under_way).
+//   circle. A local one is declared in order, as any local constant. A
+//   circle is a constant's, "'A' is defined in terms of itself"
+//   (`A :: B; B :: A;`, `S :: *S;`), its alias dropped. An alias whose value
+//   needs an instance of a generic struct whose field names the alias,
+//   `Ptr :: *Node(int);` with `kids: [..]Ptr;`, is no circle: the generic's
+//   own check leaves the alias's name until the alias is worked out, and
+//   checks it then (check_generic.cpp's alias_under_way).
 // - An alias whose check failed, or that is in a circle, has no type, its
 //   mistake said once: its uses say nothing more (resolve_written,
 //   check_addressable). Nor do those of one naming a struct found in a
