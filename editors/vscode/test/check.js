@@ -1267,6 +1267,9 @@ check('the grammar colours an alias of a named type as a type', () => {
     assertScopes('SAME :: SQUARES;', { SAME: CONSTANT });
     assertScopes('MINE :: OS;', { MINE: CONSTANT });
     assertScopes('VERBOSE :: true;', { VERBOSE: CONSTANT });
+    // A call of a capitalised procedure is taken for an instance: the
+    // accepted mistake the README names.
+    assertScopes('R :: Repeat(3);', { R: TYPE, Repeat: TYPE });
     assertScopes('R :: repeat(3);', { R: CONSTANT });
     assertScopes('A :: [2]int.[1, 2];', { A: CONSTANT });
     assertScopes('LIMIT :: 10;', { LIMIT: CONSTANT });

@@ -14379,6 +14379,12 @@ TEST(a_failed_constant_says_nothing_more_as_a_type) {
         {"K :: 1 + \"a\";\nX :: K + 1;\nmain :: () { x: X; }\n",
          "1:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
         {"X :: 5;\nmain :: () { x: X; }\n", "2:17: 'X' is not a type\n"},
+        // A constant that keeps its type despite its own mistake is a value,
+        // so using it as a type is a mistake of its own, in either order.
+        {"X :: 300 + cast(u8) 0;\nmain :: () { x: X; }\n",
+         "1:6: 300 doesn't fit in 'u8'\n2:17: 'X' is not a type\n"},
+        {"main :: () { x: X; }\nX :: 300 + cast(u8) 0;\n",
+         "1:17: 'X' is not a type\n2:6: 300 doesn't fit in 'u8'\n"},
         // A mistake on the line of X's declaration, before its name or
         // after its ';', isn't X's own.
         {"Y :: 5;\nmain :: () { a := 1 + \"a\"; X :: cast(Y) 1; x: X; }\n",

@@ -202,28 +202,27 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // worked out only where they're needed (resolve_enum). Any other name
 // declared where the type is written isn't a type ("'foo' is not a type"):
 // a constant's is taken back at the end of check() when the constant's own
-// declaration said a mistake, which it would only repeat. That's decided
-// there, not at the use, which may come before the constant is worked out,
-// so a use before the declaration and one after it get the same
-// (withdraw_repeated_not_a_type). A name declared nowhere is "unknown type
-// 'foo'", unless a #load or a top-level #if's condition failed: the missing
-// file, or the branches never decided, may declare it (Checker.lost_a_file).
-// A decider says instead, of a name a top-level #if's branch declares,
-// "'foo' is declared in a top-level #if, so it can't decide another
-// top-level #if" (check_in_a_branch). A broken entry's name may have been
-// anything, so nothing is said about it. A struct found to contain itself
-// has no type: its uses say nothing more. A generic struct's name alone is
-// no type (spec 3.23): "'Map' is generic; write its arguments, as in Map(K,
-// V)". An instance of one, Map(string, int), is the instance's struct
-// (check_generic.cpp's check_written_instance), laid out here as a
-// struct's name's is. In an instance of a generic procedure, a type
-// parameter's name is the type it's bound to (spec 7.11, Ast_Alias), and a
-// type alias's name is the type it names, wherever (spec 3.22); one that
-// failed, its mistake said, says nothing more where it's used. Type, the
-// type of types (spec 5.20), is written nowhere it resolves (a $T: Type
+// declaration said a mistake and left it with no type, which it would only
+// repeat. That's decided there, not at the use, which may come before the
+// constant is worked out, so a use before the declaration and one after it
+// get the same (withdraw_repeated_not_a_type). A name declared nowhere is
+// "unknown type 'foo'", unless a #load or a top-level #if's condition
+// failed: the missing file, or the branches never decided, may declare it
+// (Checker.lost_a_file). A decider says instead, of a name a top-level
+// #if's branch declares, "'foo' is declared in a top-level #if, so it can't
+// decide another top-level #if" (check_in_a_branch). A broken entry's name
+// may have been anything, so nothing is said about it. A struct found
+// to contain itself has no type: its uses say nothing more. A generic
+// struct's name alone is no type (spec 3.23): "'Map' is generic; write its
+// arguments, as in Map(K, V)". An instance of one, Map(string, int), is
+// the instance's struct (check_generic.cpp's check_written_instance), laid
+// out here as a struct's name's is. In an instance of a generic procedure,
+// a type parameter's name is the type it's bound to (spec 7.11, Ast_Alias),
+// and a type alias's name is the type it names, wherever (spec 3.22); one
+// that failed, its mistake said, says nothing more where it's used. Type,
+// the type of types (spec 5.20), is written nowhere it resolves (a $T: Type
 // parameter's type never is, check_generic.cpp's takes_a_type): "'Type'
-// only names types while compiling; a *Type_Info describes one at run
-// time".
+// only names types while compiling; a *Type_Info describes one at run time".
 //
 // behind_pointer: the type is what a pointer points at, or a view's or a
 // resizable array's elements, which lie elsewhere: a struct named right
@@ -328,8 +327,9 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
         // (may_be_alias, `K :: g;` with g a variable), is no type, as is a
         // call of anything but a generic struct, `K :: f(1);` with f a
         // procedure (may_call_instance), whether worked out yet or not: the
-        // branch below says so, and takes it back at the end of check() if
-        // the constant's own declaration said a mistake.
+        // branch below says so, and records the note, which check()
+        // withdraws at its end when the constant has no type and its own
+        // declaration said a mistake (withdraw_repeated_not_a_type).
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
         // A constant's is recorded: whether its own declaration fails is
@@ -515,8 +515,9 @@ static bool may_be_alias(Checker *c, Ast_Const *constant) {
 // too. Any other constant is never an alias, so its value isn't worked out
 // here: `S :: struct { a: C; } C :: size_of(S);` and `S :: struct { a: C; }
 // C :: D; D :: size_of(S);` are "'C' is not a type", no circle. When C's
-// own declaration fails, `C :: size_of(S) + "a";`, only its mistake is
-// said: the note is withdrawn at the end (withdraw_repeated_not_a_type).
+// own declaration fails, leaving it no type, `C :: size_of(S) + "a";`, only
+// its mistake is said: the note is withdrawn at the end
+// (withdraw_repeated_not_a_type).
 static Ast *find_name(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
