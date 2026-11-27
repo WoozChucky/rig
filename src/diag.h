@@ -91,11 +91,11 @@ void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows);
 // one is set (Diagnostics.context), copied.
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 
-// Withdraws error `index` (Diagnostics.messages'), said before it was known
-// to repeat another: the ones after it move down one, and error_count goes
-// down one. Several are withdrawn from the highest index down, so the
-// others' indices hold.
-void diag_withdraw(Diagnostics *d, s64 index);
+// Withdraws the errors said before they were known to repeat another:
+// withdrawn holds a flag for each of Diagnostics.messages, in its order,
+// set for each to withdraw. The others keep their order, and error_count
+// goes down one for each withdrawn.
+void diag_withdraw(Diagnostics *d, const bool *withdrawn);
 
 // Gives the error reported last these lines, copied: each ends with a line
 // break, and they're printed after its caret (Diagnostic.lines).

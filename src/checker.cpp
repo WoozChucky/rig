@@ -4113,6 +4113,19 @@ static bool inside_declaration(Position at, Ast_Const *k) {
     return from_name && to_end;
 }
 
+// Whether constant k's declaration holds a mistake of its own, said in no
+// instance or in `instance`, the chain one of its notes was said in: an
+// error inside it that is no recorded note. note_of[m] is the constant
+// message m is a note of, null for any other message.
+static bool holds_own_mistake(Diagnostics *d, Array<Ast_Const *> note_of, Ast_Const *k, String instance) {
+    for (s64 m = 0; m < d->messages.count; m++) {
+        Diagnostic *said = &d->messages[m];
+        bool same_instance = !said->context.count || string_eq(said->context, instance);
+        if (same_instance && !note_of[m] && inside_declaration(said->pos, k)) return true;
+    }
+    return false;
+}
+
 // At the end of check(): withdraws each "'X' is not a type" recorded of a
 // constant (Ast_File.constants_not_types, resolve_type_name) whose
 // constant has no type and whose declaration holds an error that is no
@@ -4131,44 +4144,59 @@ static bool inside_declaration(Position at, Ast_Const *k) {
 // places, so a message said in an instance (Diagnostic.context) is X's own
 // only when said in the note's: another instance's X is another constant.
 // One said in none, a top-level constant's (resolve_global enters no
-// instance) or the generic's own (check_generic_names), may be. The notes
-// are withdrawn from the last down, so each one's index holds
-// (diag_withdraw); nothing sorts the messages before (the driver prints
-// them only once check() is done). Frees the list. Returns how many of the
-// notes it withdrew were said before check() began, index < said_before: a
-// decider's, which check()'s return leaves out.
+// instance) or the generic's own (check_generic_names), may be. Whether X
+// has a mistake of its own is worked out once for each instance its notes
+// are said in (holds_own_mistake), not for each note, and the notes are
+// withdrawn together, in one pass (diag_withdraw); nothing sorts the
+// messages before (the driver prints them only once check() is done).
+// Frees the list. Returns how many of the notes it withdrew were said
+// before check() began, index < said_before: a decider's, which check()'s
+// return leaves out.
 static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
     Ast_File *file = c->file;
     Diagnostics *d = c->diag;
-    Array<bool> is_note = {};
-    array_reserve(&is_note, d->messages.count);
-    for (s64 i = 0; i < d->messages.count; i++) array_add(&is_note, false);
-    for (s64 i = 0; i < file->constants_not_types.count; i++) is_note[file->constants_not_types[i].message] = true;
-    // Which to withdraw, decided first, while every index is still the
-    // message's: withdrawing moves the ones after it.
+    Array<Constant_Not_A_Type> *notes = &file->constants_not_types;
+    Array<Ast_Const *> note_of = {};
     Array<bool> withdraw = {};
-    array_reserve(&withdraw, file->constants_not_types.count);
-    for (s64 i = 0; i < file->constants_not_types.count; i++) {
-        Ast_Const *constant = file->constants_not_types[i].constant;
-        String instance = d->messages[file->constants_not_types[i].message].context;
-        bool own_mistake = false;
-        for (s64 m = 0; m < d->messages.count && !constant->type && !own_mistake; m++) {
-            Diagnostic *said = &d->messages[m];
-            bool same_instance = !said->context.count || string_eq(said->context, instance);
-            own_mistake = !is_note[m] && same_instance && inside_declaration(said->pos, constant);
-        }
-        array_add(&withdraw, own_mistake);
+    array_reserve(&note_of, d->messages.count);
+    array_reserve(&withdraw, d->messages.count);
+    for (s64 m = 0; m < d->messages.count; m++) {
+        array_add(&note_of, nullptr);
+        array_add(&withdraw, false);
+    }
+    for (s64 i = 0; i < notes->count; i++) note_of[(*notes)[i].message] = (*notes)[i].constant;
+    // Each constant's answer, by its address and the chain of the instance
+    // its notes are said in, so many uses of one constant look through the
+    // messages once. A key's bytes are put together in `key`, and copied
+    // into `keys` when it's new.
+    Table<bool> own_mistake = {};
+    Arena keys = arena_make();
+    Array<u8> key = {};
+    for (s64 i = 0; i < notes->count; i++) {
+        Ast_Const *constant = (*notes)[i].constant;
+        if (constant->type) continue;  // a value, whatever its mistakes: its notes stay
+        s64 message = (*notes)[i].message;
+        String instance = d->messages[message].context;
+        key.count = 0;
+        String address = pointer_key((const void *const *)&constant);
+        for (s64 b = 0; b < address.count; b++) array_add(&key, address.data[b]);
+        for (s64 b = 0; b < instance.count; b++) array_add(&key, instance.data[b]);
+        bool *known = table_get(&own_mistake, {key.data, key.count});
+        bool own = known ? *known : holds_own_mistake(d, note_of, constant, instance);
+        if (!known) table_put(&own_mistake, string_copy(&keys, {key.data, key.count}), own);
+        withdraw[message] = own;
     }
     s64 withdrawn_before = 0;
-    for (s64 i = file->constants_not_types.count - 1; i >= 0; i--) {
-        if (!withdraw[i]) continue;
-        s64 message = file->constants_not_types[i].message;
-        diag_withdraw(d, message);
-        if (message < said_before) withdrawn_before++;
+    for (s64 m = 0; m < said_before; m++) {
+        if (withdraw[m]) withdrawn_before++;
     }
+    diag_withdraw(d, withdraw.data);
+    array_free(&key);
+    arena_free(&keys);
+    table_free(&own_mistake);
     array_free(&withdraw);
-    array_free(&is_note);
-    array_free(&file->constants_not_types);
+    array_free(&note_of);
+    array_free(notes);
     return withdrawn_before;
 }
 

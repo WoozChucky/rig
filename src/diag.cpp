@@ -33,12 +33,18 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...) {
     d->error_count++;
 }
 
-void diag_withdraw(Diagnostics *d, s64 index) {
-    RIG_ASSERT(index >= 0 && index < d->messages.count);
-    // Its text stays in the arena, freed with the rest.
-    for (s64 i = index; i + 1 < d->messages.count; i++) d->messages[i] = d->messages[i + 1];
-    d->messages.count--;
-    d->error_count--;
+void diag_withdraw(Diagnostics *d, const bool *withdrawn) {
+    // One pass: each kept message moves down over the withdrawn ones before
+    // it. Their text stays in the arena, freed with the rest.
+    s64 kept = 0;
+    for (s64 i = 0; i < d->messages.count; i++) {
+        if (withdrawn[i]) {
+            d->error_count--;
+        } else {
+            d->messages[kept++] = d->messages[i];
+        }
+    }
+    d->messages.count = kept;
 }
 
 void diag_add_lines(Diagnostics *d, String lines) {
