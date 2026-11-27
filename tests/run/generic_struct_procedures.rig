@@ -3,15 +3,22 @@
 // and V from a *Map(string, int), so a typed map is a struct and the
 // procedures over it, each compiled once per instance; a $N where the
 // struct takes a constant declares a constant parameter of the procedure,
-// Ring($T, $N) and Vec($N), which a later Vec(N) uses; a using parameter
-// of an instance reaches its fields. The same compiled, interpreted and in
-// a top-level #run.
+// Ring($T, $N) and Vec($N), which a later Vec(N) uses, an array's count
+// too, of the struct parameter's type, a string's, an enum's or a u8's as
+// well; a type is matched below an instance's argument, Map(*$K, int); a
+// using parameter of an instance reaches its fields. The same compiled,
+// interpreted and in a top-level #run.
 #import "Basic";
 
 Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }
 Ring :: struct (T: Type, N: int) { items: [N]T; }
 Pair :: struct (A: Type, B: Type) { first: A; second: B; }
 Vec :: struct (N: int) { v: [N]float; }
+Labeled :: struct (S: string) { n: int; }
+Mode :: enum { A; B; }
+Tag :: struct (M: Mode) { n: int; }
+Small :: struct (N: u8) { a: [N]u8; }
+Box :: struct (T: Type) { item: T; }
 
 // Sets key's value, replacing the one it has, if any.
 map_set :: (m: *Map($K, $V), key: K, value: V) {
@@ -42,7 +49,19 @@ ring_sum :: (r: Ring($T, $N)) -> T {
     return t;
 }
 
+// N as an array's count.
+ring_size :: (r: *Ring($T, $N)) -> int {
+    a: [N]T;
+    return a.count;
+}
+
 swap :: (p: Pair($A, $B)) -> Pair(B, A) { return .{p.second, p.first}; }
+
+name_of :: (l: Labeled($S)) -> string { return S; }
+tag_of :: (t: Tag($M)) -> Mode { return M; }
+small_n :: (s: Small($N)) -> u8 { return N; }
+key_size :: (m: Map(*$K, int)) -> int { return size_of(K); }
+deref :: (b: Box(*$T)) -> T { return b.item.*; }
 
 dot :: (a: Vec($N), b: Vec(N)) -> float {
     t: float;
@@ -74,6 +93,13 @@ main :: () {
     r.items[1] = 20;
     r.items[2] = 30;
     print("{}\n", ring_sum(r));
+    print("{}\n", ring_size(*r));
     print("{}\n", swap(Pair(int, bool).{1, true}));
     print("{}\n", dot(Vec(3).{.[1, 2, 3]}, Vec(3).{.[4, 5, 6]}));
+    print("{} {}\n", name_of(Labeled("hi").{}), name_of(Labeled("ho").{}));
+    print("{} {}\n", tag_of(Tag(Mode.B).{}), small_n(Small(3).{}));
+    keys: Map(*u8, int);
+    print("{}\n", key_size(keys));
+    five := 5;
+    print("{}\n", deref(Box(*int).{*five}));
 }

@@ -1,27 +1,48 @@
-tests/errors/generic_struct_procedures.rig:19:13: error: 'Map' takes 2 arguments, but 1 was given
+tests/errors/generic_struct_procedures.rig:23:13: error: 'Map' takes 2 arguments, but 1 was given
     bad :: (m: *Map($K)) { }
                 ^
-tests/errors/generic_struct_procedures.rig:20:14: error: 'Vec2' isn't generic, so it takes no arguments
+tests/errors/generic_struct_procedures.rig:24:14: error: 'Vec2' isn't generic, so it takes no arguments
     bad2 :: (p: *Vec2($T)) { }
                  ^
-tests/errors/generic_struct_procedures.rig:21:21: error: unknown type 'Nope'
+tests/errors/generic_struct_procedures.rig:25:21: error: unknown type 'Nope'
     bad3 :: (m: Map($K, Nope)) { }
                         ^
-tests/errors/generic_struct_procedures.rig:22:17: error: 'K' is used before '$K' declares it
+tests/errors/generic_struct_procedures.rig:26:17: error: 'K' is used before '$K' declares it
     bad4 :: (m: Map(K, $V), k: $K) { }
                     ^
-tests/errors/generic_struct_procedures.rig:23:22: error: unknown type 'Mapp'
+tests/errors/generic_struct_procedures.rig:27:22: error: unknown type 'Mapp'
     bad5 :: (v: $T) { x: Mapp(T, T); }
                          ^
-tests/errors/generic_struct_procedures.rig:30:13: error: argument 1 of 'map_add' has type '*Vec2', which doesn't fit '*Map($K, $V)'
+tests/errors/generic_struct_procedures.rig:28:14: error: 'Map' takes 2 arguments, but 3 were given
+    bad6 :: (m: *Map(*Nope, int, int), x: $T) { }
+                 ^
+tests/errors/generic_struct_procedures.rig:29:17: error: 'N' is used before '$N' declares it
+    bad7 :: (b: Vec(N), c: Vec($N)) { }
+                    ^
+tests/errors/generic_struct_procedures.rig:31:30: error: unknown identifier 'nope'
+    bad8 :: (v: $T) { x: Ring(T, nope(2)); }
+                                 ^
+tests/errors/generic_struct_procedures.rig:41:13: error: argument 1 of 'map_add' has type '*Vec2', which doesn't fit '*Map($K, $V)'
         map_add(*v, 1, 2);
                 ^
-tests/errors/generic_struct_procedures.rig:31:17: error: argument 2 of 'map_add' has type 'int', which can't be converted to 'string'
+tests/errors/generic_struct_procedures.rig:42:17: error: argument 2 of 'map_add' has type 'int', which can't be converted to 'string'
         map_add(*m, 1, 2);
                     ^
-tests/errors/generic_struct_procedures.rig:32:14: error: argument 1 of 'ring_sum' has type 'Map(string, int)', which doesn't fit 'Ring($T, $N)'
+tests/errors/generic_struct_procedures.rig:43:14: error: argument 1 of 'ring_sum' has type 'Map(string, int)', which doesn't fit 'Ring($T, $N)'
         ring_sum(m);
                  ^
-tests/errors/generic_struct_procedures.rig:33:12: error: argument 2 of 'dot' has type 'Vec(4)', which can't be converted to 'Vec(3)'
+tests/errors/generic_struct_procedures.rig:44:12: error: argument 2 of 'dot' has type 'Vec(4)', which can't be converted to 'Vec(3)'
         dot(a, c);
                ^
+tests/errors/generic_struct_procedures.rig:50:11: error: argument 1 of 'deref' has type 'Map(string, int)', which doesn't fit 'Map(*$K, $V)'
+        deref(m);
+              ^
+tests/errors/generic_struct_procedures.rig:51:11: error: can't work out 'N' for 'vec_n': argument 1 has no type of its own
+        vec_n(.{});
+              ^
+tests/errors/generic_struct_procedures.rig:52:5: error: can't work out 'N' for 'vecs': no argument gives it
+        vecs();
+        ^
+tests/errors/generic_struct_procedures.rig:53:11: error: unknown identifier 'nope'
+        vec_n(nope);
+              ^

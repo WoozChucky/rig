@@ -1605,8 +1605,11 @@
 //   generic (at_generic_instance): its name a generic struct's ("'Vec2'
 //   isn't generic, so it takes no arguments", "unknown type 'Nope'"), its
 //   count ("'Map' takes 2 arguments, but 1 was given"), and the type names
-//   of its arguments where the struct takes a type; one where it takes a
-//   constant is each instance's to check, as an array's count is. A name
+//   of its arguments where the struct takes a type, unless it said one of
+//   those mistakes or its struct's own check did, as a use then binds none
+//   of its arguments; one where it takes a constant, Ring(T, N + 1)'s or
+//   Ring(T, twice(2))'s, is each instance's to check, as an array's count
+//   is. In a generic's body, a name there is a value's or a call's. A name
 //   used before the $ that declares it, in an instance's argument too, is
 //   "'K' is used before '$K' declares it". In a generic's body an
 //   instance's name declared nowhere is "unknown type 'Mapp'". A generic

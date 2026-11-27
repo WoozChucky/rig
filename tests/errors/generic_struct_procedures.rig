@@ -4,9 +4,13 @@
 // converts to its parameter's type as any does, a Vec(4) to a Vec(3) too.
 // The instances a generic's signature names are checked once, at the
 // generic, however often it's called: the name a generic struct's, the
-// count right, each type name known; a name used before the $ that
-// declares it, in an instance's argument too. An instance in a generic's
-// body naming nothing is said though nothing calls it.
+// count right, each type name known, but none of a refused instance's; a
+// name used before the $ that declares it, in an instance's argument too,
+// a constant parameter's as well. An instance in a generic's body naming
+// nothing is said though nothing calls it, and a call where its struct
+// takes a constant is a value. A type below an instance's argument that
+// can't match doesn't fit; a constant parameter left unbound is said as a
+// type parameter's is.
 Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }
 Ring :: struct (T: Type, N: int) { items: [N]T; }
 Vec :: struct (N: int) { v: [N]float; }
@@ -21,6 +25,13 @@ bad2 :: (p: *Vec2($T)) { }
 bad3 :: (m: Map($K, Nope)) { }
 bad4 :: (m: Map(K, $V), k: $K) { }
 bad5 :: (v: $T) { x: Mapp(T, T); }
+bad6 :: (m: *Map(*Nope, int, int), x: $T) { }
+bad7 :: (b: Vec(N), c: Vec($N)) { }
+twice :: (n: int) -> int { return n * 2; }
+bad8 :: (v: $T) { x: Ring(T, nope(2)); }
+deref :: (m: Map(*$K, $V)) { }
+vec_n :: (v: Vec($N)) -> int { return N; }
+vecs :: (vs: ..Vec($N)) { }
 
 main :: () {
     m: Map(string, int);
@@ -36,4 +47,8 @@ main :: () {
     bad2(*v);
     bad3(m);
     bad3(m);
+    deref(m);
+    vec_n(.{});
+    vecs();
+    vec_n(nope);
 }

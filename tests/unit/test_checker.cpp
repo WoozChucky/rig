@@ -15238,11 +15238,30 @@ TEST(inference_reads_through_instances) {
     // the procedure, of that parameter's type, bound to the instance's
     // value, which its body uses as any constant, an array's count too, and
     // which a later Vec(N) uses. A using parameter of one reaches its
-    // fields.
+    // fields. A constant parameter has the struct parameter's type, a
+    // string's, an enum's, a u8's, a bool's or a float's too, each value
+    // its own instance; and a type is matched below an instance's argument,
+    // a pointer's target or another instance's argument.
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
                                  joined(&a, STRUCT_PROCEDURES,
+                                        "Labeled :: struct (S: string) { n: int; }\n"
+                                        "Mode :: enum { A; B; }\n"
+                                        "Tag :: struct (M: Mode) { n: int; }\n"
+                                        "Small :: struct (N: u8) { a: [N]u8; }\n"
+                                        "Flag :: struct (F: bool) { n: int; }\n"
+                                        "Scaled :: struct (S: float) { n: int; }\n"
+                                        "Box :: struct (T: Type) { item: T; }\n"
+                                        "name_of :: (l: Labeled($S)) -> string { return S; }\n"
+                                        "tag_of :: (t: Tag($M)) -> Mode { return M; }\n"
+                                        "small_n :: (s: Small($N)) -> u8 { return N; }\n"
+                                        "flag_of :: (f: Flag($F)) -> bool { return F; }\n"
+                                        "scale_of :: (s: Scaled($S)) -> float { return S; }\n"
+                                        "key_size :: (m: Map(*$K, int)) -> int { return size_of(K); }\n"
+                                        "deref :: (b: Box(*$T)) -> T { return b.item.*; }\n"
+                                        "second_of :: (m: *Map($K, Pair($A, $B))) -> B { return m.values[0].second; }\n"
+                                        "ring_count :: (m: Map(Ring($T, $N), int)) -> int { return N; }\n"
                                         "main :: () {\n"
                                         "    m: Map(string, int);\n"
                                         "    r: Ring(u8, 3);\n"
@@ -15258,21 +15277,56 @@ TEST(inference_reads_through_instances) {
                                         "    w := swap(q);\n"
                                         "    d := dot(a, b);\n"
                                         "    k := map_count(*m);\n"
+                                        "    o1 := name_of(Labeled(\"hi\").{});\n"
+                                        "    o2 := name_of(Labeled(\"ho\").{});\n"
+                                        "    o3 := name_of(Labeled(\"hi\").{});\n"
+                                        "    o4 := tag_of(Tag(Mode.B).{});\n"
+                                        "    o5 := small_n(Small(3).{});\n"
+                                        "    o6 := flag_of(Flag(true).{});\n"
+                                        "    o7 := scale_of(Scaled(1.5).{});\n"
+                                        "    pm: Map(*u8, int);\n"
+                                        "    o8 := key_size(pm);\n"
+                                        "    bx: Box(*int);\n"
+                                        "    o9 := deref(bx);\n"
+                                        "    nm: Map(int, Pair(string, bool));\n"
+                                        "    o10 := second_of(*nm);\n"
+                                        "    rm: Map(Ring(u8, 4), int);\n"
+                                        "    o11 := ring_count(rm);\n"
                                         "}\n"),
                                  &tree),
               "");
-    Ast_Proc *map_add = (Ast_Proc *)top_level_named(tree, "map_add");
-    CHECK_EQ(map_add->instances.count, 1);
-    if (map_add->instances.count == 1) CHECK_STR(map_add->instances[0]->name, "map_add(K = string, V = int)");
-    Ast_Proc *ring_sum = (Ast_Proc *)top_level_named(tree, "ring_sum");
-    CHECK_EQ(ring_sum->instances.count, 1);
-    if (ring_sum->instances.count == 1) CHECK_STR(ring_sum->instances[0]->name, "ring_sum(T = u8, N = 3)");
-    Ast_Proc *dot = (Ast_Proc *)top_level_named(tree, "dot");
-    CHECK_EQ(dot->instances.count, 1);
-    if (dot->instances.count == 1) CHECK_STR(dot->instances[0]->name, "dot(N = 3)");
-    const char *names[] = {"s", "n", "f", "w", "d", "k"};
-    const char *types[] = {"u8", "int", "int", "Pair(bool, int)", "float32", "int"};
-    for (s64 i = 0; i < 6; i++) {
+    // Each generic's instances, in the order they're made, by name.
+    struct Instances {
+        const char *generic;
+        s64 count;
+        const char *names[2];
+    };
+    const Instances instances[] = {
+        {"map_add", 1, {"map_add(K = string, V = int)"}},
+        {"ring_sum", 1, {"ring_sum(T = u8, N = 3)"}},
+        {"ring_size", 1, {"ring_size(T = u8, N = 3)"}},
+        {"dot", 1, {"dot(N = 3)"}},
+        {"name_of", 2, {"name_of(S = \"hi\")", "name_of(S = \"ho\")"}},
+        {"tag_of", 1, {"tag_of(M = Mode.B)"}},
+        {"small_n", 1, {"small_n(N = 3)"}},
+        {"flag_of", 1, {"flag_of(F = true)"}},
+        {"scale_of", 1, {"scale_of(S = 1.5)"}},
+        {"key_size", 1, {"key_size(K = u8)"}},
+        {"deref", 1, {"deref(T = int)"}},
+        {"second_of", 1, {"second_of(K = int, A = string, B = bool)"}},
+        {"ring_count", 1, {"ring_count(T = u8, N = 4)"}},
+    };
+    for (const Instances &k : instances) {
+        Ast_Proc *generic = (Ast_Proc *)top_level_named(tree, k.generic);
+        CHECK_EQ(generic->instances.count, k.count);
+        if (generic->instances.count != k.count) continue;
+        for (s64 i = 0; i < k.count; i++) CHECK_STR(generic->instances[i]->name, k.names[i]);
+    }
+    const char *names[] = {"s",  "n",  "f",  "w",  "d",  "k",  "o1", "o2", "o3",
+                           "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11"};
+    const char *types[] = {"u8",     "int",  "int", "Pair(bool, int)", "float32", "int", "string", "string", "string",
+                           "Mode",   "u8",   "bool", "float32",        "int",     "int", "bool",   "int"};
+    for (s64 i = 0; i < 17; i++) {
         Type *t = local_type(tree, "main", names[i]);
         CHECK_STR(t ? type_name(&a, t) : str("?"), types[i]);
     }
@@ -15287,7 +15341,9 @@ TEST(inference_through_instances_mistakes) {
     // or not, twice too: the name a generic struct's, the count right,
     // each argument's type name known; a name used before the $ that
     // declares it, in an instance's argument too. An instance in a
-    // generic's body naming nothing is said by the walk over its names.
+    // generic's body naming nothing is said by the walk over its names. A
+    // constant parameter of an instance's argument left unbound is said as
+    // a type parameter's is.
     Arena a = arena_make();
     struct Case {
         const char *body;
@@ -15307,6 +15363,43 @@ TEST(inference_through_instances_mistakes) {
         {"bad3(m); bad3(m);", "bad3 :: (m: Map($K, Nope)) { }\n", "14:21: unknown type 'Nope'\n"},
         {"", "bad4 :: (m: Map(K, $V), k: $K) { }\n", "14:17: 'K' is used before '$K' declares it\n"},
         {"", "bad5 :: (v: $T) { x: Mapp(T, T); }\n", "14:22: unknown type 'Mapp'\n"},
+        // An instance refused, its count wrong or its struct's own check
+        // said a mistake, says nothing of its arguments, at any depth, as a
+        // use binds none of them; nor does one whose name is no generic
+        // struct's.
+        {"", "bad6 :: (m: Map(Nope), x: $T) { }\n", "14:13: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"", "bad7 :: (m: *Map(*Nope, int, int), x: $T) { }\n", "14:14: 'Map' takes 2 arguments, but 3 were given\n"},
+        {"", "Dup :: struct (T: Type, T: Type) { a: int; }\nbad8 :: (m: Dup(Nope, $X)) { }\n",
+         "14:25: 'T' is already declared at test.rig:14:16\n"},
+        {"", "Dup :: struct (T: Type, T: Type) { a: int; }\nbad9 :: (y: Dup(int)) { }\n",
+         "14:25: 'T' is already declared at test.rig:14:16\n"},
+        {"", "Bad :: struct (K: Type) { a: Nope; }\nbad10 :: (m: *Bad(*Nope), x: $T) { }\n",
+         "14:30: unknown type 'Nope'\n"},
+        {"", "bad11 :: (m: Nope($K)) { }\n", "14:14: unknown type 'Nope'\n"},
+        {"", "bad12 :: (y: $T, x: T(int)) { }\n", "14:21: 'T' isn't generic, so it takes no arguments\n"},
+        {"", "bad13 :: ($N: int, y: N(int)) { }\n", "14:23: 'N' is not a type\n"},
+        {"", "bad14 :: (y: main(Nope)) { }\n", "14:14: 'main' is not a type\n"},
+        // A constant parameter's name used before its $ in an instance's
+        // argument, as in a count.
+        {"", "bad15 :: (b: Vec(N), c: Vec($N)) { }\n", "14:18: 'N' is used before '$N' declares it\n"},
+        // A name with arguments where the struct takes a constant is a
+        // call, each instance's to check; in a body, it and a bare name
+        // there are values, their names unknown identifiers.
+        {"", "twice :: (n: int) -> int { return n * 2; }\nbad16 :: (r: Ring($T, twice(Nope))) { }\n", ""},
+        {"", "twice :: (n: int) -> int { return n * 2; }\n"
+             "bad17 :: (v: $T) { x: Ring(T, nope(2)); y: Ring(T, nope2); z: Ring(T, twice(nope3)); }\n",
+         "15:31: unknown identifier 'nope'\n15:52: unknown identifier 'nope2'\n"
+         "15:77: unknown identifier 'nope3'\n"},
+        // A type below an instance's argument that can't match.
+        {"deref(m);", "deref :: (m: Map(*$K, $V)) { }\n",
+         "13:72: argument 1 of 'deref' has type 'Map(string, int)', which doesn't fit 'Map(*$K, $V)'\n"},
+        // A constant parameter of an instance's argument still unbound: its
+        // place's argument has no type of its own, or there's none, or its
+        // own check failed (said).
+        {"vec_n(.{});", "vec_n :: (v: Vec($N)) -> int { return N; }\n",
+         "13:72: can't work out 'N' for 'vec_n': argument 1 has no type of its own\n"},
+        {"vecs();", "vecs :: (vs: ..Vec($N)) { }\n", "13:66: can't work out 'N' for 'vecs': no argument gives it\n"},
+        {"vec_n(nope);", "vec_n :: (v: Vec($N)) -> int { return N; }\n", "13:72: unknown identifier 'nope'\n"},
     };
     for (const Case &k : cases) {
         String text = string_printf(&a,
