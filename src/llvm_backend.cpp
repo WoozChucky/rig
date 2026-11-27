@@ -725,9 +725,10 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
     // Go and gdb's minimal language too. The ones that don't, Rust, Pascal,
     // Modula-2 and Ada, print values and read expressions their own way
     // (Rust's *mut u8, Ada's (first => 7, ...), Pascal's `&b` a syntax
-    // error). A type printer in Python mends `whatis b` but not `ptype` of a
-    // struct, nor `print &b`, and gdb won't load one a program carries from
-    // outside its default auto-load safe-path. So the unit stays C99, and
+    // error). A type printer in Python mends `whatis b`, but makes `ptype` of
+    // a struct print its name alone, without its fields, leaves `print &b`
+    // as it was, and gdb won't load one a program carries from outside its
+    // default auto-load safe-path. So the unit stays C99, and
     // `whatis/r` shows the name as it is, struct Box(*u8). (Measured with
     // gdb 17.1, the unit given each language in turn.)
     //
