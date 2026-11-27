@@ -394,8 +394,9 @@ static bool constant_arguments(Checker *c, Ast_Struct *generic, Ast_Type *writte
 }
 
 // At an instance in a written type of a generic's signature, Map($K, $V)
-// (spec 7.11): what doesn't depend on the generic's parameters is said
-// once, at the generic, called or not, as each instance would say it
+// (spec 7.11), or of a generic struct's field (check_generic_fields, spec
+// 3.23): what doesn't depend on the generic's parameters is said once, at
+// the generic, called or used or not, as each instance would say it
 // (check_written_instance). Its name must be a generic struct's: "'Vec2'
 // isn't generic, so it takes no arguments", or what resolve_type_name says
 // of a name that is no type ("unknown type 'Nope'", "'main' is not a
@@ -950,8 +951,11 @@ static bool names_unbound(Ast_Type *pattern, Array<Generic_Binding> *bindings, G
 // constant, whose value it then has, of its type. An argument that is an
 // expression, or a name of anything else, binds nothing and isn't looked
 // at: the call's conversion says a mismatch, a *Ring(int, 5) to a
-// *Ring(int, 4).
-static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindings) {
+// *Ring(int, 4). A type binding of the instance's that has no type now
+// (made again to null, checker.cpp's made_again_bindings: a struct in it
+// was found in a circle since, and said) binds nothing and can't match:
+// *lost is then set, so the call says nothing more.
+static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Binding> *bindings, bool *lost) {
     if (!names_unbound(pattern, bindings, nullptr)) return true;
     switch (pattern->kind) {
     case AST_TYPE_NAME: {
@@ -972,7 +976,12 @@ static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Bin
             Ast *bound = inst->bindings[i];
             if (!is_written_type(arg)) continue;
             if (bound->kind == AST_ALIAS) {
-                if (!match_type(c, (Ast_Type *)arg, ((Ast_Alias *)bound)->aliased, bindings)) return false;
+                Type *aliased = ((Ast_Alias *)bound)->aliased;
+                if (!aliased) {
+                    *lost = true;
+                    return false;
+                }
+                if (!match_type(c, (Ast_Type *)arg, aliased, bindings, lost)) return false;
                 continue;
             }
             Generic_Binding *b = arg->kind == AST_TYPE_NAME ? binding_named(bindings, ((Ast_Type *)arg)->name) : nullptr;
@@ -983,13 +992,14 @@ static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Bin
         }
         return true;
     }
-    case AST_TYPE_POINTER: return t->kind == TYPE_POINTER && match_type(c, pattern->pointee, t->pointee, bindings);
+    case AST_TYPE_POINTER:
+        return t->kind == TYPE_POINTER && match_type(c, pattern->pointee, t->pointee, bindings, lost);
     case AST_TYPE_VIEW:
         return (t->kind == TYPE_ARRAY || t->kind == TYPE_VIEW || t->kind == TYPE_RESIZABLE) &&
-               match_type(c, pattern->element, t->element, bindings);
-    case AST_TYPE_ARRAY: return t->kind == TYPE_ARRAY && match_type(c, pattern->element, t->element, bindings);
+               match_type(c, pattern->element, t->element, bindings, lost);
+    case AST_TYPE_ARRAY: return t->kind == TYPE_ARRAY && match_type(c, pattern->element, t->element, bindings, lost);
     case AST_TYPE_RESIZABLE:
-        return t->kind == TYPE_RESIZABLE && match_type(c, pattern->element, t->element, bindings);
+        return t->kind == TYPE_RESIZABLE && match_type(c, pattern->element, t->element, bindings, lost);
     case AST_TYPE_PROC: {
         if (t->kind != TYPE_PROC || t->param_count != pattern->params.count ||
             t->result_count != pattern->results.count || t->is_variadic != pattern->is_variadic) {
@@ -998,12 +1008,12 @@ static bool match_type(Checker *c, Ast_Type *pattern, Type *t, Array<Generic_Bin
         for (s64 i = 0; i < t->param_count; i++) {
             // A '..T' parameter is a []T, and its pattern T.
             bool dots = t->is_variadic && i == t->param_count - 1;
-            if (!match_type(c, pattern->params[i], dots ? t->params[i]->element : t->params[i], bindings)) {
+            if (!match_type(c, pattern->params[i], dots ? t->params[i]->element : t->params[i], bindings, lost)) {
                 return false;
             }
         }
         for (s64 i = 0; i < t->result_count; i++) {
-            if (!match_type(c, pattern->results[i], t->results[i], bindings)) return false;
+            if (!match_type(c, pattern->results[i], t->results[i], bindings, lost)) return false;
         }
         return true;
     }
@@ -1226,7 +1236,9 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
             if (pattern->kind == AST_TYPE_NAME) continue;  // its default only if nothing typed fixes it
             t = t == &type_untyped_float ? &type_float32 : &type_int;
         }
-        if (match_type(c, pattern, t, bindings)) continue;
+        bool lost = false;
+        if (match_type(c, pattern, t, bindings, &lost)) continue;
+        if (lost) return false;  // an instance's binding with no type now: its mistake was said
         diag_error(c->diag, args[i]->start,
                    "argument %lld of '" STR_FMT "' has type '" STR_FMT "', which doesn't fit '" STR_FMT "'",
                    (long long)(i + 1), STR_ARG(generic->name), STR_ARG(type_name(c->arena, t)),
@@ -1661,11 +1673,11 @@ static s32 field_levels(Ast_Struct *s) {
 }
 
 // One step of a generic struct's own check of its fields (Generic_Fields):
-// a named field's name, or a type name in its written type outside any
-// array's count or instance's argument (at_generic_type_name).
+// a named field's name, or a type name or an instance in its written type
+// outside any array's count or instance's argument (at_generic_type_name).
 struct Generic_Field_Step {
     Ast_Field *field;
-    Ast_Type *name;    // the type name, or null for the field's own name
+    Ast_Type *name;    // the type name or the instance, or null for the field's own name
     Name_Place place;  // where the type name is in the field's type
 };
 
@@ -1693,11 +1705,13 @@ struct Field_Steps {
     Ast_Field *field;
 };
 
-// At a type name in a field's written type outside any array's count or
-// instance's argument: a step that checks it, added to the Field_Steps
-// `data` is.
+// At a type name, or an instance, in a field's written type outside any
+// array's count or instance's argument: a step that checks it, added to
+// the Field_Steps `data` is.
 static bool add_type_name_step(void *data, Ast *name, Name_Place place) {
-    if (name->kind != AST_TYPE_NAME || place.in_count || place.in_instance) return true;
+    if ((name->kind != AST_TYPE_NAME && name->kind != AST_TYPE_INSTANCE) || place.in_count || place.in_instance) {
+        return true;
+    }
     Field_Steps *steps = (Field_Steps *)data;
     array_add(steps->steps, Generic_Field_Step{steps->field, (Ast_Type *)name, place});
     return true;
@@ -1705,7 +1719,8 @@ static bool add_type_name_step(void *data, Ast *name, Name_Place place) {
 
 // The steps of struct s's named fields, added to *steps in source order,
 // an anonymous member's where its braces are, at any depth: each field's
-// name, then each type name in its type, in the order walk_names meets it.
+// name, then each type name and instance in its type, in the order
+// walk_names meets them.
 static void field_steps(Ast_Struct *s, Array<Generic_Field_Step> *steps) {
     for (s64 i = 0; i < s->fields.count; i++) {
         Ast_Field *field = s->fields[i];
@@ -1728,12 +1743,15 @@ static void field_steps(Ast_Struct *s, Array<Generic_Field_Step> *steps) {
 // - a field named as an earlier field, in its own braces or in another
 //   member's, is the same, as each instance's layout would say it
 //   (checker.cpp's lay_out), once here instead;
-// - each type name in its written type is checked as one in a generic
-//   procedure's parameter's is (at_generic_type_name), the parameters
-//   taken as types and constants still to be known: "unknown type 'Nope'",
-//   "'N' is not a type", "'void' is only a pointer's target, as in *void".
-//   An array's count and an instance's arguments are each instance's to
-//   check, and so, for now, is an instance's name.
+// - each type name and instance in its written type is checked as one in
+//   a generic procedure's parameter's is (at_generic_type_name), the
+//   parameters taken as types and constants still to be known: "unknown
+//   type 'Nope'", "'N' is not a type", "'void' is only a pointer's target,
+//   as in *void"; an instance's name a generic struct's, "'Vec2' isn't
+//   generic, so it takes no arguments", its count right, "'Map' takes 2
+//   arguments, but 1 was given", and a written type where it takes a
+//   constant no value (at_generic_instance). An array's count and an
+//   instance's other arguments are each instance's to check.
 // A field said to clash has its type checked, for its own mistakes, only
 // when it holds a pointer or a view, as lay_out makes only a late one's.
 // Each mistake marks the generic as it's said (Ast_Struct.had_errors); a

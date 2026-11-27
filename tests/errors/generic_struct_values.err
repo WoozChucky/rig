@@ -1,32 +1,35 @@
-tests/errors/generic_struct_values.rig:10:10: error: 'Pair(string, int)' is a type, not a value
+tests/errors/generic_struct_values.rig:11:10: error: 'Pair(string, int)' is a type, not a value
         x := Pair(string, int);
              ^
-tests/errors/generic_struct_values.rig:11:28: error: '==' compares a type only with a type, as in T == int
+tests/errors/generic_struct_values.rig:12:28: error: '==' compares a type only with a type, as in T == int
         y := Pair(string, int) == 3;
                                ^
-tests/errors/generic_struct_values.rig:12:10: error: 'Pair' is generic; write its arguments, as in Pair(A, B)
+tests/errors/generic_struct_values.rig:13:10: error: 'Pair' is generic; write its arguments, as in Pair(A, B)
         z := Pair;
              ^
-tests/errors/generic_struct_values.rig:13:10: error: 'Pair' takes 2 arguments, but 1 was given
+tests/errors/generic_struct_values.rig:14:10: error: 'Pair' takes 2 arguments, but 1 was given
         w := Pair(string).{};
              ^
-tests/errors/generic_struct_values.rig:14:15: error: argument 1 of 'Pair' must be a type, for 'A: Type'
+tests/errors/generic_struct_values.rig:15:15: error: argument 1 of 'Pair' must be a type, for 'A: Type'
         v := Pair(1, 2) == Pair(int, int);
                   ^
-tests/errors/generic_struct_values.rig:14:18: error: argument 2 of 'Pair' must be a type, for 'B: Type'
+tests/errors/generic_struct_values.rig:15:18: error: argument 2 of 'Pair' must be a type, for 'B: Type'
         v := Pair(1, 2) == Pair(int, int);
                      ^
-tests/errors/generic_struct_values.rig:15:10: error: 'Vec2' isn't a procedure, so it can't be called
+tests/errors/generic_struct_values.rig:16:10: error: 'Vec2' isn't a procedure, so it can't be called
         u := Vec2(1);
              ^
-tests/errors/generic_struct_values.rig:17:10: error: 'Ring(int, -2)' is a type, not a value
+tests/errors/generic_struct_values.rig:18:10: error: 'Ring(int, -2)' is a type, not a value
         r := Ring(int, -2);
              ^
-tests/errors/generic_struct_values.rig:20:44: error: an array's count can't be negative (-1)
+tests/errors/generic_struct_values.rig:20:12: error: 'Pair(string, int)' has no field 'A'
+        k := m.A;
+               ^
+tests/errors/generic_struct_values.rig:23:44: error: an array's count can't be negative (-1)
     Ring :: struct (T: Type, N: int) { items: [N]T; }
                                                ^
-    in 'Ring' with T = int, N = -1, used at tests/errors/generic_struct_values.rig:16:10
-tests/errors/generic_struct_values.rig:20:44: error: an array's count can't be negative (-2)
+    in 'Ring' with T = int, N = -1, used at tests/errors/generic_struct_values.rig:17:10
+tests/errors/generic_struct_values.rig:23:44: error: an array's count can't be negative (-2)
     Ring :: struct (T: Type, N: int) { items: [N]T; }
                                                ^
-    in 'Ring' with T = int, N = -2, used at tests/errors/generic_struct_values.rig:17:10
+    in 'Ring' with T = int, N = -2, used at tests/errors/generic_struct_values.rig:18:10

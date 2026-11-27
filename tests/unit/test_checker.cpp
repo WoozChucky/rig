@@ -14510,7 +14510,7 @@ TEST(struct_instances_hold_themselves_behind_pointers) {
     Type *t = local_type(tree, "main", "t");
     CHECK(t && t->fields.count == 2 && t->fields[1].type && t->fields[1].type->element == t);
     Type *b = local_type(tree, "main", "b");
-    CHECK(b && b->size == 16);
+    CHECK(b && b->size == 16 && b->fields.count == 2);
     if (b && b->fields.count == 2) {
         Type *inner = b->fields[0].type;
         CHECK_STR(type_name(&a, inner), "A(u8)");
@@ -14799,8 +14799,9 @@ TEST(generic_struct_declaration_mistakes) {
     // instances: two parameters of one name, a parameter named as a
     // built-in type, a field named as a parameter or as another field
     // across its braces, an anonymous member's too, and a field's type
-    // naming nothing, a constant parameter, or void. A generic with one
-    // makes no instance: its uses have no type and say nothing more.
+    // naming nothing, a constant parameter, void, or an instance that can
+    // be none. A generic with one makes no instance: its uses have no type
+    // and say nothing more.
     Arena a = arena_make();
     struct Case {
         const char *declaration;
@@ -14824,6 +14825,24 @@ TEST(generic_struct_declaration_mistakes) {
         {"S :: struct (N: int) { a: N; }\n", "x: S(1); y: S(2);", "1:27: 'N' is not a type\n"},
         {"S :: struct (T: Type) { a: void; }\n", "x: S(int); y: S(u8);",
          "1:28: 'void' is only a pointer's target, as in *void\n"},
+        // An instance in a field's type is checked as one in a generic
+        // procedure's signature is: its name a generic struct's, its count
+        // right, a written type where it takes a constant no value. A
+        // generic struct whose own check said a mistake can't be
+        // instantiated with it, so the field's generic makes no instance
+        // either. The instance's arguments are each instance's (below).
+        {"S :: struct (T: Type) { a: *Nope(T); }\n", "x: S(int); y: S(u8);", "1:29: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { a: *T(int); }\n", "x: S(int); y: S(u8);",
+         "1:29: 'T' isn't generic, so it takes no arguments\n"},
+        {"S :: struct (N: int) { a: *N(int); }\n", "x: S(1); y: S(2);", "1:28: 'N' is not a type\n"},
+        {"S :: struct (T: Type) { a: *Vec2(T); }\nVec2 :: struct { x: float; }\n", "x: S(int); y: S(u8);",
+         "1:29: 'Vec2' isn't generic, so it takes no arguments\n"},
+        {"S :: struct (T: Type) { a: *Map(T); }\nMap :: struct (K: Type, V: Type) { k: K; }\n",
+         "x: S(int); y: S(u8);", "1:29: 'Map' takes 2 arguments, but 1 was given\n"},
+        {"S :: struct (T: Type) { a: *Ring(T, *int); }\nRing :: struct (T: Type, N: int) { items: [N]T; }\n",
+         "x: S(int); y: S(u8);", "1:37: '*int' is a type, not a value\n"},
+        {"S :: struct (T: Type) { a: *Bad(T); }\nBad :: struct (K: Type) { a: Nope; }\n", "x: S(int); y: S(u8);",
+         "2:30: unknown type 'Nope'\n"},
         // A field said to clash has its type checked only when it holds a
         // pointer or a view, as any struct's layout makes only a late one's.
         {"S :: struct (T: Type) { a: T; a: Nope; }\n", "x: S(int); y: S(u8);",
@@ -15173,6 +15192,13 @@ TEST(instance_value_mistakes) {
          "3:27: argument 2 of 'Pair' must be a type, for 'B: Type'\n"},
         {"main :: () { x := Pair(string, Nope); }\n", "3:32: unknown identifier 'Nope'\n"},
         {"main :: () { u := Vec2(1); }\n", "3:19: 'Vec2' isn't a procedure, so it can't be called\n"},
+        // An instance's parameters aren't read from outside it, for now:
+        // through a value or a pointer, a parameter's name is no field, and
+        // the instance itself, before a '.', is a type, not a value.
+        {"main :: () { m: Pair(int, int); x := m.A; p := *m; y := p.A; z := Pair(int, int).A; }\n",
+         "3:40: 'Pair(int, int)' has no field 'A'\n"
+         "3:59: 'Pair(int, int)' has no field 'A'\n"
+         "3:67: 'Pair(int, int)' is a type, not a value\n"},
         {"show :: (v: $T) { }\nmain :: () { show(Pair(int, int)); }\n",
          "4:19: 'Pair(int, int)' is a type, not a value\n"},
         {"Pairs :: Pair(T, T);\nmain :: () { }\n",
@@ -15494,5 +15520,28 @@ TEST(inference_through_instances_mistakes) {
                                     STRUCT_PROCEDURES, k.body, k.declarations);
         CHECK_STR(check_with_preload(&a, string_cstr(&a, text)), k.message);
     }
+    arena_free(&a);
+}
+
+TEST(inference_through_an_instance_that_lost_a_binding) {
+    // A struct instance whose type binding is found in a circle after it
+    // was made, by a global's type or a field's, keeps its type, as a
+    // struct holding a pointer to one does, but the binding has none: a
+    // call whose pattern reads that binding binds nothing from it and says
+    // nothing more, whatever its pattern, as the circle was said.
+    Arena a = arena_make();
+    const char *pair = "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n";
+    const char *circle = "3:1: 'Bad' contains itself; it can hold a pointer to itself, *Bad\n";
+    const char *programs[] = {
+        "G: Pair(*Bad, int);\nBad :: struct { b: Bad; }\nf :: (p: Pair(*$A, $B)) {}\nmain :: () { f(G); }\n",
+        "G: *Pair(*Bad, int);\nBad :: struct { b: Bad; }\nf :: (p: *Pair(*$A, $B)) {}\nmain :: () { f(G); }\n",
+        "G: Pair(*Bad, int);\nBad :: struct { b: Bad; }\nf :: (p: Pair($A, $B)) {}\nmain :: () { f(G); }\n",
+    };
+    for (const char *program : programs) CHECK_STR(check_source(&a, joined(&a, pair, program)), circle);
+    CHECK_STR(check_source(&a, joined(&a, pair,
+                                      "H :: struct { p: Pair(*Bad, int); }\nBad :: struct { b: Bad; }\n"
+                                      "f :: (p: Pair($A, $B)) {}\ng :: (p: Pair(*$A, $B)) {}\n"
+                                      "main :: () { h: H; f(h.p); g(h.p); }\n")),
+              circle);
     arena_free(&a);
 }

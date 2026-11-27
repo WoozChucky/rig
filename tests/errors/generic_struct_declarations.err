@@ -22,3 +22,6 @@ tests/errors/generic_struct_declarations.rig:15:34: error: 'N' is not a type
 tests/errors/generic_struct_declarations.rig:16:32: error: 'void' is only a pointer's target, as in *void
     Empty :: struct (T: Type) { a: void; }
                                    ^
+tests/errors/generic_struct_declarations.rig:17:44: error: unknown type 'Nope'
+    Unknown_Instance :: struct (T: Type) { a: *Nope(T); }
+                                               ^

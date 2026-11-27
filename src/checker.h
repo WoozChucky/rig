@@ -1498,9 +1498,12 @@
 //   already declared at PATH:L:C", at the later; a parameter named as a
 //   built-in type, "'int' is a built-in type"; its fields' written types,
 //   the parameters taken as types and constants still to be known
-//   (check_generic_type: "unknown type 'Nope'", "'N' is not a type",
-//   "'void' is only a pointer's target, as in *void"), array counts and
-//   instances, their names too for now, left to each instance. One whose
+//   (check_generic_fields, a name at a time with at_generic_type_name:
+//   "unknown type 'Nope'", "'N' is not a type", "'void' is only a
+//   pointer's target, as in *void"; an instance's name, its count and a
+//   written type where it takes a constant, as in a generic procedure's
+//   signature, "'Vec2' isn't generic, so it takes no arguments"), array
+//   counts and instances' other arguments left to each instance. One whose
 //   own check said a mistake makes no instance (Ast_Struct.had_errors): its
 //   uses have no type and say nothing more, and one made before the
 //   mistake was found, by a field's type through an alias, is never laid

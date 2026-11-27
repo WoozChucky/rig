@@ -368,7 +368,9 @@ struct Ast_Const : Ast {
                           // a struct or array literal (a baked view's, its elements' array); a
                           // pointer's string literal; null when that's a field or element a literal
                           // leaves out, so the value is zero
-    Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it
+    Ast_Resolve resolve;  // a top-level one's: how far the checker has got with it; a local one's is
+                          // RESOLVE_DONE once check_const has worked it out, so resolve_written
+                          // takes one with no type as having had its mistake said
     s32 levels;           // the deepest levels of its value (MAX_DEPTH), as Ast_Var's
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
     Ast_Alias *alias;     // its value names a type (spec 3.22): the alias the checker made of it, at its
@@ -419,8 +421,12 @@ struct Ast_Struct : Ast {
                                 // out, inside its outer struct's layout, and done after
     Type *declared;             // its type: made when the checker collects the top level's names,
                                 // so a pointer can name it before its layout is known; null once
-                                // it's found to contain itself. An anonymous member's is made by
-                                // its outer struct's layout, and is null when that one's is
+                                // it's found to contain itself, or too big. An anonymous member's is
+                                // made by its outer struct's layout, and is null when that one's is.
+                                // A generic struct has none; an instance's copy has its own, made
+                                // with the copy (check_generic.cpp's make_struct_instance, by
+                                // checker.cpp's new_struct_type), null when its generic said a
+                                // mistake of its own or when it's nested too deeply to lay out
     bool is_union;              // union { ... }: every member at offset 0 (spec 3.19)
     bool is_tagged;             // union #tagged { ... } (spec 3.20): a tag, then its members over each
                                 // other; is_union is false

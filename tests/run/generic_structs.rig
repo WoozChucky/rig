@@ -2,9 +2,10 @@
 // (Pair's A and B) and constants (Ring's N, Grid's W and H), each set of
 // arguments making one instance where a type is written, laid out as any
 // struct with its parameters bound in its fields. A field may point at its
-// own instance (List), hold a resizable array of it (Tree), or be a using
-// field of another instance (Derived's Base(T)), whose fields it reaches as
-// its own, a using parameter of an instance too (bump), a *Derived(u16)
+// own instance (List), hold a resizable array of it (Tree), hold another
+// instance that points back at it (B(T)'s A(T)), or be a using field of
+// another instance (Derived's Base(T)), whose fields it reaches as its
+// own, a using parameter of an instance too (bump), a *Derived(u16)
 // converting to a *Base(u16). An instance's type information names it as
 // the program writes it, Pair(string, int). An instance only ever taken
 // behind a pointer before the bodies (Only, by a global) is laid out all
@@ -15,6 +16,8 @@ Pair :: struct (A: Type, B: Type) { first: A; second: B; }
 Ring :: struct (T: Type, N: int) { items: [N]T; }
 List :: struct (T: Type) { value: T; next: *List(T); }
 Tree :: struct (T: Type) { value: T; kids: [..]Tree(T); }
+A :: struct (T: Type) { b: *B(T); }
+B :: struct (T: Type) { a: A(T); n: T; }
 Base :: struct (T: Type) { id: T; }
 Derived :: struct (T: Type) { using base: Base(T); extra: T; }
 Grid :: struct (W: int, H: int, Cell: Type) { cells: [W * H]Cell; row: [W]u8; }
@@ -59,6 +62,11 @@ main :: () {
     array_add(*t.kids, b);
     print("{} {}\n", t.kids.count, t.kids[1].value);
     array_free(*t.kids);
+
+    ab: B(u8);
+    ab.n = 5;
+    ab.a.b = *ab;
+    print("{} {}\n", ab.a.b.n, size_of(B(u8)));
 
     d: Derived(u16);
     d.id = 7;

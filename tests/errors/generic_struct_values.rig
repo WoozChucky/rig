@@ -2,7 +2,8 @@
 // instance is a type, not a value; compared, its other operand must be a
 // type too; the generic's name alone is no type; an instance's count and
 // arguments are checked as where a type goes, a mistake in its layout
-// chained as used at its name; a plain struct called keeps its message.
+// chained as used at its name; a plain struct called keeps its message;
+// an instance's parameter is no field of it, for now.
 Pair :: struct (A: Type, B: Type) { first: A; second: B; }
 Vec2 :: struct { x: float; }
 
@@ -15,6 +16,8 @@ main :: () {
     u := Vec2(1);
     a := Ring(int, -1) == Ring(int, 4);
     r := Ring(int, -2);
+    m: Pair(string, int);
+    k := m.A;
 }
 
 Ring :: struct (T: Type, N: int) { items: [N]T; }

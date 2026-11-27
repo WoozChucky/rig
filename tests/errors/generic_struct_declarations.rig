@@ -3,9 +3,9 @@
 // it or none does: two parameters of one name, a parameter named as a
 // built-in type, a field named as a parameter, in the struct's braces and
 // in an anonymous member's, two fields of one name, and a field's type
-// naming nothing, a constant parameter, or void. Duplicate's two uses
-// would make two instances: its mistake is said once, and the uses say
-// nothing more.
+// naming nothing, a constant parameter, void, or an instance of nothing.
+// Duplicate's and Unknown_Instance's two uses would each make two
+// instances: each mistake is said once, and the uses say nothing more.
 Twice :: struct (T: Type, T: Type) { }
 Built_In :: struct (int: Type) { }
 Field_Param :: struct (T: Type) { T: int; }
@@ -14,8 +14,11 @@ Duplicate :: struct (T: Type) { a: T; a: int; }
 Missing :: struct (T: Type) { a: Nope; }
 Constant :: struct (N: int) { a: N; }
 Empty :: struct (T: Type) { a: void; }
+Unknown_Instance :: struct (T: Type) { a: *Nope(T); }
 
 main :: () {
     x: Duplicate(int);
     y: Duplicate(u8);
+    z: Unknown_Instance(int);
+    w: Unknown_Instance(u8);
 }
