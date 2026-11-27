@@ -1463,9 +1463,9 @@
 //   name of a type, or of a constant that may be one in turn: checker.cpp's
 //   may_be_alias), out first (resolve_global), as check_lookup does, so an
 //   alias can be used before its declaration, in a struct's field or a
-//   global's type; any other, `C :: size_of(S);`, `C :: f(1);` with f a
-//   procedure, or `C :: D;` with D no alias, is "'C' is not a type" there,
-//   its value not worked out, so no circle. A local one is declared in
+//   global's type; any other, `C :: size_of(S);` or `C :: D;` with D no
+//   alias, is "'C' is not a type" there, its value not worked out, so no
+//   circle. A local one is declared in
 //   order, as any local constant. A circle is a constant's, "'A' is
 //   defined in terms of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias
 //   dropped. An alias whose value needs an instance of a generic struct
@@ -1478,6 +1478,12 @@
 //   check_addressable). Nor do those of one naming a struct found in a
 //   circle or too big once every struct is laid out: what it names is made
 //   again then (check's made_again), null.
+// - Nor do those of a constant whose own declaration said a mistake,
+//   `C :: 1 + "a";` or `C :: f(1);` with f a procedure ("the value of
+//   constant 'C' isn't known while compiling"): its "'C' is not a type"
+//   only repeats it, so it's withdrawn at the end of check() (checker.cpp's
+//   withdraw_repeated_not_a_type). One whose failure no mistake of its own
+//   explains, `C :: K + 1;` with K's value the mistake, still says it.
 // - Refused: an alias named as a built-in type, `u8 :: s32;`, which
 //   resolve_written would never find, "'u8' is a built-in type", at its
 //   name, at the top level and in a body; `X :: Type;`, as any type value
