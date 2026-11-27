@@ -4708,8 +4708,8 @@ TEST(parses_type_parameters) {
 
 TEST(dollar_mistakes) {
     // Only a procedure declaration's parameter's type declares a type
-    // parameter: a '$' in any other type is refused at it, and a '$' where
-    // an expression starts is none.
+    // parameter: a '$' in any other type, an instance's argument in one
+    // too, is refused at it, and a '$' where an expression starts is none.
     Arena a = arena_make();
     String errors;
     const char *refused =
@@ -4729,6 +4729,9 @@ TEST(dollar_mistakes) {
         {"main :: () { x := cast($T) 1; }\n", 24},
         {"main :: () { x := type_info($T); }\n", 29},
         {"main :: () { x := #type $T; }\n", 25},
+        {"main :: () { x: Map($K, int); }\n", 21},
+        {"g: Map($K, int);\n", 8},
+        {"S :: struct { m: *Ring(int, $N); }\n", 29},
     };
     for (const Case &k : cases) {
         parse_src(&a, k.text, &errors);

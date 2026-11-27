@@ -14532,6 +14532,24 @@ TEST(struct_instances_hold_themselves_behind_pointers) {
     if (only && only->pointee) CHECK(only->pointee->size == 16 && only->pointee->fields.count == 2);
     Type *param = ((Ast_Proc *)top_level_named(tree, "f"))->params[0]->type;
     CHECK(param && param->pointee && param->pointee->size == 2 && param->pointee->fields.count == 2);
+    // One only taken behind a pointer in a procedure instance's body,
+    // checked in that last pass, is laid out too: the pass goes round again
+    // for the instances its bodies made.
+    CHECK_STR(check_with_preload(&a, "Only :: struct (T: Type) { a: T; b: T; }\n"
+                                     "mk :: (v: $T) { p: *Only(T); }\n"
+                                     "main :: () { mk(cast(u8) 1); mk(1); }\n",
+                                 &tree),
+              "");
+    Ast_Struct *generic_only = (Ast_Struct *)top_level_named(tree, "Only");
+    CHECK_EQ(generic_only->instances.count, 2);
+    if (generic_only->instances.count == 2) {
+        Type *small = generic_only->instances[0]->structure->declared;
+        Type *big = generic_only->instances[1]->structure->declared;
+        CHECK_STR(type_name(&a, small), "Only(u8)");
+        CHECK(small && small->size == 2 && small->fields.count == 2);
+        CHECK_STR(type_name(&a, big), "Only(int)");
+        CHECK(big && big->size == 16 && big->fields.count == 2);
+    }
     CHECK_STR(check_with_preload(&a, "Bad :: struct (T: Type) { b: Bad(T); }\n"
                                      "Holder :: struct { p: *Bad(u8); }\n"
                                      "main :: () { }\n"),
@@ -14995,6 +15013,14 @@ TEST(struct_instance_errors_name_their_chain) {
               "    in 'S' with T = int, used at test.rig:3:17\n"
               "2:32: unknown type 'Nope'\n"
               "    in 'S' with T = u8, used at test.rig:3:28\n");
+    // A top-level constant first worked out inside an instance's layout, an
+    // array's count's, the global before it needing S(int), is the
+    // program's: its mistake has no chain.
+    CHECK_STR(check_source(&a, "S :: struct (T: Type) { a: [K]T; }\n"
+                               "g: S(int);\n"
+                               "K :: 1 + \"a\";\n"
+                               "main :: () { }\n"),
+              "3:8: '+' needs numbers, not 'string'\n");
     arena_free(&a);
 }
 
