@@ -33,6 +33,24 @@ void compile_time_set_compiler(Compile_Time *ct, Interp_Compiler_Call *call, voi
 // #run; either leaves it with no value. True when it has one.
 bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run);
 
+struct Generic_Binding;  // check.h: a generic's type or constant parameter, bound
+
+// Runs #modify block `modify` (spec 7.12), which checked and whose walk was
+// clean, for the bindings *bindings gives, one per variable of the block,
+// in order: true with *accepted its bool, *message its string (in the
+// checker's arena, empty for none) and each binding rewritten to what the
+// block left in its variable, a type's `type`, a constant's `value` (baked
+// as a #run's result is). The block runs in the world, as a #run does:
+// what it leaves in the globals, later runs and blocks see. False after a
+// failure, said at the #modify, "#modify failed: runtime error: MESSAGE",
+// with its frames, the outermost "    in #modify (PATH:L:C)", and the
+// checker's chain (Diagnostics.context), or after a result that can't be
+// baked ("#modify failed: its result holds a string with a negative
+// count"), or after a type it describes had an error (check_run.cpp's
+// reach_descriptions), said there; *bindings may be changed then.
+bool compile_time_modify(Compile_Time *ct, Checker *c, Ast_Modify *modify, Array<Generic_Binding> *bindings,
+                         bool *accepted, String *message);
+
 // The program's top-level #runs (Ast_File.runs), once it checked with no
 // errors (rig build, and interpret mode; never rig check): each in turn, in
 // order (file by file in load order, source order within a file), its result
@@ -41,9 +59,9 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run);
 void compile_time_run_top_level(Compile_Time *ct, Ast_File *file);
 
 // The time the world's #runs have taken so far, in nanoseconds, for rig
-// build's report (spec 10.1): expression and top-level runs alike, each from
-// making the world's parts (the first time) and lowering what it reaches to
-// its end on the interpreter. No run happens inside another today; if one
+// build's report (spec 10.1): expression and top-level runs alike, and
+// #modify blocks' (spec 7.12), each from making the world's parts (the
+// first time) and lowering what it reaches to its end on the interpreter. No run happens inside another today; if one
 // did, it would count only as part of the outer one's. 0 for a world that
 // ran nothing.
 s64 compile_time_nanoseconds(Compile_Time *ct);

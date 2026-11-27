@@ -1,0 +1,4 @@
+// Loaded by tests/run/modify.rig: widen_more's call of widen gives its
+// block u16 here, from another file, and the block's bindings make the main
+// file's instance of int.
+widen_more :: () -> int { return widen(cast(u16) 4); }

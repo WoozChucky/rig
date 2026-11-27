@@ -955,9 +955,7 @@ void interp_run(Interp *in, s32 proc, Array<u64> args, Arena *a, Interp_Result *
                                         (unsigned long long)INTERP_PROC_LIMIT);
         return;
     }
-    while (in->procs.count < m->procs.count) array_add(&in->procs, nullptr);
-    while (in->c_functions.count < m->procs.count) array_add(&in->c_functions, nullptr);
-    if (!interp_map_globals(in, a, &result->message)) return;
+    if (!interp_map(in, a, &result->message)) return;
     Ir_Proc *p = m->procs[proc];
     RIG_ASSERT(args.count == p->params.count);
     if (p->is_foreign) {
@@ -1024,6 +1022,24 @@ s32 interp_c_function_at(Interp *in, u64 address, s32 from) {
 u8 *interp_global(Interp *in, s32 global) {
     RIG_ASSERT(global >= 0 && global < in->globals.count);
     return in->globals[global];
+}
+
+bool interp_map(Interp *in, Arena *a, String *error) {
+    // A procedure's place first: a global's relocation may name any
+    // procedure the module has, a C function's included.
+    Ir_Module *m = in->module;
+    while (in->procs.count < m->procs.count) array_add(&in->procs, nullptr);
+    while (in->c_functions.count < m->procs.count) array_add(&in->c_functions, nullptr);
+    return interp_map_globals(in, a, error);
+}
+
+s32 interp_global_at(Interp *in, u64 address) {
+    // Every global has bytes of its own, one at least (interp_map_globals),
+    // so no two start at one address.
+    for (s64 i = 0; i < in->globals.count; i++) {
+        if ((u64)(uintptr_t)in->globals[i] == address) return (s32)i;
+    }
+    return -1;
 }
 
 String interp_frames_text(Arena *a, Array<Interp_Frame> frames, Array<String> paths) {

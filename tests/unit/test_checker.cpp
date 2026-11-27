@@ -16190,3 +16190,195 @@ TEST(modify_blocks_are_checked_at_their_first_use) {
     }
     arena_free(&a);
 }
+
+// The generics the tests of #modify's runs share (spec 7.12), lines 1 to 5:
+// widen gives u8 and u16 the instance of int, sum refuses strings, ring
+// makes a count below 1 one, say makes "" "none", and only takes int alone.
+static const char *MODIFY_GENERICS =
+    "widen :: (v: $T) -> T #modify { if T == u8 || T == u16 { T = int; } return true; } { return v; }\n"
+    "sum :: (values: []$T) -> T #modify { return T != string, \"sum needs numbers\"; } "
+    "{ t: T; for values { t += it; } return t; }\n"
+    "ring :: ($N: int, $T: Type) -> [N]T #modify { if N < 1 { N = 1; } return true; } { r: [N]T; return r; }\n"
+    "say :: ($S: string) -> string #modify { if S == \"\" { S = \"none\"; } return true; } { return S; }\n"
+    "only :: (v: $T) #modify { return T == int; } { }\n";
+
+TEST(modify_maps_given_bindings_to_one_instance) {
+    // A block runs once for each set of bindings given, and the instance a
+    // use makes is the one for the bindings it leaves: u8 and u16 widen to
+    // int, so every call shares widen(T = int), and u8's second call runs
+    // nothing.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "main :: () { a := widen(cast(u8) 1); b := widen(cast(u16) 2); "
+                                            "c := widen(3); d := widen(cast(u8) 4); }\n"),
+                                 &file),
+              "");
+    Ast_Proc *widen = (Ast_Proc *)top_level_named(file, "widen");
+    CHECK_EQ(widen->instances.count, 1);
+    if (widen->instances.count == 1) CHECK_STR(widen->instances[0]->name, "widen(T = int)");
+    CHECK_EQ(widen->modify->runs.count, 3);
+    const char *names[] = {"a", "b", "c", "d"};
+    for (const char *name : names) CHECK_STR(type_of_main_local(&a, file, name), "int");
+    arena_free(&a);
+}
+
+TEST(modify_changes_the_instance_a_call_makes) {
+    // After the block, a call is any call of the instance its bindings
+    // make: a changed constant is the instance's, and the arguments
+    // convert to the instance's parameters, or are said not to.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "main :: () { x := ring(0, int); y := ring(1, int); s := say(\"\"); }\n"),
+                                 &file),
+              "");
+    Ast_Proc *ring = (Ast_Proc *)top_level_named(file, "ring");
+    CHECK_EQ(ring->instances.count, 1);
+    if (ring->instances.count == 1) CHECK_STR(ring->instances[0]->name, "ring(N = 1, T = int)");
+    CHECK_STR(type_of_main_local(&a, file, "x"), "[1]int");
+    CHECK_STR(type_of_main_local(&a, file, "y"), "[1]int");
+    Ast_Proc *say = (Ast_Proc *)top_level_named(file, "say");
+    CHECK_EQ(say->instances.count, 1);
+    if (say->instances.count == 1) CHECK_STR(say->instances[0]->name, "say(S = \"none\")");
+    // A block that describes types reads what it's given through the
+    // type's description, and may give its variable a written type: u8 and
+    // s8, one byte each, make pick(T = int), float32 its own.
+    CHECK_STR(check_with_preload(&a,
+                                 "pick :: (v: $T) -> T #modify { if type_info(T).size == 1 { T = int; } "
+                                 "return true; } { return v; }\n"
+                                 "main :: () { p := pick(cast(u8) 1); q := pick(cast(s8) 2); r := pick(2.5); }\n",
+                                 &file),
+              "");
+    Ast_Proc *pick = (Ast_Proc *)top_level_named(file, "pick");
+    CHECK(pick->modify->describes);
+    CHECK_EQ(pick->modify->runs.count, 3);
+    CHECK_EQ(pick->instances.count, 2);
+    if (pick->instances.count == 2) {
+        CHECK_STR(pick->instances[0]->name, "pick(T = int)");
+        CHECK_STR(pick->instances[1]->name, "pick(T = float32)");
+    }
+    CHECK_STR(type_of_main_local(&a, file, "q"), "int");
+    CHECK_STR(check_with_preload(&a, "sum :: (values: []$T) -> T #modify { if T == u8 { T = int; } return true; } "
+                                     "{ t: T; for values { t += it; } return t; }\n"
+                                     "main :: () { u: [2]u8; t := sum(u); }\n"),
+              "2:33: argument 1 of 'sum' has type '[2]u8', which can't be converted to '[]int'\n");
+    arena_free(&a);
+}
+
+TEST(modify_refuses_at_each_use) {
+    // A block's false refuses the instance at each use that gives those
+    // bindings, with its message, if any, and the caller's chain; the block
+    // still runs once for them, and no instance is made.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "main :: () { sum(string.[\"a\"]); sum(string.[\"b\"]); only(true); }\n"),
+                                 &file),
+              "6:14: 'sum' refused T = string: sum needs numbers\n"
+              "6:33: 'sum' refused T = string: sum needs numbers\n"
+              "6:52: 'only' refused T = bool\n");
+    Ast_Proc *sum = (Ast_Proc *)top_level_named(file, "sum");
+    CHECK_EQ(sum->modify->runs.count, 1);
+    CHECK_EQ(sum->instances.count, 0);
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "wrap :: (v: $T) { sum(string.[\"c\"]); }\n"
+                                            "main :: () { wrap(1); }\n")),
+              "6:19: 'sum' refused T = string: sum needs numbers\n"
+              "    in 'wrap' with T = int, called at test.rig:7:14\n");
+    arena_free(&a);
+}
+
+TEST(modify_failures_name_their_bindings) {
+    // A block that fails while it runs is said once for each set of
+    // bindings given, at the #modify, with its frames, the outermost the
+    // block's own, then the line of the instance those bindings would have
+    // made, and its chain.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "bad :: (v: $T) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { }\n"
+                                     "main :: () { bad(1); bad(1); bad(true); }\n"),
+              "1:16: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:46)\n"
+              "    in 'bad' with T = int, called at test.rig:2:14\n"
+              "1:16: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:46)\n"
+              "    in 'bad' with T = bool, called at test.rig:2:30\n");
+    // A block that describes types has Box(int) laid out first, which
+    // enters its instance and leaves it: the failure still names the
+    // bindings given.
+    CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) { v: T; }\n"
+                                     "bad :: (v: $T) #modify { i := type_info(T); a: [1]int; k := 3; a[k] = 1; "
+                                     "return true; } { }\n"
+                                     "main :: () { p: *Box(int); bad(p); }\n"),
+              "2:16: #modify failed: runtime error: index 3 is out of bounds (count 1)\n"
+              "    in #modify (test.rig:2:65)\n"
+              "    in 'bad' with T = *Box(int), called at test.rig:3:28\n");
+    arena_free(&a);
+}
+
+TEST(modify_cannot_use_its_own_generic) {
+    // A block decides its generic's instances, so neither it nor what it
+    // reaches can use its generic: said once, at the inner use, and no
+    // instance is made, with no hang. A block may use another generic with
+    // a block, which is checked and run first.
+    Arena a = arena_make();
+    const char *loops[] = {"main :: () { loop(2); }\n", "main :: () { }\n"};
+    for (const char *main : loops) {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, joined(&a, "loop :: (v: $T) #modify { loop(1); return true; } { }\n", main),
+                                     &file),
+                  "1:27: 'loop' can't be used in its own #modify, which decides its instances\n");
+        CHECK_EQ(((Ast_Proc *)top_level_named(file, "loop"))->instances.count, 0);
+    }
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "ping :: (v: $T) #modify { pong(1); return true; } { }\n"
+                                 "pong :: (v: $T) #modify { ping(1); return true; } { }\n"
+                                 "main :: () { ping(1); }\n",
+                                 &file),
+              "2:27: 'ping' can't be used in its own #modify, which decides its instances\n");
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "ping"))->instances.count, 0);
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "pong"))->instances.count, 0);
+    // inner's block runs while outer's is checked, before outer's runs: the
+    // count is 1 by then, and inner's block never runs again.
+    CHECK_STR(check_with_preload(&a,
+                                 "count: int;\n"
+                                 "inner :: (v: $T) #modify { count += 1; return T != bool; } { }\n"
+                                 "outer :: (v: $T) #modify { inner(1); return count == 1, \"inner ran later\"; } { }\n"
+                                 "main :: () { outer(1); }\n",
+                                 &file),
+              "");
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "inner"))->modify->runs.count, 1);
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "outer"))->modify->runs.count, 1);
+    arena_free(&a);
+}
+
+TEST(modify_runs_wherever_it_is_needed) {
+    // A block runs where an instance is first asked for: in a constant's
+    // #run, and in a body that the walk of a #run's reach checks, both in
+    // the declarations pass. A top-level #if's condition can't run it yet.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS, "W :: #run widen(cast(u8) 7);\nmain :: () { }\n"),
+                                 &file),
+              "");
+    Ast_Const *w = (Ast_Const *)top_level_named(file, "W");
+    CHECK(w->type == &type_int);
+    CHECK(w->is_constant);
+    CHECK_EQ(w->constant, 7);
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "widen"))->modify->runs.count, 1);
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "V :: #run widen_twice();\n"
+                                            "widen_twice :: () -> int { return widen(cast(u16) 2) * 2; }\n"
+                                            "main :: () { }\n"),
+                                 &file),
+              "");
+    Ast_Const *v = (Ast_Const *)top_level_named(file, "V");
+    CHECK(v->is_constant);
+    CHECK_EQ(v->constant, 4);
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "#if widen(cast(u8) 1) == 1 { X :: 1; }\n"
+                                            "main :: () { }\n")),
+              "6:5: a top-level #if's condition can't run code while compiling, for now\n");
+    arena_free(&a);
+}

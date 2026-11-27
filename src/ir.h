@@ -501,12 +501,15 @@ struct Ir_Proc {
     Array<Ir_Block *> blocks;  // blocks[0] is the entry
     s32 value_count;           // the values numbered so far
     // For a debugger. A procedure the compiler makes has none of them,
-    // but for a run's, run.N (ir_lower_run), which stands for its #run.
+    // but for a run's, run.N (ir_lower_run), which stands for its #run, and
+    // a #modify block's, modify.N (ir_lower_modify), for its #modify.
     String source_name;        // its name in the source ("main", "sort"), an instance's max(T = int);
-                               // empty for one the compiler makes; "#run" for a run's
-    Position pos;              // its declaration: its name; a run's: the #run
+                               // empty for one the compiler makes; "#run" for a run's, "#modify" for
+                               // a #modify block's
+    Position pos;              // its declaration: its name; a run's: the #run; a #modify block's: the
+                               // #modify
     Position body;             // its body's '{'; a run's: its block's '{', or the #run of an expression
-                               // run
+                               // run; a #modify block's: its block's '{'
     Array<Ir_Scope> scopes;    // scope 0 is the body; empty without a source_name
     Array<Ir_Var> vars;        // in the order they're declared, the parameters first
     Array<Type *> source_results;  // its results' Rig types, in order, aggregates too (each of
@@ -663,8 +666,33 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
 // sure everything it reaches checked cleanly (check_run.cpp's walk).
 s32 ir_lower_run(Lowering *l, Ast_Run *run);
 
+// The procedure #modify block `modify` is (spec 7.12), modify.N in l's
+// module, made the first time with everything it reaches, lowered; its
+// index. It takes the hidden pointer its string result is copied through,
+// %0, then the address of the bindings block, %1, where its variables live,
+// MODIFY_SLOT_SIZE bytes each, in order; its bool is its one IR result. It
+// starts with the default context, as a run's procedure does. A Type value
+// in it is a handle: when the block describes types (Ast_Modify.describes),
+// the type's description's address, and otherwise the Type * itself (made
+// with inttoptr), so == and != of types compare pointers. Its source_name
+// is "#modify", so a failure's outer frame is named #modify; its statements
+// are each at their own place. The checker made sure everything it
+// reaches checked cleanly (check_run.cpp's reach_modify).
+s32 ir_lower_modify(Lowering *l, Ast_Modify *modify);
+
+// Type t's description (spec 3.16) in l's module, made the first time, with
+// every description it reaches, as type_info(T) makes it: its global's
+// index. The checker laid out what it reaches first (check_run.cpp's
+// reach_descriptions).
+s32 ir_lowering_type_info(Lowering *l, Type *t);
+
+// The type whose description is l's module's global `global`
+// (ir_lowering_type_info, or a type_info(T) lowered); null when it's no
+// description.
+Type *ir_lowering_described(Lowering *l, s32 global);
+
 // The procedure of the source that l's module's procedure `proc` lowers;
-// null for the compiler's own procedures and the runs'.
+// null for the compiler's own procedures, the runs' and the #modify blocks'.
 Ast_Proc *ir_lowering_source(Lowering *l, s32 proc);
 
 void ir_lowering_free(Lowering *l);

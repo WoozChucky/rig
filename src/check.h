@@ -138,7 +138,8 @@ struct Generic_Binding {
 struct Modify_Run {
     Array<Ast *> given;             // the bindings given, as make_bindings made them, compared by
                                     // same_binding
-    bool ran;                       // it ran to its return; false after a failure, said once
+    bool ran;                       // it ran to its return; false while it runs, and after a failure,
+                                    // said once
     bool accepted;                  // its bool
     String message;                 // its string, in the checker's arena; empty for none
     Array<Generic_Binding> result;  // the bindings it left, when accepted
@@ -543,6 +544,15 @@ bool has_failed_run(Ast *e);
 // own body is checked already (check_modify). A call of main in it is "main
 // is where the program starts; #modify can't call it", at the '#modify'.
 bool reach_modify(Checker *c, Ast_Modify *modify);
+
+// The descriptions of `types`, the type bindings a #modify block that
+// describes types (Ast_Modify.describes) is given, walked as type_info(T)'s
+// are (spec 7.12): each type laid out, and what its description reaches
+// checked, so the block's run can describe them. True when nothing there
+// has an error; false after one, said by the walk, at `at` for its own
+// messages: a struct still being laid out is a circle, as type_info(T) of
+// it in a #run is.
+bool reach_descriptions(Checker *c, Position at, Array<Type *> types);
 
 // check_generic.cpp
 

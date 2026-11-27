@@ -1,0 +1,65 @@
+// #modify (issue #228, spec 7.12): a generic's block runs while compiling,
+// once for each set of bindings its uses give, before an instance is made,
+// and may change them; the instance is the one for the bindings it leaves.
+// widen gives u8 and u16 the instance of int, so a u8 widens to an int
+// there and 3 * 1000 doesn't wrap; sum takes any T but a string, here
+// float32; ring makes a count below 1 one, so ring(0, int) is a [1]int;
+// say makes an empty string "none". Each block counts its runs in a
+// global of the compile-time world, which a top-level #run prints (the
+// .build.out): 5, one for each set given, widen's u8 (by a constant's #run
+// first, then main's call, which finds it) and u16 (by a #loaded file's
+// procedure), sum's float32, ring's N = 0, T = int and say's S = "". No
+// block has code in the program, whose own count stays 0. The same
+// compiled and interpreted.
+#import "Basic";
+#load "load/modify.rig";
+
+modify_runs: int;
+
+widen :: (v: $T) -> T #modify {
+    modify_runs += 1;
+    if T == u8 || T == u16 { T = int; }
+    return true;
+} {
+    return v;
+}
+
+sum :: (values: []$T) -> T #modify {
+    modify_runs += 1;
+    return T != string, "sum needs numbers";
+} {
+    t: T;
+    for values { t += it; }
+    return t;
+}
+
+ring :: ($N: int, $T: Type) -> [N]T #modify {
+    modify_runs += 1;
+    if N < 1 { N = 1; }
+    return true;
+} {
+    r: [N]T;
+    return r;
+}
+
+say :: ($S: string) -> string #modify {
+    modify_runs += 1;
+    if S == "" { S = "none"; }
+    return true;
+} {
+    return S;
+}
+
+W :: #run widen(cast(u8) 7);
+
+#run { print("{}\n", modify_runs); }
+
+main :: () {
+    print("{}\n", widen(cast(u8) 3) * 1000);
+    print("{}\n", sum(float.[1.5, 2]));
+    print("{}\n", ring(0, int));
+    print("{}\n", say(""));
+    print("{}\n", W);
+    print("{}\n", widen_more());
+    print("{}\n", modify_runs);
+}

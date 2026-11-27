@@ -1,0 +1,36 @@
+// #modify blocks that refuse an instance, or fail (issue #228, spec 7.12).
+// A block runs once for each set of bindings its uses give. When it gives
+// false, each use with those bindings is refused, with its message when it
+// gave one, and the use's chain: sum's string, twice from main and once
+// from wrap's instance, its block run once; only's bool, with no message.
+// When it fails while it runs, the failure is said once for each set given,
+// at the #modify, with its frames, the outermost the block's own, then the
+// instance those bindings would have made: bad's int, given twice, then
+// its bool. Nothing more is said at those uses.
+
+sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } {
+    t: T;
+    for values { t += it; }
+    return t;
+}
+
+only :: (v: $T) #modify { return T == int; } { }
+
+wrap :: (v: $T) { sum(string.["c"]); }
+
+bad :: (v: $T) #modify {
+    a: [2]int;
+    i := 5;
+    a[i] = 1;
+    return true;
+} { }
+
+main :: () {
+    sum(string.["a"]);
+    sum(string.["b"]);
+    only(true);
+    wrap(1);
+    bad(1);
+    bad(1);
+    bad(true);
+}

@@ -597,6 +597,16 @@ bool reach_modify(Checker *c, Ast_Modify *modify) {
     return walk_reached(&r);
 }
 
+// The types a #modify block that describes types is given, each walked for
+// its description, as type_info(T)'s is (reach_described), so each is
+// laid out, and what it reaches checked, before the block runs.
+bool reach_descriptions(Checker *c, Position at, Array<Type *> types) {
+    Reach r = start_reach(c, at, "#modify");
+    r.describes = true;
+    for (s64 i = 0; i < types.count; i++) reach_described(&r, types[i]);
+    return walk_reached(&r);
+}
+
 // In order:
 // 1. Once: a #run is checked where it's met, and never again, so neither
 //    the walk of what it reaches nor its messages ever happen twice. A

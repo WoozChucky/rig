@@ -3556,7 +3556,7 @@ main :: () {
 - `main`, where the program starts (section 7.4), is never run while compiling: a call of `main` anywhere in what a `#run` reaches is `main is where the program starts; #run can't call it`, at the `#run`. A `#run` in `main`'s body is fine.
 - The top-level `#run`s run in `rig build` only, once the whole program has checked with no errors, so after every expression's `#run`. They run file by file in load order (section 2.13), and in source order within a file: a loaded file's `#run`s run after every one of the file whose `#load` of it is met first, not at that `#load`. That is the load order with only the taken branches of the top-level `#if`s written, a taken branch's `#run`s running in the `#if`'s place, and a branch not taken's never (section 4.9). `rig check` checks them as `rig build` does, what they reach and `main` included, but never runs them (section 10.1). A top-level `#run` that fails doesn't stop the ones after it, and every diagnostic is printed after the last of them. A build program's top-level `#run`s make the workspaces it builds, and come before them: the workspaces are built once the last `#run` has run, and none is when one of them failed (section 7.9).
 
-**One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, Preload's among them (section 2.14), which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
+**One world.** Every `#run` of a compilation runs in one compile-time world: one interpreter, holding one copy of the program's globals, Preload's among them (section 2.14), which start from their written values (section 4.3) and which every `#run` shares. So one `#run` can set up what a later one reads. A generic's `#modify` block runs in the same world (section 7.12), sharing its globals: what a block leaves there, later blocks and `#run`s see, and its time is the `#run`s' time in `rig build`'s report (section 10.1). The program's own globals are untouched: the program starts with their written values, whatever the `#run`s did to theirs.
 
 **The context.** Every `#run`'s code, an expression's and a top-level one's, starts with the compile-time world's `default_context` as its `context` (section 7.10), not with the context of the procedure the `#run` is written in, which doesn't exist while compiling, as its locals don't: `context` in a `#run`'s operand is the run's own, and so is the context a default value its calls leave out reads (`G :: #run f(context);` and `x := #run make();`, for a `make` whose allocator defaults to `context.allocator`, are fine in any body or at the top level). Each run calls Preload's `__runtime_init` first, which sets the world's `default_context` up the first time only, so every run shares it: its allocator, the heap, and its temporary storage, which nothing resets but the runs' own code. A `#run` in a `#c_call` procedure's body needs no push, since its code has a context of its own (section 7.6).
 
@@ -3917,7 +3917,7 @@ A **generic procedure**, Jai's, is written once and compiled once for each set o
 
 **Inference.** Each call works out its type parameters from its arguments, after checking them as any call's (section 5.10) and counting them against the parameters, with the same messages (`'max' takes 2 arguments, but 1 was given`). Each type parameter is bound from the arguments whose parameter's type names it, in parameter order, the first typed one fixing it. A name alone, `$T` or `T`, is the argument's type; the rest of a parameter's type is read through, as far as it holds the name: a pointer's target, `*$T` taking `Vec2` from a `*Vec2`; an array's, a view's or a resizable array's elements, `[]$T` taking `int` from a `[3]int`, a `[]int` or a `[..]int`, all of which convert to a `[]int` (sections 3.7, 3.17); a procedure type's parameters and results, `($T) -> T` taking `int` from a `(int) -> int`; a generic struct's instance's arguments, `*Map($K, $V)` taking `string` and `int` from a `*Map(string, int)` (below). A part that can't match is `argument 1 of 'first' has type 'int', which doesn't fit '[]$T'`, at the argument, the parameter's type written as messages write types, its `$` kept and an array's count as the program wrote it. A `..$T` parameter's arguments each give `T`, a spread among them its elements' type (section 7.2), so a spread of anything else is `'..' spreads a 'int' into 'rest', which needs a '[]$T'`, at the `..`; a spread no `..T` parameter takes is refused before inference, as any call's, and gives nothing. An untyped constant (section 3.12) takes the type another argument fixes: `max(1, x)`, with `x` a `u8`, is `max` for `u8`. When every argument at a type parameter's places is an untyped number, the type they meet at, a float if any is one, gives it its default type, `int` or `float32`: `max(1, 2)` is `max` for `int`, `max(1, 2.5)` for `float32`. An argument with no type of its own, `null`, `.{...}`, `.[...]` or `.FREE`, takes the type another fixes (`pick(v, .{1, 2})`), and when none does it's `can't work out 'T' for 'max': argument 1 has no type of its own`, at the first such argument. Once the type parameters are known, the call is checked as a call of that instance (below): each argument converts to its parameter's type as any argument does (section 3.13), so `max(x_s32, y_int)` is `argument 2 of 'max' has type 'int', which can't be converted to 's32'`, while `max(y_int, x_s32)` is `max` for `int`, the `s32` widening.
 
-**Instances.** Each distinct set of types makes one **instance** of the generic procedure: its signature and body with each type parameter bound, checked and compiled on their own, as any procedure is. Every call with that set calls the same instance, wherever it is, in any file, in a `#run` or in another instance's body: the program has one `max` for `int`, and one for `s64`, a different type, while `float` and `float32` are one type, so one instance (section 3.1). An instance's signature is checked where its first call needs it, its body after every other body and top-level `#run`, or where a `#run` reaches it first (section 7.8). A mistake in an instance's signature, a default value that doesn't convert to its `T`, is said once: every call with its types, the first one too, has no type and says nothing more. Its type parameters are in its parameters' scope (section 4.7): a local may not take `T`'s name in the body's block, as it may not a parameter's. An instance is named by its procedure and its bindings, `max(T = int)`, in the debugger (section 10.7) and in a failed `#run`'s frames (section 10.8); its symbol, the name the object file gives it, is that name with its spaces and last `)` left out and every other character that isn't a letter, a digit or `_` made `$`, `max$T$int`, which no name a program writes can be, and, when an earlier instance of the same procedure has that symbol already, `$` and the instance's number among them after it (`f$T$$$$int` for `f(T = *[]int)`, then `f$T$$$$int$2` for `f(T = []*int)`). Messages about a call name the procedure as it's written, `'max'`.
+**Instances.** Each distinct set of types makes one **instance** of the generic procedure: its signature and body with each type parameter bound, checked and compiled on their own, as any procedure is. Every call with that set calls the same instance, wherever it is, in any file, in a `#run` or in another instance's body: the program has one `max` for `int`, and one for `s64`, a different type, while `float` and `float32` are one type, so one instance (section 3.1). An instance's signature is checked where its first call needs it, its body after every other body and top-level `#run`, or where a `#run` reaches it first (section 7.8). A mistake in an instance's signature, a default value that doesn't convert to its `T`, is said once: every call with its types, the first one too, has no type and says nothing more. Its type parameters are in its parameters' scope (section 4.7): a local may not take `T`'s name in the body's block, as it may not a parameter's. An instance is named by its procedure and its bindings, `max(T = int)`, in the debugger (section 10.7) and in a failed `#run`'s frames (section 10.8); its symbol, the name the object file gives it, is that name with its spaces and last `)` left out and every other character that isn't a letter, a digit or `_` made `$`, `max$T$int`, which no name a program writes can be, and, when an earlier instance of the same procedure has that symbol already, `$` and the instance's number among them after it (`f$T$$$$int` for `f(T = *[]int)`, then `f$T$$$$int$2` for `f(T = []*int)`). Messages about a call name the procedure as it's written, `'max'`. A generic with a `#modify` block (section 7.12) has the instances its block's bindings make: the block runs for the set a call's arguments give, and the call's instance is the one for the set the block leaves, named by it, and by it in the instance's chain line, so `widen(cast(u8) 1)` and `widen(2)` may both call `widen(T = int)`.
 
 **Types and constants as parameters.** A `$` before a parameter's name bakes the parameter into each instance: each call gives it a type or a constant, known while compiling, and it is no parameter of the instance. A `$T: Type` takes a type, `Type` being the type of types (section 5.20), which only such a parameter and a comparison of types take: `get :: (w: *World, $T: Type) -> *T` is called `get(w, Position)`, its argument a type written where a value goes (section 5.20), and declares `T` as a `$T` in a parameter's type does, so the types after it and the body name it. Any other argument is `argument 2 of 'get' must be a type, for '$T: Type'`, at it. A `$N: int` takes a constant of a number, `bool`, enum or `string` type: its argument converts to that type as any argument does (`300 doesn't fit in 'u8'`, section 3.13), and must be known while compiling (section 5.9), or it's `argument 1 of 'ring' must be known while compiling, for '$N: int'`, at it; a type there is `'int' is a type, not a value`. In the instance, `N` is a constant of that value, as a local constant is (section 4.2): a type after it in the signature and the body may use it where a constant goes, an array's count included, `ring :: ($N: int, $T: Type) -> [N]T`. Each distinct set of types and constants makes one instance, a constant compared by its type and value, a string's by its bytes and a float's by its bits, so `-0.0` and `0.0` make two instances, though `-0.0 == 0.0`: `ring(3, int)` called twice is one instance, `ring(N = 3, T = int)`, its symbol `ring$N$3$T$int`. A constant is named as the program would write it: an integer in decimal, `true` or `false`, a float as the shortest decimal that reads back as it (with a `.0` when it would read as an integer; a whole one below 10^15 written out, `100.0`, not `1e+02`; a NaN or an infinity as a division that makes one, `0.0 / 0.0`, `1.0 / 0.0` or `-1.0 / 0.0`), an enum's value as its first member of that value, `flag(M = Mode.B)`, or as a cast where none is, `cast(Mode) 7`, a string in quotes, its quotes, backslashes and control characters escaped, `say(S = "hi")`. A type or a constant has no code, so the call passes only the other arguments, each run once, in order, and the messages about them count the arguments as written. A `$` parameter of any other type is `a '$' parameter is a type, '$T: Type', or a constant of a number, bool, enum or string type, not '[]int'`, at its type: a struct or an array of constant data isn't one, for now. A `$` parameter is never `..`, `a '$' parameter can't be '..': a generic procedure's '..' parameter has one type, as in values: ..$T`, at the `..`; it comes before any `..T` parameter, which takes every argument left, `a '$' parameter can't come after a '..' parameter, which takes every argument left`, at the `$`; it has no default value, for now, `a parameter that declares '$N' can't have a default value, for now`, at the `=`, so it comes before any parameter that has one, every parameter after that needing one (section 7.2), `a '$' parameter can't come after one with a default value, since each parameter after that needs one`, at the `$`; and `using` takes none, a type or a constant having no fields to reach (section 3.21): `using $T: Type` is `'using' needs a struct or a pointer to one, not 'Type'`, and `using $N: int` the same of `'int'`, at the type. A constant parameter's name is no type, `'N' is not a type`, and a type parameter's is no value.
 
@@ -4182,7 +4182,7 @@ sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } 
 Box :: struct (T: Type) #modify { if T == u8 { T = int; } return true; } { v: T; }
 ```
 
-The block is code that runs while compiling, before an instance is made, to check the bindings a use gives, or to change them: for now it is checked, as below, but not yet run, and a use makes the instance its own bindings make.
+The block is code that runs while compiling, before an instance is made, to check the bindings a use gives, or to change them: `sum` refuses to sum strings. For now only a generic procedure's block runs, as below; a generic struct's is checked, as below, but not yet run, and a use of the struct makes the instance its own bindings make.
 
 **Where it may be written.** On a procedure that isn't generic, after a struct with no parameters, or after `union` or `union #tagged`, it is `#modify is for a generic procedure or struct, as in sum :: (values: []$T) -> T #modify { ... } { ... }`, at the `#modify`. A second one is `'#modify' is written twice`, at it, and any other directive after the block, where the body's `{` goes, `expected '{', found directive` (a `#load` or an `#import` there is `#load can only be at the top level`, as after a signature). Anywhere else, `#modify` is the error for what was expected there, as `#type` is (section 2.7): `x := #modify;` is `expected an expression, found directive`. Each gives the declaration up (section 9.2).
 
@@ -4220,6 +4220,93 @@ example.rig:3:11: error: can't take the address of 'T': it's a 'Type'
 example.rig:4:12: error: unknown identifier 'values'
         return values.count > 0;
                ^
+```
+
+**When it runs.** A generic procedure's block runs while its uses are checked, `rig check` included (section 10.1), once for each set of bindings the uses give: the types and constants a call's arguments bind (section 7.11), before any instance is made of them. A set given again, by any use anywhere, in another file, in a `#run`, in an instance's body, runs nothing: what the block did with it is kept, the generic's, for the whole program. The block runs where a use first needs an instance, so in the declarations pass for a use in a constant's `#run`, or in a body that a `#run` reaches and so checks then (section 7.8). Only a use in a top-level `#if`'s condition can't run it, as above.
+
+**What it does.** Its variables start as the set given, and what they hold when it returns `true` is the set the instance is made of: the instance of those bindings, found if a use made it already, made otherwise, and named by them, in a chain line too (section 7.11). So `widen` below gives `u8` and `u16` the instance of `int`, and `widen(cast(u8) 200)` and `widen(5)` both call `widen(T = int)`, one instance. Its result is final: the block never runs again on the bindings it leaves, and a set it maps to bindings some other set gives makes no new instance. After the block, a call is any call of that instance: its arguments convert to the instance's parameters, so `widen(cast(u8) 200)` passes a `u8` that widens to an `int`, while a `sum` whose block made a `[]u8`'s `T` an `int` is `argument 1 of 'sum' has type '[]u8', which can't be converted to '[]int'`, at the argument, as for any call. A changed constant is the instance's: `ring(0, int)` below returns a `[1]int`.
+
+**Refusals.** When the block returns `false`, no instance is made, and each use that gives that set is refused, at the use: `'sum' refused T = string: sum needs numbers`, with the message the block added, or `'only' refused T = bool` for an empty one, the set given written as an instance's bindings are, then the use's chain, when it is in an instance (section 7.11). It is said at every use that gives the set, and the block still runs once for it.
+
+**Failures.** A block that fails while it runs, as a `#run` can (section 7.8), is an error at the `#modify`: `#modify failed: runtime error: MESSAGE`, then the calls that led there, innermost first, the outermost the block's own, `in #modify (PATH:LINE:COL)` (section 10.8), then a line naming the instance the set given would have made, `    in 'bad' with T = int, called at PATH:LINE:COL`, and the use's chain. It is said once for that set: no instance is made, and no use that gives it says anything more.
+
+**Its world.** The block runs in the compile-time world, as a `#run` does (section 7.8): it may call procedures, print, and read and write the globals every `#run` and every block shares, and what it does, it does once for each set given, so a global the block adds 1 to counts the sets. None of it is the program's: the program has no code of the block's, and its own globals are untouched. A block may use another generic that has a block of its own: that block is checked, and runs for what this one gives it, while this one is checked, before this one runs.
+
+```rig
+#import "Basic";
+
+widen :: (v: $T) -> T #modify {
+    if T == u8 || T == u16 { T = int; }
+    return true;
+} {
+    return v;
+}
+
+sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } {
+    total: T;
+    for values { total += it; }
+    return total;
+}
+
+ring :: ($N: int, $T: Type) -> [N]T #modify {
+    if N < 1 { N = 1; }
+    return true;
+} {
+    r: [N]T;
+    return r;
+}
+
+say :: ($S: string) -> string #modify {
+    if S == "" { S = "none"; }
+    return true;
+} {
+    return S;
+}
+
+main :: () {
+    print("{}\n", widen(cast(u8) 200) + widen(cast(u8) 100));
+    print("{}\n", sum(float.[1.5, 2]));
+    print("{}\n", ring(0, int));
+    print("{}\n", say(""));
+}
+```
+
+```text
+300
+3.5
+[0]
+none
+```
+
+```rig error
+sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } {
+    total: T;
+    for values { total += it; }
+    return total;
+}
+
+bad :: (v: $T) #modify {
+    a: [2]int;
+    i := 5;
+    a[i] = 1;
+    return true;
+} { }
+
+main :: () {
+    s := sum(string.["a", "b"]);
+    bad(1);
+}
+```
+
+```text
+example.rig:7:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    bad :: (v: $T) #modify {
+                   ^
+    in #modify (example.rig:10:6)
+    in 'bad' with T = int, called at example.rig:16:5
+example.rig:15:10: error: 'sum' refused T = string: sum needs numbers
+        s := sum(string.["a", "b"]);
+             ^
 ```
 
 ## 8. Runtime checks
@@ -4482,6 +4569,8 @@ The sections defining each construct give its messages. Some of those met most o
 | `a value of type 'Type' can't be an argument of 'g'; type_info(T) describes the type` | 7.12 |
 | `main is where the program starts; #modify can't call it` | 7.12 |
 | `'sum' can't be used in its own #modify, which decides its instances` | 7.12 |
+| `'sum' refused T = string: sum needs numbers` | 7.12 |
+| `#modify failed: runtime error: index 5 is out of bounds (count 2)` | 7.12, 7.8 |
 | `can't assign to 'a': it's a parameter` | 6.4 |
 | `'f' must return a value on every path, and this one reaches its end` | 6.11 |
 | `'A' is defined in terms of itself` | 4.8, 3.22 |
@@ -4672,8 +4761,8 @@ hello.rig
 ```
 
 - `loading` is stages 1 to 3: reading the files, lexing and parsing them, and deciding the top-level `#if`s (section 4.9).
-- `checking` is stage 4, less the time of the expression `#run`s it runs, which is `#run`'s.
-- `#run` is every `#run`'s, expression and top-level, each from lowering what it reaches into the compile-time module to its end on the interpreter, the first one's setting up of the compile-time world included (sections 7.8 and 10.8).
+- `checking` is stage 4, less the time of the expression `#run`s and the `#modify` blocks it runs, which is `#run`'s.
+- `#run` is every `#run`'s, expression and top-level, and every `#modify` block's run (section 7.12), each from lowering what it reaches into the compile-time module to its end on the interpreter, the first one's setting up of the compile-time world included (sections 7.8 and 10.8).
 - `lowering` is stage 5.
 - `llvm module`, `optimising` and `object file` are stage 6: the IR into LLVM's module, which LLVM verifies; the module through LLVM's `default<O2>` pipeline, a line only for a workspace with `optimize` (section 7.9); and the object file's code made and written.
 - `linking` is stage 7.
@@ -4953,7 +5042,7 @@ The procedures the compiler adds (section 10.5) are left out. A run that fails b
     in main (tables.rig:52:5)
 ```
 
-A failing `#run` writes them after its message (section 7.8), the outermost frame being the `#run`'s own procedure, `in #run (PATH:LINE:COL)`, and, for a `#run` in an instance's body, the instance's chain after them, `    in 'limit' with T = Big, called at PATH:LINE:COL` (section 7.11), which is the checker's, not a frame. The test mode that runs a program interpreted, `bin/unit-tests --interpret` (`CONTRIBUTING.md`), writes only the innermost frame's position before the message (the file alone when there is no frame), as a compiled program does: `tables.rig:40:17: runtime error: index 10 is out of bounds (count 10)`. A call of `__runtime_error` it writes as the compiled program does too, its `text` as given, so a failed `assert` names its caller's place interpreted as compiled. Its command line is `bin/unit-tests --interpret FILE.rig [--no-bounds-checks] [-- ARGS...]`, and it calls `main` with `argc` and `argv` as a compiled program's start-up would (section 10.4): `argv[0]` is FILE as given, then each word after the `--`, as it is, a `--` or `--no-bounds-checks` there included, since the `--` ends the test mode's own words (so a word after it is never FILE: `--interpret greet.rig -- x.rig` runs greet.rig with `x.rig` as its argument, and `--interpret -- x.rig`, with no FILE, prints the usage), each a copy ended by a zero, as rig reads its own command line: in UTF-8 on Windows, and on Linux as the system's bytes, no encoding assumed. `__save_command_line` saves that `argv` as given (section 10.5), as it does a compiled program's, so given the same words, the program gets the arguments after its name that it would compiled. On Windows the test mode, as rig does, takes its words from the C runtime's wide arguments, split from the command line by the rules that split a compiled program's (section 10.6), so the same command line, a `""` inside quotes included, gives the program the same words interpreted as compiled. It refuses a build program (section 7.9), which has no `main` to run, once it has checked with no errors and before its top-level `#run`s: `unit-tests: error: a build program can't be interpreted`, status 1. A Preload that can't be found or read (section 2.14) it says as rig does, after `unit-tests: error: `, status 1, before anything is checked.
+A failing `#run` writes them after its message (section 7.8), the outermost frame being the `#run`'s own procedure, `in #run (PATH:LINE:COL)`, and, for a `#run` in an instance's body, the instance's chain after them, `    in 'limit' with T = Big, called at PATH:LINE:COL` (section 7.11), which is the checker's, not a frame. A `#modify` block that fails while it runs writes them the same way (section 7.12), its outermost frame its own, `in #modify (PATH:LINE:COL)`, at the place in its block where it failed or made the call that did, then the checker's line of the instance its bindings would have made, `    in 'bad' with T = int, called at PATH:LINE:COL`, and that use's chain. The test mode that runs a program interpreted, `bin/unit-tests --interpret` (`CONTRIBUTING.md`), writes only the innermost frame's position before the message (the file alone when there is no frame), as a compiled program does: `tables.rig:40:17: runtime error: index 10 is out of bounds (count 10)`. A call of `__runtime_error` it writes as the compiled program does too, its `text` as given, so a failed `assert` names its caller's place interpreted as compiled. Its command line is `bin/unit-tests --interpret FILE.rig [--no-bounds-checks] [-- ARGS...]`, and it calls `main` with `argc` and `argv` as a compiled program's start-up would (section 10.4): `argv[0]` is FILE as given, then each word after the `--`, as it is, a `--` or `--no-bounds-checks` there included, since the `--` ends the test mode's own words (so a word after it is never FILE: `--interpret greet.rig -- x.rig` runs greet.rig with `x.rig` as its argument, and `--interpret -- x.rig`, with no FILE, prints the usage), each a copy ended by a zero, as rig reads its own command line: in UTF-8 on Windows, and on Linux as the system's bytes, no encoding assumed. `__save_command_line` saves that `argv` as given (section 10.5), as it does a compiled program's, so given the same words, the program gets the arguments after its name that it would compiled. On Windows the test mode, as rig does, takes its words from the C runtime's wide arguments, split from the command line by the rules that split a compiled program's (section 10.6), so the same command line, a `""` inside quotes included, gives the program the same words interpreted as compiled. It refuses a build program (section 7.9), which has no `main` to run, once it has checked with no errors and before its top-level `#run`s: `unit-tests: error: a build program can't be interpreted`, status 1. A Preload that can't be found or read (section 2.14) it says as rig does, after `unit-tests: error: `, status 1, before anything is checked.
 
 **No step limit.** The interpreter counts no steps: an endless loop runs until the compiler is stopped (Ctrl-C), as the compiled program would. An editor checking as one types may stop it (section 7.8).
 

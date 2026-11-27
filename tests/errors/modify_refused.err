@@ -1,0 +1,23 @@
+tests/errors/modify_refused.rig:19:19: error: 'sum' refused T = string: sum needs numbers
+    wrap :: (v: $T) { sum(string.["c"]); }
+                      ^
+    in 'wrap' with T = int, called at tests/errors/modify_refused.rig:32:5
+tests/errors/modify_refused.rig:21:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    bad :: (v: $T) #modify {
+                   ^
+    in #modify (tests/errors/modify_refused.rig:24:6)
+    in 'bad' with T = int, called at tests/errors/modify_refused.rig:33:5
+tests/errors/modify_refused.rig:21:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    bad :: (v: $T) #modify {
+                   ^
+    in #modify (tests/errors/modify_refused.rig:24:6)
+    in 'bad' with T = bool, called at tests/errors/modify_refused.rig:35:5
+tests/errors/modify_refused.rig:29:5: error: 'sum' refused T = string: sum needs numbers
+        sum(string.["a"]);
+        ^
+tests/errors/modify_refused.rig:30:5: error: 'sum' refused T = string: sum needs numbers
+        sum(string.["b"]);
+        ^
+tests/errors/modify_refused.rig:31:5: error: 'only' refused T = bool
+        only(true);
+        ^

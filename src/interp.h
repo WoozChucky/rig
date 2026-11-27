@@ -144,8 +144,20 @@ s32 interp_proc_at(Interp *in, u64 address);
 // so a caller wanting each of them starts again after the one it got.
 s32 interp_c_function_at(Interp *in, u64 address, s32 from);
 
-// A global's compile-time bytes, once a run has mapped it.
+// A global's compile-time bytes, once a run, or interp_map, has mapped it.
 u8 *interp_global(Interp *in, s32 global);
+
+// Maps what the module gained since the last run or map, its globals and
+// its procedures' places, as a run does first, without running anything:
+// so a caller may hand a run the address of a global the run will read,
+// a #modify block's run a type's description (spec 7.12). False, with
+// nothing mapped, when a global's relocation names a C function that is
+// nowhere: its message in *error, in `a`, as a run fails with it.
+bool interp_map(Interp *in, Arena *a, String *error);
+
+// The mapped global whose bytes start at `address`, or -1: an address
+// inside a global's bytes but not at their start is none.
+s32 interp_global_at(Interp *in, u64 address);
 
 // "    in NAME (PATH:L:C)\n" for each frame, PATH from paths[pos.file].
 String interp_frames_text(Arena *a, Array<Interp_Frame> frames, Array<String> paths);
