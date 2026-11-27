@@ -57,6 +57,14 @@ ring_size :: (r: *Ring($T, $N)) -> int {
 
 swap :: (p: Pair($A, $B)) -> Pair(B, A) { return .{p.second, p.first}; }
 
+// An instance's argument that is an expression is each instance's: a
+// Ring(u8, 3) grows into a Ring(u8, 4).
+grow :: (r: Ring($T, $N)) -> Ring(T, N + 1) {
+    g: Ring(T, N + 1);
+    for r.items { g.items[it_index] = it; }
+    return g;
+}
+
 name_of :: (l: Labeled($S)) -> string { return S; }
 tag_of :: (t: Tag($M)) -> Mode { return M; }
 small_n :: (s: Small($N)) -> u8 { return N; }
@@ -94,6 +102,7 @@ main :: () {
     r.items[2] = 30;
     print("{}\n", ring_sum(r));
     print("{}\n", ring_size(*r));
+    print("{}\n", grow(r));
     print("{}\n", swap(Pair(int, bool).{1, true}));
     print("{}\n", dot(Vec(3).{.[1, 2, 3]}, Vec(3).{.[4, 5, 6]}));
     print("{} {}\n", name_of(Labeled("hi").{}), name_of(Labeled("ho").{}));

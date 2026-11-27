@@ -106,8 +106,11 @@ struct Generic_Binding {
     String name;
     Position declared;  // its '$'; a struct's parameter's name
     bool is_type;       // a type parameter, $T; a constant one, $N: int, isn't
-    Type *type;         // is_type: what it's bound to, null until then; otherwise the constant's type
-    Ast *value;         // a constant one's argument, converted
+    Type *type;         // is_type: what it's bound to, null until then; otherwise the constant's type,
+                        // $N: int's, or that of the struct parameter an instance's argument declares
+                        // it at, Ring($T, $N)'s N (null when the struct's own check refused it)
+    Ast *value;         // a constant one's value, null until bound: its argument, converted, or the
+                        // constant an instance's argument binds it to (match_type)
 };
 
 // checker.cpp
@@ -527,6 +530,14 @@ bool has_failed_run(Ast *e);
 // default values themselves are each instance's, checked and converted
 // with its signature.
 void check_generic_signature(Checker *c, Ast_Proc *generic);
+
+// The own checks (check_generic_struct) of the generic structs the
+// instances in generic procedure generic's parameters' and results' types
+// name, outside an array's count, at any depth: run before its signature's
+// check counts its mistakes (checker.cpp's resolve_signature), as a
+// struct's mistakes are its own, never the generic's, whichever is checked
+// first.
+void check_signature_structs(Checker *c, Ast_Proc *generic);
 
 // Whether param is a $T: Type (spec 7.11), which takes a type: known by
 // its type's written name, Type, before any type is resolved.

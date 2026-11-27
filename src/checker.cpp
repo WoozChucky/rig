@@ -3638,6 +3638,9 @@ static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     enter_instance(c, proc->instance);      // and an instance's bindings
     proc->resolve = RESOLVE_UNDER_WAY;
     array_add(&c->resolving, (Ast *)proc);
+    // The generic structs a generic's signature names are checked first:
+    // their mistakes are theirs, never the generic's.
+    if (proc->is_generic) check_signature_structs(c, proc);
     s64 errors = c->diag->error_count;
     if (proc->is_generic) {
         check_generic_signature(c, proc);

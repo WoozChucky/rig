@@ -4,6 +4,7 @@ true
 7 seven
 60
 3
+{items = [10, 20, 30, 0]}
 {first = true, second = 1}
 32.0
 hi ho

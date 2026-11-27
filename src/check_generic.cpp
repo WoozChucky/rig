@@ -343,12 +343,55 @@ static bool is_constant_parameter(Array<Generic_Binding> declared, String name) 
 
 // What check_generic_type's action needs: the checker, and the type and
 // constant parameters the generic, a procedure or a struct, declares; and
-// what it found: whether it said a mistake of the generic's own.
+// what it found: whether it said a mistake of the generic's own, or met an
+// instance of a generic struct its own check refused (at_generic_instance).
 struct Generic_Type_Check {
     Checker *c;
     Array<Generic_Binding> declared;
     bool said;
 };
+
+static String written_type_text(Checker *c, Ast_Type *written);
+
+// At a name walk_names meets: the first that declares a parameter, $M,
+// kept in the Ast_Type * `data` points at.
+static bool at_first_dollar(void *data, Ast *name, Name_Place) {
+    Ast_Type **first = (Ast_Type **)data;
+    if (!*first && name->kind == AST_TYPE_NAME && ((Ast_Type *)name)->declares) *first = (Ast_Type *)name;
+    return true;
+}
+
+// Whether the arguments of `written`, an instance of generic struct
+// `generic` giving one per parameter, are values where it takes a constant,
+// as far as the generic's own check can tell (at_generic_instance); if not,
+// says why, at the first that isn't.
+static bool constant_arguments(Checker *c, Ast_Struct *generic, Ast_Type *written) {
+    for (s64 i = 0; i < written->args.count; i++) {
+        Ast *arg = written->args[i];
+        if (struct_takes_a_type(generic->params[i]) || !is_written_type(arg) || arg->kind == AST_TYPE_NAME) continue;
+        Ast_Type *argument = (Ast_Type *)arg;
+        if (argument->kind == AST_TYPE_INSTANCE && !instance_generic(c, argument)) {
+            Ast_Type *dollar = nullptr;
+            walk_names(argument, Name_Place{}, at_first_dollar, &dollar);
+            if (!dollar) continue;
+            Array<u8> example = {};
+            for (s64 j = 0; j < generic->params.count; j++) {
+                add_text(&example, str(j > 0 ? ", $" : "$"));
+                add_text(&example, generic->params[j]->name);
+            }
+            diag_error(c->diag, dollar->pos,
+                       "a '$' where '" STR_FMT "' takes a constant is all of its argument, as in " STR_FMT "(%.*s)",
+                       STR_ARG(generic->name), STR_ARG(generic->name), (int)example.count,
+                       (const char *)example.data);
+            array_free(&example);
+        } else {
+            diag_error(c->diag, argument->pos, "'" STR_FMT "' is a type, not a value",
+                       STR_ARG(written_type_text(c, argument)));
+        }
+        return false;
+    }
+    return true;
+}
 
 // At an instance in a written type of a generic's signature, Map($K, $V)
 // (spec 7.11): what doesn't depend on the generic's parameters is said
@@ -358,12 +401,23 @@ struct Generic_Type_Check {
 // of a name that is no type ("unknown type 'Nope'", "'main' is not a
 // type"), a type parameter's, which is bound to a type, being "'T' isn't
 // generic, ...", and a constant parameter's "'N' is not a type". Then its
-// count: "'Map' takes 2 arguments, but 1 was given". A generic struct
-// whose own check said a mistake says nothing more (check_generic_struct).
+// count: "'Map' takes 2 arguments, but 1 was given". Then each argument
+// where the struct takes a constant that is a written type: a name, a
+// value's or a $N, or a call, twice(2), is each instance's to check, but
+// any other written type is no value, whatever the generic's parameters
+// are: "'*$N' is a type, not a value", as each instance would say it
+// (bind_struct_argument); and a '$' in a call there, twice($M), could
+// never be bound, as no instance is read inside a value: "a '$' where
+// 'Ring' takes a constant is all of its argument, as in Ring($T, $N)", at
+// the '$'. A generic struct whose own check said a mistake says nothing
+// more (check_generic_struct), but the generic can't be instantiated with
+// it: that counts as a mistake of the generic's (Generic_Type_Check.said),
+// so it makes no instance and its calls say nothing more either, whichever
+// was checked first.
 // True when its arguments are to be checked after it (at_generic_type_name):
 // only when it names a generic struct whose own check said no mistake and
-// gives it one argument per parameter, as a use binds the arguments of no
-// other (check_struct_instance).
+// gives it one argument per parameter, none of them refused here, as a use
+// binds the arguments of no other (check_struct_instance).
 static bool at_generic_instance(Generic_Type_Check *check, Ast_Type *written) {
     Checker *c = check->c;
     s64 errors = c->diag->error_count;
@@ -378,8 +432,11 @@ static bool at_generic_instance(Generic_Type_Check *check, Ast_Type *written) {
         if (decl && decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) {
             Ast_Struct *generic = (Ast_Struct *)decl;
             check_generic_struct(c, generic);
-            arguments = !generic->had_errors && generic->resolve == RESOLVE_DONE &&
-                        count_struct_arguments(c, generic, written->args.count, written->pos);
+            if (generic->had_errors || generic->resolve != RESOLVE_DONE) {
+                check->said = true;
+            } else if (count_struct_arguments(c, generic, written->args.count, written->pos)) {
+                arguments = constant_arguments(c, generic, written);
+            }
         } else if (resolve_type_name(c, written, true)) {
             diag_error(c->diag, written->pos, "'" STR_FMT "' isn't generic, so it takes no arguments",
                        STR_ARG(written->name));
@@ -450,11 +507,13 @@ static bool at_generic_type_name(void *data, Ast *name, Name_Place place) {
 
 // Checks written type `written` of a generic's signature against the type
 // and constant parameters the generic declares, `declared`
-// (at_generic_type_name). A generic struct's fields are checked name by
-// name instead (check_generic_fields).
-static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared) {
+// (at_generic_type_name): whether it found a mistake of the generic's own,
+// said there, or an instance of a struct its own check refused. A generic
+// struct's fields are checked name by name instead (check_generic_fields).
+static bool check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared) {
     Generic_Type_Check check = {c, declared, false};
     walk_names(written, Name_Place{}, at_generic_type_name, &check);
+    return check.said;
 }
 
 // The name of the first parameter written type `written` declares, a type
@@ -547,8 +606,9 @@ struct Signature_Check {
 // instance's to check. An instance's argument that is an expression,
 // Ring(T, N + 1)'s, is walked as a count is (walk_names); one that is a
 // written type as any written type is, a name that is all of it, Map(K,
-// V)'s K or Vec(N)'s N, used before the $ that declares it, said as in a
-// count, a constant parameter's too.
+// V)'s K or Vec(N)'s N, used before the $ that declares it, said as a type
+// name's is where the struct takes a type, and as in a count where it
+// doesn't, a constant parameter's too.
 // A refused $T is still the $ of its name: a use after it says nothing
 // more.
 static bool at_signature_name(void *data, Ast *name, Name_Place place) {
@@ -573,9 +633,12 @@ static bool at_signature_name(void *data, Ast *name, Name_Place place) {
     Ast_Type *written = (Ast_Type *)name;
     Signature_Name *earlier = signature_name(names, written->name);
     if (!written->declares) {
-        // All of an instance's argument, a name may be a constant
-        // parameter's too, Vec(N)'s N, as in a count.
-        if (place.of_instance) {
+        // All of an instance's argument where it takes no type, a name may
+        // be a constant parameter's too, Vec(N)'s N, as in a count, and so
+        // in a call there, twice(N). Where it takes a type, a constant
+        // parameter's is no type, said so (at_generic_type_name).
+        Ast_Param *param = argument_parameter(c, place);
+        if (place.of_instance && (!param || !struct_takes_a_type(param))) {
             check_count_name(c, written->name, written->pos, check->declared, names);
         } else if (is_type_parameter(check->declared, written->name) && !type_from_name(written->name) &&
                    !dollar_declared(names, written->name)) {
@@ -606,8 +669,6 @@ static void check_signature_names(Checker *c, Ast_Type *written, Array<Generic_B
     Signature_Check check = {c, declared, names};
     walk_names(written, Name_Place{}, at_signature_name, &check);
 }
-
-static String written_type_text(Checker *c, Ast_Type *written);
 
 // Whether a constant parameter, $N: X, may have type t (spec 7.11): a
 // number, a bool, an enum or a string, whose values the instance's name
@@ -759,7 +820,7 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
             check_baked_parameter(c, generic, i, declared, settled.data);
             continue;
         }
-        check_generic_type(c, param->type_expr, declared);
+        generic->had_errors |= check_generic_type(c, param->type_expr, declared);
         // A default value that would fix T has no call to give it a type
         // yet, so a parameter whose type declares one takes none, for now
         // (spec 7.11).
@@ -776,7 +837,9 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
     // instance checks only its defaults' values.
     check_default_places(c, generic, settled.data);
     array_free(&settled);
-    for (s64 i = 0; i < generic->results.count; i++) check_generic_type(c, generic->results[i], declared);
+    for (s64 i = 0; i < generic->results.count; i++) {
+        generic->had_errors |= check_generic_type(c, generic->results[i], declared);
+    }
     // C's '..' is a foreign procedure's, as check_signature says; a foreign
     // generic is refused below.
     if (generic->is_c_variadic && !generic->is_foreign) refuse_c_dots(c, generic);
@@ -799,6 +862,22 @@ void check_generic_signature(Checker *c, Ast_Proc *generic) {
     }
     generic->type = nullptr;  // no value: only its instances are procedures
     array_free(&declared);
+}
+
+// At an instance outside an array's count: its generic struct's own check
+// (instance_generic), for check_signature_structs, `data` the Checker.
+static bool at_signature_struct(void *data, Ast *name, Name_Place place) {
+    if (name->kind == AST_TYPE_INSTANCE && !place.in_count) instance_generic((Checker *)data, (Ast_Type *)name);
+    return true;
+}
+
+void check_signature_structs(Checker *c, Ast_Proc *generic) {
+    for (s64 i = 0; i < generic->params.count; i++) {
+        walk_names(generic->params[i]->type_expr, Name_Place{}, at_signature_struct, c);
+    }
+    for (s64 i = 0; i < generic->results.count; i++) {
+        walk_names(generic->results[i], Name_Place{}, at_signature_struct, c);
+    }
 }
 
 // Inference (spec 7.11): each type parameter is bound from the arguments
@@ -1205,7 +1284,11 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
         // Only an instance binds a constant parameter of an instance's
         // argument, Ring($T, $N)'s N: an untyped number at its place met its
         // pattern as its default type, which is no instance, and didn't fit
-        // (said, above). What's left is a type parameter.
+        // (said, above). What's left is a type parameter, and a typed
+        // argument at its place bound it: one no argument could bind, below
+        // an instance's argument where the struct takes a constant,
+        // Ring(int, *$N)'s, is the generic's mistake (constant_arguments),
+        // and a generic with one makes no instance.
         RIG_ASSERT(b->is_type);
         b->type = untyped_float ? &type_float32 : &type_int;
     }
@@ -2041,6 +2124,8 @@ struct Name_Walk {
     Checker *c;
     Array<String> names;  // the parameters, the type parameters, then what the body declared so far
     bool any_field;       // a using parameter: a name may be any of its fields, which depend on T
+    s64 others;           // the errors said by the own checks of the generic structs the walk needed
+                          // (at_body_name): theirs, never the generic's
 };
 
 static void names_statement(Name_Walk *w, Ast *statement);
@@ -2080,6 +2165,12 @@ static void names_expression(Name_Walk *w, Ast *node);
 // (instance_as_call), as each instance checks them (bind_struct_argument).
 static bool at_body_name(void *data, Ast *name, Name_Place place) {
     Name_Walk *w = (Name_Walk *)data;
+    // The own check of a generic struct an instance here names, which what
+    // follows may need first, says its own mistakes (Name_Walk.others).
+    s64 errors = w->c->diag->error_count;
+    if (place.of_instance) instance_generic(w->c, place.of_instance);
+    if (name->kind == AST_TYPE_INSTANCE) instance_generic(w->c, (Ast_Type *)name);
+    w->others += w->c->diag->error_count - errors;
     Ast_Param *param = argument_parameter(w->c, place);
     bool value = name->kind == AST_NAME || (param && !struct_takes_a_type(param));
     if (value && name->kind == AST_TYPE_INSTANCE && !instance_generic(w->c, (Ast_Type *)name)) {
@@ -2249,7 +2340,7 @@ void check_generic_names(Checker *c, Ast_Proc *generic) {
     String outer_context = c->diag->context;
     c->diag->context = {};
     s64 errors = c->diag->error_count;
-    Name_Walk w = {c, {}, false};
+    Name_Walk w = {c, {}, false, 0};
     for (s64 i = 0; i < generic->params.count; i++) {
         array_add(&w.names, generic->params[i]->name);
         w.any_field |= generic->params[i]->is_using && !generic->params[i]->is_baked;
@@ -2259,6 +2350,6 @@ void check_generic_names(Checker *c, Ast_Proc *generic) {
     array_free(&declared);
     names_statements(&w, generic->body);
     array_free(&w.names);
-    generic->had_errors |= c->diag->error_count != errors;
+    generic->had_errors |= c->diag->error_count - w.others != errors;
     c->diag->context = outer_context;
 }

@@ -14966,6 +14966,15 @@ TEST(struct_instance_errors_name_their_chain) {
               "    in 'make' with T = int, called at test.rig:7:10\n"
               "2:1: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)\n"
               "    in 'Bad' with T = u8, used at test.rig:6:8\n");
+    // A generic struct's field's instance's arguments are each instance's
+    // to check, a name in them that is no type too, said with each chain.
+    CHECK_STR(check_source(&a, "Box :: struct (T: Type) { item: T; }\n"
+                               "S :: struct (T: Type) { a: Box(Nope); }\n"
+                               "main :: () { x: S(int); y: S(u8); }\n"),
+              "2:32: unknown type 'Nope'\n"
+              "    in 'S' with T = int, used at test.rig:3:17\n"
+              "2:32: unknown type 'Nope'\n"
+              "    in 'S' with T = u8, used at test.rig:3:28\n");
     arena_free(&a);
 }
 
@@ -15241,7 +15250,8 @@ TEST(inference_reads_through_instances) {
     // fields. A constant parameter has the struct parameter's type, a
     // string's, an enum's, a u8's, a bool's or a float's too, each value
     // its own instance; and a type is matched below an instance's argument,
-    // a pointer's target or another instance's argument.
+    // a pointer's target or another instance's argument. An argument that is
+    // an expression, Ring(T, N + 1)'s, is each instance's: a Ring(u8, 4).
     Arena a = arena_make();
     Ast_File *tree = nullptr;
     CHECK_STR(check_with_preload(&a,
@@ -15262,6 +15272,7 @@ TEST(inference_reads_through_instances) {
                                         "deref :: (b: Box(*$T)) -> T { return b.item.*; }\n"
                                         "second_of :: (m: *Map($K, Pair($A, $B))) -> B { return m.values[0].second; }\n"
                                         "ring_count :: (m: Map(Ring($T, $N), int)) -> int { return N; }\n"
+                                        "grow :: (r: Ring($T, $N)) -> Ring(T, N + 1) { g: Ring(T, N + 1); return g; }\n"
                                         "main :: () {\n"
                                         "    m: Map(string, int);\n"
                                         "    r: Ring(u8, 3);\n"
@@ -15292,6 +15303,7 @@ TEST(inference_reads_through_instances) {
                                         "    o10 := second_of(*nm);\n"
                                         "    rm: Map(Ring(u8, 4), int);\n"
                                         "    o11 := ring_count(rm);\n"
+                                        "    o12 := grow(r);\n"
                                         "}\n"),
                                  &tree),
               "");
@@ -15305,7 +15317,10 @@ TEST(inference_reads_through_instances) {
         {"map_add", 1, {"map_add(K = string, V = int)"}},
         {"ring_sum", 1, {"ring_sum(T = u8, N = 3)"}},
         {"ring_size", 1, {"ring_size(T = u8, N = 3)"}},
+        {"firsts", 1, {"firsts(A = int, B = string)"}},
+        {"swap", 1, {"swap(A = int, B = bool)"}},
         {"dot", 1, {"dot(N = 3)"}},
+        {"map_count", 1, {"map_count(K = string, V = int)"}},
         {"name_of", 2, {"name_of(S = \"hi\")", "name_of(S = \"ho\")"}},
         {"tag_of", 1, {"tag_of(M = Mode.B)"}},
         {"small_n", 1, {"small_n(N = 3)"}},
@@ -15315,6 +15330,7 @@ TEST(inference_reads_through_instances) {
         {"deref", 1, {"deref(T = int)"}},
         {"second_of", 1, {"second_of(K = int, A = string, B = bool)"}},
         {"ring_count", 1, {"ring_count(T = u8, N = 4)"}},
+        {"grow", 1, {"grow(T = u8, N = 3)"}},
     };
     for (const Instances &k : instances) {
         Ast_Proc *generic = (Ast_Proc *)top_level_named(tree, k.generic);
@@ -15322,11 +15338,12 @@ TEST(inference_reads_through_instances) {
         if (generic->instances.count != k.count) continue;
         for (s64 i = 0; i < k.count; i++) CHECK_STR(generic->instances[i]->name, k.names[i]);
     }
-    const char *names[] = {"s",  "n",  "f",  "w",  "d",  "k",  "o1", "o2", "o3",
-                           "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11"};
+    const char *names[] = {"s",  "n",  "f",  "w",  "d",  "k",   "o1",  "o2", "o3",
+                           "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11", "o12"};
     const char *types[] = {"u8",     "int",  "int", "Pair(bool, int)", "float32", "int", "string", "string", "string",
-                           "Mode",   "u8",   "bool", "float32",        "int",     "int", "bool",   "int"};
-    for (s64 i = 0; i < 17; i++) {
+                           "Mode",   "u8",   "bool", "float32",        "int",     "int", "bool",   "int",
+                           "Ring(u8, 4)"};
+    for (s64 i = 0; i < 18; i++) {
         Type *t = local_type(tree, "main", names[i]);
         CHECK_STR(t ? type_name(&a, t) : str("?"), types[i]);
     }
@@ -15400,6 +15417,75 @@ TEST(inference_through_instances_mistakes) {
          "13:72: can't work out 'N' for 'vec_n': argument 1 has no type of its own\n"},
         {"vecs();", "vecs :: (vs: ..Vec($N)) { }\n", "13:66: can't work out 'N' for 'vecs': no argument gives it\n"},
         {"vec_n(nope);", "vec_n :: (v: Vec($N)) -> int { return N; }\n", "13:72: unknown identifier 'nope'\n"},
+        // An untyped number at an instance's place is matched as its
+        // default type, which is no instance.
+        {"vec_n(5);", "vec_n :: (v: Vec($N)) -> int { return N; }\n",
+         "13:72: argument 1 of 'vec_n' has type 'int', which doesn't fit 'Vec($N)'\n"},
+        // An argument that is an expression binds nothing: the call's
+        // conversion says a mismatch, and its value is each instance's to
+        // check, followed by the struct instance's line and the procedure
+        // instance's.
+        {"r2: Ring(int, 2); x4: Ring(int, 4); fill(r2, *x4);",
+         "fill :: (a: Ring($T, $N), b: *Ring(T, N + 1)) { }\n",
+         "13:111: argument 2 of 'fill' has type '*Ring(int, 4)', which can't be converted to '*Ring(int, 3)'\n"},
+        {"r2: Ring(int, 2); shrink(r2);",
+         "shrink :: (r: Ring($T, $N)) -> Ring(T, N - 10) { s: Ring(T, N - 10); return s; }\n",
+         "2:44: an array's count can't be negative (-8)\n"
+         "    in 'Ring' with T = int, N = -8, used at test.rig:14:32\n"
+         "    in 'shrink' with T = int, N = 2, called at test.rig:13:84\n"},
+        // A generic struct its own check refused makes a generic naming it
+        // in its signature make no instance, whichever is declared first:
+        // its calls say nothing more. The struct's own mistakes are never
+        // the generic's, whichever is checked first: a generic naming a
+        // struct whose field's alias has a mistake is called as any.
+        {"gen2(5); gen2(.{});", "Bad :: struct (N: []int) { v: int; }\ngen2 :: (b: Bad($N)) { }\n",
+         "14:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"gen2(5); gen2(.{});", "gen2 :: (b: Bad($N)) { }\nBad :: struct (N: []int) { v: int; }\n",
+         "15:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"r: Ring(int, 2); gen3(null, r);",
+         "Bad :: struct (N: []int) { v: int; }\ngen3 :: (b: *Bad($N), c: Ring(int, N)) { }\n",
+         "14:19: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"f9(null);", "Bad :: struct (T: Type, S: []int) { a: T; }\nf9 :: (m: *Bad(int), v: $T) { }\n",
+         "14:28: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"f9(null);", "f9 :: (m: *Bad(int), v: $T) { }\nBad :: struct (T: Type, S: []int) { a: T; }\n",
+         "15:28: a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, "
+         "not '[]int'\n"},
+        {"f10(null);",
+         "Bad :: struct (T: Type) { p: *A; }\nA :: #type [Missing]u8;\nf10 :: (m: *Bad(int), v: $T) { }\n",
+         "13:66: 'f10' takes 2 arguments, but 1 was given\n15:13: unknown identifier 'Missing'\n"},
+        {"f10(null);",
+         "f10 :: (m: *Bad(int), v: $T) { }\nBad :: struct (T: Type) { p: *A; }\nA :: #type [Missing]u8;\n",
+         "13:66: 'f10' takes 2 arguments, but 1 was given\n16:13: unknown identifier 'Missing'\n"},
+        // So with its body's walk, which a #run may need before the
+        // struct's turn.
+        {"y := f11(1, 2);",
+         "X :: #run f11(1);\nf11 :: (v: $T) -> int { b: *Bad(T); return 1; }\nBad :: struct (K: Type) { p: *A; }\n"
+         "A :: #type [Missing]u8;\n",
+         "13:71: 'f11' takes 1 argument, but 2 were given\n17:13: unknown identifier 'Missing'\n"},
+        // Where the struct takes a constant, a written type that is neither
+        // a name nor a call is no value whatever the generic's parameters
+        // are, and a '$' in a call there is bound by nothing: each said once,
+        // at the generic, called or not, which then makes no instance.
+        {"r4: Ring(int, 4); fp(r4); fp(r4);", "fp :: (r: Ring(int, *$N)) { }\n",
+         "14:21: '*$N' is a type, not a value\n"},
+        {"r4: Ring(u8, 4); fh(r4, 1.5); fh(r4, 1);", "fh :: (r: Ring($T, *$N), x: N) { }\n",
+         "14:20: '*$N' is a type, not a value\n"},
+        {"", "fq :: (v: Vec([]$T)) { }\n", "14:15: '[]$T' is a type, not a value\n"},
+        {"", "fn :: (r: Ring(int, *N), $N: int) { }\n", "14:21: '*N' is a type, not a value\n"},
+        {"r4: Ring(u8, 4); fk(r4);", "fk :: (r: Ring($T, Pair($A, int))) { }\n",
+         "14:20: 'Pair($A, int)' is a type, not a value\n"},
+        {"r4: Ring(u8, 4); fg(r4);", "twice :: (n: int) -> int { return n * 2; }\nfg :: (r: Ring($T, twice($M))) { }\n",
+         "15:26: a '$' where 'Ring' takes a constant is all of its argument, as in Ring($T, $N)\n"},
+        // A constant parameter's name where the struct takes a type is no
+        // type, said once; in a call where it takes a constant, a value used
+        // before its $.
+        {"", "f3 :: (m: Map(N, int), $N: int) { }\n", "14:15: 'N' is not a type\n"},
+        {"", "twice :: (n: int) -> int { return n * 2; }\nf3b :: (r: Ring(int, twice(N)), $N: int) { }\n",
+         "15:28: 'N' is used before '$N' declares it\n"},
     };
     for (const Case &k : cases) {
         String text = string_printf(&a,

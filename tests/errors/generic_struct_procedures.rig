@@ -10,7 +10,8 @@
 // nothing is said though nothing calls it, and a call where its struct
 // takes a constant is a value. A type below an instance's argument that
 // can't match doesn't fit; a constant parameter left unbound is said as a
-// type parameter's is.
+// type parameter's is. A generic naming a refused struct makes no instance,
+// and what no instance's argument could bind is said at the generic.
 Map :: struct (K: Type, V: Type) { keys: [..]K; values: [..]V; count: int; }
 Ring :: struct (T: Type, N: int) { items: [N]T; }
 Vec :: struct (N: int) { v: [N]float; }
@@ -51,4 +52,26 @@ main :: () {
     vec_n(.{});
     vecs();
     vec_n(nope);
+    r4: Ring(int, 4);
+    gen(5);
+    gen2(5);
+    fp(r4);
+    fp(r4);
 }
+
+// A generic struct its own check refused makes a generic naming it in its
+// signature make no instance, whichever is declared first: its calls say
+// nothing more.
+Bad :: struct (N: []int) { v: int; }
+gen :: (b: Bad($N)) { }
+gen2 :: (b: Bad2($N)) { }
+Bad2 :: struct (N: []int) { v: int; }
+
+// Where the struct takes a constant, a written type that is neither a name
+// nor a call is no value, and a '$' in a call there is bound by nothing:
+// each said once, at the generic, called or not. A constant parameter's
+// name where it takes a type is no type, said once.
+fp :: (r: Ring(int, *$N)) { }
+fq :: (v: Vec([]$T)) { }
+fg :: (r: Ring($T, twice($M))) { }
+f3 :: (m: Map(N, int), $N: int) { }

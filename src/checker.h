@@ -1609,7 +1609,14 @@
 //   those mistakes or its struct's own check did, as a use then binds none
 //   of its arguments; one where it takes a constant, Ring(T, N + 1)'s or
 //   Ring(T, twice(2))'s, is each instance's to check, as an array's count
-//   is. In a generic's body, a name there is a value's or a call's. A name
+//   is, but any other written type there is no value ("'*$N' is a type,
+//   not a value") and a '$' in a call there is bound by nothing ("a '$'
+//   where 'Ring' takes a constant is all of its argument, as in Ring($T,
+//   $N)"), said at the generic. The structs a signature names are checked
+//   before its mistakes are counted, so theirs stay their own
+//   (check_signature_structs), but a generic naming one whose own check
+//   said a mistake makes no instance, whichever is declared first. In a
+//   generic's body, a name there is a value's or a call's. A name
 //   used before the $ that declares it, in an instance's argument too, is
 //   "'K' is used before '$K' declares it". In a generic's body an
 //   instance's name declared nowhere is "unknown type 'Mapp'". A generic
