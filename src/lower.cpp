@@ -4027,8 +4027,9 @@ static s64 type_info_size(Type_Info_Tag tag) {
 }
 
 // A read-only global named `name`, of `size` bytes aligned to 8, laid out
-// as a description is: `bytes` (all `size` of them, or none yet) and
-// `relocs`, by increasing offset; its index.
+// as a description is: `bytes` (all `size` of them; or its first ones, the
+// rest zero, as a constant's value writes them, global_value; or none yet)
+// and `relocs`, by increasing offset; its index.
 static s32 add_type_info_global(Lowering *l, String name, s64 size, String bytes, Array<Ir_Reloc> relocs) {
     Ir_Global g = {};
     g.name = name;
@@ -4124,14 +4125,15 @@ static void global_value(Lowering *l, Ir_Global *g, Type *t, Ast *value, bool wr
 // TYPE_INFO_STRUCT_PARAMETERS_OFFSET in its description's `bytes`: a view
 // of a read-only array of its own, `name`.parameters, an Any per binding,
 // in the order its generic declares them, each pointing at a read-only
-// global of its own, `name`.parameter.K, that holds its value. A type's
-// Any is a *Type_Info (Preload's Type_Info, kept on the tree), its value
-// the address of the bound type's description; a constant's is of the
-// constant's type, its value as any constant of that type is written
-// (global_value: a float32's 4 bytes, a string's count and a relocation to
-// its bytes). Only an instance's own copy has parameters: any other struct,
-// and an anonymous member's struct in an instance (whose `instance` is set
-// too, for its late fields, but whose structure isn't it), keeps the empty
+// global of its own, `name`.parameter.K, that holds its value, laid out
+// as a description is (add_type_info_global). A type's Any is a
+// *Type_Info (Preload's Type_Info, kept on the tree), its value the address
+// of the bound type's description; a constant's is of the constant's type,
+// its value as any constant of that type is written (global_value: a
+// float32's 4 bytes, a string's count and a relocation to its bytes). Only
+// an instance's own copy has parameters: any other struct, and an
+// anonymous member's struct in an instance (whose `instance` is set too,
+// for its late fields, but whose structure isn't it), keeps the empty
 // view, zeros, and no array.
 static void describe_parameters(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs, String name, Type *t) {
     Ast_Struct *s = t->decl;
@@ -4144,28 +4146,21 @@ static void describe_parameters(Lowering *l, u8 *bytes, Array<Ir_Reloc> *relocs,
     Array<Ir_Reloc> any_relocs = {};
     for (s64 i = 0; i < count; i++) {
         Ast *bound = inst->bindings[i];
-        Ir_Global value = {};
-        value.name = string_printf(l->arena, STR_FMT ".parameter.%lld", STR_ARG(name), (long long)i);
-        value.type = IR_VOID;
-        value.has_layout = true;
-        value.is_read_only = true;
-        value.align = TYPE_INFO_ALIGN;
         Type *value_type;
+        Ir_Global value = {};  // only its bytes and relocations
         if (bound->kind == AST_ALIAS) {
             Type *aliased = ((Ast_Alias *)bound)->aliased;
             RIG_ASSERT(aliased);  // an instance with a type left unknown is an error, which stops lowering
             value_type = type_pointer_to(l->type_info_type);
-            value.size = 8;
             value.bytes = {(u8 *)arena_alloc(l->arena, 8, 1), 8};  // zeroed: the address
             array_add(&value.relocs, Ir_Reloc{0, type_info_global(l, aliased), false});
         } else {
             Ast_Const *constant = (Ast_Const *)bound;
             value_type = constant->type;
-            value.size = value_type->size;
             global_value(l, &value, value_type, constant->value, false);
         }
-        array_add(&l->module->globals, value);
-        s32 value_global = (s32)(l->module->globals.count - 1);
+        String value_name = string_printf(l->arena, STR_FMT ".parameter.%lld", STR_ARG(name), (long long)i);
+        s32 value_global = add_type_info_global(l, value_name, value_type->size, value.bytes, value.relocs);
         array_add(&any_relocs, Ir_Reloc{i * ANY_SIZE + ANY_TYPE_OFFSET, type_info_global(l, value_type), false});
         array_add(&any_relocs, Ir_Reloc{i * ANY_SIZE + ANY_VALUE_OFFSET, value_global, false});
     }
