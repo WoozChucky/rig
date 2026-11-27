@@ -1,0 +1,10 @@
+// exit() in a #run ends the compiler there (spec 7.8), inside X's value.
+// f's x: X, found before X is worked out, is "'X' is not a type": X is
+// still under way, with no type yet, though it would keep u8's despite
+// its own mistake, a value (spec 3.22). So its note stays, as at the end
+// of a check that isn't cut short.
+exit :: (status: s32) #foreign libc;
+f :: (x: X) { }
+stop :: () -> u8 { exit(1); return 0; }
+X :: (300 + cast(u8) 0) + #run stop();
+main :: () { }

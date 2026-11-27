@@ -75,6 +75,12 @@ struct Diagnostics {
                      // empty: none. The checker sets it to the chain of the instance being checked
                      // (check_generic.cpp's enter_instance), and lowering to the chain of the
                      // instance whose body it lowers (lower.cpp's lower_body)
+    void (*at_exit)(void *data);  // called with at_exit_data by the atexit handler
+                                  // (diag_print_at_exit) before it sorts and prints the messages;
+                                  // null: nothing. check() sets it while it runs, to withdraw first
+                                  // the notes that repeat a constant's own mistake (checker.cpp's
+                                  // withdraw_at_exit)
+    void *at_exit_data;
 };
 
 // Registers a file; the result is its index, for Position.file. The text
@@ -90,6 +96,12 @@ void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows);
 // Records an error at pos, with a printf-style message, and the context, if
 // one is set (Diagnostics.context), copied.
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
+
+// Withdraws the errors said before they were known to repeat another:
+// withdrawn holds a flag for each of Diagnostics.messages, in its order,
+// set for each to withdraw. The others keep their order, and error_count
+// goes down one for each withdrawn.
+void diag_withdraw(Diagnostics *d, const bool *withdrawn);
 
 // Gives the error reported last these lines, copied: each ends with a line
 // break, and they're printed after its caret (Diagnostic.lines).
@@ -118,7 +130,8 @@ void diag_print(Diagnostics *d);
 
 // Until called again with null: a process that ends before rig prints its
 // diagnostics (exit() in a #run, spec 7.8) prints d's first, sorted, as
-// diag_print does, from an atexit handler registered once.
+// diag_print does, from an atexit handler registered once, after calling
+// d's at_exit, if it's set (Diagnostics.at_exit).
 void diag_print_at_exit(Diagnostics *d);
 
 // Frees the messages and the file list.

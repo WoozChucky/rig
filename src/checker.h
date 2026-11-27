@@ -1463,21 +1463,32 @@
 //   name of a type, or of a constant that may be one in turn: checker.cpp's
 //   may_be_alias), out first (resolve_global), as check_lookup does, so an
 //   alias can be used before its declaration, in a struct's field or a
-//   global's type; any other, `C :: size_of(S);`, `C :: f(1);` with f a
-//   procedure, or `C :: D;` with D no alias, is "'C' is not a type" there,
-//   its value not worked out, so no circle. A local one is declared in
-//   order, as any local constant. A circle is a constant's, "'A' is
-//   defined in terms of itself" (`A :: B; B :: A;`, `S :: *S;`), its alias
-//   dropped. An alias whose value needs an instance of a generic struct
-//   whose field names the alias, `Ptr :: *Node(int);` with `kids:
-//   [..]Ptr;`, is no circle: the generic's own check leaves the alias's
-//   name until the alias is worked out, and checks it then
-//   (check_generic.cpp's alias_under_way).
+//   global's type; any other, `C :: size_of(S);` or `C :: D;` with D no
+//   alias, is "'C' is not a type" there, its value not worked out, so no
+//   circle. A local one is declared in order, as any local constant. A
+//   circle is a constant's, "'A' is defined in terms of itself"
+//   (`A :: B; B :: A;`, `S :: *S;`), its alias dropped. An alias whose value
+//   needs an instance of a generic struct whose field names the alias,
+//   `Ptr :: *Node(int);` with `kids: [..]Ptr;`, is no circle: the generic's
+//   own check leaves the alias's name until the alias is worked out, and
+//   checks it then (check_generic.cpp's alias_under_way).
 // - An alias whose check failed, or that is in a circle, has no type, its
 //   mistake said once: its uses say nothing more (resolve_written,
 //   check_addressable). Nor do those of one naming a struct found in a
 //   circle or too big once every struct is laid out: what it names is made
 //   again then (check's made_again), null.
+// - Nor do those of a constant whose own declaration said a mistake and
+//   left it with no type, `C :: 1 + "a";` or `C :: f(1);` with f a
+//   procedure ("the value of constant 'C' isn't known while compiling"):
+//   its "'C' is not a type" only repeats it, so it's withdrawn at the end
+//   of check(), or as a #run's exit() ends the process inside it
+//   (checker.cpp's withdraw_repeated_not_a_type, withdraw_at_exit). A
+//   "'Y' is not a type" said in C's declaration of a constant that has a
+//   type, `C :: cast(Y) 1;` with `Y :: 5;`, is such a mistake; one said of
+//   a constant with no type, `C :: cast(Y) 1;` with `Y :: 1 + "a";`, isn't.
+//   One whose failure no mistake of its own explains, that or `C :: K + 1;`
+//   with K's value the mistake, still says it, as does one that keeps its
+//   type, a value, `C :: 300 + cast(u8) 0;`.
 // - Refused: an alias named as a built-in type, `u8 :: s32;`, which
 //   resolve_written would never find, "'u8' is a built-in type", at its
 //   name, at the top level and in a body; `X :: Type;`, as any type value

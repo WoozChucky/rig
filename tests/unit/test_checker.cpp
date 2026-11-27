@@ -14324,6 +14324,130 @@ TEST(alias_mistakes) {
     arena_free(&a);
 }
 
+TEST(a_failed_constant_says_nothing_more_as_a_type) {
+    // A constant whose declaration had its own mistake said is no second
+    // mistake where it's used as a type, before its declaration or after,
+    // at the top level or in a body. One whose failure no mistake of its
+    // own explains still is.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case withdrawn[] = {
+        {"X :: 1 + \"a\";\nmain :: () { x: X; }\n", "1:8: '+' needs numbers, not 'string'\n"},
+        {"main :: () { x: X; }\nX :: 1 + \"a\";\n", "2:8: '+' needs numbers, not 'string'\n"},
+        {"S :: struct { a: X; }\nX :: 1 + \"a\";\nmain :: () { s: S; }\n", "2:8: '+' needs numbers, not 'string'\n"},
+        {"X :: (int);\nmain :: () { x: X; }\n", "1:7: 'int' is a type, not a value\n"},
+        {"main :: () { X :: 1 + \"a\"; x: X; }\n", "1:21: '+' needs numbers, not 'string'\n"},
+        {"X :: #run 1 + \"a\";\nmain :: () { x: X; }\n", "1:13: '+' needs numbers, not 'string'\n"},
+        // A note of a constant that has a type is a mistake that stays, so
+        // it's X's own, before Y's declaration or after, as one said of a
+        // variable is.
+        {"X :: cast(Y) 1;\nY :: 5;\nmain :: () { x: X; }\n", "1:11: 'Y' is not a type\n"},
+        {"Y :: 5;\nX :: cast(Y) 1;\nmain :: () { x: X; }\n", "2:11: 'Y' is not a type\n"},
+        {"g := 5;\nX :: cast(g) 1;\nmain :: () { x: X; }\n", "2:11: 'g' is not a type\n"},
+        {"X :: 1 +\n    \"a\";\nmain :: () { x: X; }\n", "1:8: '+' needs numbers, not 'string'\n"},
+        {"X :: 1\n    + \"a\";\nmain :: () { x: X; }\n", "2:5: '+' needs numbers, not 'string'\n"},
+        // A circle's message is said at its name.
+        {"X :: X + 1;\nmain :: () { x: X; }\n", "1:1: 'X' is defined in terms of itself\n"},
+        {"S :: struct { a: C; b: int; }\nC :: size_of(S) + \"a\";\nmain :: () { }\n",
+         "2:17: '+' needs numbers, not 'string'\n"},
+        {"X :: 1 + \"a\";\nf :: (a: X) -> X { return a; }\ng: X;\n"
+         "main :: () { y := cast(X) 1; z: *X; w: [2]X; }\n",
+         "1:8: '+' needs numbers, not 'string'\n"},
+        {"Box :: struct (T: Type) { a: X; }\nX :: 1 + \"a\";\nmain :: () { b: Box(int); }\n",
+         "2:8: '+' needs numbers, not 'string'\n"},
+        {"f :: (a: $T) { X :: 1 + \"a\"; x: X; }\nmain :: () { f(1); f(true); }\n",
+         "1:23: '+' needs numbers, not 'string'\n    in 'f' with T = int, called at test.rig:2:14\n"
+         "1:23: '+' needs numbers, not 'string'\n    in 'f' with T = bool, called at test.rig:2:20\n"},
+        // In each instance of f, Y's note in X is X's own mistake, Y having
+        // a type there: X's note goes, and Y's is said once per instance.
+        {"f :: (t: $T) { Y :: 5; X :: cast(Y) 1; x: X; }\nmain :: () { f(1); f(true); }\n",
+         "1:34: 'Y' is not a type\n    in 'f' with T = int, called at test.rig:2:14\n"
+         "1:34: 'Y' is not a type\n    in 'f' with T = bool, called at test.rig:2:20\n"},
+        // A top-level X's mistake is said in no instance, its notes in each
+        // instance of f, before X's declaration or after.
+        {"X :: 1 + \"a\";\nf :: (a: $T) { x: X; }\nmain :: () { f(1); f(true); }\n",
+         "1:8: '+' needs numbers, not 'string'\n"},
+        {"f :: (a: $T) { x: X; }\nX :: 1 + \"a\";\nmain :: () { f(1); f(true); }\n",
+         "2:8: '+' needs numbers, not 'string'\n"},
+    };
+    for (const Case &k : withdrawn) CHECK_STR(check_source(&a, k.text), k.message);
+    const Case kept[] = {
+        // A silent circle: C fails without a word, because g.a has no type,
+        // because of the field a: C. The field's message is the program's
+        // only one, in either order.
+        {"S :: struct { a: C; }\ng: S;\nC :: g.a;\nmain :: () { }\n", "1:18: 'C' is not a type\n"},
+        {"C :: g.a;\ng: S;\nS :: struct { a: C; }\nmain :: () { }\n", "3:18: 'C' is not a type\n"},
+        // A note of a constant with no type is no constant's own mistake,
+        // said of itself in its own declaration or of another there: Y's
+        // note in X is withdrawn, its mistake Y's own, and X's stays.
+        {"X :: cast(X) 1;\nmain :: () { }\n", "1:11: 'X' is not a type\n"},
+        {"X :: cast(Y) 1;\nY :: 1 + \"a\";\nmain :: () { x: X; }\n",
+         "2:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
+        // K's mistake isn't X's own, in either order.
+        {"X :: K + 1;\nK :: 1 + \"a\";\nmain :: () { x: X; }\n",
+         "2:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
+        {"K :: 1 + \"a\";\nX :: K + 1;\nmain :: () { x: X; }\n",
+         "1:8: '+' needs numbers, not 'string'\n3:17: 'X' is not a type\n"},
+        {"X :: 5;\nmain :: () { x: X; }\n", "2:17: 'X' is not a type\n"},
+        // A constant that keeps its type despite its own mistake is a value,
+        // so using it as a type is a mistake of its own, in either order.
+        {"X :: 300 + cast(u8) 0;\nmain :: () { x: X; }\n",
+         "1:6: 300 doesn't fit in 'u8'\n2:17: 'X' is not a type\n"},
+        {"main :: () { x: X; }\nX :: 300 + cast(u8) 0;\n",
+         "1:17: 'X' is not a type\n2:6: 300 doesn't fit in 'u8'\n"},
+        // A mistake on the line of X's declaration, before its name or
+        // after its ';', isn't X's own.
+        {"K :: 1 + \"a\";\nmain :: () { a := 1 + \"a\"; X :: K + 1; x: X; }\n",
+         "1:8: '+' needs numbers, not 'string'\n2:21: '+' needs numbers, not 'string'\n2:43: 'X' is not a type\n"},
+        {"X :: K + 1; K :: 1 + \"a\";\nmain :: () { x: X; }\n",
+         "1:20: '+' needs numbers, not 'string'\n2:17: 'X' is not a type\n"},
+        // Nor is another instance's: each instance of f has its own X, at
+        // the same place. The T = string one's fails by its own cast, the
+        // T = int one's only through K, so its note stays.
+        {"f :: (a: $T) { X :: cast(T) 1 + K; x: X; }\nK :: 1 + \"a\";\nmain :: () { f(1); f(\"s\"); }\n",
+         "1:21: can't cast 'int' to 'string'\n    in 'f' with T = string, called at test.rig:3:20\n"
+         "1:39: 'X' is not a type\n    in 'f' with T = int, called at test.rig:3:14\n"
+         "2:8: '+' needs numbers, not 'string'\n"},
+        // A circle's message is said once, at its first constant (spec
+        // 4.8): only that one's declaration holds a mistake, so only its
+        // uses say nothing more.
+        {"A :: B + 1;\nB :: A + 1;\nmain :: () { x: B; y: A; }\n",
+         "1:1: 'A' is defined in terms of itself\n3:17: 'B' is not a type\n"},
+        {"B :: A + 1;\nA :: B + 1;\nmain :: () { x: B; y: A; }\n",
+         "1:1: 'B' is defined in terms of itself\n3:23: 'A' is not a type\n"},
+    };
+    for (const Case &k : kept) CHECK_STR(check_source(&a, k.text), k.message);
+    // A top-level #if's decider lays S out before X is worked out, and says
+    // the field's note: check() withdraws it with its own, and returns
+    // false, though the decider's withdrawn note leaves error_count where it
+    // was before check(): it said X's mistake.
+    Token_List *list = src("#if size_of(S) > 4 { }\nS :: struct { a: X; }\nX :: 1 + \"a\";\nmain :: () { x: X; }\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK(!check(file, &a, &list->diag));
+    // Done, check() leaves nothing for an exit() after it to withdraw: its
+    // Checker, which withdraw_at_exit reads, is gone.
+    CHECK(list->diag.at_exit == nullptr);
+    CHECK(list->diag.at_exit_data == nullptr);
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag), "3:8: '+' needs numbers, not 'string'\n");
+    token_list_free(list);
+    // A decider that works out X itself says X's mistake, and check() only
+    // the note, which it withdraws: it said no error of its own, so it
+    // returns true.
+    list = src("#if X > 1 { }\nX :: 1 + \"a\";\nmain :: () { x: X; }\n");
+    file = parse(list->tokens, &a, &list->diag);
+    decide_all(file, &a, &list->diag);
+    CHECK(check(file, &a, &list->diag));
+    diag_sort(&list->diag);
+    CHECK_STR(messages(&a, &list->diag), "2:8: '+' needs numbers, not 'string'\n");
+    token_list_free(list);
+    arena_free(&a);
+}
+
 // Issue #227: generic structs (spec 3.23).
 
 // The source every test of struct instances starts with: [..] needs
@@ -15333,17 +15457,14 @@ TEST(instance_value_mistakes) {
         // A constant whose value calls a name that is none may be an
         // instance: it had its own mistake said, so its uses say nothing
         // more, before its declaration or after. A call of a procedure is a
-        // value, so its uses are no type, whether it's worked out yet or
-        // not, and no circle.
+        // value, and is no type wherever it's used, whether it's worked out
+        // yet or not, and no circle: its mistake is said once.
         {"K :: nope(1);\nmain :: () { x: K; }\n", "3:6: unknown identifier 'nope'\n"},
         {"S :: struct { a: K; }\nK :: nope(1);\nmain :: () { }\n", "4:6: unknown identifier 'nope'\n"},
         {"S :: struct { a: K; }\nK :: f(1);\nf :: (n: int) -> int { return n; }\nmain :: () { x: K; }\n",
-         "3:18: 'K' is not a type\n"
-         "4:6: the value of constant 'K' isn't known while compiling\n"
-         "6:17: 'K' is not a type\n"},
+         "4:6: the value of constant 'K' isn't known while compiling\n"},
         {"K :: f(v);\nv: K;\nf :: (n: int) -> int { return n; }\nmain :: () { }\n",
-         "3:6: the value of constant 'K' isn't known while compiling\n"
-         "4:4: 'K' is not a type\n"},
+         "3:6: the value of constant 'K' isn't known while compiling\n"},
         // In parentheses an instance is a value, compared or as a
         // constant's value too.
         {"main :: () { x := (Pair(int, int)) == Pair(int, int); }\n",

@@ -1,0 +1,9 @@
+#if size_of(S) > 4 { }
+S :: struct { a: X; }
+X :: 1 + "a";
+main :: () { x: X; }
+
+// A constant whose own declaration has a mistake says nothing more where
+// it's used as a type (spec 3.22). The #if's decider lays S out before X is
+// worked out, so S's field is the first use of X, said before X's mistake
+// is: X's mistake is still said once, and its uses nothing.

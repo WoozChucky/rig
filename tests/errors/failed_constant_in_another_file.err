@@ -1,0 +1,6 @@
+tests/errors/failed_constant_in_another_file.rig:3:17: error: 'X' is not a type
+    main :: () { x: X; }
+                    ^
+tests/errors/load/failed_constant.rig:1:8: error: '+' needs numbers, not 'string'
+    K :: 1 + "a";
+           ^

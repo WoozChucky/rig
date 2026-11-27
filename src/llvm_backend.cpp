@@ -716,11 +716,29 @@ static void begin_debug_info(Backend *b, Ir_Module *m, Arena *a) {
 
     // The language is C99: a debugger evaluates the expressions it's given
     // in the unit's language, and C's are Rig's (a.count, a[i]; Rig's p.*
-    // is C's *p). The producer is rig, the commit it was built from and the
-    // LLVM that made the code, "rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)"
-    // (version.h), so a program's debug information says which compiler
-    // made it. It once said "clang version", since cdb read an aggregate
-    // parameter's record for a value at an address held in memory
+    // is C's *p).
+    //
+    // gdb shows a few instances' names as C++ would read them: Box(*u8) as
+    // `Box* u8`, a declaration of u8 as a pointer to Box (spec 10.7). Every
+    // language whose types gdb prints as C's does the same, since gdb's C
+    // type printer reads a struct's name as C++ unless /r is given: C11, C17,
+    // D, Go and gdb's minimal language too. The ones that don't, Rust,
+    // Pascal, Modula-2 and Ada, print values and read expressions their own
+    // way: Rust prints a struct as `Pair(int, bool) {first: 7, second: true}`
+    // and fails on `print head.next.*`, Ada prints `(first => 7, ...)` and
+    // refuses the `.`, and Pascal reads `&b` as a syntax error. A type
+    // printer in Python mends `whatis b`, but makes `ptype` of a struct
+    // worse, printing its name alone, without its fields; it leaves
+    // `print &b` as it was, and gdb won't load one a program carries from
+    // outside its default auto-load safe-path. So the unit stays C99, and
+    // `whatis/r` shows the name as it is, struct Box(*u8). (Measured with
+    // gdb 17.1, the unit given each language in turn.)
+    //
+    // The producer is rig, the commit it was built from and the LLVM that
+    // made the code, "rig 0.1.0 (3f9c2a1b7d4e) (LLVM X.Y.Z)" (version.h), so
+    // a program's debug information says which compiler made it. It once
+    // said "clang version", since cdb read an aggregate parameter's record
+    // for a value at an address held in memory
     // (S_DEFRANGE_REGISTER_REL_INDIR) only from a compiler of that name.
     // That parameter is now described as the pointer it is, in its stack
     // slot, which cdb reads whatever the compiler's name, and measured with

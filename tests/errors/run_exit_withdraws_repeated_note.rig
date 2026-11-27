@@ -1,0 +1,11 @@
+// exit() in a #run ends the compiler there (spec 7.8), after printing the
+// errors found so far. f's x: X, found before X is worked out, is "'X' is
+// not a type", which only repeats X's own mistake: it's withdrawn before
+// they're printed, as at the end of a check that isn't cut short (spec
+// 3.22), and X's mistake is said once.
+exit :: (status: s32) #foreign libc;
+f :: (x: X) { }
+X :: 1 + "a";
+stop :: () -> int { exit(1); return 0; }
+N :: #run stop();
+main :: () { }
