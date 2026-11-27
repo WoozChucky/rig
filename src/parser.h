@@ -83,7 +83,8 @@
 //   cast        = 'cast' [',' IDENT] '(' type ')' unary       (the IDENT: trunc)
 //   postfix     = primary { '(' [expression {',' expression}] ')' | '[' expression ']'
 //                           | '.' '*' | '.' IDENT
-//                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name: the literal's type)
+//                           | '.' '{' fields '}' | '.' '[' values ']' }   (after a name, or a call of
+//                                                                      one: the literal's type)
 //   primary     = IDENT | INT | FLOAT | STRING | 'true' | 'false' | 'null' | 'context'
 //               | '#caller_location' | 'size_of' '(' type ')' | 'type_info' '(' type ')'
 //               | '(' expression ')' | '.' '{' fields '}' | '.' '[' values ']'
@@ -116,8 +117,11 @@
 // or a default value, and empty parentheses are none. An instance is
 // written where a type goes as the struct's name and its arguments,
 // `Map(string, int)`, `Ring(int, N + 1)`, each a type or an expression, by
-// how it is written (parser.cpp's parse_instance_argument). A union takes
-// no parameters, for now.
+// how it is written (parser.cpp's parse_instance_argument). Where a value
+// goes it stays a call, which the checker tells apart (spec 5.20), but
+// before a literal's '.', `Pair(string, int).{"ann", 36}`, it's the
+// literal's type, its arguments the call's expressions (parser.cpp's
+// parse_postfix). A union takes no parameters, for now.
 //
 // Unions (spec 3.19) are declared as structs are, `Value :: union { i: s64;
 // f: float64; }`, at the top level only ("unions can only be declared at the

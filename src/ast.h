@@ -980,7 +980,10 @@ struct Ast_File {
 // move its start to the outermost '(' (parser.cpp's parse_primary). A type
 // in parentheses is no type, so (Vec2).{1} is no literal (the parser's
 // parse_postfix), and an enum's name in them is no enum's, so (Mode).FREE
-// is no member (check_expr.cpp's check_member).
+// is no member (check_expr.cpp's check_member). It answers for the forms a
+// type takes where a value goes (spec 5.20): a name, a type value, *X, and
+// a call, a generic struct's instance's form, which is at its '(' and so
+// is in them when it doesn't start where its callee does, (Pair(int, int)).
 bool ast_in_parentheses(Ast *e);
 
 // Whether the program is a build program (spec 7.9): it reaches the Compiler

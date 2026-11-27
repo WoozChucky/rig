@@ -1,0 +1,21 @@
+tests/errors/generic_struct_values.rig:10:10: error: 'Pair(string, int)' is a type, not a value
+        x := Pair(string, int);
+             ^
+tests/errors/generic_struct_values.rig:11:28: error: '==' compares a type only with a type, as in T == int
+        y := Pair(string, int) == 3;
+                               ^
+tests/errors/generic_struct_values.rig:12:10: error: 'Pair' is generic; write its arguments, as in Pair(A, B)
+        z := Pair;
+             ^
+tests/errors/generic_struct_values.rig:13:10: error: 'Pair' takes 2 arguments, but 1 was given
+        w := Pair(string).{};
+             ^
+tests/errors/generic_struct_values.rig:14:15: error: argument 1 of 'Pair' must be a type, for 'A: Type'
+        v := Pair(1, 2) == Pair(int, int);
+                  ^
+tests/errors/generic_struct_values.rig:14:18: error: argument 2 of 'Pair' must be a type, for 'B: Type'
+        v := Pair(1, 2) == Pair(int, int);
+                     ^
+tests/errors/generic_struct_values.rig:15:10: error: 'Vec2' isn't a procedure, so it can't be called
+        u := Vec2(1);
+             ^

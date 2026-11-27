@@ -314,7 +314,8 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
     } else if (decl->kind == AST_CONST && !decl->type && written_as_type(((Ast_Const *)decl)->value) &&
                (((Ast_Const *)decl)->resolve != RESOLVE_NOT_YET || may_be_alias(c, (Ast_Const *)decl))) {
         // A constant whose value is written as a type may be, but which has
-        // no type, had its own mistake said (`V :: []Nope;`), or is in the
+        // no type, had its own mistake said (`V :: []Nope;`, `P ::
+        // Pair(int, Nope);`, or a call's, `K :: nope(1);`), or is in the
         // circle being said (`S :: *S;`, resolve_global), or couldn't be
         // worked out, nested too deeply, said: its uses say nothing more.
         // One find_name left as it is, which is no alias (may_be_alias,
@@ -442,8 +443,9 @@ static Ast *alias_in_place(Ast *decl) {
 
 // Whether the top-level constant `constant` may be an alias (spec 3.22),
 // told by lookup alone, nothing worked out: its value, past any '*', is a
-// type written as a value, or a name that is a struct's, an enum's, a
-// built-in type's, none's (an unknown identifier, said when the constant is
+// type written as a value, a call of a generic struct, its instance (spec
+// 3.23), or a name that is a struct's, an enum's, a built-in type's,
+// none's (an unknown identifier, said when the constant is
 // worked out), or a constant's that is an alias, is under way (a circle,
 // which working it out says), had its own mistake said, or may be an alias
 // in turn. A name of a variable, a procedure or a constant that is no alias
@@ -458,6 +460,12 @@ static bool may_be_alias(Checker *c, Ast_Const *constant) {
         Ast *value = constant->value;
         while (value->kind == AST_UNARY) value = ((Ast_Unary *)value)->operand;
         if (value->kind == AST_TYPE_VALUE) return true;
+        if (value->kind == AST_CALL) {
+            // An instance, Pair(int, int), when the callee is a generic
+            // struct's name (spec 3.23); any other call is a value.
+            Ast **callee = table_get(&c->top_level, ((Ast_Name *)((Ast_Call *)value)->callee)->name);
+            return callee && (*callee)->kind == AST_STRUCT && ((Ast_Struct *)*callee)->is_generic;
+        }
         Ast **found = table_get(&c->top_level, ((Ast_Name *)value)->name);
         if (!found || (*found)->kind == AST_STRUCT || (*found)->kind == AST_ENUM) return true;
         if ((*found)->kind != AST_CONST) return false;
@@ -918,11 +926,12 @@ static bool check_constant_value(Checker *c, Ast_Const *constant, Ast *value, Ty
 // literal), never is_constant: Ast.constant holds one scalar.
 //
 // A value that names a type (expr_names_type: a type's name, an alias's
-// included, *X, or a type written where a value goes, `[]int`, `#type T`,
-// a procedure type's alias's signature) makes the constant an alias (spec
-// 3.22): the same type under a second name, checked as a type value
-// (check_type_value, so a struct named there needs no layout), kept in an
-// Ast_Alias at the constant's name (Ast_Const.alias), which every lookup
+// included, *X, a generic struct's instance, `Pair(int, int)`, or a type
+// written where a value goes, `[]int`, `#type T`, a procedure type's
+// alias's signature) makes the constant an alias (spec 3.22): the same
+// type under a second name, checked as a type value (check_type_value, so
+// a struct named there needs no layout), kept in an Ast_Alias at the
+// constant's name (Ast_Const.alias), which every lookup
 // finds in the constant's place (find_name, check_lookup), so it is a type
 // wherever #226's instance bindings are. The constant's type is Type, and
 // it has no value at run time: nothing lowers it. A built-in type's name

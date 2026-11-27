@@ -527,11 +527,16 @@ static Ast *parse_literal(Parser *p, Ast_Type *type_expr, Token *dot, Position s
 // (a.b).c, p.*.x is the field x of what p points at, and a[i].x[j] is
 // ((a[i]).x)[j]. A '.' after a name and followed by '{' or '[' makes the
 // name a type, of the literal that follows: a struct's (Vec2.{1, 2}), or an
-// array's whose elements are of that type (int.[1, 2]); after anything
-// else, a name in parentheses included, it's "expected a field's name". The
-// lexer reads a '*' after a '.' alone (lexer.h), so p.*=5 is p.* = 5.
+// array's whose elements are of that type (int.[1, 2]); so does one after a
+// call of a name, which is then a generic struct's instance (spec 3.23),
+// Pair(string, int).{"ann", 36}; after anything else, a name in parentheses
+// included, (Pair)(u8, u8) and a.Pair(u8, u8) too, it's "expected a field's
+// name". The lexer reads a '*' after a '.' alone (lexer.h), so p.*=5 is
+// p.* = 5.
 static Ast *parse_postfix(Parser *p) {
     Ast *e = parse_primary(p);
+    Ast_Call *call = nullptr;  // the last call read, and where its ')' is
+    Position call_end = {};
     for (;;) {
         if (!e) return nullptr;
         if (peek(p)->kind == TOKEN_DOT) {
@@ -561,6 +566,20 @@ static Ast *parse_postfix(Parser *p) {
                 Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, e->pos);
                 type->name = ((Ast_Name *)e)->name;
                 e = parse_literal(p, type, dot, e->start);
+            } else if ((after->kind == TOKEN_LBRACE || after->kind == TOKEN_LBRACKET) && e == call &&
+                       !ast_in_parentheses(call) && call->callee->kind == AST_NAME &&
+                       !ast_in_parentheses(call->callee)) {
+                // The call was an instance of a generic struct, the
+                // literal's type (spec 3.23): Pair(string, int).{...}, at
+                // the name, its arguments the call's expressions as they
+                // are, which the checker reads as types or constants
+                // (check_generic.cpp's bind_struct_argument). Neither the
+                // name nor the instance is in parentheses, as no type is.
+                Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_INSTANCE, call->callee->pos);
+                type->name = ((Ast_Name *)call->callee)->name;
+                type->args = call->args;
+                type->end = call_end;
+                e = parse_literal(p, type, dot, e->start);
             } else {
                 error_expected_or_load(p, "a field's name");
                 return nullptr;
@@ -585,7 +604,7 @@ static Ast *parse_postfix(Parser *p) {
             continue;
         }
         if (peek(p)->kind != TOKEN_LPAREN) return e;
-        Ast_Call *call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
+        call = ast_new<Ast_Call>(p->arena, AST_CALL, peek(p)->pos);
         advance(p);
         call->start = e->start;
         call->callee = e;
@@ -602,7 +621,10 @@ static Ast *parse_postfix(Parser *p) {
                 advance(p);
             }
         }
-        if (!set_height(p, height + 1) || !expect(p, TOKEN_RPAREN)) return nullptr;
+        if (!set_height(p, height + 1)) return nullptr;
+        Token *close = expect(p, TOKEN_RPAREN);
+        if (!close) return nullptr;
+        call_end = close->pos;
         e = call;
     }
 }

@@ -1,0 +1,3 @@
+// Loaded by tests/run/generic_struct_values.rig: the Ring(int, 4) written
+// here is the main file's R4, one instance for the program.
+other :: () -> bool { return Ring(int, 4) == R4; }

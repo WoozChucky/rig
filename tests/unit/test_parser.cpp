@@ -1397,9 +1397,11 @@ TEST(parses_struct_literals) {
     CHECK_STR(errors, "2:23: a struct literal's fields are all named or all in order, not both\n");
     body_dump(&a, "v := Vec2.{1, y = 2};", &errors);
     CHECK_STR(errors, "2:19: a struct literal's fields are all named or all in order, not both\n");
-    // A literal's type is a name before the '.'.
-    body_dump(&a, "v := f().{1};", &errors);
-    CHECK_STR(errors, "2:14: expected a field's name, found '{'\n");
+    // A literal's type is a name before the '.', or a name with arguments,
+    // an instance's (parses_instance_literals): a call's result, a.f(), is
+    // none.
+    body_dump(&a, "v := a.f().{1};", &errors);
+    CHECK_STR(errors, "2:16: expected a field's name, found '{'\n");
     // A type is never in parentheses, so neither is a literal's.
     body_dump(&a, "v := (Vec2).{1};", &errors);
     CHECK_STR(errors, "2:17: expected a field's name, found '{'\n");
@@ -4966,5 +4968,45 @@ TEST(struct_parameter_mistakes) {
         parse_src(&a, k.text, &errors);
         CHECK_STR(errors, k.message);
     }
+    arena_free(&a);
+}
+
+TEST(parses_instance_literals) {
+    // A name with arguments directly before a literal's '.' is an
+    // instance's, the literal's type: an AST_TYPE_INSTANCE at the name,
+    // whose arguments are the call's expressions as they are, a type's
+    // name a name, for the checker to read as types or constants. An
+    // array literal's elements may be of one. A type is never in
+    // parentheses, so neither is an instance's name, and a name reached
+    // through a member is no type's.
+    Arena a = arena_make();
+    String errors;
+    CHECK_STR(body_dump(&a, "p := Pair(string, int).{\"a\", 1};", &errors),
+              "(block (var p _ (literal (instance Pair (name string) (name int)) (string \"a\") (int 1))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "q := Pair(u8, u8).[.{1, 2}];", &errors),
+              "(block (var q _ (literal-array (instance Pair (name u8) (name u8)) (literal _ (int 1) (int 2)))))");
+    CHECK_STR(errors, "");
+    CHECK_STR(body_dump(&a, "r := Ring(int, N + 1).{};", &errors),
+              "(block (var r _ (literal (instance Ring (name int) (binary + (name N) (int 1))))))");
+    CHECK_STR(errors, "");
+    // The instance is at its name, and ends at the call's ')'.
+    Token_List *list = src("f :: () {\n    p := Pair(string, int).{};\n}\n");
+    Ast_File *file = parse(list->tokens, &a, &list->diag);
+    CHECK_STR(messages(&a, &list->diag), "");
+    Ast_Var *p = (Ast_Var *)file->procs[0]->body->statements[0];
+    Ast_Literal *literal = (Ast_Literal *)p->value;
+    CHECK_EQ(literal->kind, AST_LITERAL);
+    CHECK_EQ(literal->type_expr->kind, AST_TYPE_INSTANCE);
+    CHECK_EQ(literal->type_expr->pos.col, 10);
+    CHECK_EQ(literal->type_expr->end.col, 26);
+    CHECK_EQ(literal->start.col, 10);
+    token_list_free(list);
+    body_dump(&a, "r := (Pair)(u8, u8).{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    body_dump(&a, "r := a.Pair(u8, u8).{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
+    body_dump(&a, "r := (Pair(u8, u8)).{};", &errors);
+    CHECK_STR(errors, "2:25: expected a field's name, found '{'\n");
     arena_free(&a);
 }

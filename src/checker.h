@@ -1438,11 +1438,12 @@
 //   Ast_Type_Value of the procedure type (parser.cpp's
 //   proc_type_alias_follows). A constant whose value names a type
 //   (check_expr.cpp's expr_names_type: a type's name, an alias's included,
-//   `*X`, or an Ast_Type_Value) is an alias: its value is checked as a type
-//   value (check_type_value, so a struct named there needs no layout), and
-//   the constant keeps an Ast_Alias at its name (Ast_Const.alias), its type
-//   Type (type_type), never is_constant nor is_data
-//   (checker.cpp's check_const_value).
+//   `*X`, a generic struct's instance, `Pair(int, int)`, or an
+//   Ast_Type_Value) is an alias: its value is checked as a type value
+//   (check_type_value, so a struct named there needs no layout), and the
+//   constant keeps an Ast_Alias at its name (Ast_Const.alias), its type
+//   Type (type_type), never is_constant nor is_data (checker.cpp's
+//   check_const_value).
 // - Every lookup that finds such a constant, in a scope or at the top level,
 //   gives its Ast_Alias in its place (find_name, check_lookup), so an alias
 //   is what an instance's type parameter is wherever a name is resolved: a
@@ -1452,10 +1453,11 @@
 //   (through_alias). It is the same type, not a new one: `V == Vec2` is
 //   true, and messages name the type, "'Vec2' has no field 'z'". find_name
 //   works a top-level constant that may be an alias, by lookup alone (its
-//   value, past any `*`, a type value or a name of a type, or of a constant
-//   that may be one in turn: checker.cpp's may_be_alias), out first
-//   (resolve_global), as check_lookup does, so an alias can be used before
-//   its declaration, in a struct's field or a global's type; any other,
+//   value, past any `*`, a type value, a call of a generic struct, or a
+//   name of a type, or of a constant that may be one in turn: checker.cpp's
+//   may_be_alias), out first (resolve_global), as check_lookup does, so an
+//   alias can be used before its declaration, in a struct's field or a
+//   global's type; any other,
 //   `C :: size_of(S);` or `C :: D;` with D no alias, is "'C' is not a type"
 //   there, its value not worked out, so no circle. A local one is declared in order, as
 //   any local constant. A circle is a constant's, "'A' is defined in terms
@@ -1522,6 +1524,22 @@
 //   'int'", "300 doesn't fit in 'u8'") and must be known while compiling
 //   ("argument 2 of 'Ring' must be known while compiling, for 'N: int'"),
 //   checked where the instance is written, as an array's count is.
+// - Where a value goes (spec 5.20) an instance is a call, its callee a name
+//   not in parentheses whose lookup finds a generic struct
+//   (check_expr.cpp's generic_struct_called): it names a type
+//   (expr_names_type, written_as_type for may_be_alias), and is resolved as
+//   an AST_TYPE_INSTANCE made of the call, its arguments the call's
+//   expressions (written_type_of), so ==, a $T: Type argument and an
+//   alias's value take one, `Int_Pair :: Pair(int, int);`. Anywhere else
+//   the call is "'Pair(string, int)' is a type, not a value", at its name,
+//   once the instance is worked out, its own mistakes said instead
+//   (check_call, before any callee's check). Before a literal's '.', the
+//   parser makes the call the literal's AST_TYPE_INSTANCE,
+//   `Pair(string, int).{"ann", 36}` (parser.cpp's parse_postfix). The
+//   generic's name alone where a value goes is the generic message too
+//   (check_named, name_is_place); a plain struct's call keeps "'Vec2' isn't
+//   a procedure, so it can't be called". One set of arguments is one type
+//   however it's written.
 // - Each distinct set of bindings (a type by its Type *, a constant by its
 //   type and value, a string's by its bytes, as for a procedure's) makes one
 //   instance, program-wide, an Ast_Instance whose generic_struct and

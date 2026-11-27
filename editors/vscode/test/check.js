@@ -1277,7 +1277,9 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     // line as a signature (its '(' holding nothing or starting with a
     // parameter, or its ')' followed by '->', as the grammar's rule reads
     // it) with no body and no directive but #c_call; or one whose value is
-    // a name, after any '*' and '[...]', that is a type's. NAME :: X; is an
+    // a name, after any '*' and '[...]', that is a type's, or such a name
+    // with arguments, a generic struct's instance, `Int_Pair :: Pair(int,
+    // int);` (spec 3.23). NAME :: X; is an
     // alias when X is a type: a built-in one, or one of the names known, an
     // alias's included, declared in any order, so the look goes on until it
     // finds no more. A constant naming a value, `ADD :: add;` or `VERBOSE ::
@@ -1286,7 +1288,7 @@ check('the grammar colours the types in every program of tests/run and tests/bui
     const learnAliases = (from, names) => {
         const aliases = [];   // [NAME, X] of each NAME :: X;, after any '*' and '[...]'
         for (const source of from) {
-            for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:\*\s*|\[[^\][]*\]\s*)*([A-Za-z_]\w*)\s*;/g)) aliases.push([m[1], m[2]]);
+            for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*(?:\*\s*|\[[^\][]*\]\s*)*([A-Za-z_]\w*)\s*(?:\([^;{}\n]*\)\s*)?;/g)) aliases.push([m[1], m[2]]);
             for (const m of source.matchAll(/\b([A-Za-z_]\w*)\s*::\s*#type\b/g)) names.add(m[1]);
             const signature = /^[ \t]*([A-Za-z_]\w*)[ \t]*::[ \t]*\((?:[ \t]*\)|[ \t]*(?:using[ \t]+)?\$?[A-Za-z_]\w*[ \t]*:(?!:)|[^;{#\n]*\)[ \t]*->)[^;{#\n]*(?:#c_call\b[^;{#\n]*)?;/gm;
             for (const m of source.matchAll(signature)) names.add(m[1]);

@@ -1,0 +1,42 @@
+// Generic structs' instances where values go (issue #227, spec 5.20, 5.17,
+// 3.22): an instance written as a call of its generic, Pair(string, int),
+// is a literal's type, a struct's or an array's elements', an alias's
+// value, an operand of == and a $T: Type argument; however it's written,
+// and in whichever file, one set of arguments is one type: the #loaded
+// file's Ring(int, 4) is this file's R4. A constant may hold an instance's
+// literal, or a #run's result of an instance's type. The same compiled,
+// interpreted and in a top-level #run.
+#import "Basic";
+#load "load/generic_struct_values.rig";
+
+Pair :: struct (A: Type, B: Type) { first: A; second: B; }
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+
+Int_Pair :: Pair(int, int);
+R4 :: Ring(int, 4);
+ORIGIN :: Pair(int, int).{0, 0};
+
+zero :: ($T: Type) -> T { return T.{}; }
+make_pair :: (v: $T) -> Pair(T, T) { return .{v, v}; }
+
+MADE :: #run make_pair(3);
+
+#run {
+    print("{}\n", Pair(string, int).{"r", 1});
+}
+
+main :: () {
+    print("{}\n", Pair(string, int).{"ann", 36});
+    print("{}\n", Pair(string, int).{second = 2});
+    print("{}\n", Pair(u8, u8).[.{1, 2}, .{3, 4}]);
+    q := Int_Pair.{5, 6};
+    print("{}\n", q);
+    print("{} {}\n", Int_Pair == Pair(int, int), Pair(int, int) == Pair(int, s64));
+    #if Ring(int, 4) == Ring(int, 2 + 2) {
+        print("one type\n");
+    }
+    print("{}\n", zero(Pair(u8, bool)));
+    print("{}\n", ORIGIN);
+    print("{}\n", MADE);
+    print("{}\n", other());
+}

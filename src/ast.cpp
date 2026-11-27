@@ -1170,7 +1170,10 @@ System host_system() {
 }
 
 bool ast_in_parentheses(Ast *e) {
-    return e->start.line != e->pos.line || e->start.col != e->pos.col;
+    // A call is at its '(', and starts where its callee does unless it is
+    // in parentheses itself.
+    Position at = e->kind == AST_CALL ? ((Ast_Call *)e)->callee->start : e->pos;
+    return e->start.line != at.line || e->start.col != at.col;
 }
 
 bool ast_is_build_program(Ast_File *file) {

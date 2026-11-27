@@ -1,0 +1,16 @@
+// Generic structs' instances where values go (issue #227, spec 5.20): an
+// instance is a type, not a value; compared, its other operand must be a
+// type too; the generic's name alone is no type; an instance's count and
+// arguments are checked as where a type goes; a plain struct called keeps
+// its message.
+Pair :: struct (A: Type, B: Type) { first: A; second: B; }
+Vec2 :: struct { x: float; }
+
+main :: () {
+    x := Pair(string, int);
+    y := Pair(string, int) == 3;
+    z := Pair;
+    w := Pair(string).{};
+    v := Pair(1, 2) == Pair(int, int);
+    u := Vec2(1);
+}

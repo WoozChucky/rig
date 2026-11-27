@@ -14543,8 +14543,8 @@ TEST(struct_instances_see_only_their_bindings) {
     // An instance's fields see its own parameters, which hide the top
     // level's names (a struct T, a constant N), and nothing of the
     // procedure instance that uses it: make_box's Box(u8) is the one Box(u8)
-    // whatever its T. An argument naming a constant is that constant.
-    // Leak(u8), first laid out inside make_box's instances, finds the top
+    // whatever its T. An argument naming a constant is that constant, in an
+    // alias's value too (R, the one Ring(int, 3)). Leak(u8), first laid out inside make_box's instances, finds the top
     // level's T, not the T each binds: one instance, 16 bytes. A using
     // field of a parameter's type is the struct bound, not the top level's
     // T, wherever a using walk looks for a name: through the instance, a
@@ -14560,6 +14560,7 @@ TEST(struct_instances_see_only_their_bindings) {
                                                               "N :: 100;\n"
                                                               "Buf :: struct (N: int) { b: [N]u8; }\n"
                                                               "SIZE :: 3;\n"
+                                                              "R :: Ring(int, SIZE);\n"
                                                               "make_box :: (v: $T) -> Box(u8) {\n"
                                                               "    b: Box(u8);\n"
                                                               "    l: Leak(u8);\n"
@@ -14569,6 +14570,7 @@ TEST(struct_instances_see_only_their_bindings) {
                                                               "    x: Box(u8);\n"
                                                               "    y: Buf(3);\n"
                                                               "    r: Ring(int, SIZE);\n"
+                                                              "    r2: R;\n"
                                                               "    p := make_box(\"s\");\n"
                                                               "    q := make_box(1);\n"
                                                               "    w: W(Inner);\n"
@@ -14589,6 +14591,7 @@ TEST(struct_instances_see_only_their_bindings) {
     Type *r = local_type(tree, "main", "r");
     CHECK(r && r->size == 24);
     CHECK_STR(type_name(&a, r), "Ring(int, 3)");
+    CHECK(local_type(tree, "main", "r2") == r);
     CHECK(local_type(tree, "main", "p") == x);
     CHECK(local_type(tree, "main", "q") == x);
     Ast_Proc *make_box = (Ast_Proc *)top_level_named(tree, "make_box");
@@ -15053,5 +15056,120 @@ TEST(struct_instances_have_a_depth_limit) {
         array_free(&lines);
     }
     token_list_free(c.list);
+    arena_free(&a);
+}
+
+TEST(instances_are_one_type_however_written) {
+    // An instance written where a value goes, as a call of the generic
+    // struct, is the one written where a type goes: compared with ==, named
+    // by an alias, at the top level or in a body, in a generic procedure's
+    // instance naming its T, and in a top-level #run, one type per set of
+    // arguments however each is written.
+    Arena a = arena_make();
+    Ast_File *tree = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+                                 "R4 :: Ring(int, 4);\n"
+                                 "same_ring :: ($T: Type) -> bool { return Ring(T, 4) == Ring(int, 4); }\n"
+                                 "RUN :: #run same_ring(int);\n"
+                                 "main :: () {\n"
+                                 "    a := Ring(int, 4) == Ring(int, 2 + 2);\n"
+                                 "    b := Ring(int, 4) == Ring(int, cast(u8) 4);\n"
+                                 "    c := R4 == Ring(int, 4);\n"
+                                 "    d := Ring(int, 4) != Ring(s64, 4);\n"
+                                 "    e := Ring(int, 4) == Ring(int, 5);\n"
+                                 "    f := same_ring(int);\n"
+                                 "    g := same_ring(s64);\n"
+                                 "    L :: Ring(int, 2 + 2);\n"
+                                 "    h: L;\n"
+                                 "    k: R4;\n"
+                                 "    m: Ring(int, 4);\n"
+                                 "}\n",
+                                 &tree),
+              "");
+    Ast_Block *body = ((Ast_Proc *)top_level_named(tree, "main"))->body;
+    const char *compared[] = {"a", "b", "c", "d", "e"};
+    for (s64 k = 0; k < 5; k++) {
+        Ast_Var *var = (Ast_Var *)find_local(body, compared[k]);
+        CHECK(var->type == &type_bool);
+        CHECK(var->value->is_constant);
+        CHECK_EQ(var->value->constant, k < 4 ? 1 : 0);
+    }
+    Ast_Const *run = (Ast_Const *)top_level_named(tree, "RUN");
+    CHECK(run->is_constant);
+    CHECK_EQ(run->constant, 1);
+    // Each instance of same_ring returns the constant its T makes.
+    Ast_Proc *same_ring = (Ast_Proc *)top_level_named(tree, "same_ring");
+    CHECK_EQ(same_ring->instances.count, 2);
+    for (s64 i = 0; i < same_ring->instances.count; i++) {
+        Ast_Instance *inst = same_ring->instances[i];
+        Ast_Return *ret = (Ast_Return *)inst->proc->body->statements[0];
+        CHECK(ret->values[0]->is_constant);
+        CHECK_EQ(ret->values[0]->constant, string_eq(inst->name, str("same_ring(T = int)")) ? 1 : 0);
+    }
+    Type *m = local_type(tree, "main", "m");
+    CHECK_STR(type_name(&a, m), "Ring(int, 4)");
+    CHECK(local_type(tree, "main", "h") == m);
+    CHECK(local_type(tree, "main", "k") == m);
+    Ast_Const *r4 = (Ast_Const *)top_level_named(tree, "R4");
+    CHECK(r4->alias && r4->alias->aliased == m);
+    CHECK(r4->type == &type_type);
+    CHECK_EQ(((Ast_Struct *)top_level_named(tree, "Ring"))->instances.count, 3);
+    arena_free(&a);
+}
+
+TEST(instance_value_mistakes) {
+    // An instance is a type, not a value, at its name, said after its own
+    // mistakes: its count, each of its arguments'. In parentheses it is one
+    // still, but a generic's name in them is none: called, it's a callee as
+    // any struct's is. Compared, the other operand must be a type. The
+    // generic's name alone is no type, where a value goes too. A plain
+    // struct called keeps its message. An alias's value names no
+    // parameter: outside an instance, T is no name.
+    Arena a = arena_make();
+    struct Case {
+        const char *text;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"main :: () { x := Pair(string, int); }\n", "3:19: 'Pair(string, int)' is a type, not a value\n"},
+        {"main :: () { x := (Pair(string, int)); }\n", "3:20: 'Pair(string, int)' is a type, not a value\n"},
+        {"main :: () { x := (Pair)(string, int); }\n", "3:20: 'Pair' isn't a procedure, so it can't be called\n"
+                                                       "3:26: 'string' is a type, not a value\n"
+                                                       "3:34: 'int' is a type, not a value\n"},
+        {"main :: () { y := Pair(string, int) == 3; }\n",
+         "3:37: '==' compares a type only with a type, as in T == int\n"},
+        {"main :: () { z := Pair; }\n", "3:19: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        {"main :: () { Pair = 1; }\n", "3:14: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        {"size_in :: ($T: Type) -> int { return size_of(T); }\nmain :: () { n := size_in(Pair); }\n",
+         "4:27: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        {"main :: () { w := Pair(string).{}; }\n", "3:19: 'Pair' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { w := Pair(string); }\n", "3:19: 'Pair' takes 2 arguments, but 1 was given\n"},
+        {"main :: () { v := Pair(1, 2) == Pair(int, int); }\n",
+         "3:24: argument 1 of 'Pair' must be a type, for 'A: Type'\n"
+         "3:27: argument 2 of 'Pair' must be a type, for 'B: Type'\n"},
+        {"main :: () { x := Pair(string, Nope); }\n", "3:32: unknown identifier 'Nope'\n"},
+        {"main :: () { u := Vec2(1); }\n", "3:19: 'Vec2' isn't a procedure, so it can't be called\n"},
+        {"show :: (v: $T) { }\nmain :: () { show(Pair(int, int)); }\n",
+         "4:19: 'Pair(int, int)' is a type, not a value\n"},
+        {"Pairs :: Pair(T, T);\nmain :: () { }\n",
+         "3:15: unknown identifier 'T'\n3:18: unknown identifier 'T'\n"},
+        {"M :: Pair;\nmain :: () { }\n", "3:6: 'Pair' is generic; write its arguments, as in Pair(A, B)\n"},
+        // A name with arguments before a literal's '.' is an instance's, and
+        // one that names no generic struct is no type.
+        {"f :: () -> int { return 1; }\nmain :: () { v := f().{1}; }\n", "4:19: 'f' is not a type\n"},
+        {"main :: () { v := Vec2(1).{1}; }\n", "3:19: 'Vec2' isn't generic, so it takes no arguments\n"},
+        // An alias whose instance has a mistake names no type: its uses say
+        // nothing more.
+        {"Int_Pair :: Pair(int, Nope);\nmain :: () { x: Int_Pair; y := Int_Pair.{}; }\n",
+         "3:23: unknown identifier 'Nope'\n"},
+    };
+    for (const Case &k : cases) {
+        CHECK_STR(check_with_preload(&a, joined(&a,
+                                                "Pair :: struct (A: Type, B: Type) { first: A; second: B; }\n"
+                                                "Vec2 :: struct { x: float; }\n",
+                                                k.text)),
+                  k.message);
+    }
     arena_free(&a);
 }

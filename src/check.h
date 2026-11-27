@@ -450,17 +450,19 @@ Type *check_unify_numbers(Checker *c, Ast *left, Ast *right, Position at, const 
 // Whether e denotes a type (spec 5.20): an Ast_Type_Value, a name whose
 // lookup finds a struct, an enum, an instance's type parameter (an
 // Ast_Alias, spec 7.11) or a type alias's (spec 3.22, `V :: Vec2;`), or
-// none while type_from_name knows it
-// (a local `int := 5;` hides the type int), or *X of such an X; never one
-// in parentheses, which is a value, as (Vec2).{1} is no literal. Looks only:
-// nothing is checked or said (a global the lookup finds is worked out, as
-// any lookup of it does: check_lookup).
+// none while type_from_name knows it (a local `int := 5;` hides the type
+// int), a call whose callee, a name not in parentheses, finds a generic
+// struct, its instance (spec 3.23, `Map(string, int)`), or *X of such an
+// X; never one in parentheses, which is a value, as (Vec2).{1} is no
+// literal. Looks only: nothing is checked or said (a global the lookup
+// finds is worked out, as any lookup of it does: check_lookup).
 bool expr_names_type(Checker *c, Ast *e);
 
 // Whether e is written as a type may be where a value goes, whatever its
-// name stands for: an Ast_Type_Value, a name, or *X of such an X, never in
-// parentheses; expr_names_type's shape, looking nothing up. A constant
-// whose value isn't is never an alias (spec 3.22, checker.cpp's find_name).
+// name stands for: an Ast_Type_Value, a name, a call of a name (an
+// instance's shape, spec 3.23), or *X of such an X, never in parentheses;
+// expr_names_type's shape, looking nothing up. A constant whose value
+// isn't is never an alias (spec 3.22, checker.cpp's find_name).
 bool written_as_type(Ast *e);
 
 // The type e, which expr_names_type holds for, denotes, resolved as a
@@ -468,8 +470,10 @@ bool written_as_type(Ast *e);
 // names types while compiling; ..."), but needing no layout
 // (resolve_type_value); e->type then Type (type_type), and the type kept
 // for type_value. Null after a mistake, said. For a place that takes a
-// type value: for now == and != between types, and a $T: Type parameter's
-// argument (check_generic_call).
+// type value: for now == and != between types, a $T: Type parameter's
+// argument (check_generic_call), a generic struct's type argument
+// (check_generic.cpp's bind_struct_argument) and an alias's value
+// (checker.cpp's check_const_value).
 Type *check_type_value(Checker *c, Ast *e);
 
 // The type a checked type value denotes (Ast.constant's bits; Ast.is_constant
