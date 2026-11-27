@@ -16430,3 +16430,102 @@ TEST(modify_runs_wherever_it_is_needed) {
               "6:5: a top-level #if's condition can't run code while compiling, for now\n");
     arena_free(&a);
 }
+
+// The generic structs the tests of #modify on structs share (spec 7.12,
+// 3.23), lines 1 and 2: Box gives u8 the instance of int and refuses
+// strings, and Ring makes a count below 1 one.
+static const char *MODIFY_STRUCTS =
+    "Box :: struct (T: Type) #modify { if T == u8 { T = int; } return T != string, \"no strings in a box\"; } "
+    "{ v: T; }\n"
+    "Ring :: struct (T: Type, N: int) #modify { if N < 1 { N = 1; } return true; } { items: [N]T; }\n";
+
+TEST(modify_makes_one_struct_type) {
+    // A struct's block runs once for each set of arguments given, and the
+    // instance a written type names is the one for the bindings it leaves:
+    // Box(u8) and Box(int) are one type, Box(int), wherever written, in an
+    // alias, a global's type in the declarations pass, a local's, a
+    // literal's, and inferred through, so unbox's T is int; Ring(int, 0) is
+    // Ring(int, 1), one int of 8 bytes. Comparing the two written types is
+    // constant, and true.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "B :: Box(u8);\n"
+                                            "g: Box(u8);\n"
+                                            "unbox :: (b: Box($T)) -> T { return b.v; }\n"
+                                            "main :: () { a: Box(u8); b: Box(int); c: B; d := Box(u8).{3}; "
+                                            "e := unbox(a); r: Ring(int, 0); same := Box(u8) == Box(int); }\n"),
+                                 &file),
+              "");
+    Ast_Struct *box = (Ast_Struct *)top_level_named(file, "Box");
+    CHECK_EQ(box->instances.count, 1);
+    CHECK_EQ(box->modify->runs.count, 2);
+    Type *boxed = top_level_named(file, "g")->type;
+    CHECK(boxed && boxed->kind == TYPE_STRUCT);
+    CHECK_STR(type_name(&a, boxed), "Box(int)");
+    const char *names[] = {"a", "b", "c", "d"};
+    for (const char *name : names) CHECK(local_type(file, "main", name) == boxed);
+    CHECK_STR(type_of_main_local(&a, file, "e"), "int");
+    Ast_Proc *unbox = (Ast_Proc *)top_level_named(file, "unbox");
+    CHECK_EQ(unbox->instances.count, 1);
+    if (unbox->instances.count == 1) CHECK_STR(unbox->instances[0]->name, "unbox(T = int)");
+    Type *r = local_type(file, "main", "r");
+    CHECK(r && r->size == 8);
+    CHECK_STR(type_of_main_local(&a, file, "r"), "Ring(int, 1)");
+    Ast_Var *same = (Ast_Var *)find_local(((Ast_Proc *)top_level_named(file, "main"))->body, "same");
+    CHECK(same && same->value && same->value->is_constant && same->value->constant == 1);
+    arena_free(&a);
+}
+
+TEST(modify_struct_mistakes) {
+    // A struct's refusal is said at the written type's name, at each use
+    // that gives those arguments, a local's type, a literal's and a
+    // field's in another struct's instance, with its chain, `used at`; the
+    // block runs once for them. A block that uses its own struct is said
+    // once, however often the struct is used.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "Grow :: struct (T: Type) #modify { return Grow(int) != T; } { v: T; }\n"
+                                            "Pair :: struct (A: Type) { b: Box(A); }\n"
+                                            "main :: () { x: Box(string); y := Box(string).{\"a\"}; "
+                                            "p: Pair(string); g: Grow(u8); h: Grow(u8); }\n"),
+                                 &file),
+              "3:43: 'Grow' can't be used in its own #modify, which decides its instances\n"
+              "4:31: 'Box' refused T = string: no strings in a box\n"
+              "    in 'Pair' with A = string, used at test.rig:5:57\n"
+              "5:17: 'Box' refused T = string: no strings in a box\n"
+              "5:35: 'Box' refused T = string: no strings in a box\n");
+    Ast_Struct *box = (Ast_Struct *)top_level_named(file, "Box");
+    CHECK_EQ(box->modify->runs.count, 1);
+    CHECK_EQ(box->instances.count, 0);
+    CHECK_EQ(((Ast_Struct *)top_level_named(file, "Grow"))->instances.count, 0);
+    arena_free(&a);
+}
+
+TEST(modify_struct_given_a_type_under_way) {
+    // A block that only compares holds its types as handles, so a struct
+    // whose layout is under way may be given to it: Node holds a Wrap(Node)
+    // and points at a Box(Node), and is laid out as without the blocks. A
+    // block that describes its type lays the type out first, which a Node
+    // being laid out can't be: a circle, said once, followed by the line of
+    // the instance whose block needed the layout, as a circle through an
+    // instance's fields is.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    const char *node = "Node :: struct { v: int; w: Wrap(Node); next: *Box(Node); }\n"
+                       "main :: () { n: Node; }\n";
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "Wrap :: struct (T: Type) #modify { return T != bool; } { p: *T; }\n", node),
+                                 &file),
+              "");
+    Type *laid_out = ((Ast_Struct *)top_level_named(file, "Node"))->declared;
+    CHECK(laid_out && laid_out->size == 24);
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "Wrap :: struct (T: Type) #modify { return type_info(T).size >= 0; } "
+                                            "{ p: *T; }\n",
+                                            node)),
+              "4:1: 'Node' is defined in terms of itself\n"
+              "    in 'Wrap' with T = Node, used at test.rig:4:29\n");
+    arena_free(&a);
+}

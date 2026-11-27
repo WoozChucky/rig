@@ -717,7 +717,7 @@ Any :: struct { type: *Type_Info; value_pointer: *void; }
 - **Floats, `bool`, `string` and `void`** (`.FLOAT`, `.BOOL`, `.STRING`, `.VOID`): a plain `Type_Info`. A float's `size` says which float it is. A `string` has a tag of its own, and is not described as a view of `u8` (section 3.8). `void`'s description describes what a `*void` points at (section 3.10).
 - **Pointers** (`.POINTER`): a `Type_Info_Pointer`, whose `pointer_to` is the description of what it points at, `void`'s for a `*void`.
 - **Arrays, views and resizable arrays** (`.ARRAY`) share a `Type_Info_Array`: `element_type` is the elements' description, `array_kind`, a member of the enum `Array_Kind`, is `.FIXED` for an array `[N]T`, `.VIEW` for a view `[]T` and `.RESIZABLE` for a resizable array `[..]T` (section 3.17), in Jai's order, and `count` is the array's `N`, or -1 for a view or a resizable array, whose count is its value's. A resizable array's `size` is 40 (section 3.11).
-- **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, a generic struct's instance's its name, `Map(string, int)` (section 3.23), whose `members` are its fields in order, none for a struct with none, whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0, and whose `parameters` are a generic struct's instance's arguments, in the order the generic declares its parameters, an `Any` each: a type as its description, an `Any` of type `*Type_Info` whose `value_pointer` points at the type's `*Type_Info`, and a constant as its value, an `Any` of the constant's type, `int` for `N: int`, `string` for `S: string`. Any other struct's `parameters` are empty. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
+- **Structs and unions** (`.STRUCT`): a `Type_Info_Struct`, whose `name` is the struct's or the union's declared name, a generic struct's instance's its name, `Map(string, int)` (section 3.23), whose `members` are its fields in order, none for a struct with none, whose `is_union` says whether it is a union (section 3.19), whose members are all at offset 0, and whose `parameters` are a generic struct's instance's arguments, in the order the generic declares its parameters, an `Any` each: a type as its description, an `Any` of type `*Type_Info` whose `value_pointer` points at the type's `*Type_Info`, and a constant as its value, an `Any` of the constant's type, `int` for `N: int`, `string` for `S: string`. Any other struct's `parameters` are empty. An instance made through its generic's `#modify` block (section 7.12) is described by the arguments the block left, its name and its `parameters` alike: a `Box(u8)` whose block makes `u8` an `int` is `Box(int)`, whose argument describes `int`. Each member is a `Type_Info_Struct_Member`: the field's `name`, its type's description, `type`, and its `offset`, in bytes from the struct's start (section 3.9). An anonymous member (section 3.19) is a member whose `name` is empty, and whose `type` describes its anonymous union or struct: a `Type_Info_Struct` whose `name` is empty too, with its own `is_union` and `members`. Each anonymous member's type is a type of its own, with a description of its own.
 - **Procedure types** (`.PROCEDURE`, section 3.15): a `Type_Info_Procedure`, whose `parameter_types` and `result_types` are the descriptions of its parameters' types and of its results', in order. `is_c_call` says whether it is marked `#c_call`, and `is_variadic` whether its last parameter is a `..T`, which `parameter_types` describes as a `[]T`, its type in the procedure's body (section 7.2).
 - **Enums**, `enum` and `enum_flags` types (`.ENUM`, section 3.18): a `Type_Info_Enum`, whose `name` is the enum's declared name, `underlying` the description of its integer type, whose size, alignment and sign it has, and `is_flags` whether it is an `enum_flags`. Its members are `names` and `values`, in order, none for an enum with none: `names[i]` is a member's name and `values[i]` its value, as 64 bits, sign-extended from a signed integer type and zero-extended from an unsigned one, so a `u64` member above `s64`'s largest value reads as a negative `s64`.
 - **Tagged unions** (`.TAGGED_UNION`, section 3.20): a `Type_Info_Tagged_Union`, whose `name` is the tagged union's declared name, `tag_type` the description of its tag's integer type, whose size and sign the tag has, and `tag_offset` the tag's offset, 0 in every Rig tagged union (it is there for a C layout that puts the tag elsewhere). Its `members` are described as a struct's, in order: each one's `name`, its type's description, `void`'s for a member that holds nothing, and its `offset`, the members' one offset past the tag. A value holds `members[tag]`, its tag read at `tag_offset`, when the tag is one of theirs.
@@ -1688,7 +1688,8 @@ example.rig:6:10: error: 'V' is a type, not a value
 A struct may take **parameters**, in parentheses after `struct`: `Map :: struct (K: Type, V: Type) { ... }` declares a **generic struct**. It is no type itself: each set of arguments a type gives it, `Map(string, int)`, names one of its **instances**, a struct laid out from its fields with its parameters bound to those arguments. This is Jai's generic struct. A parameter `NAME: Type` is a type parameter, which each instance gives a type; any other is a constant parameter, `N: int`, which each instance gives a constant of its type: a number's, a `bool`'s, an enum's or a `string`'s, as for a generic procedure's `$N` (section 7.11). Any other type is `a struct's parameter is a type, 'T: Type', or a constant of a number, bool, enum or string type, not '[]int'`, at it.
 
 ```ebnf
-StructDecl  = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" ] | "union" ) "{" { FieldDecl } "}" .
+StructDecl  = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" [ "#modify" Block ] ] | "union" )
+              "{" { FieldDecl } "}" .
 StructParam = identifier ":" Type .
 ```
 
@@ -1733,6 +1734,8 @@ main :: () {
 The generic's name alone names no type: `x: Map;` and `*Map` are `'Map' is generic; write its arguments, as in Map(K, V)`, at the name, its parameters' names in the example. A struct without parameters takes no arguments: `Vec2(int)` is `'Vec2' isn't generic, so it takes no arguments`, and a name that names no type is what it is for any type, `unknown type 'Nope'` or `'main' is not a type`.
 
 **One type per set of arguments.** Instances given the same arguments are one type, program-wide, however each is written: types are the same when they are the same type (section 3.1), constants when they have the same type and value, strings when they have the same bytes, floats when they have the same bits, as for a generic procedure's (section 7.11): with `F :: struct (V: float64)`, `F(-0.0)` and `F(0.0)` are two types, though `-0.0 == 0.0`. `Ring(int, 4)`, `Ring(int, 2 + 2)` and `Ring(int, cast(u8) 4)` are one type; `Ring(s64, 4)` and `Ring(int, 5)` are two others. `Ring(int, 4)` is that one type wherever it's written: where a value goes (below), as an alias's value, `R4 :: Ring(int, 4);`, inside a generic procedure's instance with `T = int`, `Ring(T, 4)`, in another file of the program, or in a `#run`: `R4 == Ring(int, 2 + 2)` is true everywhere. An instance is named by its generic and its arguments as the program would write them, a type as messages name it, a constant by its value: `Map(string, int)`, `Map(int, Map(string, *u8))`, `Ring(int, 4)`, `Ring(float32, 1)` (`float` is `float32`), `Labeled("hi")`, `Tag(Mode.B)`, `Flag(true)`. Messages name it so, and so does its type information (section 3.16); Basic's `print` writes its value as any struct's.
+
+**#modify.** A generic struct may carry a `#modify` block after its parameters, right before its fields (section 7.12): code run while compiling, once for each set of arguments its uses give, before an instance is made, that may refuse them or change them. The instance a written type names is then the one for the arguments the block left, found or made as any other, and named by them wherever it is written: with `Box :: struct (T: Type) #modify { if T == u8 { T = int; } return true; } { v: T; }`, `Box(u8)` and `Box(int)` are one type, `Box(int)`, as a variable's type, an alias's value, a literal's type, an operand of `==` (`Box(u8) == Box(int)` is true), in messages and in its type information (section 3.16), and a generic procedure's `Box($T)` binds `T = int` from it. A block that returns `false` refuses the instance at the written type's name, `'Box' refused T = string: no strings in a box`, at each use that gives those arguments, followed by the use's chain; a block that fails as it runs is said once, followed by the line of the instance the arguments would have made, `    in 'Box' with T = string, used at PATH:L:C`. Either way the use has no type, and says nothing more.
 
 **Where values go.** An instance is written where a value goes as a call of its generic, `Pair(string, int)` (section 5.20): it is a type there, as `Vec2` is, so it may be an operand of `==` and `!=` with another type, a `$T: Type` argument, `zero(Pair(u8, bool))`, and an alias's value, `Int_Pair :: Pair(int, int);` (section 3.22). It is a literal's type too, of a struct literal or an array literal's elements (section 5.17): `Pair(string, int).{"ann", 36}`, `Pair(u8, u8).[.{1, 2}]`, and a constant may hold one, `ORIGIN :: Pair(int, int).{0, 0};`. Anywhere else it is no value: `x := Pair(string, int);` is `'Pair(string, int)' is a type, not a value`, at its name, unless its count or one of its arguments has a mistake, which is said instead, as where a type goes; a mistake inside the instance, such as `Ring(int, -2)`'s negative count in `items: [N]T;`, is said as well, as the instance's (below).
 
@@ -1947,7 +1950,8 @@ A procedure's name is called (section 5.10), and used anywhere else it is a proc
 ### 4.5 Structs
 
 ```ebnf
-StructDecl  = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" ] | "union" ) "{" { FieldDecl } "}" .
+StructDecl  = identifier "::" ( "struct" [ "(" StructParam { "," StructParam } ")" [ "#modify" Block ] ] | "union" )
+              "{" { FieldDecl } "}" .
 StructParam = identifier ":" Type .
 FieldDecl   = [ "using" ] identifier ":" Type ";"
             | ( "struct" | "union" ) "{" { FieldDecl } "}" ";" .
@@ -4182,7 +4186,7 @@ sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } 
 Box :: struct (T: Type) #modify { if T == u8 { T = int; } return true; } { v: T; }
 ```
 
-The block is code that runs while compiling, before an instance is made, to check the bindings a use gives, or to change them: `sum` refuses to sum strings. For now only a generic procedure's block runs, as below; a generic struct's is checked, as below, but not yet run, and a use of the struct makes the instance its own bindings make.
+The block is code that runs while compiling, before an instance is made, to check the bindings a use gives, or to change them: `sum` refuses to sum strings, and `Box` gives `u8` the instance of `int`, so `Box(u8)` is `Box(int)`.
 
 **Where it may be written.** On a procedure that isn't generic, after a struct with no parameters, or after `union` or `union #tagged`, it is `#modify is for a generic procedure or struct, as in sum :: (values: []$T) -> T #modify { ... } { ... }`, at the `#modify`. A second one is `'#modify' is written twice`, at it, and any other directive after the block, where the body's `{` goes, `expected '{', found directive` (a `#load` or an `#import` there is `#load can only be at the top level`, as after a signature). Anywhere else, `#modify` is the error for what was expected there, as `#type` is (section 2.7): `x := #modify;` is `expected an expression, found directive`. Each gives the declaration up (section 9.2).
 
@@ -4222,13 +4226,13 @@ example.rig:4:12: error: unknown identifier 'values'
                ^
 ```
 
-**When it runs.** A generic procedure's block runs while its uses are checked, `rig check` included (section 10.1), once for each set of bindings the uses give: the types and constants a call's arguments bind (section 7.11), before any instance is made of them. A set given again, by any use anywhere, in another file, in a `#run`, in an instance's body, runs nothing: what the block did with it is kept, the generic's, for the whole program. The block runs where a use first needs an instance, so in the declarations pass for a use in a constant's `#run`, or in a body that a `#run` reaches and so checks then (section 7.8). Only a use in a top-level `#if`'s condition can't run it, as above.
+**When it runs.** A generic's block runs while its uses are checked, `rig check` included (section 10.1), once for each set of bindings the uses give: the types and constants a call's arguments bind (section 7.11), or the arguments a written type gives a generic struct (section 3.23), before any instance is made of them. A set given again, by any use anywhere, in another file, in a `#run`, in an instance's body or fields, through an alias, `B :: Box(u8);`, or as a literal's type, `Box(u8).{1}`, runs nothing: what the block did with it is kept, the generic's, for the whole program. The block runs where a use first needs an instance, so in the declarations pass for a use in a global's type or a constant's `#run`, or in a body that a `#run` reaches and so checks then (section 7.8). Only a use in a top-level `#if`'s condition can't run it, as above.
 
 **What it does.** Its variables start as the set given, and what they hold when it returns `true` is the set the instance is made of: the instance of those bindings, found if a use made it already, made otherwise, and named by them, in a chain line too (section 7.11). So `widen` below gives `u8` and `u16` the instance of `int`, and `widen(cast(u8) 200)` and `widen(5)` both call `widen(T = int)`, one instance. Its result is final: the block never runs again on the bindings it leaves, and a set it maps to bindings some other set gives makes no new instance. After the block, a call is any call of that instance: its arguments convert to the instance's parameters, so `widen(cast(u8) 200)` passes a `u8` that widens to an `int`, while a `sum` whose block made a `[]u8`'s `T` an `int` is `argument 1 of 'sum' has type '[]u8', which can't be converted to '[]int'`, at the argument, as for any call. A changed constant is the instance's: `ring(0, int)` below returns a `[1]int`.
 
-**Refusals.** When the block returns `false`, no instance is made, and each use that gives that set is refused, at the use: `'sum' refused T = string: sum needs numbers`, with the message the block added, or `'only' refused T = bool` for an empty one, the set given written as an instance's bindings are, then the use's chain, when it is in an instance (section 7.11). It is said at every use that gives the set, and the block still runs once for it.
+**Refusals.** When the block returns `false`, no instance is made, and each use that gives that set is refused, at the use, a struct's at the written type's name: `'sum' refused T = string: sum needs numbers`, with the message the block added, or `'only' refused T = bool` for an empty one, the set given written as an instance's bindings are, then the use's chain, when it is in an instance (section 7.11). It is said at every use that gives the set, and the block still runs once for it.
 
-**Failures.** A block that fails while it runs, as a `#run` can (section 7.8), is an error at the `#modify`: `#modify failed: runtime error: MESSAGE`, then the calls that led there, innermost first, the outermost the block's own, `in #modify (PATH:LINE:COL)` (section 10.8), then a line naming the instance the set given would have made, `    in 'bad' with T = int, called at PATH:LINE:COL`, and the use's chain. So is a result it can't bake (section 7.8), a variable or the message being a string with a negative count: `#modify failed: its result holds a string with a negative count`, at the `#modify`, with the same chain line. Either is said once for that set: no instance is made, and no use that gives it says anything more.
+**Failures.** A block that fails while it runs, as a `#run` can (section 7.8), is an error at the `#modify`: `#modify failed: runtime error: MESSAGE`, then the calls that led there, innermost first, the outermost the block's own, `in #modify (PATH:LINE:COL)` (section 10.8), then a line naming the instance the set given would have made, `    in 'bad' with T = int, called at PATH:LINE:COL` (a struct's `used at`, section 3.23), and the use's chain. So is a result it can't bake (section 7.8), a variable or the message being a string with a negative count: `#modify failed: its result holds a string with a negative count`, at the `#modify`, with the same chain line. Either is said once for that set: no instance is made, and no use that gives it says anything more.
 
 **Its world.** The block runs in the compile-time world, as a `#run` does (section 7.8): it may call procedures, print, and read and write the globals every `#run` and every block shares, and what it does, it does once for each set given, so a global the block adds 1 to counts the sets. None of it is the program's: the program has no code of the block's, and its own globals are untouched. A string the block is given is its own copy, kept for the whole compilation: writing through its data changes neither the program's literal nor the use's, and a global the block keeps it in still holds it in later runs. A block may use another generic that has a block of its own: that block is checked, and runs for what this one gives it, while this one is checked, before this one runs.
 
@@ -4308,6 +4312,63 @@ example.rig:15:10: error: 'sum' refused T = string: sum needs numbers
         s := sum(string.["a", "b"]);
              ^
 ```
+
+**Structs.** A generic struct's block is the same code, its variables the struct's parameters, `T: Type` and `N: int`, and it runs where a written type names an instance (section 3.23), once for each set of arguments given. The instance is the one for the arguments the block leaves, named by them wherever it is written: `Box(u8)` below is `Box(int)`, one type, in a variable's type, a comparison, a generic procedure's parameter, `Box($T)` binding `T = int` from it, a message and its type information (section 3.16). A field's instance inside the struct, `next: *List(T);`, gives the block that instance's own arguments, as any use does. A refusal is said at the written type's name, and a failure's line names the instance the arguments would have made, `used at` the written type, as an instance's chain line does (section 3.23).
+
+```rig
+#import "Basic";
+
+Box :: struct (T: Type) #modify {
+    if T == u8 { T = int; }
+    return T != string, "no strings in a box";
+} {
+    v: T;
+}
+
+Ring :: struct (T: Type, N: int) #modify {
+    if N < 1 { N = 1; }
+    return true;
+} {
+    items: [N]T;
+}
+
+unbox :: (b: Box($T)) -> T { return b.v; }
+
+main :: () {
+    a: Box(u8) = .{200};
+    print("{} {}\n", a.v * 2, unbox(a));
+    print("{} {}\n", Box(u8) == Box(int), size_of(Ring(int, 0)));
+    print("{}\n", (cast(*Type_Info_Struct) type_info(Box(u8))).name);
+}
+```
+
+```text
+400 200
+true 8
+Box(int)
+```
+
+```rig error
+Box :: struct (T: Type) #modify { return T != string, "no strings in a box"; } { v: T; }
+Pair :: struct (A: Type) { b: Box(A); }
+
+main :: () {
+    x: Box(string);
+    p: Pair(string);
+}
+```
+
+```text
+example.rig:2:31: error: 'Box' refused T = string: no strings in a box
+    Pair :: struct (A: Type) { b: Box(A); }
+                                  ^
+    in 'Pair' with A = string, used at example.rig:6:8
+example.rig:5:8: error: 'Box' refused T = string: no strings in a box
+        x: Box(string);
+           ^
+```
+
+**Types whose layout is under way.** A block holds a type as a handle, which it compares and assigns without looking inside, so it may be given a type still being laid out: with `Wrap :: struct (T: Type) #modify { return T != bool; } { p: *T; }`, `Node :: struct { v: int; w: Wrap(Node); }` is laid out as without the block, 16 bytes, though `Node`'s layout needs `Wrap(Node)`, and so its block's run, before it is done. Only `type_info` looks inside a type: a block that takes `type_info` of a `Type` value, anywhere in it, has each type it is given described, and so laid out (section 3.16), before it runs. Given a `Node` being laid out, that is a circle: with `return type_info(T).size > 0;` as `Wrap`'s block, `Node` is `'Node' is defined in terms of itself`, at its name, followed by the line of the instance whose block needed the layout, `    in 'Wrap' with T = Node, used at PATH:L:C`.
 
 ## 8. Runtime checks
 

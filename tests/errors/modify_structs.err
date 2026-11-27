@@ -1,0 +1,13 @@
+tests/errors/modify_structs.rig:16:43: error: 'Grow' can't be used in its own #modify, which decides its instances
+    Grow :: struct (T: Type) #modify { return Grow(int) != T; } { v: T; }
+                                              ^
+tests/errors/modify_structs.rig:18:31: error: 'Box' refused T = string: no strings in a box
+    Pair :: struct (A: Type) { b: Box(A); }
+                                  ^
+    in 'Pair' with A = string, used at tests/errors/modify_structs.rig:23:8
+tests/errors/modify_structs.rig:21:8: error: 'Box' refused T = string: no strings in a box
+        x: Box(string);
+           ^
+tests/errors/modify_structs.rig:22:10: error: 'Box' refused T = string: no strings in a box
+        y := Box(string).{"a"};
+             ^

@@ -1672,19 +1672,20 @@
 //   (Ast_Modify.proc). It is never cloned: an instance has none.
 // - Its check (check_generic.cpp's check_modify) is once, as the generic's
 //   own code, at the top level and with no chain, whether an instance is
-//   ever asked for or not: the first time one is (check_instance's
-//   modify_bindings, check_struct_instance, before finding one), or in
+//   ever asked for or not: the first time one is (modify_bindings, from
+//   check_instance and check_struct_instance, before finding one), or in
 //   check()'s pass over the bodies (check_generic_modify), a generic
-//   struct's after its own check. Its variables (Ast_Modify.vars) are the generic's type and
-//   constant parameters, in its order, at what declares them, a type one of
-//   type Type, a constant one of its constant's type; its body declares them
-//   in its scope (checker.cpp's check_body), so a local can't take their
-//   names there. Its body is checked with check_reached_body, then what it
-//   reaches walked (check_run.cpp's reach_modify), so a body it calls has no
-//   errors before it runs; a call of main there is "main is where the
-//   program starts; #modify can't call it", at the #modify. Any mistake
-//   sets Ast_Modify.had_errors and the generic's had_errors: it makes no
-//   instance, and its uses say nothing more. A procedure's other parameters
+//   struct's after its own check. Its variables (Ast_Modify.vars) are the
+//   generic's type and constant parameters, in its order, at what declares
+//   them, a type one of type Type, a constant one of its constant's type;
+//   its body declares them in its scope (checker.cpp's check_body), so a
+//   local can't take their names there. Its body is checked with
+//   check_reached_body, then what it reaches walked (check_run.cpp's
+//   reach_modify), so a body it calls has no errors before it runs; a
+//   call of main there is "main is where the program starts; #modify
+//   can't call it", at the #modify. Any mistake sets Ast_Modify.had_errors
+//   and the generic's had_errors: it makes no instance, and its uses say
+//   nothing more. A procedure's other parameters
 //   aren't in its scope: no call's arguments exist when it runs. A use of
 //   the generic from the block, or from code it reaches, finds the check
 //   under way: "'sum' can't be used in its own #modify, which decides its
@@ -1744,30 +1745,38 @@
 //   comparison of types as a leaf too, its operands never looked at.
 // - The block runs (check_generic.cpp's modify_bindings) between the
 //   bindings a generic procedure's call infers and finding its instance
-//   (check_instance), once for each set of bindings given, while checking,
-//   rig check too, before the instance's signature is checked: its check
-//   first, then its cache (Ast_Modify.runs, the generic's, program-wide),
-//   a Modify_Run per set given, compared as instances are (same_binding),
-//   so a set already given, by any use anywhere, runs nothing. A new set
-//   runs in the compile-time world, as a #run does (run.cpp's
+//   (check_instance), or the arguments a generic struct's written type
+//   binds and finding its (check_struct_instance), once for each set of
+//   bindings given, while checking, rig check too, before the instance's
+//   signature is checked or its fields laid out: its check first, then
+//   its cache (Ast_Modify.runs, the generic's, program-wide), a
+//   Modify_Run per set given, compared as instances are (same_binding), so
+//   a set already given, by any use anywhere, runs nothing. A new set runs
+//   in the compile-time world, as a #run does (run.cpp's
 //   compile_time_modify), the checker's chain starting with the line of
 //   the instance the given bindings would make ("    in 'sum' with T =
-//   string, called at PATH:L:C"). Its result is final: the instance is the
-//   one of the bindings it left, found or made as any other, named and
-//   chained by them, so widen(cast(u8) 1) and widen(2) share widen(T =
-//   int), and the call's arguments then convert to that instance's
+//   string, called at PATH:L:C"; a struct's "used at"). Its result is
+//   final: the instance is the one of the bindings it left, found or made
+//   as any other, named and chained by them, so widen(cast(u8) 1) and
+//   widen(2) share widen(T = int), and Box(u8) and Box(int) are one type,
+//   Box(int); the call's arguments then convert to that instance's
 //   parameters as any call's do. A failure, "#modify failed: runtime
 //   error: MESSAGE" at the #modify with its frames and that chain, is said
 //   once for its set; the uses given it say nothing more. A false is said
 //   at every use given its set: "'sum' refused T = string: sum needs
 //   numbers", or "'sum' refused T = string" for an empty message, at the
-//   use, with the caller's chain. Neither makes an instance.
+//   use (a written type's name), with the caller's chain. Neither makes an
+//   instance.
 // - When the block runs, a Type value is a handle (lower.cpp's
 //   lower_type_value): a block that describes types holds each as its
 //   description's address, and has the types it is given walked for their
 //   descriptions before it runs (check_run.cpp's reach_descriptions), each
 //   laid out; any other holds each as its Type *, and nothing is described
-//   or laid out for it. Either way == and != compare handles.
+//   or laid out for it. Either way == and != compare handles. So a struct
+//   whose layout is under way may be given to a block that only compares,
+//   Node :: struct { w: Wrap(Node); }, and laid out as without it; given
+//   to one that describes types, it is the usual "'Node' is defined in
+//   terms of itself", followed by the would-be instance's line.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

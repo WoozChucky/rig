@@ -85,7 +85,7 @@ total 20, dearest: cheese
 
 - **Native:** compiled ahead of time through LLVM to executables for Windows x64 and Linux x86-64, with no garbage collector or virtual machine.
 - **C's layout and calls:** structs, unions, tagged unions and enums laid out as C lays them out, and C functions called directly with `#foreign`.
-- **Generics:** procedures with `$T` and constant `$N` parameters, and structs with parameters, `Map(string, int)`, each compiled once per set of types and values; type aliases; and types written where values go.
+- **Generics:** procedures with `$T` and constant `$N` parameters, and structs with parameters, `Map(string, int)`, each compiled once per set of types and values, with `#modify` to check or change those first; type aliases; and types written where values go.
 - **Code run while compiling:** `#run` runs Rig code in the compiler, and a `build.rig` written in Rig takes the place of a build script.
 - **Checked by default:** bounds, null pointers, division by zero and checked casts stop the program with its file, line and column. Integers wrap and variables start zeroed: no undefined behaviour.
 - **Programs and modules:** several files with `#load`, modules with `#import`, conditional compilation with `#if`.

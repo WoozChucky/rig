@@ -2319,8 +2319,8 @@ static void set_instance(Ast_Struct *s, Ast_Instance *inst) {
 
 // A new instance of generic struct `generic` for `bindings`, made where
 // the written type at `used_at` needs it, kept apart from find_instance so
-// what changes a struct as it's made (issue #228's #modify) comes between
-// them: its tree copied (ast_clone), no longer generic, its bindings made
+// the generic's #modify block, which decides the bindings (modify_bindings,
+// spec 7.12), comes before both: its tree copied (ast_clone), no longer generic, its bindings made
 // as a procedure instance's are (make_bindings), named Map(string, int)
 // (each binding's value as the program would write it: a type as type_name
 // writes it, a constant as constant_text does), its copy named so and
@@ -2389,10 +2389,13 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
     Array<Generic_Binding> bindings = struct_parameters(generic);
     bool bound = true;
     for (s64 i = 0; i < count; i++) bound = bind_struct_argument(c, generic, args[i], i, &bindings[i]) && bound;
-    // Then its #modify block's check (spec 7.12), as a generic procedure's
-    // (check_instance): one with a mistake makes no instance, and one under
-    // way is said at the instance's name.
-    if (bound && generic->modify && !check_modify(c, generic->modify, generic->name, at, bindings)) {
+    // Then its #modify block (spec 7.12) decides which bindings make the
+    // instance, as a generic procedure's does (check_instance): a block
+    // with a mistake, a refusal, said at the instance's name, or a failure,
+    // said once, makes none. The instance is then the one of the bindings
+    // the block left, found or made as any other, and named by them, so
+    // Box(u8) and Box(int) may be one type, Box(int), wherever written.
+    if (bound && generic->modify && !modify_bindings(c, generic->modify, generic->name, &bindings, at, true)) {
         generic->had_errors |= generic->modify->had_errors;
         bound = false;
     }

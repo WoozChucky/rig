@@ -1,0 +1,26 @@
+// #modify blocks on generic structs that refuse an instance, or use their
+// own struct (issue #228, spec 7.12, 3.23). Box's block refuses strings:
+// each written type that gives it a string is refused at its name, a
+// local's type, a literal's and a field's in Pair's instance, followed by
+// that instance's line, `used at`; the block runs once for them, and no
+// instance is made. Grow's block names its own struct, whose instances it
+// decides: said once, at the inner use, however often Grow is used.
+
+Box :: struct (T: Type) #modify {
+    if T == u8 { T = int; }
+    return T != string, "no strings in a box";
+} {
+    v: T;
+}
+
+Grow :: struct (T: Type) #modify { return Grow(int) != T; } { v: T; }
+
+Pair :: struct (A: Type) { b: Box(A); }
+
+main :: () {
+    x: Box(string);
+    y := Box(string).{"a"};
+    p: Pair(string);
+    g: Grow(u8);
+    h: Grow(u8);
+}
