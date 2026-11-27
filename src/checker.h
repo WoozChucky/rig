@@ -1487,9 +1487,18 @@
 //   parameter; any other's type is resolved and must be a number's, a
 //   bool's, an enum's or string, kept in the parameter's Ast.type ("a
 //   struct's parameter is a type, 'T: Type', or a constant of a number,
-//   bool, enum or string type, not '[]int'", at the type). One whose own
-//   check said a mistake makes no instance (Ast_Struct.had_errors): its uses
-//   have no type and say nothing more.
+//   bool, enum or string type, not '[]int'", at the type). Then what its
+//   declaration says that doesn't depend on its arguments, said once here,
+//   instantiated or not: a parameter named as an earlier one, and a field
+//   named as a parameter or as an earlier field across its braces, "'T' is
+//   already declared at PATH:L:C", at the later; a parameter named as a
+//   built-in type, "'int' is a built-in type"; its fields' written types,
+//   the parameters taken as types and constants still to be known
+//   (check_generic_type: "unknown type 'Nope'", "'N' is not a type",
+//   "'void' is only a pointer's target, as in *void"), array counts and
+//   instances' arguments left to each instance. One whose own check said a
+//   mistake makes no instance (Ast_Struct.had_errors): its uses have no
+//   type and say nothing more.
 // - An instance is written where a type goes, Map(string, int)
 //   (AST_TYPE_INSTANCE), worked out once per written type
 //   (check_written_instance, Ast_Type.instance_type): a name that is no
@@ -1532,7 +1541,18 @@
 //   instance laid out from inside it. An error there is followed by its
 //   chain, "    in 'Ring' with T = int, N = -2, used at PATH:L:C"
 //   (instance_line, Ast_Instance.shown), the procedure instances' lines
-//   after it when one made it.
+//   after it when one made it. One holding itself by value is "'Bad(u8)'
+//   contains itself; it can hold a pointer to itself, *Bad(u8)", with its
+//   chain.
+// - Instances nest at most MAX_DEPTH deep, struct instances and
+//   procedure instances in one chain (spec 9.4): a struct instance to be
+//   made inside one MAX_DEPTH deep is refused where it's written, "'Grow'
+//   is instantiated more than 1000 levels deep, each instance's fields
+//   making the next", with the chain, and the written type has no type
+//   (make_struct_instance). Instances held by value are laid out inside one
+//   another, so they meet the declarations' nesting limit first
+//   (open_declaration), said once, naming the innermost; that copy is then
+//   done, with no type, never laid out again (resolve_struct).
 // - check(): the declarations pass checks a generic struct on its own and
 //   lays out any other; the late fields of every struct but a generic one
 //   are made, then each struct instance made so far is laid out and has its

@@ -238,16 +238,17 @@ static bool is_constant_parameter(Array<Generic_Binding> declared, String name) 
 }
 
 // What check_generic_type's action needs: the checker, and the type and
-// constant parameters the generic declares.
+// constant parameters the generic, a procedure or a struct, declares.
 struct Generic_Type_Check {
     Checker *c;
     Array<Generic_Binding> declared;
 };
 
-// At a type name in a written type of a generic's signature, its type
-// parameters taken as types still to be known: every other type name
-// resolved as where it's written anywhere (checker.cpp's resolve_written,
-// behind a pointer, so a struct's layout isn't needed), and void refused
+// At a type name in a written type of a generic's signature, or of a
+// generic struct's field (check_generic_fields), its type parameters taken
+// as types still to be known: every other type name resolved as where it's
+// written anywhere (checker.cpp's resolve_written, behind a pointer, so a
+// struct's layout isn't needed), and void refused
 // but as a pointer's target (`place.pointee`), as resolve_type and
 // resolve_element refuse it, so "unknown type 'Foo'" and "'void' is only a
 // pointer's target, as in *void" are said once, here, not once per
@@ -276,9 +277,9 @@ static void at_generic_type_name(void *data, Ast *name, Name_Place place) {
     }
 }
 
-// Checks written type `written` of a generic's signature against the type
-// and constant parameters the generic declares, `declared`
-// (at_generic_type_name).
+// Checks written type `written` of a generic's signature, or of a generic
+// struct's field, against the type and constant parameters the generic
+// declares, `declared` (at_generic_type_name).
 static void check_generic_type(Checker *c, Ast_Type *written, Array<Generic_Binding> declared) {
     Generic_Type_Check check = {c, declared};
     walk_names(written, Name_Place{}, at_generic_type_name, &check);
@@ -1328,14 +1329,94 @@ static bool struct_takes_a_type(Ast_Param *param) {
     return param->type_expr->kind == AST_TYPE_NAME && string_eq(param->type_expr->name, str("Type"));
 }
 
+// The type and constant parameters generic struct `generic` declares, in
+// order, none bound yet: a constant one of the type its own check gave it
+// (check_generic_struct), null when that refused it. The caller frees the
+// Array.
+static Array<Generic_Binding> struct_parameters(Ast_Struct *generic) {
+    Array<Generic_Binding> declared = {};
+    for (s64 i = 0; i < generic->params.count; i++) {
+        Ast_Param *param = generic->params[i];
+        Generic_Binding b = {};
+        b.name = param->name;
+        b.declared = param->pos;
+        b.is_type = struct_takes_a_type(param);
+        b.type = b.is_type ? nullptr : param->type;
+        array_add(&declared, b);
+    }
+    return declared;
+}
+
+// The levels of the written types of struct s's fields, the deepest one's
+// (Ast_Type.levels), an anonymous member's braces a level above its own
+// deepest field's (spec 3.19), as checker.cpp's layout_levels counts them;
+// but each type whole, a late field's too, as the walk over a generic's
+// fields (check_generic_fields) looks behind its pointers.
+static s32 field_levels(Ast_Struct *s) {
+    s32 deepest = 0;
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Field *field = s->fields[i];
+        s32 levels = field->anonymous ? field_levels(field->anonymous) + 1 : field->type_expr->levels;
+        if (levels > deepest) deepest = levels;
+    }
+    return deepest;
+}
+
+// The fields of struct s, generic struct generic's own or an anonymous
+// member's in it, at any depth, checked as the generic's own (spec 3.23),
+// against its parameters, `declared`, and the named fields so far across
+// its braces, `reachable`, which this adds to, in source order:
+// - a field named as a parameter is "'T' is already declared at PATH:L:C",
+//   at it, as two of a procedure's parameters are;
+// - a field named as an earlier field, in its own braces or in another
+//   member's, is the same, as each instance's layout would say it
+//   (checker.cpp's lay_out), once here instead;
+// - its written type is checked as a generic procedure's parameter's is
+//   (check_generic_type), the parameters taken as types and constants
+//   still to be known: "unknown type 'Nope'", "'N' is not a type", "'void'
+//   is only a pointer's target, as in *void". An array's count and an
+//   instance's arguments are each instance's to check.
+// A field said to clash still has its type checked, for its own mistakes,
+// as lay_out makes a late one's. Once the generic's check has said more
+// than the `errors` it started with, after each field, it is marked
+// (Ast_Struct.had_errors).
+static void check_generic_fields(Checker *c, Ast_Struct *generic, Ast_Struct *s, Array<Generic_Binding> declared,
+                                 Array<Ast_Field *> *reachable, s64 errors) {
+    for (s64 i = 0; i < s->fields.count; i++) {
+        Ast_Field *field = s->fields[i];
+        if (field->anonymous) {
+            check_generic_fields(c, generic, field->anonymous, declared, reachable, errors);
+            continue;
+        }
+        Ast_Param *param = nullptr;
+        for (s64 j = 0; j < generic->params.count && !param; j++) {
+            if (string_eq(generic->params[j]->name, field->name)) param = generic->params[j];
+        }
+        Ast_Field *earlier = nullptr;
+        for (s64 j = 0; j < reachable->count && !earlier; j++) {
+            if (string_eq((*reachable)[j]->name, field->name)) earlier = (*reachable)[j];
+        }
+        if (param) {
+            report_declared_again(c, field->name, field->pos, param->pos);
+        } else if (earlier) {
+            report_declared_again(c, field->name, field->pos, earlier->pos);
+        } else {
+            array_add(reachable, field);
+        }
+        check_generic_type(c, field->type_expr, declared);
+        generic->had_errors |= c->diag->error_count != errors;
+    }
+}
+
 void check_generic_struct(Checker *c, Ast_Struct *generic) {
     if (generic->resolve != RESOLVE_NOT_YET) return;
     // Worked out inside what needs it, as a struct's layout is, so a chain
     // of generics each needing the next in a parameter's type nests at most
     // MAX_DEPTH levels (checker.cpp's open_declaration): the one too deep,
     // said, is left to be checked in its own turn, and what needed it makes
-    // no instance.
-    s32 levels = 0, outer;
+    // no instance. Its fields' types count too: a name in one is resolved
+    // here, as a declaration needed inside it.
+    s32 levels = field_levels(generic), outer;
     for (s64 i = 0; i < generic->params.count; i++) {
         if (generic->params[i]->type_expr->levels > levels) levels = generic->params[i]->type_expr->levels;
     }
@@ -1345,6 +1426,22 @@ void check_generic_struct(Checker *c, Ast_Struct *generic) {
     // and its mistakes are its own, with no instance's chain.
     Outer_Scopes scopes = leave_scopes(c);
     s64 errors = c->diag->error_count;
+    // A parameter named as an earlier one is "'T' is already declared at
+    // PATH:L:C", at it, as for a procedure's; one named as a built-in type,
+    // which always means the type (spec 3.1), could never be named in its
+    // fields: "'int' is a built-in type", as a $T of that name is.
+    for (s64 i = 0; i < generic->params.count; i++) {
+        Ast_Param *param = generic->params[i];
+        Ast_Param *earlier = nullptr;
+        for (s64 j = 0; j < i && !earlier; j++) {
+            if (string_eq(generic->params[j]->name, param->name)) earlier = generic->params[j];
+        }
+        if (earlier) {
+            report_declared_again(c, param->name, param->pos, earlier->pos);
+        } else if (type_from_name(param->name)) {
+            diag_error(c->diag, param->pos, "'" STR_FMT "' is a built-in type", STR_ARG(param->name));
+        }
+    }
     for (s64 i = 0; i < generic->params.count; i++) {
         Ast_Param *param = generic->params[i];
         if (struct_takes_a_type(param)) continue;
@@ -1368,9 +1465,19 @@ void check_generic_struct(Checker *c, Ast_Struct *generic) {
         param->type = t;
     }
     generic->had_errors |= c->diag->error_count != errors;
+    // An instance needs only its parameters: done, so a field's type that
+    // reaches an instance of the generic, through a global's type
+    // (a: g; g: *List(int);), finds it checked, not in a circle. Its fields
+    // are checked after, each mistake marking the generic at once, so a use
+    // after it makes no instance.
+    generic->resolve = RESOLVE_DONE;
+    Array<Generic_Binding> declared = struct_parameters(generic);
+    Array<Ast_Field *> reachable = {};
+    check_generic_fields(c, generic, generic, declared, &reachable, errors);
+    array_free(&reachable);
+    array_free(&declared);
     c->levels = outer;
     return_to_scopes(c, scopes);
-    generic->resolve = RESOLVE_DONE;
 }
 
 void report_generic_struct(Checker *c, Ast_Struct *generic, Position at) {
@@ -1382,23 +1489,6 @@ void report_generic_struct(Checker *c, Ast_Struct *generic, Position at) {
     diag_error(c->diag, at, "'" STR_FMT "' is generic; write its arguments, as in " STR_FMT "(%.*s)",
                STR_ARG(generic->name), STR_ARG(generic->name), (int)example.count, (const char *)example.data);
     array_free(&example);
-}
-
-// The type and constant parameters generic struct `generic` declares, in
-// order, none bound yet: a constant one of the type its own check gave it
-// (check_generic_struct). The caller frees the Array.
-static Array<Generic_Binding> struct_parameters(Ast_Struct *generic) {
-    Array<Generic_Binding> declared = {};
-    for (s64 i = 0; i < generic->params.count; i++) {
-        Ast_Param *param = generic->params[i];
-        Generic_Binding b = {};
-        b.name = param->name;
-        b.declared = param->pos;
-        b.is_type = struct_takes_a_type(param);
-        b.type = b.is_type ? nullptr : param->type;
-        array_add(&declared, b);
-    }
-    return declared;
 }
 
 // The text of struct parameter `param` as written, for a message: "N:
@@ -1548,8 +1638,23 @@ static void set_instance(Ast_Struct *s, Ast_Instance *inst) {
 // to the generic's cache and the program's list before anything is laid
 // out, so a field that names its own instance, next: *List(T), finds it.
 // No symbol: no object-file name is a struct's.
+//
+// Instances nest at most MAX_DEPTH deep (spec 9.4), struct instances as a
+// procedure's do (make_instance): a generic struct whose instances' fields
+// each name a new one behind a pointer, next: *Grow(*T), would make them
+// without end, each laid out in its turn (check()'s last loop). One to be
+// made in an instance MAX_DEPTH deep is refused where it's used, "'Grow' is
+// instantiated more than 1000 levels deep, each instance's fields making
+// the next", followed by the chain it's in (Diagnostics.context), and none
+// is made: null, and the written type has no type.
 static Ast_Instance *make_struct_instance(Checker *c, Ast_Struct *generic, Array<Generic_Binding> bindings,
                                           Position used_at) {
+    if (c->instance && c->instance->depth >= MAX_DEPTH) {
+        diag_error(c->diag, used_at,
+                   "'" STR_FMT "' is instantiated more than %d levels deep, each instance's fields making the next",
+                   STR_ARG(generic->name), MAX_DEPTH);
+        return nullptr;
+    }
     Ast_Instance *inst = arena_new<Ast_Instance>(c->arena);
     inst->generic_struct = generic;
     inst->structure = (Ast_Struct *)ast_clone(c->arena, generic);
@@ -1600,7 +1705,8 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
     }
     array_free(&bindings);
     // An instance found to contain itself, or too big, said where it was
-    // laid out, has no type: its uses say nothing more.
+    // laid out, has no type: its uses say nothing more. One refused for its
+    // depth (said) is none.
     return inst ? inst->structure->declared : nullptr;
 }
 

@@ -593,7 +593,11 @@ void enter_instance(Checker *c, Ast_Instance *inst);
 // bool's, an enum's or string, kept in the parameter's Ast.type for each
 // instance's argument to convert to: "a struct's parameter is a type, 'T:
 // Type', or a constant of a number, bool, enum or string type, not
-// '[]int'", at the type. One that said a mistake makes no instance
+// '[]int'", at the type. Then its parameters' and fields' names, each
+// declared once ("'T' is already declared at PATH:L:C"), no parameter a
+// built-in type's ("'int' is a built-in type"), and its fields' types, the
+// parameters taken as types and constants still to be known ("unknown type
+// 'Nope'", "'N' is not a type"). One that said a mistake makes no instance
 // (Ast_Struct.had_errors): its uses have no type and say nothing more.
 void check_generic_struct(Checker *c, Ast_Struct *generic);
 

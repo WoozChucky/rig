@@ -129,7 +129,8 @@ static void token_list_free(Token_List *list) {
 // "2:5: unknown identifier 'x'\n", each followed by its more lines, if it
 // has any (a failed #run's frames, Diagnostic.lines), then by its instance
 // chain, if it has one (an error inside an instance of a generic
-// procedure, Diagnostic.context). Easier to compare than renderings.
+// procedure or struct, Diagnostic.context). Easier to compare than
+// renderings.
 static String messages(Arena *a, Diagnostics *d) {
     String all = string_printf(a, "");
     for (s64 i = 0; i < d->messages.count; i++) {

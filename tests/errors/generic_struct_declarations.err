@@ -1,0 +1,24 @@
+tests/errors/generic_struct_declarations.rig:9:27: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:9:18
+    Twice :: struct (T: Type, T: Type) { }
+                              ^
+tests/errors/generic_struct_declarations.rig:10:21: error: 'int' is a built-in type
+    Built_In :: struct (int: Type) { }
+                        ^
+tests/errors/generic_struct_declarations.rig:11:35: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:11:24
+    Field_Param :: struct (T: Type) { T: int; }
+                                      ^
+tests/errors/generic_struct_declarations.rig:12:43: error: 'T' is already declared at tests/errors/generic_struct_declarations.rig:12:24
+    Inner_Param :: struct (T: Type) { union { T: int; }; }
+                                              ^
+tests/errors/generic_struct_declarations.rig:13:39: error: 'a' is already declared at tests/errors/generic_struct_declarations.rig:13:33
+    Duplicate :: struct (T: Type) { a: T; a: int; }
+                                          ^
+tests/errors/generic_struct_declarations.rig:14:34: error: unknown type 'Nope'
+    Missing :: struct (T: Type) { a: Nope; }
+                                     ^
+tests/errors/generic_struct_declarations.rig:15:34: error: 'N' is not a type
+    Constant :: struct (N: int) { a: N; }
+                                     ^
+tests/errors/generic_struct_declarations.rig:16:32: error: 'void' is only a pointer's target, as in *void
+    Empty :: struct (T: Type) { a: void; }
+                                   ^

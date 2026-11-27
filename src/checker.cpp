@@ -1713,7 +1713,9 @@ static bool circle_through_a_value(Checker *c, Ast *decl) {
 // messages stay said too, but whose type isn't made again. A struct larger
 // than any type may be (TYPE_MAX_SIZE), its fields each fine, is "'Huge' is
 // too big", at its name, and has no type either; so has a tagged union
-// whose written tag type can't count its members (lay_out_tag).
+// whose written tag type can't count its members (lay_out_tag), and a
+// struct instance's copy nested too deeply to be laid out where it's
+// needed (open_declaration, said).
 static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
@@ -1731,7 +1733,19 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     for (s64 i = 0; i < s->fields.count; i++) {
         if (layout_levels(s->fields[i]) > levels) levels = layout_levels(s->fields[i]);
     }
-    if (!open_declaration(c, s, s->name, levels, &outer)) return nullptr;
+    if (!open_declaration(c, s, s->name, levels, &outer)) {
+        // A struct instance's copy (spec 3.23) has no turn of its own to be
+        // laid out in from 0: check()'s loop would lay it out again, and
+        // its fields, holding a deeper instance, inner: Wrap(Wrap(T)), would
+        // nest as deep again, saying so again, without end. Too deep, said,
+        // it has no type, as a struct in a circle has none, and its uses
+        // say nothing more.
+        if (s->instance && s->instance->structure == s) {
+            s->resolve = RESOLVE_DONE;
+            s->declared = nullptr;
+        }
+        return nullptr;
+    }
     // Its counts' names are the top level's, and an instance's bindings
     // (spec 3.23), its own only, as a procedure instance's signature sees
     // its own (resolve_signature); its mistakes are followed by its chain.

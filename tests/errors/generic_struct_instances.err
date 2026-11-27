@@ -1,0 +1,13 @@
+tests/errors/generic_struct_instances.rig:9:44: error: an array's count can't be negative (-2)
+    Ring :: struct (T: Type, N: int) { items: [N]T; }
+                                               ^
+    in 'Ring' with T = int, N = -2, used at tests/errors/generic_struct_instances.rig:14:8
+tests/errors/generic_struct_instances.rig:9:44: error: an array's count can't be negative (-1)
+    Ring :: struct (T: Type, N: int) { items: [N]T; }
+                                               ^
+    in 'Ring' with T = int, N = -1, used at tests/errors/generic_struct_instances.rig:11:20
+    in 'make' with T = int, called at tests/errors/generic_struct_instances.rig:16:10
+tests/errors/generic_struct_instances.rig:10:1: error: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)
+    Bad :: struct (T: Type) { b: Bad(T); }
+    ^
+    in 'Bad' with T = u8, used at tests/errors/generic_struct_instances.rig:15:8

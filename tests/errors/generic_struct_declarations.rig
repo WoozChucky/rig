@@ -1,0 +1,21 @@
+// Mistakes in generic structs' declarations (issue #227, spec 3.23), one
+// generic each, said once, at the generic, whether any use instantiates
+// it or none does: two parameters of one name, a parameter named as a
+// built-in type, a field named as a parameter, in the struct's braces and
+// in an anonymous member's, two fields of one name, and a field's type
+// naming nothing, a constant parameter, or void. Duplicate's two uses
+// would make two instances: its mistake is said once, and the uses say
+// nothing more.
+Twice :: struct (T: Type, T: Type) { }
+Built_In :: struct (int: Type) { }
+Field_Param :: struct (T: Type) { T: int; }
+Inner_Param :: struct (T: Type) { union { T: int; }; }
+Duplicate :: struct (T: Type) { a: T; a: int; }
+Missing :: struct (T: Type) { a: Nope; }
+Constant :: struct (N: int) { a: N; }
+Empty :: struct (T: Type) { a: void; }
+
+main :: () {
+    x: Duplicate(int);
+    y: Duplicate(u8);
+}

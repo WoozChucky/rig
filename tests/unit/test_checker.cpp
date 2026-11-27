@@ -13662,8 +13662,10 @@ TEST(instance_errors_name_their_chain) {
 // The expected chain of `generic`'s instances from T = int to T = int
 // behind `depth` - 1 pointers, innermost first, each made at the call `at`
 // in the one before it, the first by main's call at `first`, capped as
-// instance_context caps it.
-static String pointer_chain(Arena *a, const char *generic, s64 depth, const char *at, const char *first) {
+// instance_context caps it. A struct's instances are "used at" where a
+// procedure's are "called at" (`how`).
+static String pointer_chain(Arena *a, const char *generic, s64 depth, const char *at, const char *first,
+                            const char *how = "called") {
     String expected = {};
     for (s64 d = depth; d >= 1; d--) {
         if (depth > 21 && d == depth - 10) {
@@ -13675,8 +13677,8 @@ static String pointer_chain(Arena *a, const char *generic, s64 depth, const char
         Array<u8> type = {};
         for (s64 i = 0; i < d - 1; i++) array_add(&type, (u8)'*');
         for (const char *p = "int"; *p; p++) array_add(&type, (u8)*p);
-        expected = string_printf(a, STR_FMT "    in '%s' with T = %.*s, called at test.rig:%s\n", STR_ARG(expected),
-                                 generic, (int)type.count, (const char *)type.data, d == 1 ? first : at);
+        expected = string_printf(a, STR_FMT "    in '%s' with T = %.*s, %s at test.rig:%s\n", STR_ARG(expected),
+                                 generic, (int)type.count, (const char *)type.data, how, d == 1 ? first : at);
         array_free(&type);
     }
     return expected;
@@ -14763,5 +14765,140 @@ TEST(clones_structs_deep_and_unchecked) {
     array_free(&copy_nodes);
     array_free(&copy_buffers);
     diag_free(&d);
+    arena_free(&a);
+}
+
+TEST(generic_struct_declaration_mistakes) {
+    // What a generic struct's declaration says that doesn't depend on its
+    // arguments is its own mistake, said once, at the generic, with no
+    // chain, whether no use instantiates it or two uses would make two
+    // instances: two parameters of one name, a parameter named as a
+    // built-in type, a field named as a parameter or as another field
+    // across its braces, an anonymous member's too, and a field's type
+    // naming nothing, a constant parameter, or void. A generic with one
+    // makes no instance: its uses have no type and say nothing more.
+    Arena a = arena_make();
+    struct Case {
+        const char *declaration;
+        const char *uses;
+        const char *message;
+    };
+    const Case cases[] = {
+        {"S :: struct (T: Type, T: Type) { }\n", "x: S(int, int); y: S(u8, u8);",
+         "1:23: 'T' is already declared at test.rig:1:14\n"},
+        {"S :: struct (int: Type) { }\n", "x: S(u8); y: S(u16);", "1:14: 'int' is a built-in type\n"},
+        {"S :: struct (T: Type) { T: int; }\n", "x: S(int); y: S(u8);",
+         "1:25: 'T' is already declared at test.rig:1:14\n"},
+        {"S :: struct (T: Type) { union { T: int; }; }\n", "x: S(int); y: S(u8);",
+         "1:33: 'T' is already declared at test.rig:1:14\n"},
+        {"S :: struct (T: Type) { a: T; a: int; }\n", "x: S(int); y: S(u8);",
+         "1:31: 'a' is already declared at test.rig:1:25\n"},
+        {"S :: struct (T: Type) { a: T; union { b: T; a: int; }; }\n", "x: S(int); y: S(u8);",
+         "1:45: 'a' is already declared at test.rig:1:25\n"},
+        {"S :: struct (T: Type) { a: Nope; }\n", "x: S(int); y: S(u8);", "1:28: unknown type 'Nope'\n"},
+        {"S :: struct (T: Type) { a: *[]Nope; }\n", "x: S(int); y: S(u8);", "1:31: unknown type 'Nope'\n"},
+        {"S :: struct (N: int) { a: N; }\n", "x: S(1); y: S(2);", "1:27: 'N' is not a type\n"},
+        {"S :: struct (T: Type) { a: void; }\n", "x: S(int); y: S(u8);",
+         "1:28: 'void' is only a pointer's target, as in *void\n"},
+    };
+    for (const Case &k : cases) {
+        CHECK_STR(check_source(&a, joined(&a, k.declaration, "main :: () { }\n")), k.message);
+        Checked c = check_src(&a, joined(&a, k.declaration, "main :: () { ", k.uses, " }\n"));
+        CHECK_STR(sorted_messages(&a, &c), k.message);
+        CHECK_STR(type_of(&a, &c, "x"), "?");
+        CHECK_STR(type_of(&a, &c, "y"), "?");
+        token_list_free(c.list);
+    }
+    // None of that is a mistake where it's fine: a pointer to void, a
+    // parameter in a count and behind a pointer, a field named as a type of
+    // the top level, and fields of one name in two generics.
+    CHECK_STR(check_source(&a, "Vec2 :: struct { x: float; }\n"
+                               "S :: struct (T: Type, N: int) { p: *void; a: [N]T; s: *S(T, N); Vec2: T; }\n"
+                               "U :: struct (T: Type) { a: T; p: *void; }\n"
+                               "main :: () { s: S(int, 2); u: U(u8); }\n"),
+              "");
+    arena_free(&a);
+}
+
+TEST(struct_instance_errors_name_their_chain) {
+    // A mistake that depends on an instance's arguments, a negative count
+    // or a layout that holds itself, is that instance's, followed by its
+    // chain: the instance's bindings and where it was used, then, for one
+    // made in a procedure instance's signature, that instance's line. Its
+    // body's Ring(T, -1) is the same instance: nothing more.
+    Arena a = arena_make();
+    CHECK_STR(check_source(&a,
+                           "Ring :: struct (T: Type, N: int) { items: [N]T; }\n"
+                           "Bad :: struct (T: Type) { b: Bad(T); }\n"
+                           "make :: (v: $T) -> Ring(T, -1) { r: Ring(T, -1); return r; }\n"
+                           "main :: () {\n"
+                           "    a: Ring(int, -2);\n"
+                           "    b: Bad(u8);\n"
+                           "    c := make(1);\n"
+                           "}\n"),
+              "1:44: an array's count can't be negative (-2)\n"
+              "    in 'Ring' with T = int, N = -2, used at test.rig:5:8\n"
+              "1:44: an array's count can't be negative (-1)\n"
+              "    in 'Ring' with T = int, N = -1, used at test.rig:3:20\n"
+              "    in 'make' with T = int, called at test.rig:7:10\n"
+              "2:1: 'Bad(u8)' contains itself; it can hold a pointer to itself, *Bad(u8)\n"
+              "    in 'Bad' with T = u8, used at test.rig:6:8\n");
+    arena_free(&a);
+}
+
+TEST(struct_instances_have_a_depth_limit) {
+    // Each instance's fields making the next, deeper, instance behind a
+    // pointer nests at most MAX_DEPTH instances: the one too many is
+    // refused where it's used, with the chain of the instances it's in, the
+    // innermost and outermost ten, and has no type.
+    Arena a = arena_make();
+    String expected = string_printf(&a,
+                                    "1:35: 'Grow' is instantiated more than 1000 levels deep, each instance's fields "
+                                    "making the next\n" STR_FMT,
+                                    STR_ARG(pointer_chain(&a, "Grow", 1000, "1:35", "2:17", "used")));
+    CHECK_STR(check_source(&a,
+                           "Grow :: struct (T: Type) { next: *Grow(*T); }\n"
+                           "main :: () { g: Grow(int); }\n"),
+              string_cstr(&a, expected));
+    // Held by value, the instances are laid out inside one another, as
+    // declarations nest, and meet that limit first: one message, naming the
+    // innermost instance, with the chain of those whose layouts are under
+    // way, and no crash.
+    Checked c = check_src(&a, "Wrap :: struct (T: Type) { inner: Wrap(Wrap(T)); }\n"
+                              "main :: () { w: Wrap(int); }\n");
+    Diagnostics *d = &c.list->diag;
+    CHECK_EQ(d->messages.count, 1);
+    if (d->messages.count == 1) {
+        String message = d->messages[0].message;
+        String start = str("'Wrap(Wrap(");
+        String end = str("' is nested too deeply in the declarations that need it (more than 1000 levels)");
+        CHECK(message.count > start.count + end.count);
+        if (message.count > start.count + end.count) {
+            CHECK(string_eq(string_slice(message, 0, start.count), start));
+            CHECK(string_eq(string_slice(message, message.count - end.count, end.count), end));
+        }
+        // Its chain, line by line: 21, the eleventh counting those left out.
+        String context = d->messages[0].context;
+        Array<String> lines = {};
+        s64 line_start = 0;
+        for (s64 i = 0; i < context.count; i++) {
+            if (context.data[i] != '\n') continue;
+            array_add(&lines, string_slice(context, line_start, i - line_start));
+            line_start = i + 1;
+        }
+        CHECK_EQ(line_start, context.count);
+        CHECK_EQ(lines.count, 21);
+        if (lines.count == 21) {
+            String more = str("    ... ");
+            String instances = str(" more instances");
+            String eleventh = lines[10];
+            CHECK(eleventh.count > more.count + instances.count &&
+                  string_eq(string_slice(eleventh, 0, more.count), more) &&
+                  string_eq(string_slice(eleventh, eleventh.count - instances.count, instances.count), instances));
+            CHECK_STR(lines[20], "    in 'Wrap' with T = int, used at test.rig:2:17");
+        }
+        array_free(&lines);
+    }
+    token_list_free(c.list);
     arena_free(&a);
 }

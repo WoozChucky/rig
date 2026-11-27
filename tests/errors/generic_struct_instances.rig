@@ -1,0 +1,17 @@
+// Errors inside instances of generic structs (issue #227, spec 3.23,
+// 7.11), each followed by the instances it's in, innermost first, and
+// where each was used or called. Ring(int, -2), used in main, has a
+// negative count: one line of chain. Ring(int, -1), used in make's result
+// for T = int, made by main's call: two lines, the struct instance's and
+// the procedure instance's; make's body's Ring(T, -1) is the same
+// instance and says nothing more. Bad(u8) holds a Bad(u8): it contains
+// itself, said at the generic's name, with its instance's line.
+Ring :: struct (T: Type, N: int) { items: [N]T; }
+Bad :: struct (T: Type) { b: Bad(T); }
+make :: (v: $T) -> Ring(T, -1) { r: Ring(T, -1); return r; }
+
+main :: () {
+    a: Ring(int, -2);
+    b: Bad(u8);
+    c := make(1);
+}
