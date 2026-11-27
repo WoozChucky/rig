@@ -449,7 +449,8 @@ enum Ir_Var_Kind : u8 {
     IR_VAR_SLOT,      // in memory, a stack slot: value is the IR_LOCAL's result, its address
                       // (a local's, or a scalar parameter's)
     IR_VAR_ADDRESS,   // an aggregate parameter: value is the ptr parameter holding its address
-                      // (the caller's copy)
+                      // (the caller's copy); or a #modify block's variable (spec 7.12): value
+                      // is its slot's address in the bindings block (lower_body)
     IR_VAR_CONSTANT,  // a constant that is a number, a bool or null: no storage, its value is
                       // Ir_Var.constant; value is unused (-1)
     IR_VAR_GLOBAL,    // a constant in read-only data (data, or a pointer to a literal): value

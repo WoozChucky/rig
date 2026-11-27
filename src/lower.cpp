@@ -5133,8 +5133,10 @@ static void emit_startup_context(Lowering *l, bool saves_command_line, Position 
 }
 
 // The body of procedure `source` (not a foreign or #compiler one), lowered
-// into module->procs[index]: the procedure declare_proc made for it, or the
-// run.N of a #run { } (ir_lower_run, `is_run`).
+// into module->procs[index]: the procedure declare_proc made for it, the
+// run.N of a #run { } (ir_lower_run, `is_run`), or the modify.N of a
+// #modify block (ir_lower_modify, `is_run` too, its variables in the
+// bindings block).
 static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     l->proc = l->module->procs[index];
     l->block = ir_new_block(l->arena, l->proc);

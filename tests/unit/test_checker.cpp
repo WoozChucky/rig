@@ -16223,6 +16223,15 @@ TEST(modify_maps_given_bindings_to_one_instance) {
     CHECK_EQ(widen->modify->runs.count, 3);
     const char *names[] = {"a", "b", "c", "d"};
     for (const char *name : names) CHECK_STR(type_of_main_local(&a, file, name), "int");
+    // The instance is named and chained by the bindings the block leaves,
+    // T = int, not the u8 given, and called at the use that made it: the
+    // u8 call, not the int one that finds it made. Its mistake is said once.
+    CHECK_STR(check_with_preload(&a,
+                                 "widen :: (v: $T) -> T #modify { if T == u8 { T = int; } return true; } "
+                                 "{ x: T = \"s\"; return v; }\n"
+                                 "main :: () { a := widen(cast(u8) 1); b := widen(2); }\n"),
+              "1:81: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "    in 'widen' with T = int, called at test.rig:2:19\n");
     arena_free(&a);
 }
 
