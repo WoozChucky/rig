@@ -33,6 +33,14 @@ void diag_error(Diagnostics *d, Position pos, const char *fmt, ...) {
     d->error_count++;
 }
 
+void diag_withdraw(Diagnostics *d, s64 index) {
+    RIG_ASSERT(index >= 0 && index < d->messages.count);
+    // Its text stays in the arena, freed with the rest.
+    for (s64 i = index; i + 1 < d->messages.count; i++) d->messages[i] = d->messages[i + 1];
+    d->messages.count--;
+    d->error_count--;
+}
+
 void diag_add_lines(Diagnostics *d, String lines) {
     RIG_ASSERT(d->messages.count > 0);
     d->messages[d->messages.count - 1].lines = string_copy(&d->arena, lines);

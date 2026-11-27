@@ -91,6 +91,12 @@ void diag_locate_file(Diagnostics *d, s32 file, String directory, bool windows);
 // one is set (Diagnostics.context), copied.
 void diag_error(Diagnostics *d, Position pos, const char *fmt, ...);
 
+// Withdraws error `index` (Diagnostics.messages'), said before it was known
+// to repeat another: the ones after it move down one, and error_count goes
+// down one. Several are withdrawn from the highest index down, so the
+// others' indices hold.
+void diag_withdraw(Diagnostics *d, s64 index);
+
 // Gives the error reported last these lines, copied: each ends with a line
 // break, and they're printed after its caret (Diagnostic.lines).
 void diag_add_lines(Diagnostics *d, String lines);

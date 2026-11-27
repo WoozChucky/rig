@@ -835,6 +835,7 @@ Ast *ast_clone(Arena *a, Ast *node) {
         to->name = from->name;
         to->value = ast_clone(a, from->value);
         to->levels = from->levels;
+        to->end = from->end;
         return to;
     }
     case AST_ASSIGN: {

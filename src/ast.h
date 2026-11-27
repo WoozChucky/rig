@@ -375,6 +375,11 @@ struct Ast_Const : Ast {
     bool had_errors;      // a top-level one's check (resolve_global) reported an error, as Ast_Var's
     Ast_Alias *alias;     // its value names a type (spec 3.22): the alias the checker made of it, at its
                           // name, which every lookup finds in its place; null for any other constant
+    Position end;         // its ';': the messages from its name to here are its declaration's own
+                          // (checker.cpp's withdraw_repeated_not_a_type); {} for one parse_constant
+                          // doesn't make: an enum's member, which no type name finds, and a constant
+                          // parameter's binding or OS, whose type is set, so no note of theirs is
+                          // withdrawn
 };
 
 // A field of a struct or a member of a union: `x: float;`, at its name. Its
@@ -886,6 +891,15 @@ enum System : u8 { SYSTEM_NONE = 0, SYSTEM_WINDOWS = 1, SYSTEM_LINUX = 2 };
 // The system rig runs on (_WIN32 decides, as load.cpp's HOST_IS_WINDOWS).
 System host_system();
 
+// A "'X' is not a type" said of constant X where a type is written: X, and
+// the message's index in the Diagnostics, so check() can withdraw it once X
+// turns out to have failed by a mistake of its own (checker.cpp's
+// withdraw_repeated_not_a_type).
+struct Constant_Not_A_Type {
+    Ast_Const *constant;
+    s64 message;
+};
+
 // A parsed file, or the files of a program parsed into one (parse_into):
 // their declarations, in source order, broken ones included; a file's
 // declarations come after those of the files loaded before it (load
@@ -984,6 +998,12 @@ struct Ast_File {
     // No later stage goes through them: lowering and the backend find each
     // through the types that use it.
     Array<Ast_Instance *> struct_instances;
+    // Each "'X' is not a type" said of a constant X where a type is
+    // written, in the order said (Constant_Not_A_Type): kept on the tree,
+    // not the Checker, so a decider's notes (a struct a top-level #if's
+    // condition lays out) wait for check() too, which withdraws the ones
+    // that repeat X's own mistake and frees the list.
+    Array<Constant_Not_A_Type> constants_not_types;
 };
 
 // Whether node e was written in parentheses, (e): they leave no node, but

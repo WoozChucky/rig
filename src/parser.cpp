@@ -975,6 +975,7 @@ static Ast *parse_constant(Parser *p, Token *name) {
     take_deepest(p);
     constant->value = proc_type_alias_follows(p, 0) ? parse_type_value(p, peek(p)) : parse_expression(p, 1);
     constant->levels = take_deepest(p);
+    constant->end = peek(p)->pos;
     if (!constant->value || !expect(p, TOKEN_SEMICOLON)) return nullptr;
     return constant;
 }

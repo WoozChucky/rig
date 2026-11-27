@@ -200,17 +200,21 @@ static Type *resolve_proc_type(Checker *c, Ast_Type *written) {
 // worked out here if it isn't yet (resolve_struct), or an enum's, whose
 // Type has its size from the start (declare_top_level), its members' values
 // worked out only where they're needed (resolve_enum). Any other name
-// declared where the type is written isn't a type ("'foo' is not a type"),
-// and a name declared nowhere is "unknown type 'foo'", unless a #load or a
-// top-level #if's condition failed: the missing file, or the branches never
-// decided, may declare it (Checker.lost_a_file). A decider says instead, of
-// a name a top-level #if's branch declares, "'foo' is declared in a
-// top-level #if, so it can't decide another top-level #if"
-// (check_in_a_branch). A broken entry's name may have been anything, so
-// nothing is said about it. A struct found to contain itself has no type:
-// its uses say nothing more. A generic struct's name alone is no type (spec
-// 3.23): "'Map' is generic; write its arguments, as in Map(K, V)". An
-// instance of one, Map(string, int), is the instance's struct
+// declared where the type is written isn't a type ("'foo' is not a type"):
+// a constant's is taken back at the end of check() when the constant's own
+// declaration said a mistake, which it would only repeat. That's decided
+// there, not at the use, which may come before the constant is worked out,
+// so the order of the declarations changes nothing
+// (withdraw_repeated_not_a_type). A name declared nowhere is "unknown type
+// 'foo'", unless a #load or a top-level #if's condition failed: the missing
+// file, or the branches never decided, may declare it (Checker.lost_a_file).
+// A decider says instead, of a name a top-level #if's branch declares,
+// "'foo' is declared in a top-level #if, so it can't decide another
+// top-level #if" (check_in_a_branch). A broken entry's name may have been
+// anything, so nothing is said about it. A struct found to contain itself
+// has no type: its uses say nothing more. A generic struct's name alone is
+// no type (spec 3.23): "'Map' is generic; write its arguments, as in Map(K,
+// V)". An instance of one, Map(string, int), is the instance's struct
 // (check_generic.cpp's check_written_instance), laid out here as a
 // struct's name's is. In an instance of a generic procedure, a type
 // parameter's name is the type it's bound to (spec 7.11, Ast_Alias), and a
@@ -323,9 +327,17 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
         // nothing more. One find_name left as it is, which is no alias
         // (may_be_alias, `K :: g;` with g a variable), is no type, as is a
         // call of anything but a generic struct, `K :: f(1);` with f a
-        // procedure (may_call_instance), whether worked out yet or not.
+        // procedure (may_call_instance), whether worked out yet or not: the
+        // branch below says so, and takes it back at the end of check() if
+        // the constant's own declaration said a mistake.
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
+        // A constant's is recorded: whether its own declaration fails is
+        // known only once it's worked out, maybe later, and then this
+        // repeats that mistake (withdraw_repeated_not_a_type).
+        if (decl->kind == AST_CONST) {
+            array_add(&c->file->constants_not_types, {(Ast_Const *)decl, c->diag->messages.count - 1});
+        }
     }
     return nullptr;
 }
@@ -502,7 +514,9 @@ static bool may_be_alias(Checker *c, Ast_Const *constant) {
 // be used before its declaration, in a struct's field or a global's type
 // too. Any other constant is never an alias, so its value isn't worked out
 // here: `S :: struct { a: C; } C :: size_of(S);` and `S :: struct { a: C; }
-// C :: D; D :: size_of(S);` are "'C' is not a type", no circle.
+// C :: D; D :: size_of(S);` are "'C' is not a type", no circle. When C's
+// own declaration fails, `C :: size_of(S) + "a";`, only its mistake is
+// said: the note is withdrawn at the end (withdraw_repeated_not_a_type).
 static Ast *find_name(Checker *c, String name) {
     for (s64 i = c->scopes.count - 1; i >= 0; i--) {
         Ast **found = table_get(&c->scopes[i], name);
@@ -4089,8 +4103,68 @@ bool check_in_a_branch(Checker *c, String name, Position at) {
     return found;
 }
 
+// Whether `at` is inside constant k's declaration: k's file, from k->pos,
+// its name, to k->end, its ';', both included.
+static bool inside_declaration(Position at, Ast_Const *k) {
+    if (at.file != k->pos.file) return false;
+    bool from_name = at.line != k->pos.line ? at.line > k->pos.line : at.col >= k->pos.col;
+    bool to_end = at.line != k->end.line ? at.line < k->end.line : at.col <= k->end.col;
+    return from_name && to_end;
+}
+
+// At the end of check(): withdraws each "'X' is not a type" recorded of a
+// constant (Ast_File.constants_not_types, resolve_type_name) whose
+// constant has no type and whose declaration holds an error that is no
+// recorded note: X's own mistake, said there, which the note only repeats
+// (`X :: 1 + "a";`, `X :: (int);`). It's decided here, from the final
+// state alone, so the outcome never depends on the order of the
+// declarations, and nothing the checker did between the note and here
+// changes (had_errors, a generic struct's refusals). A note is no
+// constant's own mistake, said of itself, `X :: cast(X) 1;`, or of
+// another, `X :: cast(Y) 1;`; nor is a mistake in another declaration its
+// value names, `X :: K + 1;` with `K :: 1 + "a";`; and a constant that
+// fails only through its use, a circle through a struct's field, `S ::
+// struct { a: C; } g: S; C :: g.a;`, has none: their notes stay. The notes
+// are withdrawn from the last down, so each one's index holds
+// (diag_withdraw); nothing sorts the messages before (the driver prints
+// them only once check() is done). Frees the list. Returns how many of the
+// notes it withdrew were said before check() began, index < said_before: a
+// decider's, which check()'s return leaves out.
+static s64 withdraw_repeated_not_a_type(Checker *c, s64 said_before) {
+    Ast_File *file = c->file;
+    Diagnostics *d = c->diag;
+    Array<bool> is_note = {};
+    array_reserve(&is_note, d->messages.count);
+    for (s64 i = 0; i < d->messages.count; i++) array_add(&is_note, false);
+    for (s64 i = 0; i < file->constants_not_types.count; i++) is_note[file->constants_not_types[i].message] = true;
+    // Which to withdraw, decided first, while every index is still the
+    // message's: withdrawing moves the ones after it.
+    Array<bool> withdraw = {};
+    array_reserve(&withdraw, file->constants_not_types.count);
+    for (s64 i = 0; i < file->constants_not_types.count; i++) {
+        Ast_Const *constant = file->constants_not_types[i].constant;
+        bool own_mistake = false;
+        for (s64 m = 0; m < d->messages.count && !constant->type && !own_mistake; m++) {
+            own_mistake = !is_note[m] && inside_declaration(d->messages[m].pos, constant);
+        }
+        array_add(&withdraw, own_mistake);
+    }
+    s64 withdrawn_before = 0;
+    for (s64 i = file->constants_not_types.count - 1; i >= 0; i--) {
+        if (!withdraw[i]) continue;
+        s64 message = file->constants_not_types[i].message;
+        diag_withdraw(d, message);
+        if (message < said_before) withdrawn_before++;
+    }
+    array_free(&withdraw);
+    array_free(&is_note);
+    array_free(&file->constants_not_types);
+    return withdrawn_before;
+}
+
 bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     s64 errors_before = d->error_count;
+    s64 said_before = d->messages.count;  // the messages said before, a decider's among them
     Checker c = {};
     c.arena = a;
     c.diag = d;
@@ -4238,7 +4312,12 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
         if (!m->body) diag_error(d, m->pos, "'main' must have a body: it's where the program starts");
     }
 
+    // Last, the notes that repeat a constant's own mistake are withdrawn,
+    // the ones a decider said too: its notes wait for this. One the decider
+    // said was counted in errors_before, so it's added back: check() says
+    // whether it said an error of its own.
+    s64 withdrawn_before = withdraw_repeated_not_a_type(&c, said_before);
     free_checker_fields(&c);
     if (!world) compile_time_free(c.world);
-    return d->error_count == errors_before;
+    return d->error_count + withdrawn_before == errors_before;
 }
