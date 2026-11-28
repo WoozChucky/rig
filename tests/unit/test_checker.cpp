@@ -15881,6 +15881,7 @@ TEST(modify_block_mistakes) {
         {"#if T == int { }", false, 35, "the condition of '#if' must be known while compiling"},
         {"x: T;", false, 34, variable},
         {"s := size_of(T);", false, 44, variable},
+        {"a: []T;", false, 36, variable},
         {"p := *T;", false, 37, "can't take the address of 'T': it's a 'Type'"},
         {"a: Any = T;", false, 40, "a value of type 'Type' can't be an 'Any'; type_info(T) describes the type"},
         {"t: Type;", false, 31, "a variable of type 'Type' needs a value, as in t := int;"},
@@ -15916,6 +15917,10 @@ TEST(modify_block_mistakes) {
                       string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, k.message)));
         }
     }
+    // An inner block's declaration may hide a variable, as anywhere.
+    CHECK_STR(check_with_preload(&a, "f :: (values: []$T) #modify { { T := 1; T = 2; } return true; } { }\n"
+                                     "main :: () { a: []int; f(a); }\n"),
+              "");
     arena_free(&a);
 }
 
@@ -16333,6 +16338,16 @@ TEST(modify_refuses_at_each_use) {
                                             "main :: () { wrap(1); }\n")),
               "6:19: 'sum' refused T = string: sum needs numbers\n"
               "    in 'wrap' with T = int, called at test.rig:7:14\n");
+    // A refusal names the bindings given, not those the block left.
+    CHECK_STR(check_with_preload(&a,
+                                 "nope :: (v: $T) #modify { if T == u8 { T = int; } return false, \"no\"; } { }\n"
+                                 "main :: () { nope(cast(u8) 1); nope(cast(u8) 2); }\n",
+                                 &file),
+              "2:14: 'nope' refused T = u8: no\n"
+              "2:32: 'nope' refused T = u8: no\n");
+    Ast_Proc *nope = (Ast_Proc *)top_level_named(file, "nope");
+    CHECK_EQ(nope->modify->runs.count, 1);
+    CHECK_EQ(nope->instances.count, 0);
     arena_free(&a);
 }
 
@@ -16514,6 +16529,17 @@ TEST(modify_struct_mistakes) {
     CHECK_EQ(box->modify->runs.count, 1);
     CHECK_EQ(box->instances.count, 0);
     CHECK_EQ(((Ast_Struct *)top_level_named(file, "Grow"))->instances.count, 0);
+    // A refusal names the arguments given, not those the block left.
+    CHECK_STR(check_with_preload(&a,
+                                 "Nope :: struct (T: Type) #modify { if T == u8 { T = int; } return false, \"no\"; } "
+                                 "{ v: T; }\n"
+                                 "main :: () { x: Nope(u8); y: Nope(u8); }\n",
+                                 &file),
+              "2:17: 'Nope' refused T = u8: no\n"
+              "2:30: 'Nope' refused T = u8: no\n");
+    Ast_Struct *nope = (Ast_Struct *)top_level_named(file, "Nope");
+    CHECK_EQ(nope->modify->runs.count, 1);
+    CHECK_EQ(nope->instances.count, 0);
     // A struct's block that fails as it runs is said once for each set of
     // arguments given, at the #modify, with its frames, then the line of
     // the instance they would have made, `used at`, and its chain: x's

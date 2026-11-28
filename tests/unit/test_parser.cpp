@@ -5084,7 +5084,8 @@ TEST(modify_syntax_mistakes) {
     // #modify is a generic's: after a signature that declares no '$', after
     // a struct with no parameters, or after a union, it's refused at the
     // directive. Written twice, the second is said; any other directive
-    // after the block is where the body's '{' goes. Each gives the
+    // after the block is where the body's '{' goes, but for a #load or an
+    // #import, which can only be at the top level. Each gives the
     // declaration up.
     Arena a = arena_make();
     String errors;
@@ -5104,6 +5105,10 @@ TEST(modify_syntax_mistakes) {
         {"B :: struct (T: Type) #modify { return true; } #modify { return true; } { a: T; }\n",
          "'#modify' is written twice", 48},
         {"h :: (a: $T) #modify { return true; } #no_abc { }\n", "expected '{', found directive", 39},
+        {"S :: struct (T: Type) #modify { return true; } #no_abc { v: T; }\n", "expected '{', found directive", 48},
+        {"g :: (a: $T) #modify { return true; } #load \"x.rig\";\n", "#load can only be at the top level", 39},
+        {"B :: struct (T: Type) #modify { return true; } #import \"Basic\";\n", "#import can only be at the top level",
+         48},
     };
     for (const Case &k : cases) {
         parse_src(&a, k.text, &errors);
