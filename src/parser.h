@@ -225,10 +225,11 @@
 // (Ast_Modify). Anywhere else after a signature or a struct's keyword it's
 // "#modify is for a generic procedure or struct, as in sum :: (values:
 // []$T) -> T #modify { ... } { ... }"; written twice, "'#modify' is written
-// twice"; and any other directive after it is "expected '{'", but a #load
-// or an #import, "#load can only be at the top level", as after a
-// signature. Elsewhere it is no directive the grammar has: "expected an
-// expression, found directive", and so on, as for #type.
+// twice"; and any other directive after it is "expected '{'", but a #load,
+// "#load can only be at the top level", and an #import, "#import can only
+// be at the top level", as after a signature. Elsewhere it is no directive
+// the grammar has: "expected an expression, found directive", and so on,
+// as for #type.
 //
 // A procedure the compiler does itself, while compiling (spec 7.9), is
 // declared with #compiler after its signature, Jai's directive, and a ';'
