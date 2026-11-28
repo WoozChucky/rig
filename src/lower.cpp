@@ -345,9 +345,10 @@
 //   names it (proc_index_of: a call, a procedure value, a global's
 //   relocation), and its body joins `waiting`; a global is made the first
 //   time a body uses it (address_of). ir_lower_run lowers the run's own
-//   procedure, then the waiting bodies, first in, first out, each of which
-//   may queue more: a run's procedure comes with everything it can call,
-//   and a procedure two runs reach is lowered once, its globals shared.
+//   procedure, and ir_lower_modify a #modify block's, then the waiting
+//   bodies (lower_waiting), first in, first out, each of which may queue
+//   more: a run's procedure comes with everything it can call, and a
+//   procedure two runs reach is lowered once, its globals shared.
 // - The helpers come first, whole: __rig_bounds_failed (index 0),
 //   __rig_string_equal (index 1) and __rig_no_case (index 2), made by
 //   ir_lowering_new, so none waits on checks lowered later. The bounds
@@ -364,10 +365,19 @@
 //   starts as main does, calling __runtime_init, then with the world's
 //   default_context as its context: only the world's first call sets it
 //   up, so every run has the same one.
+// - A #modify block's procedure, modify.N (spec 7.12, ir_lower_modify),
+//   made once per block, starts as a run's does. Its results are its
+//   block's, bool and string, and its one other parameter is the address
+//   of the bindings block, where its variables live, a slot each
+//   (lower_body). A Type value, which only its code has, is a handle:
+//   the type's description's address when the block describes types,
+//   otherwise the Type * itself (lower_type_value).
 // - Compile-time code never reaches the program: it is lowered into its
-//   own module, and the program's ir_lower never lowers a run's code. What
-//   a #run gives the program is its value, baked into the tree, which
-//   ir_lower lowers as it would a constant's (lower_expr's AST_RUN).
+//   own module, and the program's ir_lower never lowers a run's code, nor
+//   a #modify block's. What a #run gives the program is its value, baked
+//   into the tree, which ir_lower lowers as it would a constant's
+//   (lower_expr's AST_RUN); what a #modify block gives it is which
+//   instances it has.
 
 #include "checker.h"
 #include "ir.h"
@@ -484,6 +494,8 @@ struct Lowering {
     // something needs it (type_info_global) and filled by a worklist
     // (describe_type), so a chain or a cycle of types needs no recursion.
     Table<s32> type_infos;                  // each type's description's index, by pointer_key of its Type
+    Array<Type *> described_types;          // the other way: each global's type, by the global's index, null
+                                            // for one that's no description (ir_lowering_described)
     Array<Pending_Description> describing;  // made, waiting to be filled, first in first out
     s64 described;                          // describing's next to fill
     s32 type_info_count;                    // the type_info.N made so far
@@ -546,8 +558,15 @@ struct Lowering {
     // it, rather than the whole program up front.
     bool on_demand;
     Array<s32> waiting;         // on demand: procedures declared whose bodies wait to be lowered,
-                                // first in, first out (ir_lower_run)
+                                // first in, first out (lower_waiting, after ir_lower_run's or
+                                // ir_lower_modify's own procedure)
     s32 run_count;              // the run.N procedures made so far
+    // #modify blocks (spec 7.12), on demand: each block's modify.N, made
+    // once (ir_lower_modify), and the block whose body is being lowered,
+    // the only code with Type values (lower_type_value); null otherwise.
+    Table<s32> modify_procs;    // each block's procedure's index, by pointer_key of its Ast_Modify
+    s32 modify_count;           // the modify.N procedures made so far
+    Ast_Modify *modify;
 };
 
 // The `pos` and `scope` the next instructions get.
@@ -567,6 +586,10 @@ static Ir_Type ir_type_of(Type *t) {
     if (t->kind == TYPE_POINTER || t->kind == TYPE_NULL) return IR_PTR;
     // A procedure value is the address of the procedure's code.
     if (t->kind == TYPE_PROC) return IR_PTR;
+    // A Type value, only ever a #modify block's while it runs (spec 7.12),
+    // is a handle: the type's description's address, or its Type * itself
+    // (lower_type_value).
+    if (t->kind == TYPE_TYPE) return IR_PTR;
     if (type_is_aggregate(t)) return IR_PTR;
     if (t->kind == TYPE_FLOAT) return t->size == 4 ? IR_F32 : IR_F64;
     t = type_integer_of(t);
@@ -811,7 +834,7 @@ static s32 add_bytes(Lowering *l, String bytes) {
     g.name = string_printf(l->arena, "str.%d", l->string_count++);
     g.type = IR_VOID;
     u8 *copy = (u8 *)arena_alloc(l->arena, bytes.count + 1, 1);
-    memcpy(copy, bytes.data, (size_t)bytes.count);  // arena memory is zeroed: the last byte is 0
+    if (bytes.count) memcpy(copy, bytes.data, (size_t)bytes.count);  // arena memory is zeroed: the last byte is 0
     g.bytes = {copy, bytes.count + 1};
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
@@ -2103,9 +2126,38 @@ static s32 lower_literal(Lowering *l, Ast_Literal *literal) {
     return temporary;
 }
 
+// A Type value (spec 7.12), which only a #modify block's code has, held as
+// a handle while the block runs. A variable's is read from its place, as
+// any variable's. A written type's, whose Type * the checker keeps in
+// Ast.constant, is the type's description's address when the block
+// describes types (Ast_Modify.describes), the read-only global
+// type_info_global makes, so type_info(t) is t itself; and otherwise the
+// Type * itself, an opaque handle, made from its bits, since a ptr
+// constant is only ever null:
+//
+//     %n = const i64 TYPE
+//     %t = inttoptr i64 %n to ptr
+//
+// Either way a type has one handle, every type existing once, so == and
+// != compare handles (lower_expr's AST_BINARY).
+static s32 lower_type_value(Lowering *l, Ast *e) {
+    RIG_ASSERT(l->modify);
+    Ast *decl = e->kind == AST_NAME ? ((Ast_Name *)e)->decl : nullptr;
+    if (decl && decl->kind == AST_VAR) return emit_get(l, e->type, address_of(l, decl));
+    Type *t = (Type *)(uintptr_t)e->constant;
+    if (l->modify->describes) {
+        Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
+        addr->target = type_info_global(l, t);
+        return addr->result;
+    }
+    return emit_convert(l, IR_INTTOPTR, IR_I64, emit_constant(l, IR_I64, (u64)(uintptr_t)t), IR_PTR);
+}
+
 // The value of an expression the checker didn't mark constant, of its own
-// type. Returns the value's number (-1 for a call that returns nothing).
+// type. Returns the value's number (-1 for a call that returns nothing). A
+// Type value is a #modify block's handle (lower_type_value).
 static s32 lower_expr(Lowering *l, Ast *e) {
+    if (e->type == &type_type) return lower_type_value(l, e);
     switch (e->kind) {
     case AST_STRING: {
         // A string: a view of the literal's bytes, their count without the
@@ -2198,7 +2250,8 @@ static s32 lower_expr(Lowering *l, Ast *e) {
         if (e->type == &type_bool) {
             // A comparison: both operands at the type they meet at (the
             // checker's operand_type), then a cmp (an fcmp for floats),
-            // which gives the i1.
+            // which gives the i1. Two Type values in a #modify block (spec
+            // 7.12) are two handles, ptrs, compared as pointers are.
             Type *t = b->operand_type;
             s32 left = lower_value(l, b->left, t);
             s32 right = lower_value(l, b->right, t);
@@ -2239,7 +2292,12 @@ static s32 lower_expr(Lowering *l, Ast *e) {
     case AST_TYPE_INFO: {
         // type_info(T): the address of T's description, a read-only
         // global made the first time anything needs it (type_info_global).
-        s32 global = type_info_global(l, ((Ast_Type_Info *)e)->described);
+        // In a #modify block, type_info(t) of a Type value t (spec 7.12) is
+        // t's handle itself: a block that takes one describes types, so
+        // each is held as its description's address (lower_type_value).
+        Ast_Type_Info *info = (Ast_Type_Info *)e;
+        if (info->of) return lower_expr(l, info->of);
+        s32 global = type_info_global(l, info->described);
         Ir_Instr *addr = emit(l, IR_ADDR, IR_PTR);
         addr->target = global;
         return addr->result;
@@ -4060,6 +4118,8 @@ static s32 type_info_global(Lowering *l, Type *t) {
     String name = string_printf(l->arena, "type_info.%d", l->type_info_count++);
     s32 global = add_type_info_global(l, name, type_info_size(type_info_tag(t)), {}, {});
     table_put(&l->type_infos, string_copy(l->arena, key), global);
+    while (l->described_types.count <= global) array_add(&l->described_types, (Type *)nullptr);
+    l->described_types[global] = t;
     // The one filling it is the call that found the queue empty: describing
     // counts the one being filled until it's done.
     bool outermost = l->described == l->describing.count;
@@ -5079,8 +5139,10 @@ static void emit_startup_context(Lowering *l, bool saves_command_line, Position 
 }
 
 // The body of procedure `source` (not a foreign or #compiler one), lowered
-// into module->procs[index]: the procedure declare_proc made for it, or the
-// run.N of a #run { } (ir_lower_run, `is_run`).
+// into module->procs[index]: the procedure declare_proc made for it, the
+// run.N of a #run { } (ir_lower_run, `is_run`), or the modify.N of a
+// #modify block (ir_lower_modify, `is_run` too, its variables in the
+// bindings block).
 static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
     l->proc = l->module->procs[index];
     l->block = ir_new_block(l->arena, l->proc);
@@ -5152,6 +5214,23 @@ static void lower_body(Lowering *l, Ast_Proc *source, s32 index, bool is_run) {
         array_add(&l->locals, {(Ast *)param, slot});
         array_add(&l->proc->vars, Ir_Var{param->name, param->type, param->pos, 0, IR_VAR_SLOT, slot, arg, 0, false});
     }
+    // A #modify block's variables (spec 7.12) live in the bindings block,
+    // the one parameter after the hidden pointer to its message
+    // (ir_lower_modify): each in a slot of MODIFY_SLOT_SIZE bytes there, in
+    // order, which the run fills with the bindings given and reads back
+    // once the block returns (run.cpp's compile_time_modify). Each is a
+    // variable at its address, as an aggregate parameter is, but a local
+    // one, arg 0: none is a parameter of the procedure.
+    if (source->modify_of) {
+        RIG_ASSERT(from != CONTEXT_PARAM && hidden == 1);
+        Array<Ast_Var *> &vars = source->modify_of->vars;
+        for (s64 k = 0; k < vars.count; k++) {
+            Ast_Var *var = vars[k];
+            s32 address = emit_field_address(l, hidden, k * MODIFY_SLOT_SIZE);
+            array_add(&l->locals, {(Ast *)var, address});
+            array_add(&l->proc->vars, Ir_Var{var->name, var->type, var->pos, 0, IR_VAR_ADDRESS, address, 0, 0, false});
+        }
+    }
     if (from == CONTEXT_STARTUP) emit_startup_context(l, !is_run && takes_command_line(l, source), source->pos);
     place(l, source->body->pos, body_scope);
     lower_block(l, source->body, source);
@@ -5187,6 +5266,8 @@ static void release_lowering(Lowering *l) {
     table_free(&l->constant_index);
     table_free(&l->used_foreign);
     table_free(&l->type_infos);
+    array_free(&l->described_types);
+    table_free(&l->modify_procs);
     array_free(&l->describing);
     array_free(&l->pending_constants);
     array_free(&l->locals);
@@ -5357,6 +5438,16 @@ Lowering *ir_lowering_new(Ir_Module *m, Diagnostics *d, Arena *a, Ast_File *file
     return l;
 }
 
+// On demand, the bodies of what the procedure just lowered named, and of
+// what those name, in the order they were declared.
+static void lower_waiting(Lowering *l) {
+    for (s64 i = 0; i < l->waiting.count; i++) {
+        s32 k = l->waiting[i];
+        lower_body(l, l->sources[k], k, false);
+    }
+    l->waiting.count = 0;
+}
+
 s32 ir_lower_run(Lowering *l, Ast_Run *run) {
     RIG_ASSERT(l->on_demand && run->checked);
     Ir_Module *m = l->module;
@@ -5409,14 +5500,47 @@ s32 ir_lower_run(Lowering *l, Ast_Run *run) {
             }
         }
     }
-    // Then the bodies of what it named, and of what those name, in the
-    // order they were declared.
-    for (s64 i = 0; i < l->waiting.count; i++) {
-        s32 k = l->waiting[i];
-        lower_body(l, l->sources[k], k, false);
-    }
-    l->waiting.count = 0;
+    lower_waiting(l);
     return index;
+}
+
+s32 ir_lower_modify(Lowering *l, Ast_Modify *modify) {
+    RIG_ASSERT(l->on_demand && modify->resolve == RESOLVE_DONE && !modify->had_errors);
+    const void *node = modify;
+    String key = pointer_key(&node);
+    s32 *found = table_get(&l->modify_procs, key);
+    if (found) return *found;
+    Ir_Module *m = l->module;
+    Ir_Proc *p = ir_new_proc(m, l->arena, string_printf(l->arena, "modify.%d", l->modify_count++));
+    s32 index = (s32)(m->procs.count - 1);
+    table_put(&l->modify_procs, string_copy(l->arena, key), index);
+    p->source_name = str("#modify");
+    p->pos = modify->pos;
+    Ast_Proc *source = modify->proc;
+    p->body = source->body->pos;
+    // Its results, bool and string, as a procedure's are (declare_proc):
+    // the string through the hidden pointer, %0, the bool the IR's one
+    // result. Then the bindings block's address, %1, where its variables
+    // live (lower_body). It takes no context: it starts with the default
+    // one, as a run's procedure does (lower_body's CONTEXT_STARTUP).
+    ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    ir_add_param(p, IR_PTR, IR_EXT_NONE);
+    array_add(&p->results, {ir_type_of(&type_bool), ir_ext_of(&type_bool)});
+    for (s64 k = 0; k < source->results.count; k++) array_add(&p->source_results, source->results[k]->type);
+    l->modify = modify;
+    lower_body(l, source, index, true);
+    l->modify = nullptr;
+    lower_waiting(l);
+    return index;
+}
+
+s32 ir_lowering_type_info(Lowering *l, Type *t) {
+    RIG_ASSERT(l->on_demand);
+    return type_info_global(l, t);
+}
+
+Type *ir_lowering_described(Lowering *l, s32 global) {
+    return global >= 0 && global < l->described_types.count ? l->described_types[global] : nullptr;
 }
 
 Ast_Proc *ir_lowering_source(Lowering *l, s32 proc) {

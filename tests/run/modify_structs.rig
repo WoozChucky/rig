@@ -1,0 +1,56 @@
+// #modify on generic structs (issue #228, spec 7.12, 3.23): a struct's
+// block runs while compiling, once for each set of arguments its written
+// types give, before an instance is made, and may change them; the
+// instance is the one for the bindings it leaves, named by them wherever
+// it's written. Box gives u8 the instance of int, so a Box(u8) holds
+// 200 * 2 without wrapping, is a Box(int), and its type information says
+// so; Ring makes a count below 1 one, so Ring(int, 0) holds one int, 8
+// bytes. List gives u8 the instance of int too: its field next: *List(T),
+// T being int there, gives the block int, which it leaves as it is, so
+// it finds the instance being made, which two List(u8) nodes, linked,
+// are. The same compiled, interpreted and in a top-level #run, whose
+// Box(u8) holds 7 and adds 1000 to it, which a u8 couldn't take.
+#import "Basic";
+
+Box :: struct (T: Type) #modify {
+    if T == u8 { T = int; }
+    return T != string, "no strings in a box";
+} {
+    v: T;
+}
+
+Ring :: struct (T: Type, N: int) #modify {
+    if N < 1 { N = 1; }
+    return true;
+} {
+    items: [N]T;
+}
+
+List :: struct (T: Type) #modify {
+    if T == u8 { T = int; }
+    return true;
+} {
+    value: T;
+    next: *List(T);
+}
+
+#run {
+    b: Box(u8) = .{7};
+    print("{}\n", b.v + 1000);
+}
+
+main :: () {
+    a: Box(u8) = .{200};
+    print("{}\n", a.v * 2);
+    print("{} {}\n", size_of(Ring(int, 0)), (cast(*Type_Info_Struct) type_info(Box(u8))).name);
+
+    second: List(u8) = .{2, null};
+    first: List(u8) = .{1, *second};
+    node := *first;
+    while node != null {
+        print("{}", node.value);
+        node = node.next;
+        if node != null { print(" "); }
+    }
+    print("\n");
+}

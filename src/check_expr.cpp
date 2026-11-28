@@ -482,11 +482,19 @@ static void convert_array_literal(Checker *c, Ast_Literal *literal, Type *to) {
 // ("this literal's type isn't known; write it before the '.', as in
 // Vec2.{1, 2}", check_default_type), nor has a member without its enum,
 // .FREE ("this member's enum isn't known; write it with its enum, as in
-// Mode.FREE"): each is left with no type.
+// Mode.FREE"): each is left with no type. Nor does a value of type Type,
+// in a #modify block (spec 7.12): no Any holds a type, but its description
+// says what the type is, "a value of type 'Type' can't be an 'Any';
+// type_info(T) describes the type", at the value.
 static void convert_to_any(Checker *c, Ast *e) {
     if (e->type == &type_null) e->type = type_pointer_to(&type_void);
     check_default_type(c, e);
     if (!e->type) return;
+    if (e->type == &type_type) {
+        diag_error(c->diag, e->start, "a value of type 'Type' can't be an 'Any'; type_info(T) describes the type");
+        e->type = nullptr;
+        return;
+    }
     e->to_any = expr_is_place(e) ? ANY_PLACE : ANY_COPY;
 }
 
@@ -895,6 +903,9 @@ void check_default_type(Checker *c, Ast *e) {
 }
 
 Type *check_value(Checker *c, Ast *e) {
+    // In a #modify block (spec 7.12), a written type is a value wherever a
+    // value goes, of type Type: `T = s64;`, `t := int;`.
+    if (c->modify && expr_names_type(c, e)) return check_type_value(c, e) ? &type_type : nullptr;
     Type *t = check_expression(c, e);
     if (t == &type_void) {
         // Only a call has type void.
@@ -1822,10 +1833,24 @@ static Type *overflows(Checker *c, Ast *e) {
 // on a constant flips it. * takes an address: *x is a *T for an x of type
 // T that has one (check_addressable), never a constant. ~ also flips the
 // flags of a flags value (spec 3.18), wrapping as its integer type does;
-// ~.A waits for its flags type as .A does (check_convert).
+// ~.A waits for its flags type as .A does (check_convert). In a #modify
+// block (spec 7.12), a variable of type Type has no address to take: no
+// *Type exists, so *T is "can't take the address of 'T': it's a 'Type'",
+// at T.
 static Type *check_unary(Checker *c, Ast_Unary *u) {
     if (u->op == TOKEN_STAR) {
-        return check_addressable(c, u->operand, false) ? type_pointer_to(u->operand->type) : nullptr;
+        if (!check_addressable(c, u->operand, false)) return nullptr;
+        // The only place of type Type is such a variable's name: no
+        // pointer, field or element holds a type, nor does an instance's
+        // parameter or local (check_generic.cpp's infer_bindings refuses a
+        // Type value as a type parameter's).
+        if (u->operand->type == &type_type) {
+            RIG_ASSERT(u->operand->kind == AST_NAME);
+            diag_error(c->diag, u->operand->pos, "can't take the address of '" STR_FMT "': it's a 'Type'",
+                       STR_ARG(((Ast_Name *)u->operand)->name));
+            return nullptr;
+        }
+        return type_pointer_to(u->operand->type);
     }
     Type *t = u->op == TOKEN_TILDE ? check_member_operand(c, u->operand) : check_operand(c, u->operand);
     if (!t || t == &type_untyped_member) return t;
@@ -2580,6 +2605,19 @@ static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
     return nullptr;
 }
 
+// Whether e, an operand of a type comparison in a #run's operand in a
+// #modify block (spec 7.12), names one of the block's variables of type
+// Type, which don't exist while the #run runs (check_type_comparison):
+// said when it does.
+static bool refuse_run_type_local(Checker *c, Ast *e) {
+    if (c->modify || e->kind != AST_NAME || e->type != &type_type) return false;
+    Ast_Name *name = (Ast_Name *)e;
+    if (!name->decl || name->decl->kind != AST_VAR) return false;
+    diag_error(c->diag, name->pos, "#run can't use '" STR_FMT "': it's a local, which doesn't exist while compiling",
+               STR_ARG(name->name));
+    return true;
+}
+
 // == or != with an operand that names a type (spec 5.20): the other must
 // name one too, and the two are compared while compiling, equal when
 // they're the same type (every type exists once, so when their Type *s
@@ -2591,18 +2629,57 @@ static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
 // value's as ever (one whose check still gives a type, a call with too
 // many arguments, is compared too, both said). left_names and right_names
 // say which operands name a type (expr_names_type), as check_binary found.
+//
+// In a #modify block (spec 7.12) a value of type Type, a variable's, is a
+// type too, known only when the block runs: a comparison with one is a
+// bool worked out then, no constant, its operand_type Type. Only two
+// written types still compare while compiling. In a #run's operand in the
+// block (check_run.cpp's check_run sets Checker.modify aside), which runs
+// before the block does, such a variable is one of the block's locals, and
+// doesn't exist yet: `#run (T == int)` is "#run can't use 'T': it's a
+// local, which doesn't exist while compiling", at the name, as the #run
+// says a local in it (check_run.cpp's uses_no_locals), not a value
+// compared with a type (refuse_run_type_local).
 static Type *check_type_comparison(Checker *c, Ast_Binary *b, bool left_names, bool right_names) {
     Type *left = left_names ? check_type_value(c, b->left) : check_value(c, b->left);
     Type *right = right_names ? check_type_value(c, b->right) : check_value(c, b->right);
     if (!left || !right) return nullptr;
-    if (!left_names || !right_names) {
+    bool left_local = !left_names && refuse_run_type_local(c, b->left);
+    bool right_local = !right_names && refuse_run_type_local(c, b->right);
+    if (left_local || right_local) return nullptr;
+    bool left_type = left_names || (c->modify && b->left->type == &type_type);
+    bool right_type = right_names || (c->modify && b->right->type == &type_type);
+    if (!left_type || !right_type) {
         diag_error(c->diag, b->pos, "%s compares a type only with a type, as in T == int", token_kind_name(b->op));
         return nullptr;
     }
     b->operand_type = &type_type;
-    b->is_constant = true;
-    b->constant = (left == right) == (b->op == TOKEN_EQUAL_EQUAL);
+    if (left_names && right_names) {
+        b->is_constant = true;
+        b->constant = (left == right) == (b->op == TOKEN_EQUAL_EQUAL);
+    }
     return &type_bool;
+}
+
+// Whether e names a variable of type Type, which only a #modify block (spec
+// 7.12) has: one of the block's variables, or a local holding a type. Looks
+// only, as expr_names_type does. In a #run's operand in the block, it names
+// one that doesn't exist yet (check_type_comparison says so); there, and
+// anywhere else outside the block's own code, only the scopes are looked
+// in, where such a variable would be, so a global isn't worked out here.
+static bool names_type_variable(Checker *c, Ast *e) {
+    if (e->kind != AST_NAME) return false;
+    String name = ((Ast_Name *)e)->name;
+    Ast *decl = nullptr;
+    if (c->modify) {
+        decl = check_lookup(c, name, nullptr);
+    } else {
+        for (s64 i = c->scopes.count - 1; i >= 0 && !decl; i--) {
+            Ast **found = table_get(&c->scopes[i], name);
+            if (found) decl = *found;
+        }
+    }
+    return decl && decl->kind == AST_VAR && decl->type == &type_type;
 }
 
 // + - * / % & | ^ << >> (spec 6.4), and the comparisons and && || (above).
@@ -2641,17 +2718,21 @@ static Type *check_type_comparison(Checker *c, Ast_Binary *b, bool left_names, b
 // not '*Shape'; write p.* == .circle" (report_member_on_pointer).
 //
 // == and != with an operand that names a type compare types (spec 5.20,
-// check_type_comparison), before anything else is looked at. The other
+// check_type_comparison), before anything else is looked at; so do they
+// with a #modify block's variable of type Type (spec 7.12). The other
 // operators take no type: a type operand is said to be one, as a value
 // anywhere is ("'int' is a type, not a value").
 static Type *check_binary(Checker *c, Ast_Binary *b) {
     bool equality = b->op == TOKEN_EQUAL_EQUAL || b->op == TOKEN_BANG_EQUAL;
     bool bitwise = b->op == TOKEN_PIPE || b->op == TOKEN_AMP || b->op == TOKEN_CARET;
-    // Types compared (spec 5.20): T == int, []int != [..]int.
+    // Types compared (spec 5.20): T == int, []int != [..]int; in a #modify
+    // block, a variable of type Type too (spec 7.12): T == x.
     if (equality) {
         bool left_type = expr_names_type(c, b->left);
         bool right_type = expr_names_type(c, b->right);
-        if (left_type || right_type) return check_type_comparison(c, b, left_type, right_type);
+        if (left_type || right_type || names_type_variable(c, b->left) || names_type_variable(c, b->right)) {
+            return check_type_comparison(c, b, left_type, right_type);
+        }
     }
     Type *left = nullptr, *right = nullptr;
     bool left_checked = false, right_checked = false;
@@ -3331,24 +3412,45 @@ static Type *check_size_of(Checker *c, Ast_Size_Of *size_of) {
 // is the linker's to write, so it's no constant. Without Preload there is
 // no Type_Info to point at: "'type_info' needs Preload's 'Type_Info', which
 // the program doesn't have", at the name.
+//
+// In a #modify block (spec 7.12), type_info(t) of a variable t of type Type
+// describes the type t holds when the block runs: `of` is t's name, checked
+// as a value, and the block describes types (Ast_Modify.describes), so the
+// types it's given are described before each run. Its argument is where a
+// type goes, so a built-in type's name means that type there, as in `x:
+// int;` (resolve_type_name), even after `int := u8;`.
 static Type *check_type_info(Checker *c, Ast_Type_Info *info) {
-    Type *t = resolve_type_or_void(c, info->type_expr);
+    Ast_Type *written = info->type_expr;
+    Ast *variable = nullptr;
+    if (c->modify && written->kind == AST_TYPE_NAME && !written->declares && !type_from_name(written->name)) {
+        Ast_Name *name = ast_new<Ast_Name>(c->arena, AST_NAME, written->pos);
+        name->name = written->name;
+        if (names_type_variable(c, name)) variable = name;
+    }
+    Type *t = variable ? check_value(c, variable) : resolve_type_or_void(c, written);
     if (!t) return nullptr;
     if (!c->type_info_type) {
         diag_error(c->diag, info->pos, "'type_info' needs Preload's 'Type_Info', which the program doesn't have");
         return nullptr;
     }
-    info->described = t;
+    if (variable) {
+        info->of = variable;
+        c->modify->describes = true;
+    } else {
+        info->described = t;
+    }
     return type_pointer_to(c->type_info_type);
 }
 
 // Casts between pointers are walked through, and a field or an element of
 // constant data goes on from the node holding its value (constant_data), as
-// procedure_address does.
+// procedure_address does. A #modify block's type_info(t) of a Type
+// variable (Ast_Type_Info.of, spec 7.12) is none: which description it is
+// is known only when the block runs.
 Ast_Type_Info *type_info_address(Ast *e) {
     for (;;) {
         if (!e->type || !type_is_pointer(e->type)) return nullptr;
-        if (e->kind == AST_TYPE_INFO) return (Ast_Type_Info *)e;
+        if (e->kind == AST_TYPE_INFO) return ((Ast_Type_Info *)e)->of ? nullptr : (Ast_Type_Info *)e;
         if (e->kind == AST_CAST) {
             e = ((Ast_Cast *)e)->value;
             continue;

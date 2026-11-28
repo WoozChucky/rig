@@ -1,0 +1,75 @@
+tests/errors/modify_mistakes.rig:17:34: error: the condition of '#if' must be known while compiling
+    decided :: (v: $T) #modify { #if T == int { } return true; } { }
+                                     ^
+tests/errors/modify_mistakes.rig:18:33: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
+    as_type :: (v: $T) #modify { x: T; return true; } { }
+                                    ^
+tests/errors/modify_mistakes.rig:19:41: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
+    sized :: (v: $T) #modify { s := size_of(T); return true; } { }
+                                            ^
+tests/errors/modify_mistakes.rig:20:38: error: can't take the address of 'T': it's a 'Type'
+    addressed :: (v: $T) #modify { p := *T; return true; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:21:38: error: a value of type 'Type' can't be an 'Any'; type_info(T) describes the type
+    as_any :: (v: $T) #modify { a: Any = T; return true; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:22:31: error: a variable of type 'Type' needs a value, as in t := int;
+    no_value :: (v: $T) #modify { t: Type; return true; } { }
+                                  ^
+tests/errors/modify_mistakes.rig:23:33: error: a variable of type 'Type' needs a value, as in t := int;
+    left_alone :: (v: $T) #modify { t: Type = ---; return true; } { }
+                                    ^
+tests/errors/modify_mistakes.rig:24:34: error: 'Type' only names types while compiling; a *Type_Info describes one at run time
+    viewed :: (v: $T) #modify { a: []Type; return true; } { }
+                                     ^
+tests/errors/modify_mistakes.rig:25:38: error: a #modify block returns a bool, and may add a message, as in return T != string, "sum needs numbers";
+    returns_nothing :: (v: $T) #modify { return; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:26:36: error: a #modify block returns a bool, and may add a message, as in return T != string, "sum needs numbers";
+    returns_three :: (v: $T) #modify { return true, "a", 1; } { }
+                                       ^
+tests/errors/modify_mistakes.rig:27:37: error: a #modify block returns a bool, and may add a message, as in return T != string, "sum needs numbers";
+    returns_a_type :: (v: $T) #modify { return int, "a", 1; } { }
+                                        ^
+tests/errors/modify_mistakes.rig:28:39: error: '#modify' must return a bool on every path, and this one reaches its end
+    runs_off :: (v: $T) #modify { x := 1; } { }
+                                          ^
+tests/errors/modify_mistakes.rig:29:43: error: unknown identifier 'values'
+    counts :: (values: []$T) #modify { return values.count > 0; } { }
+                                              ^
+tests/errors/modify_mistakes.rig:30:38: error: a value of type 'int' doesn't convert to 'Type' implicitly
+    set_to_five :: (v: $T) #modify { T = 5; return true; } { }
+                                         ^
+tests/errors/modify_mistakes.rig:31:19: error: main is where the program starts; #modify can't call it
+    starts :: (v: $T) #modify { main(); return true; } { }
+                      ^
+tests/errors/modify_mistakes.rig:32:33: error: 'T' is already declared at tests/errors/modify_mistakes.rig:32:19
+    redeclared :: (v: $T) #modify { T := 1; return true; } { }
+                                    ^
+tests/errors/modify_mistakes.rig:33:35: error: '+' needs numbers, not 'Type'
+    added :: (v: $T) #modify { x := T + 1; return true; } { }
+                                      ^
+tests/errors/modify_mistakes.rig:34:44: error: 'int' is a type, not a value
+    runs_a_type :: (v: $T) #modify { t := #run int; return true; } { }
+                                               ^
+tests/errors/modify_mistakes.rig:35:47: error: a value of type 'Type' can't be an argument of 'takes'; type_info(T) describes the type
+    passes_a_type :: (v: $T) #modify { n := takes(T); return true; } { }
+                                                  ^
+tests/errors/modify_mistakes.rig:36:50: error: argument 1 of 'bakes' must be known while compiling, for '$U: Type'
+    bakes_a_variable :: (v: $T) #modify { n := bakes(T); return true; } { }
+                                                     ^
+tests/errors/modify_mistakes.rig:37:49: error: argument 1 of 'Wrap' must be known while compiling, for 'T: Type'
+    boxes_a_variable :: (v: $T) #modify { w := Wrap(T); return true; } { }
+                                                    ^
+tests/errors/modify_mistakes.rig:39:34: error: 'uses_itself' can't be used in its own #modify, which decides its instances
+    uses_itself :: (v: $T) #modify { uses_itself(1); return true; } { }
+                                     ^
+tests/errors/modify_mistakes.rig:40:38: error: 'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in type_info(T).size
+    Box :: struct (T: Type) #modify { x: T; return true; } { v: T; }
+                                         ^
+tests/errors/modify_mistakes.rig:41:56: error: a value of type 'int' doesn't convert to 'string' implicitly
+    Ring :: struct (T: Type, N: int) #modify { s: string = N; return true; } { items: [N]T; }
+                                                           ^
+tests/errors/modify_mistakes.rig:45:34: error: 'int' is a type, not a value
+    names_a_type :: () -> int { t := int; return 1; }
+                                     ^

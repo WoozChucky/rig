@@ -1,0 +1,12 @@
+static int widen(T = int);
+widen(T = int) (context=
+v = 3
+widen(T = int) (context=
+v=4)
+modify.rig, line 32.
+type = struct Box(int)
+{v = 5}
+exited normally
+!.debug_names not created by gdb
+!widen(T = u8)
+!Box(u8)

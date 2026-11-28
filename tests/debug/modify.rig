@@ -1,0 +1,33 @@
+// A debugger's view of #modify (bin/run-tests runs it under gdb with
+// modify.gdb and under cdb with modify.cdb). A block runs while compiling
+// and has no code in the program (spec 7.12, 10.7), so neither debugger
+// knows of it or stops in it. An instance is named by the bindings the
+// block leaves, in symbols, frames and debug types: widen gives u8 the
+// instance of int, so widen(cast(u8) 3) and widen(4) call the one
+// procedure widen(T = int), the only widen either debugger lists, and
+// gdb's breakpoint on it stops twice, its v a 3 the first time; Box gives
+// u8 the instance of int too, so b, declared a Box(u8), is a Box(int) in
+// gdb's whatis and cdb's dv /t, holding 5.
+printf :: (format: *u8, ..) -> s32 #foreign libc;
+
+widen :: (v: $T) -> T #modify {
+    if T == u8 || T == u16 { T = int; }
+    return true;
+} {
+    r := v;
+    return r;
+}
+
+Box :: struct (T: Type) #modify {
+    if T == u8 { T = int; }
+    return T != string, "no strings in a box";
+} {
+    v: T;
+}
+
+main :: () {
+    a := widen(cast(u8) 3);
+    c := widen(4);
+    b: Box(u8) = .{5};
+    printf("%lld %lld %lld\n", a, c, b.v);
+}

@@ -291,8 +291,9 @@ static bool compilation_run(Compilation *c) {
 }
 
 // The runs are over: an exit() no longer prints the diagnostics, and the
-// compile-time world is freed, its runs' time, expression and top-level,
-// taken first as #run's. Nothing when there's no world.
+// compile-time world is freed, its runs' time, expression and top-level
+// #runs' and #modify blocks', taken first as #run's. Nothing when there's
+// no world.
 static void compilation_end_runs(Compilation *c) {
     if (!c->world) return;
     c->times.phases[PHASE_RUN] = compile_time_nanoseconds(c->world);

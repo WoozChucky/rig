@@ -7993,3 +7993,23 @@ TEST(struct_descriptions_hold_their_parameters) {
     CHECK_EQ(reloc_target(m, vec2, TYPE_INFO_STRUCT_PARAMETERS_OFFSET + VIEW_DATA_OFFSET), -1);
     arena_free(&a);
 }
+
+TEST(modify_has_no_code_in_the_program) {
+    // A #modify block runs while compiling, in the compile-time world
+    // (spec 7.12): the program has only the instance its bindings make,
+    // one for u8 and int alike, and no procedure of the block's.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a,
+                                "widen :: (v: $T) -> T #modify { if T == u8 || T == u16 { T = int; } return true; } "
+                                "{ return v; }\n"
+                                "main :: () { a := widen(cast(u8) 1); b := widen(2); }\n");
+    s64 widens = 0;
+    for (s64 i = 0; i < m->procs.count; i++) {
+        Ir_Proc *p = m->procs[i];
+        if (contains(p->name, "widen")) widens++;
+        CHECK(!string_eq(p->source_name, str("#modify")));
+    }
+    CHECK_EQ(widens, 1);
+    CHECK(ir_proc_named(m, "widen$T$int") != nullptr);
+    arena_free(&a);
+}

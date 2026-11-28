@@ -10,11 +10,27 @@
 #include "checker.h"
 #include "run.h"
 
+// A #modify block's check or run under way (spec 7.12, check_generic.cpp's
+// check_modify and modify_bindings), on the stack while it lasts: whose it
+// is, the use that asked for it, with that use's chain, and how many
+// declarations were under way then. A declaration under way that the
+// block's code, or a type given to it, reaches again, one of those, is one
+// that use is in: the circle runs through the use (checker.cpp's
+// say_circle), which is said once, however many of them it reaches.
+struct Modify_Check {
+    String name;          // its generic's
+    Position at;          // the use that asked for the check or the run
+    String context;       // the use's chain (Diagnostics.context)
+    s64 resolving;        // c->resolving.count when it started
+    Modify_Check *outer;  // the check or run under way around it, if any
+    bool said;            // say_circle has said the use: a circle through it
+};
+
 struct Checker {
     Arena *arena;
     Diagnostics *diag;
-    Compile_Time *world;         // where expression #runs run (run.h): check()'s caller's, or one of
-                                 // check()'s own
+    Compile_Time *world;         // where expression #runs and #modify blocks run (run.h): check()'s
+                                 // caller's, or one of check()'s own
     Table<Ast *> top_level;      // every procedure, global variable, top-level constant, struct and
                                  // enum, by name: visible everywhere (Ast_Proc, Ast_Var, Ast_Const,
                                  // Ast_Struct, Ast_Enum); and the predeclared names, put first
@@ -95,6 +111,15 @@ struct Checker {
                                  // Changed only by enter_instance, which gives the errors recorded
                                  // meanwhile its chain (Diagnostics.context), but a generic's body
                                  // walk's, which have none (check_generic_names)
+    Ast_Modify *modify;          // the #modify whose block is being checked (spec 7.12): where a written
+                                 // type is a value of type Type, and the block's own rules hold; null
+                                 // elsewhere. Set by check_body for the block's own body only, and set
+                                 // aside with the scopes (checker.cpp's leave_scopes), so a procedure the
+                                 // block calls, or a declaration worked out inside it, is checked with it
+                                 // null; and by check_run, so a #run's operand in the block is too
+    Modify_Check *modify_check;  // the innermost #modify block's check or run under way
+                                 // (check_generic.cpp's check_modify and modify_bindings), each around
+                                 // it its `outer`; null for none
 };
 
 // A type or constant parameter of a generic procedure (spec 7.11), $T or
@@ -111,6 +136,19 @@ struct Generic_Binding {
                         // it at, Ring($T, $N)'s N (null when the struct's own check refused it)
     Ast *value;         // a constant one's value, null until bound: its argument, converted, or the
                         // constant an instance's argument binds it to (match_type)
+};
+
+// One run of a #modify block (spec 7.12), for one set of bindings given:
+// the block's cache (Ast_Modify.runs).
+struct Modify_Run {
+    Array<Ast *> given;             // the bindings given, as make_bindings made them, compared by
+                                    // same_bindings
+    bool running;                   // it's running: a use that finds it so is the block's own
+    bool ran;                       // it ran to its return; false while it runs, and after a failure,
+                                    // said once
+    bool accepted;                  // its bool
+    String message;                 // its string, in the checker's arena; empty for none
+    Array<Generic_Binding> result;  // the bindings it left, when accepted
 };
 
 // checker.cpp
@@ -222,8 +260,9 @@ bool has_params_after_dots(Ast_Proc *proc);
 
 // The body of procedure proc, needed by the #run at `at`: checked now if it
 // isn't yet (checker.cpp's check_body). A body found under way is a circle:
-// "'f' is defined in terms of itself" at `at`, once (a body already in one,
-// RESOLVE_CYCLE, says nothing more), and mark_circle from the body's entry.
+// "'f' is defined in terms of itself" at `at`, or a use of a generic in its
+// own #modify (say_circle), once (a body already in one, RESOLVE_CYCLE,
+// says nothing more), and mark_circle from the body's entry.
 // True when the body is done and neither it nor the signature had errors; a
 // foreign or #compiler procedure has no body (its signature's errors
 // count); a broken one is false, and so is one nested too deeply to check
@@ -272,7 +311,10 @@ Type *check_expression(Checker *c, Ast *e);
 // gives null. A literal without its type written, .{...} or .[...], has type
 // type_untyped_literal, its values not yet checked, and a member without its
 // enum, .FREE, type_untyped_member: where it meets a type, check_convert
-// completes it, and where it meets none, check_default_type reports it.
+// completes it, and where it meets none, check_default_type reports it. In
+// a #modify block (Checker.modify, spec 7.12), a written type there is a
+// value of type Type: check_type_value checks it, and its type is
+// type_type.
 Type *check_value(Checker *c, Ast *e);
 
 // What a call calls, as its messages name it: the procedure's name, the
@@ -476,7 +518,8 @@ bool written_as_type(Ast *e);
 // type value: for now == and != between types, a $T: Type parameter's
 // argument (check_generic_call), a generic struct's type argument
 // (check_generic.cpp's bind_struct_argument) and an alias's value
-// (checker.cpp's check_const_value).
+// (checker.cpp's check_const_value); and in a #modify block (spec 7.12),
+// any place a value goes (check_value).
 Type *check_type_value(Checker *c, Ast *e);
 
 // The type a checked type value denotes (Ast.constant's bits; Ast.is_constant
@@ -505,6 +548,22 @@ void check_top_level_run(Checker *c, Ast_Run *run);
 // has no value: its failure (or its reached errors) was said already, so a
 // value needing it says nothing more.
 bool has_failed_run(Ast *e);
+
+// What a #modify block reaches (spec 7.12), walked as a block #run's is
+// (reach_run): true when nothing in it has an error, so it can run. Its
+// own body is checked already (check_modify). A call of main in it is "main
+// is where the program starts; #modify can't call it", at the '#modify'.
+bool reach_modify(Checker *c, Ast_Modify *modify);
+
+// The descriptions of `types`, the type bindings a #modify block that
+// describes types (Ast_Modify.describes) is given, walked as type_info(T)'s
+// are (spec 7.12): each type laid out, and what its description reaches
+// checked, so the block's run can describe them. True when nothing there
+// has an error; false after one, said by the walk, at `at` for its own
+// messages. A struct still being laid out is a circle through its layout,
+// which led to the use that runs the block: said at that use, as a use of
+// the generic in its own #modify (checker.cpp's say_circle).
+bool reach_descriptions(Checker *c, Position at, Array<Type *> types);
 
 // check_generic.cpp
 
@@ -571,12 +630,15 @@ String instance_context(Checker *c, Ast_Instance *inst);
 // makes (spec 7.11): its baked parameters' types and constants taken from
 // their arguments, its type parameters inferred from the others (their
 // messages at an argument, or at `callee` when no argument names one), then
-// the program's one instance for those bindings, found in generic's cache
-// or made (ast_clone) where the call starting at `called_at` needs it, its
-// signature checked then. Its procedure, or null after saying why, or when
-// the instance's signature had errors (Ast_Instance.had_errors, said once,
-// where it was made). Takes no Ast_Call, so any construct that calls a
-// generic may.
+// the generic's #modify block, if it has one (spec 7.12, modify_bindings),
+// which may refuse the bindings (said at `called_at`), fail (said once, at
+// the #modify), or change them; then the program's one instance for the
+// bindings it leaves, found in generic's cache or made (ast_clone) where
+// the call starting at `called_at` needs it, its signature checked then.
+// Its procedure, or null after saying why, or when the block has a mistake
+// (said once, as the generic's), or when the instance's signature had
+// errors (Ast_Instance.had_errors, said once, where it was made). Takes no
+// Ast_Call, so any construct that calls a generic may.
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at);
 
 // The binding of instance inst called `name`, an Ast_Alias for a type
@@ -636,10 +698,14 @@ void finish_generic_fields(Checker *c, Ast_Struct *generic);
 // takes 2 arguments, but 1 was given", at `at`), then each argument bound
 // to its parameter in order, a type to a type parameter, a constant known
 // while compiling, converted to its type, to a constant one, with their
-// messages at the argument; then the program's one instance for those
-// bindings, found in generic's cache or made (ast_clone), not laid out:
-// its Type, or null after saying why. Takes the arguments alone, no
-// written type, so any construct that names an instance may.
+// messages at the argument; then the generic's #modify block, if it has
+// one (spec 7.12, check_generic.cpp's modify_bindings), which may refuse
+// the bindings (said at `at`), fail (said once, at the #modify), or change
+// them; then the program's one instance for the bindings it leaves, found
+// in generic's cache or made (ast_clone), not laid out, so Box(u8) may
+// give Box(int)'s: its Type, or null after saying why, or when the block
+// has a mistake (said once, as the generic's). Takes the arguments alone,
+// no written type, so any construct that names an instance may.
 Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, Position at, Position used_at);
 
 // Whether struct instance inst may be laid out (spec 3.23): its generic's
@@ -662,3 +728,36 @@ Type *check_written_instance(Checker *c, Ast_Type *written);
 // parameters' names in the example: generic struct `generic`'s name where
 // a type goes, alone (spec 3.23).
 void report_generic_struct(Checker *c, Ast_Struct *generic, Position at);
+
+// A generic's #modify block's own check (spec 7.12), once, as the
+// generic's own code, at the top level and with no chain, whether an
+// instance is ever asked for or not: its variables made, one per binding
+// in `declared`, in order, at what declares it, of type Type for a type
+// parameter and of the constant's type for a constant one; its body checked
+// (checker.cpp's check_reached_body), the variables declared in its scope;
+// then what it reaches walked (check_run.cpp's reach_modify). Only the
+// declared names, places, kinds and constant types are read, so a list
+// already bound serves. True when none of it said a mistake; false after
+// one (Ast_Modify.had_errors), for the caller to make the generic's, and
+// while the check is under way: a use from inside the block, or from code
+// it reaches, asked for its own generic, "'sum' can't be used in its own
+// #modify, which decides its instances", at `at`, the use, `name` the
+// generic's (report_used_in_own_modify); the check under way then has that
+// error. While a top-level #if's condition is decided (Checker.deciding),
+// the use is refused, "a top-level #if's condition can't run code while
+// compiling, for now", at `at`, and the block isn't checked (a later use or
+// the pass over the bodies checks it, every name known): false then.
+bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Array<Generic_Binding> declared);
+
+// "'sum' can't be used in its own #modify, which decides its instances", at
+// `at`, a use of generic `name` from its block or from code the block
+// reaches, found while the block's check is under way: by check_modify, or
+// by checker.cpp's check_reached_body, for a body the use is in that was
+// under way before the check began.
+void report_used_in_own_modify(Checker *c, String name, Position at);
+
+// In check()'s pass over the bodies, generic procedure or struct `generic`'s
+// #modify block, if it has one that no use has checked yet (check_modify),
+// with its declared parameters; a mistake there is the generic's
+// (had_errors), which then makes no instance.
+void check_generic_modify(Checker *c, Ast *generic);

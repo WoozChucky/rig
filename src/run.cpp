@@ -24,6 +24,15 @@
 // (compile_time_run_top_level): each sees what the expression runs, and the
 // top-level runs before it, left in the globals.
 //
+// A #modify block (spec 7.12) runs in the same world, as a #run does: the
+// checker runs it once for each new set of bindings its generic's uses
+// give (check_generic.cpp's modify_bindings, compile_time_modify), given
+// them in a bindings block, a slot each, which it may change, and its bool,
+// its message and the slots are read back. What it leaves in the globals,
+// later runs and blocks see, and its time is the runs' time. Its failures
+// are said as a #run's are, in its words: "#modify failed: ...", the
+// outermost frame "    in #modify (PATH:L:C)".
+//
 // A failure. Anything the interpreter fails at (a runtime check's panic, the
 // stack running out, a call it can't make, a C function found nowhere, a
 // #compiler procedure's call the compiler refuses, spec 7.9) is an error at
@@ -67,7 +76,8 @@
 // union's bytes are baked as they are, whatever its members hold (spec
 // 7.8). Baking stops at the first part refused, and that is said at the
 // #run, once, after it (Baking); nothing of the value is kept, and the #run
-// has no value, as after a failure.
+// has no value, as after a failure. A #modify block's results are baked
+// the same way, their refusals saying #modify where these say #run.
 
 #include "check.h"
 #include "interp.h"
@@ -80,7 +90,8 @@ struct Compile_Time {
     Ir_Module *module;   // the code the runs reach, lowered on demand
     Lowering *lowering;  // lowering into it, as long as the world
     Interp *interp;      // running it: the compile-time globals, every run's
-    Arena arena;         // the module's nodes, and what lowering puts in them
+    Arena arena;         // the module's nodes, what lowering puts in them, and the bytes of
+                         // the strings given #modify blocks (write_constant)
     s64 run_time;        // nanoseconds, the runs' (compile_time_nanoseconds)
     s32 running;         // how many runs are under way: a guard, as none nests today
 };
@@ -121,39 +132,44 @@ static void make_parts(Compile_Time *ct, Ast_File *file) {
     interp_set_compiler(ct->interp, ct->compiler, ct->compiler_context);
 }
 
-// One result being baked: the run it's of, and why it can't be, once a
-// part of it is refused. A refusal isn't said while the value is baked: it
-// is said at the #run once baking has stopped (compile_time_run), and the
-// value is kept only when there's none. (An array type too big for a
-// view's elements is said by check_array_type as it's made.)
+// One result being baked: what ran, and why it can't be, once a part of
+// it is refused. A refusal isn't said while the value is baked: it is said
+// at the #run once baking has stopped (compile_time_run), and the value is
+// kept only when there's none. (An array type too big for a view's
+// elements is said by check_array_type as it's made.) A #modify block's
+// results are baked as a #run's are (spec 7.12, compile_time_modify): its
+// message and its constants, said at the #modify, in its words.
 struct Baking {
     Compile_Time *ct;
     Checker *c;
-    Ast_Run *run;
-    const char *refusal;  // the message, or null
+    Position at;      // the #run, or the #modify
+    const char *who;  // what ran, as its messages say it: "#run" or "#modify"
+    String refusal;   // the message, in the checker's arena; empty for none
 };
 
-// A new node of the baked value of `run`, of type t: at the #run, as every
-// node of it is, so a message about the value points there.
+// A new node of the baked value, of type t: at the #run or the #modify
+// (Baking.at), as every node of it is, so a message about the value points
+// there.
 template<typename T>
 static T *baked_node(Baking *b, Ast_Kind kind, Type *t) {
-    T *node = ast_new<T>(b->c->arena, kind, b->run->pos);
+    T *node = ast_new<T>(b->c->arena, kind, b->at);
     node->type = t;
     return node;
 }
 
-// A part of the value refused for `message`: null, the node it gives, and
-// the message kept for compile_time_run to say. A pointer is "#run's result
-// holds a pointer, which can't be baked, for now": an address means
-// something only while compiling, in the compiler's memory, and following
-// it into the data it points at is for later.
+// A part of the value refused for `message`, whose %s is what ran (b->who):
+// null, the node it gives, and the message kept for compile_time_run to
+// say. A pointer is "#run's result holds a pointer, which can't be baked,
+// for now": an address means something only while compiling, in the
+// compiler's memory, and following it into the data it points at is for
+// later.
 static Ast *refuse(Baking *b, const char *message) {
-    b->refusal = message;
+    b->refusal = string_printf(b->c->arena, message, b->who);
     return nullptr;
 }
 
 static Ast *refuse_pointer(Baking *b) {
-    return refuse(b, "#run's result holds a pointer, which can't be baked, for now");
+    return refuse(b, "%s's result holds a pointer, which can't be baked, for now");
 }
 
 // The bits of a value of integer or enum type t, read from its bytes
@@ -291,7 +307,7 @@ static Ast *bake_tagged(Baking *b, Type *t, const u8 *at) {
     Type *tag_type = t->tag_type;
     s64 tag = (s64)extend_bits(tag_type, read_bits(at, tag_type->size));
     if (tag < 0 || tag >= t->fields.count) {
-        return refuse(b, "#run failed: its result holds a tagged union whose tag names no member");
+        return refuse(b, "%s failed: its result holds a tagged union whose tag names no member");
     }
     Type_Field *member = &t->fields[tag];
     RIG_ASSERT(member->type);  // made by the walk (check_run.cpp's walk_type)
@@ -379,11 +395,11 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
         s64 count = (s64)read_bits(at + VIEW_COUNT_OFFSET, 8);
         const u8 *data = (const u8 *)(uintptr_t)read_bits(at + VIEW_DATA_OFFSET, 8);
         if (count < 0) {
-            return refuse(b, t->kind == TYPE_STRING ? "#run failed: its result holds a string with a negative count"
-                                                    : "#run failed: its result holds a view with a negative count");
+            return refuse(b, t->kind == TYPE_STRING ? "%s failed: its result holds a string with a negative count"
+                                                    : "%s failed: its result holds a view with a negative count");
         }
         if (t->kind == TYPE_VIEW) {
-            Type *array = check_array_type(b->c, t->element, (u64)count, b->run->pos);
+            Type *array = check_array_type(b->c, t->element, (u64)count, b->at);
             Ast *elements = array ? bake_elements(b, array, data) : nullptr;
             if (elements && t->element == type_from_name(str("u8"))) {
                 ((Ast_Literal *)elements)->text = baked_string(b, data, count);
@@ -397,7 +413,7 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
     // memory and its allocator are the compile-time world's, which the
     // program never sees, so the rule is the array, not what it holds now.
     // A view of its elements bakes as any view does.
-    case TYPE_RESIZABLE: return refuse(b, "#run's result holds a resizable array, which can't be baked, for now");
+    case TYPE_RESIZABLE: return refuse(b, "%s's result holds a resizable array, which can't be baked, for now");
     case TYPE_STRUCT: {
         if (t->is_tagged) return bake_tagged(b, t, at);
         if (t->is_union) {
@@ -434,14 +450,15 @@ static Ast *bake_value(Baking *b, Type *t, const u8 *at) {
 // wants a few.
 static const s64 RUN_FRAMES_SHOWN = 10;
 
-// "#run failed: runtime error: MESSAGE", at the #run, and the frames after
-// it, the paths of the program's files naming where each is. Of more than
-// 2 * RUN_FRAMES_SHOWN + 1, only the innermost and the outermost
-// RUN_FRAMES_SHOWN, and between them "    ... N more calls": N is 2 at
-// least, as one call left out would take the line that says so.
-static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result, Arena *a) {
+// "#run failed: runtime error: MESSAGE", at `at`, the #run, and the frames
+// after it, the paths of the program's files naming where each is; a
+// #modify block's (spec 7.12) "#modify failed: ...", `who` being what ran.
+// Of more than 2 * RUN_FRAMES_SHOWN + 1, only the innermost and the
+// outermost RUN_FRAMES_SHOWN, and between them "    ... N more calls": N
+// is 2 at least, as one call left out would take the line that says so.
+static void report_failure(Compile_Time *ct, Position at, const char *who, Interp_Result *result, Arena *a) {
     Diagnostics *d = ct->diag;
-    diag_error(d, run->pos, "#run failed: runtime error: " STR_FMT, STR_ARG(result->message));
+    diag_error(d, at, "%s failed: runtime error: " STR_FMT, who, STR_ARG(result->message));
     Array<Interp_Frame> frames = result->frames;
     if (!frames.count) return;
     Array<String> paths = {};
@@ -460,31 +477,44 @@ static void report_failure(Compile_Time *ct, Ast_Run *run, Interp_Result *result
     array_free(&paths);
 }
 
+// A run's start and end, an expression's, a top-level one's or a #modify
+// block's (compile_time_modify): the world's parts are made the first time
+// (make_parts), and all of it, from there to the run's end, is the runs'
+// time (compile_time_nanoseconds), read on the monotonic clock first and
+// last. No run happens inside another today: a #run in a run's code has
+// already run, and its value is baked, and a #modify block's run asks the
+// checker for nothing once it has started. The depth count is a guard:
+// only a run that starts with none under way adds its time, so if one ever
+// ran inside another, it wouldn't be counted twice.
+static s64 start_run(Compile_Time *ct, Ast_File *file) {
+    s64 start = os_nanoseconds();
+    ct->running++;
+    if (!ct->module) make_parts(ct, file);
+    return start;
+}
+
+static void end_run(Compile_Time *ct, s64 start) {
+    ct->running--;
+    if (ct->running == 0) ct->run_time += os_nanoseconds() - start;
+}
+
 // What every run of `file`'s does, an expression's or a top-level one's,
 // in order:
-// 1. The world's parts, the first time (make_parts).
+// 1. Its start (start_run).
 // 2. The run's procedure, lowered with everything it reaches.
 // 3. What the compiler printed so far is written out first (fflush), so it
 //    comes before what the run prints, in order. Then the run, given `args`,
 //    its result in *result: its strings in `scratch`, its arrays (results,
 //    frames) on the heap, for the caller to free.
 // 4. A failure is said, with its frames.
-// All of it is the run's time (compile_time_nanoseconds), read on the
-// monotonic clock first and last. No run happens inside another today: a
-// #run in a run's code has already run, and its value is baked. The depth
-// count is a guard: only a run that starts with none under way adds its
-// time, so if one ever ran inside another, it wouldn't be counted twice.
 static void run_procedure(Compile_Time *ct, Ast_File *file, Ast_Run *run, Array<u64> args, Arena *scratch,
                           Interp_Result *result) {
-    s64 start = os_nanoseconds();
-    ct->running++;
-    if (!ct->module) make_parts(ct, file);
+    s64 start = start_run(ct, file);
     s32 proc = ir_lower_run(ct->lowering, run);
     fflush(nullptr);
     interp_run(ct->interp, proc, args, scratch, result);
-    if (!result->ok) report_failure(ct, run, result, scratch);
-    ct->running--;
-    if (ct->running == 0) ct->run_time += os_nanoseconds() - start;
+    if (!result->ok) report_failure(ct, run->pos, "#run", result, scratch);
+    end_run(ct, start);
 }
 
 // In order:
@@ -512,9 +542,9 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
     run_procedure(ct, c->file, run, args, &scratch, &result);
     Ast *value = nullptr;
     if (result.ok) {
-        Baking baking = {ct, c, run, nullptr};
+        Baking baking = {ct, c, run->pos, "#run", {}};
         value = aggregate ? bake_value(&baking, t, (const u8 *)memory) : bake_scalar(&baking, t, result.results[0]);
-        if (baking.refusal) diag_error(c->diag, run->pos, "%s", baking.refusal);
+        if (baking.refusal.count) diag_error(c->diag, run->pos, STR_FMT, STR_ARG(baking.refusal));
     }
     if (value) {
         run->value = value;
@@ -527,6 +557,142 @@ bool compile_time_run(Compile_Time *ct, Checker *c, Ast_Run *run) {
     array_free(&result.frames);
     arena_free(&scratch);
     return value != nullptr;
+}
+
+// A constant binding's value, `value` of type t (spec 7.12), written into
+// its slot as it lies in memory: a number's, a bool's or an enum's
+// canonical bits (interp.h), t->size of them, little-endian, as both of
+// Rig's targets are, a float32's narrowed from the double Ast.constant
+// keeps; a string's count and data, its bytes first copied into `world`,
+// memory as long as the world, so the block, which may write through its
+// data, never writes into the program's literal, and a global it keeps the
+// string in still holds it in every later run.
+static void write_constant(Arena *world, Type *t, Ast *value, u8 *slot) {
+    if (t->kind == TYPE_STRING) {
+        Ast_String *literal = literal_address(value);
+        String text = literal ? literal->value : String{};
+        u8 *bytes = (u8 *)arena_alloc(world, (u64)text.count + 1, 1);
+        if (text.count) memcpy(bytes, text.data, (size_t)text.count);
+        s64 count = text.count;
+        u64 data = (u64)(uintptr_t)bytes;
+        memcpy(slot + VIEW_COUNT_OFFSET, &count, sizeof count);
+        memcpy(slot + VIEW_DATA_OFFSET, &data, sizeof data);
+        return;
+    }
+    RIG_ASSERT(value->is_constant && t->size <= 8);
+    u64 bits = value->constant;
+    if (t->kind == TYPE_FLOAT && t->size == 4) {
+        f32 single = (f32)f64_from_bits(bits);
+        u32 low;
+        memcpy(&low, &single, sizeof low);
+        bits = low;
+    }
+    memcpy(slot, &bits, (size_t)t->size);
+}
+
+// In order:
+// 1. A block that describes types (Ast_Modify.describes) has the types it
+//    is given walked for their descriptions first (check_run.cpp's
+//    reach_descriptions), each laid out: an error there, said, ends it.
+// 2. Its start (start_run), and its procedure, lowered once
+//    (ir_lower_modify).
+// 3. The bindings block, MODIFY_SLOT_SIZE zeroed bytes a binding, each
+//    filled: a type with its handle, its description's address when the
+//    block describes types (ir_lowering_type_info, then interp_map maps it,
+//    so interp_global gives where it is), its Type * otherwise; a constant
+//    as it lies in memory (write_constant). A description that can't be
+//    mapped, as a C function it names is nowhere, fails the run, as it
+//    would fail a #run's.
+// 4. The run, after a fflush as a #run's is, given the hidden pointer to
+//    the message's memory and the bindings block's address. A failure is
+//    said at the #modify, with its frames.
+// 5. Otherwise its results are read back: the bool, the message baked as a
+//    string (into the checker's arena), and each slot, a type by its handle
+//    (interp_global_at and ir_lowering_described turn an address back into
+//    its type), a constant baked as any value of its type is. A part
+//    refused, a string with a negative count, is said at the #modify, and
+//    the run has failed.
+// 6. The memory is freed, as compile_time_run frees its own: the given
+//    strings' bytes stay, in the world's arena (write_constant).
+bool compile_time_modify(Compile_Time *ct, Checker *c, Ast_Modify *modify, Array<Generic_Binding> *bindings,
+                         bool *accepted, String *message) {
+    Array<Generic_Binding> &given = *bindings;
+    if (modify->describes) {
+        Array<Type *> types = {};
+        for (s64 i = 0; i < given.count; i++) {
+            if (given[i].is_type) array_add(&types, given[i].type);
+        }
+        // Laying a struct instance out enters it and leaves it, which sets
+        // the chain back to the caller's: the run's own is put back after.
+        String context = c->diag->context;
+        bool clean = reach_descriptions(c, modify->pos, types);
+        c->diag->context = context;
+        array_free(&types);
+        if (!clean) return false;
+    }
+    s64 start = start_run(ct, c->file);
+    s32 proc = ir_lower_modify(ct->lowering, modify);
+    Array<s32> descriptions = {};  // by binding: a type's description's global, -1 for none
+    for (s64 i = 0; i < given.count; i++) {
+        bool described = modify->describes && given[i].is_type;
+        array_add(&descriptions, described ? ir_lowering_type_info(ct->lowering, given[i].type) : -1);
+    }
+    Arena scratch = arena_make();
+    Interp_Result result = {};
+    u8 *text = (u8 *)calloc(1, (size_t)type_string.size);
+    u8 *block = (u8 *)calloc(given.count ? (size_t)given.count : 1, (size_t)MODIFY_SLOT_SIZE);
+    if (!text || !block) out_of_memory();
+    if (interp_map(ct->interp, &scratch, &result.message)) {
+        for (s64 i = 0; i < given.count; i++) {
+            u8 *slot = block + i * MODIFY_SLOT_SIZE;
+            if (!given[i].is_type) {
+                write_constant(&ct->arena, given[i].type, given[i].value, slot);
+                continue;
+            }
+            u64 handle = descriptions[i] >= 0 ? (u64)(uintptr_t)interp_global(ct->interp, descriptions[i])
+                                              : (u64)(uintptr_t)given[i].type;
+            memcpy(slot, &handle, sizeof handle);
+        }
+        Array<u64> args = {};
+        array_add(&args, (u64)(uintptr_t)text);
+        array_add(&args, (u64)(uintptr_t)block);
+        fflush(nullptr);
+        interp_run(ct->interp, proc, args, &scratch, &result);
+        array_free(&args);
+    }
+    if (!result.ok) report_failure(ct, modify->pos, "#modify", &result, &scratch);
+    end_run(ct, start);
+    bool ran = result.ok;
+    if (ran) {
+        Baking baking = {ct, c, modify->pos, "#modify", {}};
+        *accepted = result.results[0] != 0;
+        Ast *said = bake_value(&baking, &type_string, text);
+        if (said) *message = ((Ast_String *)said)->value;
+        for (s64 i = 0; i < given.count && !baking.refusal.count; i++) {
+            u8 *slot = block + i * MODIFY_SLOT_SIZE;
+            if (!given[i].is_type) {
+                Ast *value = bake_value(&baking, given[i].type, slot);
+                if (value) given[i].value = value;
+                continue;
+            }
+            u64 handle = read_bits(slot, 8);
+            given[i].type = modify->describes
+                                ? ir_lowering_described(ct->lowering, interp_global_at(ct->interp, handle))
+                                : (Type *)(uintptr_t)handle;
+            // Only a Type value is ever assigned a Type variable, and every
+            // one is a type's handle.
+            RIG_ASSERT(given[i].type);
+        }
+        if (baking.refusal.count) diag_error(c->diag, modify->pos, STR_FMT, STR_ARG(baking.refusal));
+        ran = !baking.refusal.count;
+    }
+    free(text);
+    free(block);
+    array_free(&descriptions);
+    array_free(&result.results);
+    array_free(&result.frames);
+    arena_free(&scratch);
+    return ran;
 }
 
 // Each run as an expression's is run (run_procedure), with no arguments: a

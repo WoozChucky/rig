@@ -1,0 +1,48 @@
+// #modify and type information (issue #228, spec 7.12, 3.16): an instance
+// a block's bindings make is described by its final bindings. Box gives u8
+// the instance of int, so a Box(u8)'s Type_Info_Struct is named Box(int),
+// and its parameter is an Any of a *Type_Info, int's description, read
+// through a cast. A block may inspect the type it's given through
+// type_info: Fields takes only a struct of two fields, as Vec2 is, and a
+// Fields(Vec2) is a Vec2 in a struct, 8 bytes. show() says the same in
+// main and in a top-level #run, whose output is the build's (spec 7.8).
+// Then, in main alone, a constant of an instance's type may be a #run's
+// value: make_box's Box(u8) is a Box(int) that holds 300, which no u8
+// holds.
+#import "Basic";
+
+Box :: struct (T: Type) #modify {
+    if T == u8 { T = int; }
+    return T != string, "no strings in a box";
+} {
+    v: T;
+}
+
+Fields :: struct (T: Type) #modify {
+    info := cast(*Type_Info_Struct) type_info(T);
+    return info.tag == .STRUCT && info.members.count == 2, "Fields needs a struct of two fields";
+} {
+    t: T;
+}
+
+Vec2 :: struct { x: float; y: float; }
+
+make_box :: () -> Box(u8) {
+    return .{300};
+}
+
+R :: #run make_box();
+
+#run show();
+
+show :: () {
+    info := cast(*Type_Info_Struct) type_info(Box(u8));
+    print("{} {}\n", info.name, info.parameters[0].type == type_info(*Type_Info));
+    print("{}\n", (cast(**Type_Info) info.parameters[0].value_pointer).* == type_info(int));
+    print("{}\n", size_of(Fields(Vec2)));
+}
+
+main :: () {
+    show();
+    print("{}\n", R);
+}

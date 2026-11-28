@@ -2182,8 +2182,63 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
     return true;
 }
 
+// modify = '#modify' block
+//
+// A generic's #modify block (spec 7.12), the parser at the '#modify': code
+// run while compiling, before each new set of bindings its uses give makes
+// an instance. Its block is read as a procedure's body, of a procedure of
+// its own named #modify, at the directive, with no parameters, as a top-level
+// #run { } is (parse_run), whose results are a bool and a string: written
+// types made here, at the directive, for the checker to resolve as any
+// result's. Whether the declaration may have one is the caller's to say,
+// and what may follow it parse_generic_modify's. Null after the block's own
+// error.
+static Ast_Modify *parse_modify(Parser *p) {
+    Token *directive = advance(p);
+    Ast_Modify *modify = arena_new<Ast_Modify>(p->arena);
+    modify->pos = directive->pos;
+    Ast_Proc *proc = ast_new<Ast_Proc>(p->arena, AST_PROC, directive->pos);
+    proc->name = str("#modify");
+    const char *results[] = {"bool", "string"};
+    for (const char *result : results) {
+        Ast_Type *type = ast_new<Ast_Type>(p->arena, AST_TYPE_NAME, directive->pos);
+        type->name = str(result);
+        array_add(&proc->results, type);
+    }
+    p->body_deepest = 0;
+    proc->body = parse_block(p);
+    if (!proc->body) return nullptr;
+    proc->body->proc = proc;
+    proc->body_levels = p->body_deepest;
+    proc->modify_of = modify;
+    modify->proc = proc;
+    return modify;
+}
+
+// "#modify is for a generic procedure or struct, as in sum :: (values:
+// []$T) -> T #modify { ... } { ... }", at a #modify that isn't a generic's.
+static void error_modify_not_generic(Parser *p, Token *directive) {
+    diag_error(p->diag, directive->pos,
+               "#modify is for a generic procedure or struct, as in sum :: (values: []$T) -> T #modify { ... } { "
+               "... }");
+}
+
+// A generic's #modify block, after its signature or its parameters, at the
+// '#modify' (parse_modify), into *modify: false, the declaration given up,
+// after the block's error, or a second #modify after it, "'#modify' is
+// written twice", at the second.
+static bool parse_generic_modify(Parser *p, Ast_Modify **modify) {
+    *modify = parse_modify(p);
+    if (!*modify) return false;
+    if (is_directive(peek(p), "modify")) {
+        diag_error(p->diag, peek(p)->pos, "'#modify' is written twice");
+        return false;
+    }
+    return true;
+}
+
 // procedure = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//               ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
+//               ({'#c_call' | '#no_abc'} [modify] block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
 // params    = param {',' param} [',' '..']
 //
 // Several results are written as a list after the arrow, with or without
@@ -2208,8 +2263,16 @@ static bool parse_variadic_dots(Parser *p, Ast_Proc *proc) {
 // `create_workspace :: (name: string) -> Workspace #compiler;`. It's no C
 // function, so it takes no #c_call either ("a #compiler procedure is the
 // compiler's: it takes no '#c_call'"), #no_abc before it is "expected
-// '{'", as before #foreign, and the ';' must follow it. Any other
-// directive but these is "unknown directive '#foo'".
+// '{'", as before #foreign, and the ';' must follow it. A generic
+// procedure may have a #modify block after its #no_abc (spec 7.12,
+// parse_generic_modify; a generic is never #c_call, which the checker
+// says), and then its body must follow: any directive there is "expected
+// '{'", but a second #modify, "'#modify' is written twice", and a #load,
+// "#load can only be at the top level", or an #import, "#import can only
+// be at the top level", as after a signature. On a procedure that isn't
+// generic, one that read no '$', it's "#modify is for a generic procedure
+// or struct, ...", at it. Any other directive but these is "unknown
+// directive '#foo'".
 //
 // Each element of the parameter list is a parameter or, last, C's bare '..'
 // of a variadic C function (printf :: (format: *u8, ..) -> s32 #foreign
@@ -2284,6 +2347,14 @@ static Ast_Proc *parse_procedure(Parser *p, Token *name) {
             if (c_call) proc->c_call_pos = t->pos;
             advance(p);
             continue;
+        }
+        if (is_directive(t, "modify")) {
+            if (!proc->is_generic) {
+                error_modify_not_generic(p, t);
+                return nullptr;
+            }
+            if (!parse_generic_modify(p, &proc->modify)) return nullptr;
+            break;  // the body follows
         }
         // Where the '{' should be: parse_block reports it. A #run or an #if
         // starting the next line is where the recovery resumes, as a #load
@@ -2572,7 +2643,7 @@ static bool parse_struct_params(Parser *p, Ast_Struct *s) {
     return expect(p, TOKEN_RPAREN) != nullptr;
 }
 
-// struct = ('struct' [struct_params] | 'union' ['#tagged' [IDENT]]) members
+// struct = ('struct' [struct_params [modify]] | 'union' ['#tagged' [IDENT]]) members
 //
 // A struct's declaration, or a union's (spec 3.19), after IDENT '::' (the
 // caller read them, and saw 'struct' or 'union'): its fields as
@@ -2580,7 +2651,10 @@ static bool parse_struct_params(Parser *p, Ast_Struct *s) {
 //
 // A struct with parameters is generic (spec 3.23, parse_struct_params). A
 // union takes none, for now, nor does a tagged one: "a union can't take
-// parameters, for now", at the '(', the declaration given up.
+// parameters, for now", at the '(', the declaration given up. A generic
+// struct may have a #modify block after its parameters (spec 7.12,
+// parse_generic_modify); any other struct or union is "#modify is for a
+// generic procedure or struct, ...", at the '#modify', given up too.
 //
 // `union #tagged` declares a tagged union (spec 3.20): a name after the
 // directive is its tag's type, only a name, as an enum's integer type is
@@ -2616,6 +2690,13 @@ static Ast *parse_struct(Parser *p, Token *name) {
             return nullptr;
         }
         if (!parse_struct_params(p, s)) return nullptr;
+    }
+    if (is_directive(peek(p), "modify")) {
+        if (!s->is_generic) {
+            error_modify_not_generic(p, peek(p));
+            return nullptr;
+        }
+        if (!parse_generic_modify(p, &s->modify)) return nullptr;
     }
     if (!parse_members(p, s)) return nullptr;
     if (s->is_tagged && !s->fields.count) {

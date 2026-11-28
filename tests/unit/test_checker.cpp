@@ -15784,3 +15784,984 @@ TEST(inference_through_an_instance_that_lost_a_binding) {
               circle);
     arena_free(&a);
 }
+
+// Issue #228: #modify (spec 7.12).
+
+TEST(modify_blocks_are_checked_once_at_the_generic) {
+    // A generic's #modify block is checked once, as the generic's own
+    // code, whether a call asks for an instance or not. Its variables are
+    // the generic's type and constant parameters, a type one of type Type.
+    // A written type there is a value of type Type, and == and != of two
+    // Type values compare them when the block runs, unless both are
+    // written types, which compare while compiling. type_info of a Type
+    // value is its description, read when the block runs: the block
+    // describes types.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "pick_first :: (v: $T, n: $N) -> T #modify { t := T; if t == u8 || T == U16 { T = "
+                                 "int; } x: Type = s64; same := T == x; aliased := U16 == u16; info := type_info(T); "
+                                 "return info.size > 0 && !same; } { return v; }\n"
+                                 "U16 :: u16;\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "");
+    Ast_Proc *pick = (Ast_Proc *)top_level_named(file, "pick_first");
+    Ast_Modify *modify = pick->modify;
+    CHECK(modify != nullptr);
+    if (!modify) {
+        arena_free(&a);
+        return;
+    }
+    CHECK_EQ(modify->resolve, RESOLVE_DONE);
+    CHECK(!modify->had_errors);
+    CHECK(!pick->had_errors);
+    CHECK(modify->describes);
+    CHECK_EQ(modify->vars.count, 2);
+    if (modify->vars.count == 2) {
+        CHECK_STR(modify->vars[0]->name, "T");
+        CHECK_STR(modify->vars[1]->name, "N");
+        CHECK(modify->vars[0]->type == &type_type);
+        CHECK(modify->vars[1]->type == &type_type);
+    }
+    Array<Ast *> &statements = modify->proc->body->statements;
+    CHECK_EQ(statements.count, 7);
+    if (statements.count == 7) {
+        CHECK(statements[0]->type == &type_type);  // t
+        CHECK(statements[2]->type == &type_type);  // x
+        Ast_Binary *either = (Ast_Binary *)((Ast_If *)statements[1])->condition;
+        Ast_Binary *t_is_u8 = (Ast_Binary *)either->left;
+        CHECK(!t_is_u8->is_constant);
+        CHECK(t_is_u8->operand_type == &type_type);
+        CHECK(t_is_u8->type == &type_bool);
+        Ast *same = ((Ast_Var *)statements[3])->value;
+        CHECK(!same->is_constant);
+        Ast *aliased = ((Ast_Var *)statements[4])->value;
+        CHECK(aliased->is_constant);
+        CHECK_EQ(aliased->constant, 1);
+        // type_info(T) reads the variable T when the block runs: no
+        // description is known while compiling.
+        Ast *info = ((Ast_Var *)statements[5])->value;
+        CHECK_EQ(info->kind, AST_TYPE_INFO);
+        if (info->kind == AST_TYPE_INFO) {
+            Ast *of = ((Ast_Type_Info *)info)->of;
+            CHECK(of != nullptr && of->kind == AST_NAME);
+            if (of && of->kind == AST_NAME) CHECK_STR(((Ast_Name *)of)->name, "T");
+            CHECK(((Ast_Type_Info *)info)->described == nullptr);
+        }
+        // A return of the bool alone gives an empty message.
+        Ast_Return *ret = (Ast_Return *)statements[6];
+        CHECK_EQ(ret->values.count, 2);
+        if (ret->values.count == 2) {
+            CHECK_EQ(ret->values[1]->kind, AST_STRING);
+            CHECK(ret->values[1]->type == &type_string);
+            if (ret->values[1]->kind == AST_STRING) CHECK_EQ(((Ast_String *)ret->values[1])->value.count, 0);
+        }
+    }
+    arena_free(&a);
+}
+
+TEST(modify_block_mistakes) {
+    // Each mistake in a block is said once, as the generic's own, with no
+    // chain, whether the generic is called twice or never; then the
+    // generic makes no instance, and its calls say nothing more.
+    Arena a = arena_make();
+    const char *returns = "a #modify block returns a bool, and may add a message, as in return T != string, \"sum "
+                          "needs numbers\";";
+    const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
+                           "type_info(T).size";
+    const char *run_local = "#run can't use 'T': it's a local, which doesn't exist while compiling";
+    struct Case {
+        const char *block;  // the block's code, before its `return true;` unless `returns`
+        bool returns;
+        s32 col;
+        const char *message;
+    };
+    // The block starts at column 31 of `f :: (values: []$T) #modify { `.
+    const Case cases[] = {
+        {"#if T == int { }", false, 35, "the condition of '#if' must be known while compiling"},
+        {"x: T;", false, 34, variable},
+        {"s := size_of(T);", false, 44, variable},
+        {"a: []T;", false, 36, variable},
+        {"p := *T;", false, 37, "can't take the address of 'T': it's a 'Type'"},
+        {"a: Any = T;", false, 40, "a value of type 'Type' can't be an 'Any'; type_info(T) describes the type"},
+        {"t: Type;", false, 31, "a variable of type 'Type' needs a value, as in t := int;"},
+        {"t: Type = ---;", false, 31, "a variable of type 'Type' needs a value, as in t := int;"},
+        {"a: []Type;", false, 36, "'Type' only names types while compiling; a *Type_Info describes one at run time"},
+        {"return;", true, 31, returns},
+        {"return true, \"a\", 1;", true, 31, returns},
+        {"x := 1;", true, 39, "'#modify' must return a bool on every path, and this one reaches its end"},
+        {"return values.count > 0;", true, 38, "unknown identifier 'values'"},
+        {"T = 5;", false, 35, "a value of type 'int' doesn't convert to 'Type' implicitly"},
+        {"main();", false, 21, "main is where the program starts; #modify can't call it"},
+        // The variables are declared in the block's own scope.
+        {"T := 1;", false, 31, "'T' is already declared at test.rig:1:17"},
+        {"x := T + 1;", false, 38, "'+' needs numbers, not 'Type'"},
+        // A written type is a value in a deferred return's values too: only
+        // the return is said.
+        {"defer { return int; }", false, 39, "can't return from a deferred statement"},
+        // A written type is a value among a miscounted return's values too.
+        {"return int, \"a\", 1;", true, 31, returns},
+        // A #run is code of its own, not the block's: a type written there
+        // is no value.
+        {"t := #run int;", false, 41, "'int' is a type, not a value"},
+        {"K :: #run int;", false, 41, "'int' is a type, not a value"},
+        // It runs before the block does, so the block's variables don't
+        // exist yet: no type of T is written there either.
+        {"s := #run type_info(T).size;", false, 51, run_local},
+        {"s := #run size_of(T);", false, 49, run_local},
+        // Nor is there a T to compare with a type, nor a local holding one.
+        {"k := #run (T == int);", false, 42, run_local},
+        {"k := #run (int != T);", false, 49, run_local},
+        {"t := u8; k := #run (t == int);", false, 51,
+         "#run can't use 't': it's a local, which doesn't exist while compiling"},
+    };
+    const char *calls[] = {"a: []int; f(a); f(a);", ""};
+    for (const Case &k : cases) {
+        for (const char *call : calls) {
+            const char *text = string_cstr(&a, string_printf(&a,
+                                                             "f :: (values: []$T) #modify { %s%s } { }\n"
+                                                             "main :: () { %s }\n",
+                                                             k.block, k.returns ? "" : " return true;", call));
+            CHECK_STR(check_with_preload(&a, text),
+                      string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, k.message)));
+        }
+    }
+    // Two of them compared there are each said.
+    CHECK_STR(check_with_preload(&a, "f :: (values: []$T) #modify { t := u8; k := #run (t == T); return true; } { }\n"
+                                     "main :: () { }\n"),
+              "1:51: #run can't use 't': it's a local, which doesn't exist while compiling\n"
+              "1:56: #run can't use 'T': it's a local, which doesn't exist while compiling\n");
+    // An inner block's declaration may hide a variable, as anywhere.
+    CHECK_STR(check_with_preload(&a, "f :: (values: []$T) #modify { { T := 1; T = 2; } return true; } { }\n"
+                                     "main :: () { a: []int; f(a); }\n"),
+              "");
+    // A call with two results is one value in a return, its first, so the
+    // block would drop the message: refused, as a procedure with two
+    // results refuses it. A call with one result is the bool.
+    CHECK_STR(check_with_preload(&a, "verdict :: (ok: bool) -> bool, string { return ok, \"nope\"; }\n"
+                                     "f :: (v: $T) #modify { return verdict(T != string); } { }\n"
+                                     "main :: () { f(1); f(\"s\"); }\n"),
+              string_cstr(&a, string_printf(&a, "2:24: %s\n", returns)));
+    // So is a #run of one: it too is one value, its first result.
+    CHECK_STR(check_with_preload(&a, "verdict :: (ok: bool) -> bool, string { return ok, \"nope\"; }\n"
+                                     "f :: (v: $T) #modify { return #run verdict(false); } { }\n"
+                                     "main :: () { f(1); f(\"s\"); }\n"),
+              string_cstr(&a, string_printf(&a, "2:24: %s\n", returns)));
+    CHECK_STR(check_with_preload(&a, "fine :: (ok: bool) -> bool { return ok; }\n"
+                                     "f :: (v: $T) #modify { return fine(T != string); } { }\n"
+                                     "main :: () { f(1); }\n"),
+              "");
+    {
+        // A return of one value gets its message here, an empty string
+        // whose bytes are somewhere, so lowering copies none from nowhere.
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, "f :: (v: $T) #modify { return true; } { }\nmain :: () { f(1); }\n", &file),
+                  "");
+        Ast_Return *ret = (Ast_Return *)((Ast_Proc *)top_level_named(file, "f"))->modify->proc->body->statements[0];
+        CHECK_EQ(ret->values.count, 2);
+        Ast_String *none = (Ast_String *)ret->values[1];
+        CHECK(none->value.count == 0 && none->value.data != nullptr);
+    }
+    arena_free(&a);
+}
+
+TEST(modify_block_mistakes_in_what_it_uses) {
+    // A block's mistakes in what it calls, said once whether the generic is
+    // called twice or never. No instance takes a Type value, which exists
+    // only while compiling: one that would bind a type parameter is
+    // refused, and a variable of type Type is no $U: Type's argument. A
+    // procedure the block calls is checked as anywhere, so a type written
+    // there is no value, and one with a mistake makes the block's. The
+    // block can't use its own generic, nor can what it calls. Either way f
+    // makes no instance, whose body would say y's mistake.
+    Arena a = arena_make();
+    const char *no_instance = "a value of type 'Type' can't be an argument of 'g'; type_info(T) describes the type";
+    const char *own = "'f' can't be used in its own #modify, which decides its instances";
+    const char *box = "Box :: struct (T: Type) { v: T; }";
+    const char *unknown_box = "argument 1 of 'Box' must be known while compiling, for 'T: Type'";
+    struct Case {
+        const char *block;    // the block's code, before its `return true;`
+        const char *after;    // declarations after main, from line 3
+        const char *at;       // where its one message is, "L:C"
+        const char *message;
+    };
+    // The block starts at column 24 of `f :: (v: $T) #modify { `.
+    const Case cases[] = {
+        {"n := g(T);", "g :: (v: $U) -> int { return 1; }", "1:31", no_instance},
+        {"n := g(int);", "g :: (v: $U) -> int { return 1; }", "1:31", no_instance},
+        {"n := g(T, int);", "g :: (v: ..$U) -> int { return 1; }", "1:31", no_instance},
+        {"t := g(T);", "g :: (v: $U) -> U { return v; }", "1:31", no_instance},
+        {"n := h(T); m := h(int);", "h :: ($U: Type) -> int { return 1; }", "1:31",
+         "argument 1 of 'h' must be known while compiling, for '$U: Type'"},
+        // A generic struct's instance is none either, written as a value.
+        {"b := Box(T);", box, "1:33", unknown_box},
+        {"t := T; b := Box(t);", box, "1:41", unknown_box},
+        {"n := helper();", "helper :: () -> int { t := int; return 1; }", "3:28", "'int' is a type, not a value"},
+        {"n := helper();", "helper :: () -> int { return \"a\"; }", "3:30",
+         "a value of type 'string' doesn't convert to 'int' implicitly"},
+        {"f(1);", "", "1:24", own},
+        {"helper();", "helper :: () { f(true); }", "3:16", own},
+    };
+    const char *calls[] = {"f(1); f(2);", ""};
+    for (const Case &k : cases) {
+        for (const char *call : calls) {
+            const char *text = string_cstr(&a, string_printf(&a,
+                                                             "f :: (v: $T) #modify { %s return true; } "
+                                                             "{ y: T = \"s\"; }\n"
+                                                             "main :: () { %s }\n%s\n",
+                                                             k.block, call, k.after));
+            Ast_File *file = nullptr;
+            CHECK_STR(check_with_preload(&a, text, &file),
+                      string_cstr(&a, string_printf(&a, "%s: %s\n", k.at, k.message)));
+            Ast_Proc *f = (Ast_Proc *)top_level_named(file, "f");
+            CHECK(f->modify->had_errors);
+            CHECK(f->had_errors);
+        }
+    }
+    // A procedure checked before the block, its mistake said in its own
+    // turn, still makes the block's: f(1) makes no instance.
+    {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a,
+                                     "helper :: () -> int { t := int; return 1; }\n"
+                                     "f :: (v: $T) #modify { n := helper(); return true; } { y: T = \"s\"; }\n"
+                                     "main :: () { helper(); f(1); }\n",
+                                     &file),
+                  "1:28: 'int' is a type, not a value\n");
+        Ast_Proc *f = (Ast_Proc *)top_level_named(file, "f");
+        CHECK(f->modify->had_errors);
+        CHECK(f->had_errors);
+    }
+    // A body already under way when its use of f asks for the block's
+    // check, which reaches that body again, is the same mistake, said at
+    // the use whatever the order: helper's body before f's block, and a
+    // constant's #run that reaches a body using A, whose block calls it.
+    for (const char *call : calls) {
+        CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a,
+                                                                       "helper :: () { f(true); }\n"
+                                                                       "f :: (v: $T) #modify { helper(); return "
+                                                                       "true; } { y: T = \"s\"; }\n"
+                                                                       "main :: () { %s }\n",
+                                                                       call))),
+                  string_cstr(&a, string_printf(&a, "1:16: %s\n", own)));
+    }
+    CHECK_STR(check_with_preload(&a, "K :: #run helper();\n"
+                                     "helper :: () -> int { x: A(u8); return 1; }\n"
+                                     "A :: struct (T: Type) #modify { helper(); return true; } { v: T; }\n"
+                                     "main :: () { }\n"),
+              "2:26: 'A' can't be used in its own #modify, which decides its instances\n");
+    arena_free(&a);
+}
+
+TEST(modify_variables_of_constants_and_structs) {
+    // A constant parameter is a variable of its constant's type, a
+    // procedure's $N: int, an instance's argument's N (Ring($T, $N)) and a
+    // generic struct's N: int alike; a generic struct's block is checked
+    // once too, used or not. A block that takes no type_info of a Type
+    // value doesn't describe types: type_info(int) is a written type's
+    // description, known while compiling.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "ring :: (v: $T, $N: int) #modify { k := N + 1; i := type_info(int); return true; } "
+                                 "{ }\n"
+                                 "Ring :: struct (T: Type, N: int) #modify { if N < 1 { N = 1; } return T != u8; } "
+                                 "{ items: [N]T; }\n"
+                                 "first :: (r: Ring($T, $N)) #modify { N = 2; return true; } { }\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "");
+    Ast_Modify *modifies[] = {((Ast_Proc *)top_level_named(file, "ring"))->modify,
+                              ((Ast_Struct *)top_level_named(file, "Ring"))->modify,
+                              ((Ast_Proc *)top_level_named(file, "first"))->modify};
+    for (Ast_Modify *modify : modifies) {
+        CHECK(modify != nullptr);
+        if (!modify) continue;
+        CHECK_EQ(modify->resolve, RESOLVE_DONE);
+        CHECK(!modify->had_errors);
+        CHECK(!modify->describes);
+        CHECK_EQ(modify->vars.count, 2);
+        if (modify->vars.count != 2) continue;
+        CHECK_STR(modify->vars[0]->name, "T");
+        CHECK(modify->vars[0]->type == &type_type);
+        CHECK_STR(modify->vars[1]->name, "N");
+        CHECK(modify->vars[1]->type == &type_int);
+    }
+    CHECK(!((Ast_Struct *)top_level_named(file, "Ring"))->had_errors);
+    Array<Ast *> &statements = modifies[0]->proc->body->statements;
+    CHECK(statements.count > 1 && statements[0]->type == &type_int);  // k
+    if (statements.count > 1) {
+        Ast_Type_Info *info = (Ast_Type_Info *)((Ast_Var *)statements[1])->value;  // i
+        CHECK(info->of == nullptr);
+        CHECK(info->described == &type_int);
+    }
+    arena_free(&a);
+}
+
+TEST(modify_describes_types_only_through_type_info_of_a_variable) {
+    // A block that takes type_info of a Type value describes types: a
+    // written type in it is held as its description, which the walk lays
+    // out, so comparing T with a struct whose layout uses the block's
+    // generic is a use of List in what its own block reaches, said once, at
+    // the use, whether Node's layout or the block's check comes first. A
+    // block that only compares holds types as handles, and lays nothing out.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    const char *list = "List :: struct (T: Type) #modify { x := type_info(T); return T != Node; } { v: int; }\n"
+                       "main :: () { }\n";
+    const char *firsts[] = {"", "g: List(u8);\n"};
+    for (const char *first : firsts) {
+        CHECK_STR(check_with_preload(&a, joined(&a, first, "Node :: struct { l: List(int); }\n", list), &file),
+                  string_cstr(&a, string_printf(&a,
+                                                "%d:21: 'List' can't be used in its own #modify, which decides its "
+                                                "instances\n",
+                                                *first ? 2 : 1)));
+        CHECK(((Ast_Struct *)top_level_named(file, "List"))->modify->describes);
+    }
+    CHECK_STR(check_with_preload(&a,
+                                 "Node :: struct { l: List(int); }\n"
+                                 "List :: struct (T: Type) #modify { return T != Node; } { v: int; }\n"
+                                 "main :: () { n: Node; }\n",
+                                 &file),
+              "");
+    CHECK(!((Ast_Struct *)top_level_named(file, "List"))->modify->describes);
+    // A built-in type's name always means it where a type goes, a local of
+    // its name hiding it only where a value goes: type_info(int) is int's
+    // description, the local not read.
+    CHECK_STR(check_with_preload(&a,
+                                 "f :: (v: $T) #modify { int := u8; x: int = 300; i := type_info(int); "
+                                 "return true; } { }\n"
+                                 "main :: () { }\n",
+                                 &file),
+              "");
+    Ast_Modify *modify = ((Ast_Proc *)top_level_named(file, "f"))->modify;
+    CHECK(!modify->describes);
+    Array<Ast *> &statements = modify->proc->body->statements;
+    CHECK_EQ(statements.count, 4);
+    if (statements.count == 4) {
+        Ast_Type_Info *info = (Ast_Type_Info *)((Ast_Var *)statements[2])->value;
+        CHECK(info->of == nullptr);
+        CHECK(info->described == &type_int);
+    }
+    arena_free(&a);
+}
+
+TEST(modify_struct_block_mistakes) {
+    // A generic struct's block mistake is said once, as the struct's own,
+    // used or not, from a body or from a global's type in the declarations
+    // pass; then the struct makes no instance, and its uses say nothing
+    // more.
+    Arena a = arena_make();
+    const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
+                           "type_info(T).size";
+    const char *box = "Box :: struct (T: Type) #modify { x: T; return true; } { v: T; }\n";
+    const char *uses[] = {"main :: () { b: Box(int); c: Box(int); }\n", "main :: () { }\n"};
+    for (const char *use : uses) {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, joined(&a, box, use), &file),
+                  string_cstr(&a, string_printf(&a, "1:38: %s\n", variable)));
+        CHECK(((Ast_Struct *)top_level_named(file, "Box"))->had_errors);
+    }
+    CHECK_STR(check_with_preload(&a, joined(&a, "g: Box(int);\n", box, "main :: () { }\n")),
+              string_cstr(&a, string_printf(&a, "2:38: %s\n", variable)));
+    // A declaration worked out from inside the block is checked as
+    // anywhere: a global the block first needs, in the declarations pass,
+    // takes no written type as its value.
+    CHECK_STR(check_with_preload(&a, "b: Box(int);\n"
+                                     "Box :: struct (T: Type) #modify { x := g; return true; } { v: T; }\n"
+                                     "g := int;\n"
+                                     "main :: () { }\n"),
+              "3:6: 'int' is a type, not a value\n");
+    // A constant parameter is a variable of its constant's type.
+    CHECK_STR(check_with_preload(&a, "Ring :: struct (T: Type, N: int) #modify { s: string = N; return true; } "
+                                     "{ items: [N]T; }\n"
+                                     "main :: () { r: Ring(int, 2); }\n"),
+              "1:56: a value of type 'int' doesn't convert to 'string' implicitly\n");
+    // A struct's block can't use its own struct either.
+    const char *grows[] = {"main :: () { g: Grow(int); }\n", "main :: () { }\n"};
+    for (const char *use : grows) {
+        CHECK_STR(check_with_preload(&a, joined(&a, "Grow :: struct (T: Type) #modify { return Grow(int) != T; } "
+                                                    "{ v: T; }\n",
+                                                use)),
+                  "1:43: 'Grow' can't be used in its own #modify, which decides its instances\n");
+    }
+    arena_free(&a);
+}
+
+TEST(modify_blocks_are_checked_at_their_first_use) {
+    // A block is checked the first time an instance is asked for, before
+    // one is found or made: a use before the generic, whose block has a
+    // mistake, makes no instance, so the bodies and fields that would fail
+    // for its bindings say nothing. The block is the generic's own code,
+    // its mistakes said with no chain, even when an instance's body asks
+    // first, here through a constant's #run in the declarations pass.
+    Arena a = arena_make();
+    const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
+                           "type_info(T).size";
+    CHECK_STR(check_with_preload(&a, "main :: () { a: []int; f(a); b: Box(int); }\n"
+                                     "f :: (values: []$T) #modify { x: T; return true; } { y: T = \"s\"; }\n"
+                                     "Box :: struct (T: Type) #modify { x: T; return true; } "
+                                     "{ v: T; w: [0 - size_of(T)]u8; }\n"),
+              string_cstr(&a, string_printf(&a, "2:34: %s\n3:38: %s\n", variable, variable)));
+    CHECK_STR(check_with_preload(&a, "K :: #run wrap(1);\n"
+                                     "wrap :: (v: $T) -> int { a: []T; f(a); return 1; }\n"
+                                     "f :: (values: []$T) #modify { main(); return true; } { }\n"
+                                     "main :: () { }\n"),
+              "3:21: main is where the program starts; #modify can't call it\n");
+    // A use while a top-level #if's condition is decided is refused, for
+    // now, each one: the block would run there. It doesn't check the block,
+    // whose names may be declared in a top-level #if: a later use does, or
+    // the bodies pass, every name known, and says a mistake there once.
+    const char *deciding = "2:5: a top-level #if's condition can't run code while compiling, for now\n"
+                           "2:16: a top-level #if's condition can't run code while compiling, for now\n";
+    CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) #modify { return K; } { v: T; }\n"
+                                     "#if Box(u8) == Box(u8) { A :: 1; }\n"
+                                     "#if true { K :: true; }\n"
+                                     "main :: () { b: Box(int); }\n"),
+              deciding);
+    CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) #modify { helper(); return T != Later; } { v: T; }\n"
+                                     "#if Box(u8) == Box(u8) { A :: 1; }\n"
+                                     "#if true { Later :: struct { a: int; } }\n"
+                                     "helper :: () { }\n"
+                                     "main :: () { b: Box(int); }\n"),
+              deciding);
+    const char *mains[] = {"main :: () { b: Box(int); }\n", "main :: () { }\n"};
+    for (const char *main : mains) {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, joined(&a,
+                                                "Box :: struct (T: Type) #modify { x: T; return K; } "
+                                                "{ v: T; w: [0 - size_of(T)]u8; }\n"
+                                                "#if Box(u8) == Box(u8) { A :: 1; }\n"
+                                                "#if true { K :: true; }\n",
+                                                main),
+                                     &file),
+                  string_cstr(&a, string_printf(&a, "1:38: %s\n%s", variable, deciding)));
+        CHECK(((Ast_Struct *)top_level_named(file, "Box"))->had_errors);
+    }
+    arena_free(&a);
+}
+
+// The generics the tests of #modify's runs share (spec 7.12), lines 1 to 5:
+// widen gives u8 and u16 the instance of int, sum refuses strings, ring
+// makes a count below 1 one, say makes "" "none", and only takes int alone.
+static const char *MODIFY_GENERICS =
+    "widen :: (v: $T) -> T #modify { if T == u8 || T == u16 { T = int; } return true; } { return v; }\n"
+    "sum :: (values: []$T) -> T #modify { return T != string, \"sum needs numbers\"; } "
+    "{ t: T; for values { t += it; } return t; }\n"
+    "ring :: ($N: int, $T: Type) -> [N]T #modify { if N < 1 { N = 1; } return true; } { r: [N]T; return r; }\n"
+    "say :: ($S: string) -> string #modify { if S == \"\" { S = \"none\"; } return true; } { return S; }\n"
+    "only :: (v: $T) #modify { return T == int; } { }\n";
+
+TEST(modify_maps_given_bindings_to_one_instance) {
+    // A block runs once for each set of bindings given, and the instance a
+    // use makes is the one for the bindings it leaves: u8 and u16 widen to
+    // int, so every call shares widen(T = int), and u8, given first by a
+    // constant's #run in the declarations pass, runs nothing again: not at
+    // main's two calls, nor in twice's instance's body.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "main :: () { a := widen(cast(u8) 1); b := widen(cast(u16) 2); "
+                                            "c := widen(3); d := widen(cast(u8) 4); e := twice(1); }\n"
+                                            "twice :: (v: $T) -> int { return widen(cast(u8) 5) * 2; }\n"
+                                            "R :: #run widen(cast(u8) 6);\n"),
+                                 &file),
+              "");
+    Ast_Proc *widen = (Ast_Proc *)top_level_named(file, "widen");
+    CHECK_EQ(widen->instances.count, 1);
+    if (widen->instances.count == 1) CHECK_STR(widen->instances[0]->name, "widen(T = int)");
+    CHECK_EQ(widen->modify->runs.count, 3);
+    const char *names[] = {"a", "b", "c", "d"};
+    for (const char *name : names) CHECK_STR(type_of_main_local(&a, file, name), "int");
+    // The instance is named and chained by the bindings the block leaves,
+    // T = int, not the u8 given, and called at the use that made it: the
+    // u8 call, not the int one that finds it made. Its mistake is said once.
+    CHECK_STR(check_with_preload(&a,
+                                 "widen :: (v: $T) -> T #modify { if T == u8 { T = int; } return true; } "
+                                 "{ x: T = \"s\"; return v; }\n"
+                                 "main :: () { a := widen(cast(u8) 1); b := widen(2); }\n"),
+              "1:81: a value of type 'string' doesn't convert to 'int' implicitly\n"
+              "    in 'widen' with T = int, called at test.rig:2:19\n");
+    arena_free(&a);
+}
+
+TEST(modify_changes_the_instance_a_call_makes) {
+    // After the block, a call is any call of the instance its bindings
+    // make: a changed constant is the instance's, and the arguments
+    // convert to the instance's parameters, or are said not to.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "main :: () { x := ring(0, int); y := ring(1, int); s := say(\"\"); }\n"),
+                                 &file),
+              "");
+    Ast_Proc *ring = (Ast_Proc *)top_level_named(file, "ring");
+    CHECK_EQ(ring->instances.count, 1);
+    if (ring->instances.count == 1) CHECK_STR(ring->instances[0]->name, "ring(N = 1, T = int)");
+    CHECK_STR(type_of_main_local(&a, file, "x"), "[1]int");
+    CHECK_STR(type_of_main_local(&a, file, "y"), "[1]int");
+    Ast_Proc *say = (Ast_Proc *)top_level_named(file, "say");
+    CHECK_EQ(say->instances.count, 1);
+    if (say->instances.count == 1) CHECK_STR(say->instances[0]->name, "say(S = \"none\")");
+    // A block that describes types reads what it's given through the
+    // type's description, and may give its variable a written type: u8 and
+    // s8, one byte each, make pick(T = int), float32 its own.
+    CHECK_STR(check_with_preload(&a,
+                                 "pick :: (v: $T) -> T #modify { if type_info(T).size == 1 { T = int; } "
+                                 "return true; } { return v; }\n"
+                                 "main :: () { p := pick(cast(u8) 1); q := pick(cast(s8) 2); r := pick(2.5); }\n",
+                                 &file),
+              "");
+    Ast_Proc *pick = (Ast_Proc *)top_level_named(file, "pick");
+    CHECK(pick->modify->describes);
+    CHECK_EQ(pick->modify->runs.count, 3);
+    CHECK_EQ(pick->instances.count, 2);
+    if (pick->instances.count == 2) {
+        CHECK_STR(pick->instances[0]->name, "pick(T = int)");
+        CHECK_STR(pick->instances[1]->name, "pick(T = float32)");
+    }
+    CHECK_STR(type_of_main_local(&a, file, "q"), "int");
+    // A generic struct's instance written where a value goes is a Type
+    // value too, which a local may hold and give the variable: f(int)
+    // makes f(T = Pair(int, int)).
+    CHECK_STR(check_with_preload(&a,
+                                 "Pair :: struct (A: Type, B: Type) { a: A; b: B; }\n"
+                                 "f :: ($T: Type) -> T #modify { x: Type = Pair(int, int); T = x; return true; } "
+                                 "{ r: T; return r; }\n"
+                                 "main :: () { p := f(int); }\n",
+                                 &file),
+              "");
+    Ast_Proc *f = (Ast_Proc *)top_level_named(file, "f");
+    CHECK_EQ(f->instances.count, 1);
+    if (f->instances.count == 1) CHECK_STR(f->instances[0]->name, "f(T = Pair(int, int))");
+    CHECK_STR(type_of_main_local(&a, file, "p"), "Pair(int, int)");
+    // A block that describes types compares them as handles too, its
+    // written types the descriptions its variable holds: u8 is made int,
+    // int is kept, and bool refused.
+    CHECK_STR(check_with_preload(&a,
+                                 "pk :: (v: $T) #modify { i := type_info(T); if T == u8 { T = int; } "
+                                 "return T == int, \"only int\"; } { }\n"
+                                 "main :: () { pk(cast(u8) 1); pk(2); pk(true); }\n",
+                                 &file),
+              "2:37: 'pk' refused T = bool: only int\n");
+    Ast_Proc *pk = (Ast_Proc *)top_level_named(file, "pk");
+    CHECK(pk->modify->describes);
+    CHECK_EQ(pk->modify->runs.count, 3);
+    CHECK_EQ(pk->instances.count, 1);
+    if (pk->instances.count == 1) CHECK_STR(pk->instances[0]->name, "pk(T = int)");
+    // A constant is given as it lies in memory, and read back so: a float32
+    // narrowed from the double the constant keeps, a signed integer of one
+    // byte, an enum's member and a bool, each changed by the block.
+    CHECK_STR(check_with_preload(&a,
+                                 "Mode :: enum { A; B; C; }\n"
+                                 "fl :: ($F: float32) -> float32 #modify { if F < 1.0 { F = F + 1.5; } return true; } "
+                                 "{ return F; }\n"
+                                 "neg :: ($N: s8) -> s8 #modify { N = N * 2; return true; } { return N; }\n"
+                                 "md :: ($M: Mode) -> Mode #modify { if M == .A { M = .C; } return true; } "
+                                 "{ return M; }\n"
+                                 "bb :: ($B: bool) -> bool #modify { B = !B; return true; } { return B; }\n"
+                                 "main :: () { f := fl(0.25); n := neg(-3); m := md(.A); b := bb(true); }\n",
+                                 &file),
+              "");
+    const char *constants[][2] = {{"fl", "fl(F = 1.75)"}, {"neg", "neg(N = -6)"}, {"md", "md(M = Mode.C)"},
+                                  {"bb", "bb(B = false)"}};
+    for (s64 i = 0; i < 4; i++) {
+        Ast_Proc *generic = (Ast_Proc *)top_level_named(file, constants[i][0]);
+        CHECK_EQ(generic->instances.count, 1);
+        if (generic->instances.count == 1) CHECK_STR(generic->instances[0]->name, constants[i][1]);
+    }
+    CHECK_STR(check_with_preload(&a, "sum :: (values: []$T) -> T #modify { if T == u8 { T = int; } return true; } "
+                                     "{ t: T; for values { t += it; } return t; }\n"
+                                     "main :: () { u: [2]u8; t := sum(u); }\n"),
+              "2:33: argument 1 of 'sum' has type '[2]u8', which can't be converted to '[]int'\n");
+    arena_free(&a);
+}
+
+TEST(modify_refuses_at_each_use) {
+    // A block's false refuses the instance at each use that gives those
+    // bindings, with its message, if any, and the caller's chain; the block
+    // still runs once for them, and no instance is made.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "main :: () { sum(string.[\"a\"]); sum(string.[\"b\"]); only(true); }\n"),
+                                 &file),
+              "6:14: 'sum' refused T = string: sum needs numbers\n"
+              "6:33: 'sum' refused T = string: sum needs numbers\n"
+              "6:52: 'only' refused T = bool\n");
+    Ast_Proc *sum = (Ast_Proc *)top_level_named(file, "sum");
+    CHECK_EQ(sum->modify->runs.count, 1);
+    CHECK_EQ(sum->instances.count, 0);
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "wrap :: (v: $T) { sum(string.[\"c\"]); }\n"
+                                            "main :: () { wrap(1); }\n")),
+              "6:19: 'sum' refused T = string: sum needs numbers\n"
+              "    in 'wrap' with T = int, called at test.rig:7:14\n");
+    // A refusal names the bindings given, not those the block left.
+    CHECK_STR(check_with_preload(&a,
+                                 "nope :: (v: $T) #modify { if T == u8 { T = int; } return false, \"no\"; } { }\n"
+                                 "main :: () { nope(cast(u8) 1); nope(cast(u8) 2); }\n",
+                                 &file),
+              "2:14: 'nope' refused T = u8: no\n"
+              "2:32: 'nope' refused T = u8: no\n");
+    Ast_Proc *nope = (Ast_Proc *)top_level_named(file, "nope");
+    CHECK_EQ(nope->modify->runs.count, 1);
+    CHECK_EQ(nope->instances.count, 0);
+    arena_free(&a);
+}
+
+TEST(modify_failures_name_their_bindings) {
+    // A block that fails while it runs is said once for each set of
+    // bindings given, at the #modify, with its frames, the outermost the
+    // block's own, then the line of the instance those bindings would have
+    // made, and its chain.
+    Arena a = arena_make();
+    CHECK_STR(check_with_preload(&a, "bad :: (v: $T) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { }\n"
+                                     "main :: () { bad(1); bad(1); bad(true); }\n"),
+              "1:16: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:46)\n"
+              "    in 'bad' with T = int, called at test.rig:2:14\n"
+              "1:16: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:46)\n"
+              "    in 'bad' with T = bool, called at test.rig:2:30\n");
+    // A block that describes types has Box(int) laid out first, which
+    // enters its instance and leaves it: the failure still names the
+    // bindings given.
+    CHECK_STR(check_with_preload(&a, "Box :: struct (T: Type) { v: T; }\n"
+                                     "bad :: (v: $T) #modify { i := type_info(T); a: [1]int; k := 3; a[k] = 1; "
+                                     "return true; } { }\n"
+                                     "main :: () { p: *Box(int); bad(p); }\n"),
+              "2:16: #modify failed: runtime error: index 3 is out of bounds (count 1)\n"
+              "    in #modify (test.rig:2:65)\n"
+              "    in 'bad' with T = *Box(int), called at test.rig:3:28\n");
+    // A block first given its bindings in an instance's body fails with
+    // that use's chain under the would-be instance's line.
+    CHECK_STR(check_with_preload(&a, "bad :: (v: $T) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { }\n"
+                                     "wrap :: (v: $T) { bad(v); }\n"
+                                     "main :: () { wrap(1); }\n"),
+              "1:16: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:46)\n"
+              "    in 'bad' with T = int, called at test.rig:2:19\n"
+              "    in 'wrap' with T = int, called at test.rig:3:14\n");
+    arena_free(&a);
+}
+
+TEST(modify_cannot_use_its_own_generic) {
+    // A block decides its generic's instances, so neither it nor what it
+    // reaches can use its generic: said once, at the inner use, and no
+    // instance is made, with no hang. A block may use another generic with
+    // a block, which is checked and run first.
+    Arena a = arena_make();
+    const char *loops[] = {"main :: () { loop(2); }\n", "main :: () { }\n"};
+    for (const char *main : loops) {
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, joined(&a, "loop :: (v: $T) #modify { loop(1); return true; } { }\n", main),
+                                     &file),
+                  "1:27: 'loop' can't be used in its own #modify, which decides its instances\n");
+        CHECK_EQ(((Ast_Proc *)top_level_named(file, "loop"))->instances.count, 0);
+    }
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a,
+                                 "ping :: (v: $T) #modify { pong(1); return true; } { }\n"
+                                 "pong :: (v: $T) #modify { ping(1); return true; } { }\n"
+                                 "main :: () { ping(1); }\n",
+                                 &file),
+              "2:27: 'ping' can't be used in its own #modify, which decides its instances\n");
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "ping"))->instances.count, 0);
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "pong"))->instances.count, 0);
+    // inner's block runs while outer's is checked, before outer's runs: the
+    // count is 1 by then, and inner's block never runs again.
+    CHECK_STR(check_with_preload(&a,
+                                 "count: int;\n"
+                                 "inner :: (v: $T) #modify { count += 1; return T != bool; } { }\n"
+                                 "outer :: (v: $T) #modify { inner(1); return count == 1, \"inner ran later\"; } { }\n"
+                                 "main :: () { outer(1); }\n",
+                                 &file),
+              "");
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "inner"))->modify->runs.count, 1);
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "outer"))->modify->runs.count, 1);
+    arena_free(&a);
+}
+
+TEST(modify_own_use_through_a_declaration) {
+    // A declaration under way when its use of Box asks for the block's
+    // check, which reaches that declaration again, is a use of Box in what
+    // its own block reaches: said once, at the use, whether the declaration
+    // or the block's check comes first (a use of Box before both). Through
+    // an alias, a global the block reads, and a late field of a struct the
+    // block describes. A circle of the block's own, which doesn't run
+    // through the use, is said as a circle anywhere is.
+    Arena a = arena_make();
+    const char *own = "'Box' can't be used in its own #modify, which decides its instances";
+    struct Case {
+        const char *box;     // Box's declaration
+        const char *decl;    // the declaration under way, after it
+        const char *column;  // of Box's use in it
+    };
+    const Case cases[] = {
+        {"Box :: struct (T: Type) #modify { b: BI; return true; } { v: T; }", "BI :: Box(int);", "7"},
+        {"Box :: struct (T: Type) #modify { y := gx.v; return true; } { v: T; }", "gx: Box(u8);", "5"},
+        {"Box :: struct (T: Type) #modify { s := type_info(T).size; if T == u8 { T = Holder; } return true; } "
+         "{ v: T; }",
+         "Holder :: struct { b: *Box(u8); n: int; }", "24"},
+    };
+    // The declaration first, then the block's check first, asked for by a
+    // global before both.
+    const char *orders[] = {"%s\n%s\nmain :: () { x: Box(int); }\n", "g: Box(bool);\n%s\n%s\nmain :: () { }\n"};
+    for (const Case &k : cases) {
+        for (s64 i = 0; i < 2; i++) {
+            Ast_File *file = nullptr;
+            CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a, orders[i], k.box, k.decl)), &file),
+                      string_cstr(&a, string_printf(&a, "%d:%s: %s\n", (int)(2 + i), k.column, own)));
+            Ast_Struct *box = (Ast_Struct *)top_level_named(file, "Box");
+            CHECK(box->modify->had_errors);
+            CHECK_EQ(box->instances.count, 0);
+        }
+    }
+    // A block that reads two declarations under way, the first needing the
+    // second, whose use asked for the check, finds each in a circle through
+    // that one use: said once, whichever the block reads first, with the
+    // declarations first or the block's check first, asked for by a global
+    // before both. Two constants, two globals and two structs whose sizes
+    // the block takes. (With the check first, the first global's value is
+    // the second, which has no value known while compiling, as anywhere.)
+    struct Pair {
+        const char *generic;         // its declaration, %s%s the block's two reads
+        const char *decls;           // the two declarations, the second's use of it at line 2
+        const char *first, *second;  // the block's reads
+        const char *column;          // of the use
+        const char *unknown;         // said beyond the use with the check first, if anything
+    };
+    const char *box = "Box :: struct (T: Type) #modify { %s%sreturn true; } { v: T; }";
+    const char *list = "List :: struct (T: Type) #modify { %s%sreturn true; } { v: int; }";
+    const Pair pairs[] = {
+        {box, "A :: B;\nB :: size_of(Box(int));", "x := B; ", "y := A; ", "14", ""},
+        {box, "gA: int = gB;\ngB: int = size_of(Box(int));", "x := gB; ", "y := gA; ", "19",
+         "2:11: a global's value must be known while compiling, for now\n"},
+        {list, "Outer :: struct { i: Inner; }\nInner :: struct { l: List(int); }", "a := size_of(Inner); ",
+         "b := size_of(Outer); ", "22", ""},
+    };
+    for (const Pair &k : pairs) {
+        const char *name = k.generic == box ? "Box" : "List";
+        for (s64 swapped = 0; swapped < 2; swapped++) {
+            const char *generic = string_cstr(
+                &a, string_printf(&a, k.generic, swapped ? k.second : k.first, swapped ? k.first : k.second));
+            for (s64 asked = 0; asked < 2; asked++) {
+                const char *ask = asked ? string_cstr(&a, string_printf(&a, "g: %s(bool);\n", name)) : "";
+                const char *text =
+                    string_cstr(&a, string_printf(&a, "%s%s\n%s\nmain :: () { }\n", ask, k.decls, generic));
+                const char *said = string_cstr(&a, string_printf(&a,
+                                                                 "%s%d:%s: '%s' can't be used in its own #modify, "
+                                                                 "which decides its instances\n",
+                                                                 asked ? k.unknown : "", (int)(2 + asked), k.column,
+                                                                 name));
+                Ast_File *file = nullptr;
+                CHECK_STR(check_with_preload(&a, text, &file), said);
+                Ast_Struct *generic_struct = (Ast_Struct *)top_level_named(file, name);
+                CHECK(generic_struct->modify->had_errors);
+                CHECK_EQ(generic_struct->instances.count, 0);
+            }
+        }
+    }
+    const char *circles[] = {"Box :: struct (T: Type) #modify { y := A; return true; } { v: T; }\nA :: B;\nB :: A;\n",
+                             "A :: B;\nB :: A;\nBox :: struct (T: Type) #modify { y := A; return true; } { v: T; }\n"};
+    for (s64 i = 0; i < 2; i++) {
+        CHECK_STR(check_with_preload(&a, joined(&a, circles[i], "main :: () { x: Box(int); }\n")),
+                  string_cstr(&a, string_printf(&a, "%d:1: 'A' is defined in terms of itself\n", (int)(i ? 1 : 2))));
+    }
+    arena_free(&a);
+}
+
+TEST(modify_runs_wherever_it_is_needed) {
+    // A block runs where an instance is first asked for: in a constant's
+    // #run, and in a body that the walk of a #run's reach checks, both in
+    // the declarations pass. A top-level #if's condition can't run it yet.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS, "W :: #run widen(cast(u8) 7);\nmain :: () { }\n"),
+                                 &file),
+              "");
+    Ast_Const *w = (Ast_Const *)top_level_named(file, "W");
+    CHECK(w->type == &type_int);
+    CHECK(w->is_constant);
+    CHECK_EQ(w->constant, 7);
+    CHECK_EQ(((Ast_Proc *)top_level_named(file, "widen"))->modify->runs.count, 1);
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "V :: #run widen_twice();\n"
+                                            "widen_twice :: () -> int { return widen(cast(u16) 40000) * 2; }\n"
+                                            "main :: () { }\n"),
+                                 &file),
+              "");
+    // 80000 only when the block has made the call widen(T = int) by then: as
+    // a u16, it would wrap.
+    Ast_Const *v = (Ast_Const *)top_level_named(file, "V");
+    CHECK(v->is_constant);
+    CHECK_EQ(v->constant, 80000);
+    Ast_Proc *widen = (Ast_Proc *)top_level_named(file, "widen");
+    CHECK_EQ(widen->modify->runs.count, 1);
+    CHECK_EQ(widen->instances.count, 1);
+    if (widen->instances.count == 1) CHECK_STR(widen->instances[0]->name, "widen(T = int)");
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_GENERICS,
+                                            "#if widen(cast(u8) 1) == 1 { X :: 1; }\n"
+                                            "main :: () { }\n")),
+              "6:5: a top-level #if's condition can't run code while compiling, for now\n");
+    arena_free(&a);
+}
+
+// The generic structs the tests of #modify on structs share (spec 7.12,
+// 3.23), lines 1 and 2: Box gives u8 the instance of int and refuses
+// strings, and Ring makes a count below 1 one.
+static const char *MODIFY_STRUCTS =
+    "Box :: struct (T: Type) #modify { if T == u8 { T = int; } return T != string, \"no strings in a box\"; } "
+    "{ v: T; }\n"
+    "Ring :: struct (T: Type, N: int) #modify { if N < 1 { N = 1; } return true; } { items: [N]T; }\n";
+
+TEST(modify_makes_one_struct_type) {
+    // A struct's block runs once for each set of arguments given, and the
+    // instance a written type names is the one for the bindings it leaves:
+    // Box(u8) and Box(int) are one type, Box(int), wherever written, in a
+    // global's type in the declarations pass, where Box(u8)'s run is first
+    // needed, an alias, a local's, a literal's, and inferred through, so
+    // unbox's T is int; Ring(int, 0) is Ring(int, 1), one int of 8 bytes.
+    // Comparing the two written types is constant, and true.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "g: Box(u8);\n"
+                                            "B :: Box(u8);\n"
+                                            "unbox :: (b: Box($T)) -> T { return b.v; }\n"
+                                            "main :: () { a: Box(u8); b: Box(int); c: B; d := Box(u8).{3}; "
+                                            "e := unbox(a); r: Ring(int, 0); same := Box(u8) == Box(int); }\n"),
+                                 &file),
+              "");
+    Ast_Struct *box = (Ast_Struct *)top_level_named(file, "Box");
+    CHECK_EQ(box->instances.count, 1);
+    CHECK_EQ(box->modify->runs.count, 2);
+    Type *boxed = top_level_named(file, "g")->type;
+    CHECK(boxed && boxed->kind == TYPE_STRUCT);
+    CHECK_STR(type_name(&a, boxed), "Box(int)");
+    const char *names[] = {"a", "b", "c", "d"};
+    for (const char *name : names) CHECK(local_type(file, "main", name) == boxed);
+    CHECK_STR(type_of_main_local(&a, file, "e"), "int");
+    Ast_Proc *unbox = (Ast_Proc *)top_level_named(file, "unbox");
+    CHECK_EQ(unbox->instances.count, 1);
+    if (unbox->instances.count == 1) CHECK_STR(unbox->instances[0]->name, "unbox(T = int)");
+    Type *r = local_type(file, "main", "r");
+    CHECK(r && r->size == 8);
+    CHECK_STR(type_of_main_local(&a, file, "r"), "Ring(int, 1)");
+    Ast_Var *same = (Ast_Var *)find_local(((Ast_Proc *)top_level_named(file, "main"))->body, "same");
+    CHECK(same && same->value && same->value->is_constant && same->value->constant == 1);
+    arena_free(&a);
+}
+
+TEST(modify_struct_mistakes) {
+    // A struct's refusal is said at the written type's name, at each use
+    // that gives those arguments, a local's type, a literal's and a
+    // field's in another struct's instance, with its chain, `used at`; the
+    // block runs once for them. A block that uses its own struct is said
+    // once, however often the struct is used.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "Grow :: struct (T: Type) #modify { return Grow(int) != T; } { v: T; }\n"
+                                            "Pair :: struct (A: Type) { b: Box(A); }\n"
+                                            "main :: () { x: Box(string); y := Box(string).{\"a\"}; "
+                                            "p: Pair(string); g: Grow(u8); h: Grow(u8); }\n"),
+                                 &file),
+              "3:43: 'Grow' can't be used in its own #modify, which decides its instances\n"
+              "4:31: 'Box' refused T = string: no strings in a box\n"
+              "    in 'Pair' with A = string, used at test.rig:5:57\n"
+              "5:17: 'Box' refused T = string: no strings in a box\n"
+              "5:35: 'Box' refused T = string: no strings in a box\n");
+    Ast_Struct *box = (Ast_Struct *)top_level_named(file, "Box");
+    CHECK_EQ(box->modify->runs.count, 1);
+    CHECK_EQ(box->instances.count, 0);
+    CHECK_EQ(((Ast_Struct *)top_level_named(file, "Grow"))->instances.count, 0);
+    // A refusal names the arguments given, not those the block left.
+    CHECK_STR(check_with_preload(&a,
+                                 "Nope :: struct (T: Type) #modify { if T == u8 { T = int; } return false, \"no\"; } "
+                                 "{ v: T; }\n"
+                                 "main :: () { x: Nope(u8); y: Nope(u8); }\n",
+                                 &file),
+              "2:17: 'Nope' refused T = u8: no\n"
+              "2:30: 'Nope' refused T = u8: no\n");
+    Ast_Struct *nope = (Ast_Struct *)top_level_named(file, "Nope");
+    CHECK_EQ(nope->modify->runs.count, 1);
+    CHECK_EQ(nope->instances.count, 0);
+    // A struct's block that fails as it runs is said once for each set of
+    // arguments given, at the #modify, with its frames, then the line of
+    // the instance they would have made, `used at`, and its chain: x's
+    // Bad(string), which y's and Pair(string)'s field say nothing more of,
+    // and Pair(bool)'s field's Bad(bool).
+    CHECK_STR(check_with_preload(&a,
+                                 "Bad :: struct (T: Type) #modify { a: [2]int; i := 5; a[i] = 1; return true; } "
+                                 "{ v: T; }\n"
+                                 "Pair :: struct (A: Type) { b: Bad(A); }\n"
+                                 "main :: () { x: Bad(string); y: Bad(string); p: Pair(string); q: Pair(bool); }\n",
+                                 &file),
+              "1:25: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:55)\n"
+              "    in 'Bad' with T = string, used at test.rig:3:17\n"
+              "1:25: #modify failed: runtime error: index 5 is out of bounds (count 2)\n"
+              "    in #modify (test.rig:1:55)\n"
+              "    in 'Bad' with T = bool, used at test.rig:2:31\n"
+              "    in 'Pair' with A = bool, used at test.rig:3:66\n");
+    Ast_Struct *bad = (Ast_Struct *)top_level_named(file, "Bad");
+    CHECK_EQ(bad->modify->runs.count, 2);
+    CHECK_EQ(bad->instances.count, 0);
+    // A field's written type in an instance gives the block that
+    // instance's arguments again (spec 3.23): List(u8) is List(u16), whose
+    // next is a *List(u32), so a *List(u16) doesn't go there.
+    CHECK_STR(check_with_preload(&a, "List :: struct (T: Type) #modify { if T == u8 { T = u16; } "
+                                     "else if T == u16 { T = u32; } return true; } { value: T; next: *List(T); }\n"
+                                     "main :: () { second: List(u8); first: List(u8) = .{1, *second}; }\n"),
+              "2:55: a value of type '*List(u16)' doesn't convert to '*List(u32)' implicitly\n");
+    arena_free(&a);
+}
+
+TEST(modify_struct_given_a_type_under_way) {
+    // A block that only compares holds its types as handles, so a struct
+    // whose layout is under way may be given to it: Node holds a Wrap(Node)
+    // and points at a Box(Node), and is laid out as without the blocks. A
+    // block that describes its type lays the type out first, which a Node
+    // being laid out can't be: Node's layout uses Wrap(Node), the instance
+    // the block is deciding, said once at that use, whether Node's layout
+    // or a global's Wrap(Node) asks for the run first.
+    Arena a = arena_make();
+    Ast_File *file = nullptr;
+    const char *node = "Node :: struct { v: int; w: Wrap(Node); next: *Box(Node); }\n"
+                       "main :: () { n: Node; }\n";
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
+                                            "Wrap :: struct (T: Type) #modify { return T != bool; } { p: *T; }\n", node),
+                                 &file),
+              "");
+    Type *laid_out = ((Ast_Struct *)top_level_named(file, "Node"))->declared;
+    CHECK(laid_out && laid_out->size == 24);
+    const char *describing = "Wrap :: struct (T: Type) #modify { return type_info(T).size >= 0; } { p: *T; }\n";
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS, describing, node)),
+              "4:29: 'Wrap' can't be used in its own #modify, which decides its instances\n");
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS, describing, joined(&a, "g: Wrap(Node);\n", node))),
+              "5:29: 'Wrap' can't be used in its own #modify, which decides its instances\n");
+    // Box(Wrap(int)) makes Wrap(int), laid out for the block that describes
+    // it, and its field asks for Box(Wrap(int)), whose block is running: a
+    // use of Box in what its own block reaches, said once at the field with
+    // Wrap(int)'s chain, whether x is a Box(Wrap(int)) or points at one.
+    const char *wraps[][2] = {{"main :: () { x: Box(Wrap(int)); }\n",
+                               "2:32: 'Box' can't be used in its own #modify, which decides its instances\n"
+                               "    in 'Wrap' with T = int, used at test.rig:3:21\n"},
+                              {"main :: () { x: *Box(Wrap(int)); }\n",
+                               "2:32: 'Box' can't be used in its own #modify, which decides its instances\n"
+                               "    in 'Wrap' with T = int, used at test.rig:3:22\n"}};
+    for (s64 i = 0; i < 2; i++) {
+        CHECK_STR(check_with_preload(&a, joined(&a,
+                                                "Box :: struct (T: Type) #modify { return type_info(T).size >= 0; } "
+                                                "{ p: *T; }\n"
+                                                "Wrap :: struct (T: Type) { b: *Box(Wrap(T)); v: T; }\n",
+                                                wraps[i][0]),
+                                     &file),
+                  wraps[i][1]);
+        CHECK_EQ(((Ast_Struct *)top_level_named(file, "Box"))->instances.count, 0);
+    }
+    arena_free(&a);
+}

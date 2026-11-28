@@ -843,6 +843,27 @@ TEST(interp_maps_read_only_globals) {
     arena_free(&a);
 }
 
+TEST(interp_global_at_finds_a_mapped_global) {
+    // The globals a module gained are mapped without a run (interp_map),
+    // as a #modify block's run needs a description's address before it
+    // starts (spec 7.12); and a global is found again by the address its
+    // bytes start at, but not by one inside them.
+    Arena a = arena_make();
+    Ir_Module *m = lower_source(&a, "main :: () { }\n");
+    s32 first = add_read_only_global(m, "first", 16, 8);
+    s32 second = add_read_only_global(m, "second", 16, 8);
+    Interp *in = interp_new(m);
+    String error = {};
+    CHECK(interp_map(in, &a, &error));
+    CHECK_STR(error, "");
+    CHECK_EQ(interp_global_at(in, (u64)(uintptr_t)interp_global(in, first)), first);
+    CHECK_EQ(interp_global_at(in, (u64)(uintptr_t)interp_global(in, second)), second);
+    CHECK_EQ(interp_global_at(in, (u64)(uintptr_t)interp_global(in, first) + 8), -1);
+    CHECK_EQ(interp_global_at(in, 0), -1);
+    interp_free(in);
+    arena_free(&a);
+}
+
 TEST(interp_reads_constant_data) {
     // Issue #113: constants' read-only globals, read at run time through an
     // index, a for and a procedure in a table: sub(7, 2) * 1000, plus the

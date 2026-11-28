@@ -1270,25 +1270,27 @@
 //   takes_a_type): a variable, any other parameter, a field, a cast,
 //   size_of, type_info and a type value of it are "'Type' only names types
 //   while compiling; a *Type_Info describes one at run time", at the type
-//   (checker.cpp's resolve_written).
-// - Only == and != and a $T: Type parameter's argument take type values
-//   for now. For == and != (check_type_comparison), with either operand
-//   naming a type, both must ("'==' compares a type only with a type, as
-//   in T == int", at the operator), and the result is a constant bool, 1
-//   for == when they're the same type (one Type *), for != when they
-//   aren't: `int == s64` is false, `float == float32` true, so `#if`
-//   decides on one and a constant may be one. A $T: Type's argument is
-//   checked as a type value when it names a type (check_expr.cpp's
+//   (checker.cpp's resolve_written), but a #modify block's local (below).
+// - Only == and != and a $T: Type parameter's argument take type values for
+//   now, outside a #modify block (below). When either operand of == or !=
+//   names a type (check_type_comparison), both must ("'==' compares a type
+//   only with a type, as in T == int", at the operator), and the result is
+//   a constant bool, 1 for == when they're the same type (one Type *), for
+//   != when they aren't: `int == s64` is false, `float == float32` true, so
+//   `#if` decides on one and a constant may be one (in a #modify block, one
+//   with a variable of type Type is no constant, below). A $T: Type's
+//   argument naming a type is checked as a type value (check_expr.cpp's
 //   check_generic_call). Anywhere else a type is "'Vec2' is a type, not a
 //   value" as ever, at a name (`*Vec2` at Vec2), and "'[]int' is a type,
 //   not a value" at an Ast_Type_Value's start, its type named as messages
 //   name types.
-// - What lowering may rely on: no node of type Type is lowered. A type
-//   value has type Type and is never a constant (Ast.is_constant false),
-//   the type it denotes in Ast.constant's bits (type_value); a comparison
-//   of types is a constant bool, its operand_type Type, lowered as its
-//   constant. A #run's walk takes a node of type Type as a leaf
-//   (check_run.cpp's walk_expression).
+// - What lowering may rely on: no node of type Type is lowered, outside a
+//   #modify block (below). A type value has type Type and is never a
+//   constant (Ast.is_constant false), the type it denotes in Ast.constant's
+//   bits (type_value); a comparison of two written types is a constant
+//   bool, its operand_type Type, lowered as its constant (in a #modify
+//   block one with a variable of type Type isn't, below). A #run's walk
+//   takes a node of type Type as a leaf (check_run.cpp's walk_expression).
 //
 // Generic procedures (issue #226, spec 7.11).
 // - A procedure whose parameters' types declare a type parameter, $T, or
@@ -1661,6 +1663,128 @@
 //   made, its Type named as the instance. Nothing goes through the
 //   instances themselves (Ast_File.struct_instances).
 //
+// #modify (issue #228, spec 7.12).
+// - A generic procedure or struct may carry a #modify block, after the
+//   procedure's directives or the struct's parameters (parser.cpp's
+//   parse_generic_modify), a procedure of its own named #modify, at the
+//   directive, with no parameters, whose results are bool and string
+//   (Ast_Modify.proc). It is never cloned: an instance has none.
+// - Its check (check_generic.cpp's check_modify) is once, as the generic's
+//   own code, at the top level and with no chain, whether an instance is
+//   ever asked for or not: the first time one is (modify_bindings, from
+//   check_instance and check_struct_instance, before finding one), or in
+//   check()'s pass over the bodies (check_generic_modify), a generic
+//   struct's after its own check. Its variables (Ast_Modify.vars) are the
+//   generic's type and constant parameters, in its order, at what declares
+//   them, a type one of type Type, a constant one of its constant's type;
+//   its body declares them in its scope (checker.cpp's check_body), so a
+//   local can't take their names there. Its body is checked with
+//   check_reached_body, then what it reaches walked (check_run.cpp's
+//   reach_modify), so a body it calls has no errors before it runs; a call
+//   of main there is "main is where the program starts; #modify can't call
+//   it", at the #modify. Any mistake sets Ast_Modify.had_errors and the
+//   generic's had_errors: it makes no instance, and its uses say nothing
+//   more. A procedure's other parameters aren't in its scope: no call's
+//   arguments exist when it runs. A use of the generic from the block, or
+//   from code it reaches, finds the check under way: "'sum' can't be used
+//   in its own #modify, which decides its instances", at the use, the
+//   block's mistake. So does a declaration or a body under way since before
+//   the check began, found under way again: it led to the use, and the
+//   circle runs through it (checker.cpp's say_circle), whichever was
+//   checked first. A use while a top-level #if's condition is decided is
+//   refused, for now: "a top-level #if's condition can't run code while
+//   compiling, for now", at the use, and no instance. It doesn't check the
+//   block, whose names may be declared in a top-level #if: a later use or
+//   the bodies pass does.
+// - Checker.modify is set while the block's own body is checked, and set
+//   aside with the scopes, so a procedure it calls, or a declaration worked
+//   out inside it, is checked as anywhere; and for a #run's operand
+//   (check_run.cpp's check_run), code run on its own. In it:
+//   - a written type where a value goes (expr_names_type) is a value of type
+//     Type wherever a value goes (check_value gives it to check_type_value);
+//   - a local's whole type may be Type, with a value: `t: Type;` and `t:
+//     Type = ---;` are "a variable of type 'Type' needs a value, as in t :=
+//     int;", at its name (checker.cpp's check_var), the variable of type
+//     Type all the same; `[]Type` and the like keep "'Type' only names types
+//     while compiling; ...";
+//   - == and != with two operands of type Type, variables or written types,
+//     compare types (check_type_comparison): a constant only when both are
+//     written types; otherwise operand_type is Type, worked out when the
+//     block runs, so `#if T == int` is "the condition of '#if' must be known
+//     while compiling";
+//   - type_info(t) of a variable t of type Type is that variable's
+//     description, read when the block runs (Ast_Type_Info.of, described
+//     null), and sets Ast_Modify.describes; it is no constant address
+//     (type_info_address); a built-in type's name there means the type,
+//     a local of its name hiding it only where a value goes;
+//   - a written type naming such a variable, `x: T;`, `size_of(T)`, `[]T`,
+//     is "'T' is a variable of type 'Type', not a type; type_info(T)
+//     describes it, as in type_info(T).size", at the name; `*T` is "can't
+//     take the address of 'T': it's a 'Type'"; a Type value meeting an Any
+//     is "a value of type 'Type' can't be an 'Any'; type_info(T) describes
+//     the type", at the value; one at a place where a generic's call would
+//     bind a type parameter from it is "a value of type 'Type' can't be an
+//     argument of 'g'; type_info(T) describes the type", and a variable of
+//     type Type as a $U: Type's argument is "argument 1 of 'h' must be known
+//     while compiling, for '$U: Type'" (check_generic.cpp's infer_bindings
+//     and bake_argument), as a generic struct's T: Type's is ("argument 1
+//     of 'Box' must be known while compiling, for 'T: Type'",
+//     bind_struct_argument), so no instance has a Type parameter; any
+//     other use gets the messages any value of its type gets;
+//   - `return b;` gives an empty message: check_return appends a string ""
+//     at the return, so the return holds two values from then on; any other
+//     count is "a #modify block returns a bool, and may add a message, as in
+//     return T != string, \"sum needs numbers\";", at the 'return', and so
+//     is one value that is a call with several results, which would drop
+//     the message; a block whose end is reached is "'#modify' must return a
+//     bool on every path, and this one reaches its end", at its '}'.
+// - What a later stage may rely on: only a #modify block's code has nodes
+//   of type Type that aren't a constant comparison's operands: a read of a
+//   variable of type Type, or a written type (type_value). The walk takes
+//   either as a leaf, a written type reaching its description when the
+//   block describes types (check_run.cpp's walk_expression), and a constant
+//   comparison of types as a leaf too, its operands never looked at.
+// - The block runs (check_generic.cpp's modify_bindings) between the
+//   bindings a generic procedure's call infers and finding its instance
+//   (check_instance), or between the arguments a generic struct's written
+//   type binds and finding that instance (check_struct_instance), once for
+//   each set of bindings given, while checking, rig check too, before the
+//   instance's signature is checked or its fields laid out: its check
+//   first, then its cache (Ast_Modify.runs, the generic's, program-wide), a
+//   Modify_Run per set given, compared as instances are (same_bindings), so
+//   a set already given, by any use anywhere, runs nothing. A new set runs
+//   in the compile-time world, as a #run does (run.cpp's
+//   compile_time_modify), the checker's chain starting with the line of
+//   the instance the given bindings would make ("    in 'sum' with T =
+//   string, called at PATH:L:C"; a struct's "used at"). Its result is
+//   final: the instance is the one of the bindings it left, found or made
+//   as any other, named and chained by them, so widen(cast(u8) 1) and
+//   widen(2) share widen(T = int), and Box(u8) and Box(int) are one type,
+//   Box(int); the call's arguments then convert to that instance's
+//   parameters as any call's do. A failure, "#modify failed: runtime
+//   error: MESSAGE" at the #modify with its frames and that chain, is said
+//   once for its set; the uses given it say nothing more. A false is said
+//   at every use given its set: "'sum' refused T = string: sum needs
+//   numbers", or "'sum' refused T = string" for an empty message, at the
+//   use (a written type's name), with the caller's chain. Neither makes an
+//   instance.
+// - When the block runs, a Type value is a handle (lower.cpp's
+//   lower_type_value): a block that describes types holds each as its
+//   description's address, and has the types it is given walked for their
+//   descriptions before it runs (check_run.cpp's reach_descriptions), each
+//   laid out; any other holds each as its Type *, and nothing is described
+//   or laid out for it. Either way == and != compare handles. So a struct
+//   whose layout is under way may be given to a block that only compares,
+//   Node :: struct { w: Wrap(Node); }, and laid out as without it. Given to
+//   one that describes types, its layout, under way since before the run,
+//   is found under way again: it led to the use whose run needs it, said
+//   at that use, "'Wrap' can't be used in its own #modify, which decides
+//   its instances" (checker.cpp's say_circle). A type whose layout, for
+//   that walk, uses the instance being decided, Wrap(int) with a field
+//   *Box(Wrap(int)) given to Box's block, finds its run under way, and is
+//   said the same way, at that use, with its chain; the run fails, said no
+//   more.
+//
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.
 // - A string after the library is the C function's name (issue #135),
@@ -1851,9 +1975,10 @@ Ast_Proc *procedure_address(Ast *e);
 // The type_info(T) whose description's address e, checked, is: the node
 // itself, a field or an element of constant data that holds one
 // (Holder.{type_info(int)}.t, constant_data), or a cast of any of them
-// between pointer types; null otherwise, a cast to an integer too. A global
-// may hold one, its address written by the linker (spec 4.3): the checker
-// asks this to allow it, and lowering to write it.
+// between pointer types; null otherwise, a cast to an integer too, and a
+// #modify block's type_info(t) of a variable of type Type (spec 7.12). A
+// global may hold one, its address written by the linker (spec 4.3): the
+// checker asks this to allow it, and lowering to write it.
 Ast_Type_Info *type_info_address(Ast *e);
 
 // A procedure built into the language for resizable arrays (spec 3.17),

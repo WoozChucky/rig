@@ -167,6 +167,13 @@ static void dump(Array<u8> *buffer, Ast *node) {
             }
             out(buffer, ")");
         }
+        // A generic's #modify block (spec 7.12), before its body: (modify
+        // (block ...)).
+        if (proc->modify) {
+            out(buffer, " (modify ");
+            dump(buffer, proc->modify->proc->body);
+            out(buffer, ")");
+        }
         if (proc->body) {
             out(buffer, " ");
             dump(buffer, proc->body);
@@ -427,7 +434,8 @@ static void dump(Array<u8> *buffer, Ast *node) {
         // has its integer type, _ for none: (union #tagged Shape _ (circle
         // Circle) (empty void)). A generic struct's parameters come first,
         // each as a parameter prints: (struct Map (params (K Type) (V
-        // Type)) (keys (resizable K))).
+        // Type)) (keys (resizable K))); its #modify block after them (spec
+        // 7.12): (struct Box (params (T Type)) (modify (block ...)) (v T)).
         Ast_Struct *s = (Ast_Struct *)node;
         out(buffer, s->is_tagged ? "(union #tagged" : s->is_union ? "(union" : "(struct");
         if (s->name.count) {
@@ -448,6 +456,11 @@ static void dump(Array<u8> *buffer, Ast *node) {
                 out(buffer, " ");
                 dump(buffer, s->params[i]);
             }
+            out(buffer, ")");
+        }
+        if (s->modify) {
+            out(buffer, " (modify ");
+            dump(buffer, s->modify->proc->body);
             out(buffer, ")");
         }
         for (s64 i = 0; i < s->fields.count; i++) {
@@ -730,6 +743,8 @@ Ast *ast_clone(Arena *a, Ast *node) {
         to->c_name_pos = from->c_name_pos;
         to->body_levels = from->body_levels;
         to->is_generic = from->is_generic;
+        // Its #modify (spec 7.12) stays null: the block decides which
+        // instance a use makes, so it's the generic's alone.
         return to;
     }
     case AST_PARAM: {
@@ -1065,6 +1080,7 @@ Ast *ast_clone(Arena *a, Ast *node) {
         to->tag_expr = clone_type(a, from->tag_expr);
         to->params = clone_list(a, from->params);
         to->is_generic = from->is_generic;
+        // Its #modify stays null, as a procedure's does.
         return to;
     }
     case AST_FIELD: {

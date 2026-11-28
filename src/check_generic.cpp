@@ -10,13 +10,17 @@
 // 3.23; checker.h's "Generic structs"): a generic struct's own check, and
 // its instances, one per set of arguments, program-wide, each a copy of
 // its tree with its parameters bound, laid out as any struct: found in
-// their cache, bound, named and chained as the procedures' are. The checks
-// here that only look at each name in a written type or an expression, the
-// signature's, the inference's, the parameters' and the body's, go through
-// that type or expression with one walk (walk_names), each saying what it
-// does at a name in an action of its own; match_type and add_written_type,
-// which pair a pattern with a type or write one out, walk the type
-// themselves.
+// their cache, bound, named and chained as the procedures' are. And #modify
+// (spec 7.12; checker.h's "#modify"): a generic's block, checked once as
+// its own code (check_modify, check_generic_modify), and run between the
+// bindings a use gives and finding their instance, once for each set given
+// (modify_bindings), which decides the bindings the instance is found or
+// made with, or refuses them. The checks here that only look at each name
+// in a written type or an expression, the signature's, the inference's, the
+// parameters' and the body's, go through that type or expression with one
+// walk (walk_names), each saying what it does at a name in an action of its
+// own; match_type and add_written_type, which pair a pattern with a type or
+// write one out, walk the type themselves.
 
 #include "check.h"
 
@@ -1200,13 +1204,23 @@ static bool bake_constant(Checker *c, Ast *arg, Generic_Binding *b, s64 index, S
 // why it can't be, or when the argument's own check failed (said):
 // - a $T: Type takes a type, checked as a type value (check_expr.cpp's
 //   check_generic_call): anything else is "argument 2 of 'get' must be a
-//   type, for '$T: Type'", at it;
+//   type, for '$T: Type'", at it, and a #modify block's variable of type
+//   Type (spec 7.12), whose type is known only when the block runs, is
+//   "argument 1 of 'get' must be known while compiling, for '$T: Type'";
 // - a $N: int takes a constant (bake_constant).
 static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *arg, s64 index, Generic_Binding *b) {
     if (!arg->type) return false;
     if (b->is_type) {
         if (arg->type != &type_type) {
             diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must be a type, for '" STR_FMT "'",
+                       (long long)(index + 1), STR_ARG(generic->name), STR_ARG(baked_text(c, param)));
+            return false;
+        }
+        // A #modify block's Type value that no written type gives (spec
+        // 7.12), a variable's, holds its type only when the block runs.
+        if (!type_value(arg)) {
+            diag_error(c->diag, arg->start,
+                       "argument %lld of '" STR_FMT "' must be known while compiling, for '" STR_FMT "'",
                        (long long)(index + 1), STR_ARG(generic->name), STR_ARG(baked_text(c, param)));
             return false;
         }
@@ -1228,7 +1242,11 @@ static bool bake_argument(Checker *c, Ast_Proc *generic, Ast_Param *param, Ast *
 //   instance the argument is: one that can't match is "argument 1 of
 //   'first' has type 'int', which doesn't fit '[]$T'", at it. An untyped
 //   number meeting a pattern with more to it than a name is matched as its
-//   default type (int, float32): `first(5)` is such a mistake.
+//   default type (int, float32): `first(5)` is such a mistake. A #modify
+//   block's Type value (spec 7.12) binds none: no instance's parameter
+//   holds a type, which exists only while compiling, so one at a place
+//   still to bind is "a value of type 'Type' can't be an argument of 'g';
+//   type_info(T) describes the type", at it.
 // - A type parameter still unbound then has only untyped numbers, or
 //   arguments with no type of their own, at its places: if every one is an
 //   untyped number, the type they meet at (an untyped float if any is one,
@@ -1258,6 +1276,13 @@ static bool infer_bindings(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast
         if (type_is_untyped(t)) {
             if (pattern->kind == AST_TYPE_NAME) continue;  // its default only if nothing typed fixes it
             t = t == &type_untyped_float ? &type_float32 : &type_int;
+        }
+        if (t == &type_type && names_unbound(pattern, bindings, nullptr)) {
+            diag_error(c->diag, args[i]->start,
+                       "a value of type 'Type' can't be an argument of '" STR_FMT
+                       "'; type_info(T) describes the type",
+                       STR_ARG(generic->name));
+            return false;
         }
         bool lost = false;
         if (match_type(c, pattern, t, bindings, &lost)) continue;
@@ -1454,14 +1479,20 @@ static const s64 INSTANCES_SHOWN = 10;
 // they were when it was made (Ast_Instance.shown): since then a type
 // binding may have lost its type (made again to null, check()'s
 // made_again), while its body or its fields still make instances whose
-// chains pass through it.
+// chains pass through it. chain_line writes such a line for generic
+// `generic`, bindings `shown` and the use at `at`: an instance's, or that
+// of the one a #modify block's given bindings would make, while the block
+// runs (spec 7.12, modify_bindings).
+static String chain_line(Checker *c, String generic, String shown, bool of_struct, Position at) {
+    return string_printf(c->arena, "    in '" STR_FMT "' with " STR_FMT ", %s at " STR_FMT ":%d:%d\n", STR_ARG(generic),
+                         STR_ARG(shown), of_struct ? "used" : "called", STR_ARG(c->diag->files[at.file].path),
+                         at.line, at.col);
+}
+
 static String instance_line(Checker *c, Ast_Instance *inst) {
-    Position at = inst->called_at;
     bool of_struct = inst->generic_struct != nullptr;
     String generic = of_struct ? inst->generic_struct->name : inst->generic->name;
-    return string_printf(c->arena, "    in '" STR_FMT "' with " STR_FMT ", %s at " STR_FMT ":%d:%d\n", STR_ARG(generic),
-                         STR_ARG(inst->shown), of_struct ? "used" : "called", STR_ARG(c->diag->files[at.file].path),
-                         at.line, at.col);
+    return chain_line(c, generic, inst->shown, of_struct, inst->called_at);
 }
 
 String instance_context(Checker *c, Ast_Instance *inst) {
@@ -1504,16 +1535,24 @@ static bool same_binding(Ast *made, Generic_Binding *b) {
     return constant->constant == b->value->constant;
 }
 
+// Whether bindings `made`, an instance's or a #modify run's (make_bindings),
+// bind what `bindings` would, binding by binding (same_binding): the one
+// comparison an instance's cache and a #modify block's both use, so they
+// agree on which sets are the same.
+static bool same_bindings(Array<Ast *> made, Array<Generic_Binding> bindings) {
+    for (s64 k = 0; k < bindings.count; k++) {
+        if (!same_binding(made[k], &bindings[k])) return false;
+    }
+    return true;
+}
+
 // The instance whose bindings are `bindings` in `cache`, a generic's
 // instances (Ast_Proc.instances, Ast_Struct.instances), made already, or
 // null: compared binding by binding, a type by its Type * (every type
-// exists once), a constant by its type and value (same_binding).
+// exists once), a constant by its type and value (same_bindings).
 static Ast_Instance *find_instance(Array<Ast_Instance *> cache, Array<Generic_Binding> bindings) {
     for (s64 i = 0; i < cache.count; i++) {
-        Ast_Instance *inst = cache[i];
-        bool same = true;
-        for (s64 k = 0; k < bindings.count && same; k++) same = same_binding(inst->bindings[k], &bindings[k]);
-        if (same) return inst;
+        if (same_bindings(cache[i]->bindings, bindings)) return cache[i];
     }
     return nullptr;
 }
@@ -1638,10 +1677,191 @@ static Ast_Instance *make_instance(Checker *c, Ast_Proc *generic, Array<Generic_
     return inst;
 }
 
+// #modify (spec 7.12). A generic procedure or struct may carry a block of
+// code, run while compiling before each new set of bindings its uses give
+// makes an instance. The block is checked once, as the generic's own code,
+// whether an instance is ever asked for or not: the first time one is, or
+// else in check()'s pass over the bodies (check_generic_modify). A mistake
+// there is the generic's, which then makes no instance.
+
+void report_used_in_own_modify(Checker *c, String name, Position at) {
+    diag_error(c->diag, at, "'" STR_FMT "' can't be used in its own #modify, which decides its instances",
+               STR_ARG(name));
+}
+
+bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Array<Generic_Binding> declared) {
+    // While a top-level #if's condition is decided, there's no compile-time
+    // world to run the block in (spec 4.9), so the use is refused, for now,
+    // as a #run there is (check_run.cpp's check_run), and makes no
+    // instance. And a lookup knows only what's outside every top-level #if
+    // (checker.h), so the block isn't checked here, but by a later use or
+    // in the pass over the bodies, with every name it may use known.
+    if (c->deciding) {
+        diag_error(c->diag, at, "a top-level #if's condition can't run code while compiling, for now");
+        return false;
+    }
+    if (modify->resolve == RESOLVE_DONE) return !modify->had_errors;
+    // Under way: a use from inside the block, or from code it reaches, asks
+    // for its own generic's instance, which the block decides. Said at the
+    // use, so the check under way has an error: the generic's. (A use in a
+    // declaration already under way when the check began, that the block
+    // reaches again, is found where that declaration is found under way
+    // instead: checker.cpp's say_circle.)
+    if (modify->resolve == RESOLVE_UNDER_WAY) {
+        report_used_in_own_modify(c, name, at);
+        return false;
+    }
+    modify->resolve = RESOLVE_UNDER_WAY;
+    Modify_Check check = {name, at, c->diag->context, c->resolving.count, c->modify_check, false};
+    c->modify_check = &check;
+    // The generic's own code, in no instance: its mistakes are said with no
+    // chain, whichever use asked for the check first.
+    Ast_Instance *outer_instance = c->instance;
+    String outer_context = c->diag->context;
+    enter_instance(c, nullptr);
+    s64 errors = c->diag->error_count;
+    // Its variables, one per parameter, which the block's body declares in
+    // its own scope (checker.cpp's check_body): a type parameter's of type
+    // Type, a constant one's of the constant's type (null when the
+    // generic's own check refused it, its mistake said).
+    for (s64 i = 0; i < declared.count; i++) {
+        Generic_Binding *b = &declared[i];
+        Ast_Var *var = ast_new<Ast_Var>(c->arena, AST_VAR, b->declared);
+        var->name = b->name;
+        var->type = b->is_type ? &type_type : b->type;
+        array_add(&modify->vars, var);
+    }
+    Ast_Proc *proc = modify->proc;
+    bool fine = check_proc_signature(c, proc) && check_reached_body(c, proc, modify->pos) && reach_modify(c, modify);
+    modify->had_errors = !fine || c->diag->error_count != errors;
+    modify->resolve = RESOLVE_DONE;
+    c->modify_check = check.outer;
+    enter_instance(c, outer_instance);
+    c->diag->context = outer_context;
+    return !modify->had_errors;
+}
+
+static Array<Generic_Binding> struct_parameters(Ast_Struct *generic);
+
+void check_generic_modify(Checker *c, Ast *generic) {
+    if (generic->kind == AST_PROC) {
+        Ast_Proc *proc = (Ast_Proc *)generic;
+        // Its signature, whose check gives a constant parameter its type,
+        // is done in the pass before; one found in a circle, or too deep,
+        // was said, and its block isn't checked.
+        if (!proc->modify || proc->modify->resolve != RESOLVE_NOT_YET || !check_proc_signature(c, proc)) return;
+        Array<Generic_Binding> declared = generic_parameters(c, proc);
+        if (!check_modify(c, proc->modify, proc->name, proc->modify->pos, declared)) proc->had_errors = true;
+        array_free(&declared);
+        return;
+    }
+    Ast_Struct *s = (Ast_Struct *)generic;
+    if (!s->modify || s->modify->resolve != RESOLVE_NOT_YET) return;
+    // Its own check, which gives a constant parameter its type, is done in
+    // the pass before, but for one too deep to check there, said.
+    check_generic_struct(c, s);
+    if (s->resolve != RESOLVE_DONE) return;
+    Array<Generic_Binding> declared = struct_parameters(s);
+    if (!check_modify(c, s->modify, s->name, s->modify->pos, declared)) s->had_errors = true;
+    array_free(&declared);
+}
+
+// Which bindings a use of generic `name` makes its instance of, when the
+// generic has #modify block `modify` (spec 7.12): *bindings, the ones the
+// use's arguments bound, at `at`, where its messages point, used at
+// `used_at`, where the would-be instance's chain line says it was used;
+// `of_struct` for a generic struct's, whose use is a written type, `used
+// at` in a chain. True with *bindings the block's result; false after
+// saying why there's no instance. In order:
+// 1. The block's check (check_modify), whose declared parameters' names,
+//    places, kinds and constant types are those of *bindings: false when it
+//    refuses a use while a top-level #if's condition is decided, when the
+//    block has a mistake (the generic's, Ast_Modify.had_errors, so the uses
+//    say nothing more), or when the use is the block's own, from inside it
+//    or from code it reaches: each said by check_modify.
+// 2. The block's cache (Ast_Modify.runs), the generic's, program-wide: a
+//    run given the same bindings, compared as find_instance compares an
+//    instance's (same_bindings). With none, the bindings given are made
+//    (make_bindings), the cache's key, and the block runs for them
+//    (run.cpp's compile_time_modify). While it runs, the checker's chain
+//    (Diagnostics.context) starts with the line of the instance the given
+//    bindings would make, "    in 'sum' with T = string, called at
+//    PATH:L:C", so a failure there names them. The run joins the cache
+//    before it starts, so a use that would run it again while it runs
+//    finds it running: one in the code a type's description reaches, as
+//    the type is laid out before the block runs (a Wrap(int) whose field
+//    is a *Box(Wrap(int)), given to Box's block), asks for an instance the
+//    block is deciding. Said at the use as one inside the block is, with
+//    its chain, so the layout fails, and the run with it: false. A type
+//    given while its layout is under way, the layout whose use asked for
+//    the run, is the same circle the other way round, found where the
+//    layout is found under way: said at the use all the same (a
+//    Modify_Check for the run; checker.cpp's say_circle).
+// 3. A run that failed was said once, as it ran: false, and nothing more
+//    is said, here or at any later use given those bindings.
+// 4. A run that refused is said at each use that gives those bindings,
+//    with the caller's chain: "'sum' refused T = string: sum needs
+//    numbers", or "'sum' refused T = string" for an empty message, the
+//    bindings given written as an instance's are (bindings_text). False.
+// 5. A run that accepted rewrites *bindings to the bindings it left: true.
+static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<Generic_Binding> *bindings,
+                            Position at, Position used_at, bool of_struct) {
+    if (!check_modify(c, modify, name, at, *bindings)) return false;
+    Array<Generic_Binding> &given = *bindings;
+    Modify_Run *run = nullptr;
+    for (s64 i = 0; i < modify->runs.count && !run; i++) {
+        if (same_bindings(modify->runs[i]->given, given)) run = modify->runs[i];
+    }
+    if (!run) {
+        run = arena_new<Modify_Run>(c->arena);
+        make_bindings(c, given, &run->given);
+        for (s64 k = 0; k < given.count; k++) array_add(&run->result, given[k]);
+        array_add(&modify->runs, run);
+        String outer = c->diag->context;
+        String line = chain_line(c, name, bindings_text(c->arena, run->given), of_struct, used_at);
+        c->diag->context = string_printf(c->arena, STR_FMT STR_FMT, STR_ARG(line), STR_ARG(outer));
+        Modify_Check running = {name, at, outer, c->resolving.count, c->modify_check, false};
+        c->modify_check = &running;
+        run->running = true;
+        run->ran = compile_time_modify(c->world, c, modify, &run->result, &run->accepted, &run->message);
+        run->running = false;
+        c->modify_check = running.outer;
+        c->diag->context = outer;
+    } else if (run->running) {
+        report_used_in_own_modify(c, name, at);
+        return false;
+    }
+    if (!run->ran) return false;
+    if (!run->accepted) {
+        String shown = bindings_text(c->arena, run->given);
+        if (run->message.count) {
+            diag_error(c->diag, at, "'" STR_FMT "' refused " STR_FMT ": " STR_FMT, STR_ARG(name), STR_ARG(shown),
+                       STR_ARG(run->message));
+        } else {
+            diag_error(c->diag, at, "'" STR_FMT "' refused " STR_FMT, STR_ARG(name), STR_ARG(shown));
+        }
+        return false;
+    }
+    for (s64 k = 0; k < given.count; k++) given[k] = run->result[k];
+    return true;
+}
+
 Ast_Proc *check_instance(Checker *c, Ast_Proc *generic, Array<Ast *> args, Ast *callee, Position called_at) {
     Array<Generic_Binding> bindings = generic_parameters(c, generic);
     Ast_Proc *proc = nullptr;
-    if (infer_bindings(c, generic, args, callee, &bindings)) {
+    // Before any instance, the generic's #modify block (spec 7.12) decides
+    // which bindings make it (modify_bindings): a block with a mistake makes
+    // the generic's, which makes no instance, and the calls say nothing
+    // more; a refusal or a failure, said, makes none either. The instance
+    // is then the one of the bindings the block left, found or made as any
+    // other, named and chained by them.
+    bool inferred = infer_bindings(c, generic, args, callee, &bindings);
+    if (inferred && generic->modify &&
+        !modify_bindings(c, generic->modify, generic->name, &bindings, called_at, called_at, false)) {
+        generic->had_errors |= generic->modify->had_errors;
+        inferred = false;
+    }
+    if (inferred) {
         Ast_Instance *inst = find_instance(generic->instances, bindings);
         if (!inst) inst = make_instance(c, generic, bindings, called_at);
         // An instance whose signature had errors, said where it was made,
@@ -2037,7 +2257,9 @@ static Ast *call_argument(Checker *c, Ast *arg) {
 //   doesn't, resolve_type_value; void refused), or an expression that names
 //   a type (check_expr.cpp's expr_names_type: #type (int) -> int), checked
 //   as a type value. Any other expression, checked first, is "argument 1 of
-//   'Map' must be a type, for 'K: Type'", at it.
+//   'Map' must be a type, for 'K: Type'", at it, but a #modify block's
+//   variable of type Type (spec 7.12), "argument 1 of 'Map' must be known
+//   while compiling, for 'K: Type'".
 // - A constant parameter takes an expression, or a bare name the parser
 //   read as a type, which is the name of a value here, looked up and
 //   checked as one, at its place: "'int' is a type, not a value" when it
@@ -2067,9 +2289,14 @@ static bool bind_struct_argument(Checker *c, Ast_Struct *generic, Ast *arg, s64 
             b->type = check_type_value(c, arg);
             return b->type != nullptr;
         }
-        if (!check_value(c, arg)) return false;
-        diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must be a type, for '" STR_FMT "'",
-                   (long long)(index + 1), STR_ARG(generic->name), STR_ARG(struct_parameter_text(c, param)));
+        Type *t = check_value(c, arg);
+        if (!t) return false;
+        // A #modify block's Type value that no written type gives (spec
+        // 7.12), a variable's, holds its type only when the block runs, as
+        // for a $T: Type's argument (bake_argument).
+        const char *wanted = t == &type_type ? "be known while compiling" : "be a type";
+        diag_error(c->diag, arg->start, "argument %lld of '" STR_FMT "' must %s, for '" STR_FMT "'",
+                   (long long)(index + 1), STR_ARG(generic->name), wanted, STR_ARG(struct_parameter_text(c, param)));
         return false;
     }
     if (is_written_type(arg)) {
@@ -2116,10 +2343,10 @@ static void set_instance(Ast_Struct *s, Ast_Instance *inst) {
     }
 }
 
-// A new instance of generic struct `generic` for `bindings`, made where
-// the written type at `used_at` needs it, kept apart from find_instance so
-// what changes a struct as it's made (issue #228's #modify) comes between
-// them: its tree copied (ast_clone), no longer generic, its bindings made
+// A new instance of generic struct `generic` for `bindings`, the ones its
+// #modify block left if it has one (modify_bindings, spec 7.12), made
+// where the written type at `used_at` needs it, once find_instance found
+// none: its tree copied (ast_clone), no longer generic, its bindings made
 // as a procedure instance's are (make_bindings), named Map(string, int)
 // (each binding's value as the program would write it: a type as type_name
 // writes it, a constant as constant_text does), its copy named so and
@@ -2188,6 +2415,17 @@ Type *check_struct_instance(Checker *c, Ast_Struct *generic, Array<Ast *> args, 
     Array<Generic_Binding> bindings = struct_parameters(generic);
     bool bound = true;
     for (s64 i = 0; i < count; i++) bound = bind_struct_argument(c, generic, args[i], i, &bindings[i]) && bound;
+    // Then its #modify block (spec 7.12) decides which bindings make the
+    // instance, as a generic procedure's does (check_instance): a block
+    // with a mistake, a refusal, said at the instance's name, or a failure,
+    // said once, makes none. The instance is then the one of the bindings
+    // the block left, found or made as any other, and named by them, so
+    // Box(u8) and Box(int) may be one type, Box(int), wherever written.
+    if (bound && generic->modify &&
+        !modify_bindings(c, generic->modify, generic->name, &bindings, at, used_at, true)) {
+        generic->had_errors |= generic->modify->had_errors;
+        bound = false;
+    }
     Ast_Instance *inst = nullptr;
     if (bound) {
         inst = find_instance(generic->instances, bindings);

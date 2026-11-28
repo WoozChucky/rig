@@ -7,7 +7,8 @@
 //   file        = top_level* EOF
 //   top_level   = IDENT '::' procedure
 //               | IDENT '::' ('struct' | 'union') members           a struct or a union and its fields
-//               | IDENT '::' 'struct' struct_params members         a generic struct (spec 3.23)
+//               | IDENT '::' 'struct' struct_params [modify] members
+//                                                                   a generic struct (spec 3.23)
 //               | IDENT '::' 'union' '#tagged' [IDENT] '{' {IDENT ':' type ';'} '}'
 //                                                                   a tagged union: its tag's type, its members
 //               | IDENT '::' ('enum' | 'enum_flags') [IDENT] '{' {IDENT ['::' expression] ';'} '}'
@@ -30,8 +31,12 @@
 //   run         = '#run' block | '#run' expression ';'
 //   if_directive = '#if' expression block ['else' (block | if_directive)]
 //   procedure   = '(' [params] ')' ['->' (type {',' type} | '(' type {',' type} ')')]
-//                   ({'#c_call' | '#no_abc'} block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
-//                                                                  (the STRING: the C function's name)
+//                   ({'#c_call' | '#no_abc'} [modify] block | '#foreign' IDENT [STRING] ';' | '#compiler' ';')
+//                                                                  (the STRING: the C function's name;
+//                                                                  modify: a generic one's only)
+//   modify      = '#modify' block                                  run while compiling before each new
+//                                                                  set of a generic's bindings makes an
+//                                                                  instance (spec 7.12)
 //   params      = param {',' param} [',' '..']                    '..': a variadic C function's
 //   param       = ['using'] ['$'] IDENT ':' ['..'] type ['=' expression]
 //                                                                  'using': its struct's fields named
@@ -213,6 +218,18 @@
 // written twice"); a foreign procedure is C's already, so `#c_call
 // #foreign` is "a foreign procedure is C's already: it takes no
 // '#c_call'".
+//
+// A generic procedure's #modify block (spec 7.12) goes after those, right
+// before its body; a generic struct's after its parameters, right before
+// its fields. It's read as a body is, a procedure of its own named #modify
+// (Ast_Modify). Anywhere else after a signature or a struct's keyword it's
+// "#modify is for a generic procedure or struct, as in sum :: (values:
+// []$T) -> T #modify { ... } { ... }"; written twice, "'#modify' is written
+// twice"; and any other directive after it is "expected '{'", but a #load,
+// "#load can only be at the top level", and an #import, "#import can only
+// be at the top level", as after a signature. Elsewhere it is no directive
+// the grammar has: "expected an expression, found directive", and so on,
+// as for #type.
 //
 // A procedure the compiler does itself, while compiling (spec 7.9), is
 // declared with #compiler after its signature, Jai's directive, and a ';'

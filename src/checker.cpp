@@ -335,6 +335,23 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
         // branch below says so, and records the note, which check()
         // withdraws at its end when the constant has no type and its own
         // declaration said a mistake (withdraw_repeated_not_a_type).
+    } else if (decl->kind == AST_VAR && decl->type == &type_type && !c->modify) {
+        // The same variable outside the block's own code: in a #run's
+        // operand in the block (check_run.cpp's check_run sets Checker.modify
+        // aside), which runs before the block does, while the variable is
+        // one of the block's locals, which doesn't exist yet. Said as the
+        // #run says a local in it (check_run.cpp's uses_no_locals).
+        diag_error(c->diag, written->pos,
+                   "#run can't use '" STR_FMT "': it's a local, which doesn't exist while compiling",
+                   STR_ARG(written->name));
+    } else if (decl->kind == AST_VAR && decl->type == &type_type) {
+        // A #modify block's variable of type Type (spec 7.12) holds a type
+        // only when the block runs: no type is written of it while
+        // compiling, but its description can be read then.
+        diag_error(c->diag, written->pos,
+                   "'" STR_FMT "' is a variable of type 'Type', not a type; type_info(" STR_FMT
+                   ") describes it, as in type_info(" STR_FMT ").size",
+                   STR_ARG(written->name), STR_ARG(written->name), STR_ARG(written->name));
     } else if (decl->kind != AST_PROC || !((Ast_Proc *)decl)->is_broken) {
         diag_error(c->diag, written->pos, "'" STR_FMT "' is not a type", STR_ARG(written->name));
         // A constant's is recorded: whether its own declaration fails is
@@ -390,6 +407,7 @@ struct Outer_Scopes {
     bool in_code;                     // Checker.in_code
     bool contextless;                 // Checker.contextless
     Ast_Instance *instance;           // Checker.instance
+    Ast_Modify *modify;               // Checker.modify
 };
 
 // A declaration worked out where it's first needed (a global, a constant, a
@@ -417,11 +435,15 @@ struct Outer_Scopes {
 // bindings are its signature's, defaults' and body's only: a global, a
 // constant or a type worked out from inside one is the program's, and
 // doesn't see its T. resolve_signature and check_body enter the instance
-// they check, if any, once the scopes are set aside.
+// they check, if any, once the scopes are set aside. And so is the #modify
+// block being checked (spec 7.12), whose rules are its own body's only: a
+// declaration worked out inside it, or a body it reaches, takes a written
+// type for no value.
 static Outer_Scopes leave_scopes(Checker *c) {
     Outer_Scopes outer = {c->scopes,        c->using_params, c->lost_a_local, c->default_of,
                           c->filled_depth,  c->needs_context, c->in_code,     c->contextless,
-                          c->instance};
+                          c->instance,      c->modify};
+    c->modify = nullptr;
     c->scopes = {};
     c->using_params = {};
     c->lost_a_local = false;
@@ -436,7 +458,7 @@ static Outer_Scopes leave_scopes(Checker *c) {
 
 // Back to the scopes leave_scopes set aside, every scope opened since
 // closed, and to their using parameters, lost_a_local, default_of,
-// filled_depth, needs_context, in_code, contextless and instance.
+// filled_depth, needs_context, in_code, contextless, instance and modify.
 static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     RIG_ASSERT(c->scopes.count == 0);
     array_free(&c->scopes);
@@ -449,6 +471,7 @@ static void return_to_scopes(Checker *c, Outer_Scopes outer) {
     c->needs_context = outer.needs_context;
     c->in_code = outer.in_code;
     c->contextless = outer.contextless;
+    c->modify = outer.modify;
     enter_instance(c, outer.instance);
 }
 
@@ -627,10 +650,32 @@ static bool check_var_value(Checker *c, Ast_Var *var) {
     return fine;
 }
 
+// Whether local var's whole written type is Type in a #modify block (spec
+// 7.12), where a variable may hold a type: a Type value is the block's
+// alone. Type itself, not hidden: a built-in type's name always means it.
+static bool is_type_local(Checker *c, Ast_Var *var) {
+    Ast_Type *written = var->type_expr;
+    return c->modify && written && written->kind == AST_TYPE_NAME && type_from_name(written->name) == &type_type;
+}
+
 // A local variable. It's declared after its value is checked, so
-// `x := x + 1;` in an inner block reads the outer x.
+// `x := x + 1;` in an inner block reads the outer x. In a #modify block
+// (spec 7.12) its whole type may be Type, `x: Type = s64;`, which no zero
+// stands for: without a value, or with ---, it's "a variable of type 'Type'
+// needs a value, as in t := int;", at its name, and it's of type Type all
+// the same, so its uses say nothing more.
 static void check_var(Checker *c, Ast_Var *var) {
-    check_var_value(c, var);
+    if (is_type_local(c, var)) {
+        var->type = &type_type;
+        if (!var->value) {
+            diag_error(c->diag, var->pos, "a variable of type 'Type' needs a value, as in " STR_FMT " := int;",
+                       STR_ARG(var->name));
+        } else if (check_value(c, var->value) && !check_convert(c, var->value, &type_type)) {
+            report_no_conversion(c, var->value, &type_type);
+        }
+    } else {
+        check_var_value(c, var);
+    }
     declare(c, var->name, var);
 }
 
@@ -1074,6 +1119,44 @@ static void mark_circle(Checker *c, Ast *decl) {
     for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
 }
 
+// The #modify block's check or run under way (Checker.modify_check) that
+// began after decl, found under way, went on c->resolving: the outermost
+// one, the first a use asked for; null when none did.
+static Modify_Check *modify_in_circle(Checker *c, Ast *decl) {
+    s64 i = c->resolving.count - 1;
+    while (c->resolving[i] != decl) i--;
+    Modify_Check *asked = nullptr;
+    for (Modify_Check *m = c->modify_check; m && m->resolving > i; m = m->outer) asked = m;
+    return asked;
+}
+
+// The first circle through decl, found under way, said: "'A' is defined in
+// terms of itself", at `at`, `name` decl's. But a circle through a #modify
+// block's check or run that began after decl (modify_in_circle) runs
+// through the use of the generic that asked for it (spec 7.12): the
+// block's code, or a type given to it, reaches its own generic's use, and
+// decl is only on the way. That is said as such, "'Box' can't be used in
+// its own #modify, which decides its instances", at the use, with its
+// chain, as it is when the block's check or run comes first and the use
+// finds it under way (check_generic.cpp's check_modify and
+// modify_bindings): so which of them is checked first doesn't change what
+// is said. It's said once (Modify_Check.said): a block that reads both
+// `A :: B;` and `B :: size_of(Box(int));` finds each under way, and both
+// circles run through the one use.
+static void say_circle(Checker *c, Ast *decl, String name, Position at) {
+    Modify_Check *asked = modify_in_circle(c, decl);
+    if (!asked) {
+        diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+        return;
+    }
+    if (asked->said) return;
+    asked->said = true;
+    String context = c->diag->context;
+    c->diag->context = asked->context;
+    report_used_in_own_modify(c, asked->name, asked->at);
+    c->diag->context = context;
+}
+
 // A limit of the compiler (spec 6.1, MAX_DEPTH). A declaration worked out
 // where it's first needed is worked out inside the one that needs it, on
 // the stack: the checker recurses from a global's value into the constant
@@ -1137,14 +1220,15 @@ static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32
 // A value that needs itself, directly (`C :: C;`) or through others
 // (`A :: B; B :: A;`), would make that endless. The resolve state breaks
 // the circle: a use that finds the declaration still under way reports
-// "'A' is defined in terms of itself", at its name, once. Every
-// declaration in the circle, from A to the one whose value used it (the
-// end of c->resolving), is then marked RESOLVE_CYCLE, and gives no type
-// once done, so nothing more is said about any of them: not that a value
-// isn't known while compiling (a global with a written type, `a : int = b;
-// b : int = a;`, would otherwise keep it, and the value using it would be a
-// typed value that isn't a constant), and not by the globals that use one,
-// in the circle or out of it.
+// "'A' is defined in terms of itself", at its name, once (or a use of a
+// generic in its own #modify, when the circle runs through one:
+// say_circle). Every declaration in the circle, from A to the one whose
+// value used it (the end of c->resolving), is then marked RESOLVE_CYCLE,
+// and gives no type once done, so nothing more is said about any of them:
+// not that a value isn't known while compiling (a global with a written
+// type, `a : int = b; b : int = a;`, would otherwise keep it, and the value
+// using it would be a typed value that isn't a constant), and not by the
+// globals that use one, in the circle or out of it.
 //
 // A declaration can be in more than one circle. In `a : int = c + b;
 // b : int = a; c : int = a;`, a -> c -> a closes first, while a's value is
@@ -1177,7 +1261,7 @@ static void resolve_global(Checker *c, Ast *decl) {
         // (already RESOLVE_CYCLE) is the same tangle, said once.
         if (*state == RESOLVE_UNDER_WAY) {
             String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
-            diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+            say_circle(c, decl, name, decl->pos);
         }
         mark_circle(c, decl);
         return;
@@ -1385,9 +1469,7 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
 static bool resolve_enum(Checker *c, Ast_Enum *e) {
     if (e->resolve == RESOLVE_DONE) return true;
     if (e->resolve == RESOLVE_UNDER_WAY || e->resolve == RESOLVE_CYCLE) {
-        if (e->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, e->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(e->name));
-        }
+        if (e->resolve == RESOLVE_UNDER_WAY) say_circle(c, e, e->name, e->pos);
         mark_circle(c, e);
         return false;
     }
@@ -1778,8 +1860,8 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     // as instance_may_be_laid_out checked it.
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
-        if (s->resolve == RESOLVE_UNDER_WAY && circle_through_a_value(c, s)) {
-            diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
+        if (s->resolve == RESOLVE_UNDER_WAY && (circle_through_a_value(c, s) || modify_in_circle(c, s))) {
+            say_circle(c, s, s->name, s->pos);
         } else if (s->resolve == RESOLVE_UNDER_WAY) {
             diag_error(c->diag, s->pos,
                        "'" STR_FMT "' contains itself; it can hold a pointer to itself, *" STR_FMT, STR_ARG(s->name),
@@ -1841,9 +1923,7 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     Ast_Field *field = s->fields[i];
     if (field->resolve == RESOLVE_DONE) return;
     if (field->resolve == RESOLVE_UNDER_WAY || field->resolve == RESOLVE_CYCLE) {
-        if (field->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, field->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(field->name));
-        }
+        if (field->resolve == RESOLVE_UNDER_WAY) say_circle(c, field, field->name, field->pos);
         mark_circle(c, field);
         return;
     }
@@ -1894,9 +1974,7 @@ bool check_finished_layout(Checker *c, Type *t) {
     Ast_Struct *s = t->decl;
     RIG_ASSERT(!s || s->name.count || s->resolve == RESOLVE_DONE);
     if (s && (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE)) {
-        if (s->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
-        }
+        if (s->resolve == RESOLVE_UNDER_WAY) say_circle(c, s, s->name, s->pos);
         mark_circle(c, s);
         return false;
     }
@@ -1931,9 +2009,7 @@ bool check_member_under_way(Checker *c, Type *t, String name) {
     Ast_Struct *s = t->decl;
     if (!s || (s->resolve != RESOLVE_UNDER_WAY && s->resolve != RESOLVE_CYCLE)) return false;
     if (!held_under_way(s, name)) return false;
-    if (s->resolve == RESOLVE_UNDER_WAY) {
-        diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
-    }
+    if (s->resolve == RESOLVE_UNDER_WAY) say_circle(c, s, s->name, s->pos);
     mark_circle(c, s);
     return true;
 }
@@ -2198,6 +2274,24 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
     }
 }
 
+// The values of a return refused, each checked for its own mistakes alone.
+// A written type is a value in a #modify block (check_value's rule), so
+// `return int, "a", 1;` there, or a deferred `return int;`, says only the
+// return's mistake.
+static void check_refused_return_values(Checker *c, Ast_Return *ret) {
+    for (s64 i = 0; i < ret->values.count; i++) {
+        Ast *value = ret->values[i];
+        if (c->modify && expr_names_type(c, value)) {
+            check_type_value(c, value);
+        } else {
+            check_expression(c, value);
+        }
+    }
+}
+
+static const char *const MODIFY_RETURNS =
+    "a #modify block returns a bool, and may add a message, as in return T != string, \"sum needs numbers\";";
+
 // return; return e; return a, b; against what the procedure returns: one
 // value per result, each converting to its result's type. Another number
 // of values is reported at the 'return', after the values' own mistakes
@@ -2211,16 +2305,48 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
 // code runs as its block is left, and leaves itself only by its end. Each
 // of its values is still checked, so its own errors are said, but nothing
 // compares it with the procedure's results.
+//
+// A #modify block (spec 7.12) returns a bool, and may add a message: `return
+// b;` gives an empty one, a string "" made here at the return, so the
+// return holds both values from here on. Any other count of values is "a
+// #modify block returns a bool, and may add a message, as in return T !=
+// string, \"sum needs numbers\";", at the 'return'. So is one value that
+// is a call with several results, `return verdict(T);`, or a #run of one,
+// `return #run verdict(true);`: it is one value, as above, so its message
+// would be dropped, where a procedure with two results says it was given 1.
+// That value is checked first, to know.
 static void check_return(Checker *c, Ast_Return *ret) {
     if (c->deferring) {
         diag_error(c->diag, ret->pos, "can't return from a deferred statement");
-        for (s64 i = 0; i < ret->values.count; i++) check_expression(c, ret->values[i]);
+        check_refused_return_values(c, ret);
         return;
     }
     Ast_Proc *proc = c->proc;
+    s64 checked = 0;  // values checked here already, from the first
+    if (proc->modify_of && ret->values.count == 1) {
+        Ast *value = ret->values[0];
+        Type *t = check_value(c, value);
+        Ast *called = value;  // the expression whose result it is: a #run's, its operand's
+        while (called->kind == AST_RUN && ((Ast_Run *)called)->operand) called = ((Ast_Run *)called)->operand;
+        if (t && called->kind == AST_CALL && call_result_count((Ast_Call *)called) > 1) {
+            diag_error(c->diag, ret->pos, "%s", MODIFY_RETURNS);
+            return;
+        }
+        Type *result = proc->results[0]->type;
+        if (t && !check_convert(c, value, result)) report_no_conversion(c, value, result);
+        checked = 1;
+        Ast_String *none = ast_new<Ast_String>(c->arena, AST_STRING, ret->pos);
+        none->value = str("");
+        array_add(&ret->values, (Ast *)none);
+    }
+    if (proc->modify_of && ret->values.count != 2) {
+        check_refused_return_values(c, ret);
+        diag_error(c->diag, ret->pos, "%s", MODIFY_RETURNS);
+        return;
+    }
     s64 want = proc->results.count, given = ret->values.count;
     if (want == given) {
-        for (s64 i = 0; i < given; i++) {
+        for (s64 i = checked; i < given; i++) {
             Ast *value = ret->values[i];
             Type *result = proc->results[i]->type;
             if (check_value(c, value) && !check_convert(c, value, result)) report_no_conversion(c, value, result);
@@ -3110,14 +3236,24 @@ static void check_body(Checker *c, Ast_Proc *proc) {
         Array<Ast *> &bindings = proc->instance->bindings;
         for (s64 i = 0; i < bindings.count; i++) declare(c, binding_name(bindings[i]), bindings[i]);
     }
+    // A #modify block's (spec 7.12): its variables, the generic's type and
+    // constant parameters, declared in its scope as an instance's bindings
+    // are, and its own rules hold in it (Checker.modify), but in what
+    // leave_scopes sets it aside for.
+    c->modify = proc->modify_of;
+    if (proc->modify_of) {
+        Array<Ast_Var *> &vars = proc->modify_of->vars;
+        for (s64 i = 0; i < vars.count; i++) declare(c, vars[i]->name, vars[i]);
+    }
     add_using_params(c, proc);
     check_block(c, proc->body);
     pop_scope(c);
     // main's results are reported by check() already: main returns nothing.
     if (proc->results.count && !is_main && reaches_end(proc->body)) {
         // "a value" for one result, "its values" for several: every path
-        // returns all of them.
-        const char *what = proc->results.count > 1 ? "its values" : "a value";
+        // returns all of them. A #modify block returns a bool, its message
+        // being optional (check_return).
+        const char *what = proc->modify_of ? "a bool" : proc->results.count > 1 ? "its values" : "a value";
         diag_error(c->diag, proc->body->end, "'" STR_FMT "' must return %s on every path, and this one reaches its end",
                    STR_ARG(proc->name), what);
     }
@@ -3159,13 +3295,19 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // everything needed since the body (the end of c->resolving) is in the
 // circle, marked as resolve_global marks it, so the globals in it lose
 // their types and the bodies in it have errors.
+//
+// But a body that was under way before a #modify block's check began, one
+// the block's code reaches again, led to the use of the generic that asked
+// for that check (spec 7.12): the circle runs through the use, and the
+// block's code reaches its own generic's. That is said as such, "'sum'
+// can't be used in its own #modify, which decides its instances", at the
+// use, as it is when the block is checked before the body (say_circle).
+// The circle is marked all the same.
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     if (proc->is_broken) return false;
     if (!proc->body) return !proc->had_errors;  // a foreign procedure, C's code, or a #compiler one
     if (proc->body_resolve == RESOLVE_UNDER_WAY || proc->body_resolve == RESOLVE_CYCLE) {
-        if (proc->body_resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
-        }
+        if (proc->body_resolve == RESOLVE_UNDER_WAY) say_circle(c, proc->body, proc->name, at);
         mark_circle(c, proc->body);
         return false;
     }
@@ -3631,9 +3773,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
     if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {
-        if (proc->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, proc->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
-        }
+        if (proc->resolve == RESOLVE_UNDER_WAY) say_circle(c, proc, proc->name, proc->pos);
         mark_circle(c, proc);
         return false;
     }
@@ -4331,15 +4471,23 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // broken entry has none: the parser gave up on it. A generic procedure's
     // body is checked only as its instances' (spec 7.11): in its turn its
     // names are walked (check_generic_names), unless an instance's body
-    // checked earlier had them walked first.
+    // checked earlier had them walked first. A generic procedure's #modify
+    // block (spec 7.12) is checked in its turn here, and then a generic
+    // struct's, in a loop of their own over the top level after every
+    // procedure, each unless a use checked it first (check_generic_modify).
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
-        if (proc->is_broken || proc->body_resolve != RESOLVE_NOT_YET) continue;
+        if (proc->is_broken) continue;
         if (proc->is_generic) {
-            check_generic_names(&c, proc);
-        } else if (proc->body) {
+            check_generic_modify(&c, proc);
+            if (proc->body_resolve == RESOLVE_NOT_YET) check_generic_names(&c, proc);
+        } else if (proc->body && proc->body_resolve == RESOLVE_NOT_YET) {
             check_body(&c, proc);
         }
+    }
+    for (s64 i = 0; i < file->globals.count; i++) {
+        Ast *decl = file->globals[i];
+        if (decl->kind == AST_STRUCT && ((Ast_Struct *)decl)->is_generic) check_generic_modify(&c, decl);
     }
     // Then the top-level #runs, in source order: checked, and what each
     // reaches walked, but never run here (check_top_level_run): they run

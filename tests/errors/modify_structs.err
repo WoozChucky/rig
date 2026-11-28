@@ -1,0 +1,24 @@
+tests/errors/modify_structs.rig:21:25: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    Bad :: struct (T: Type) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { v: T; }
+                            ^
+    in #modify (tests/errors/modify_structs.rig:21:55)
+    in 'Bad' with T = int, used at tests/errors/modify_structs.rig:33:8
+tests/errors/modify_structs.rig:21:25: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    Bad :: struct (T: Type) #modify { a: [2]int; i := 5; a[i] = 1; return true; } { v: T; }
+                            ^
+    in #modify (tests/errors/modify_structs.rig:21:55)
+    in 'Bad' with T = bool, used at tests/errors/modify_structs.rig:27:31
+    in 'Hold' with A = bool, used at tests/errors/modify_structs.rig:36:8
+tests/errors/modify_structs.rig:23:43: error: 'Grow' can't be used in its own #modify, which decides its instances
+    Grow :: struct (T: Type) #modify { return Grow(int) != T; } { v: T; }
+                                              ^
+tests/errors/modify_structs.rig:25:31: error: 'Box' refused T = string: no strings in a box
+    Pair :: struct (A: Type) { b: Box(A); }
+                                  ^
+    in 'Pair' with A = string, used at tests/errors/modify_structs.rig:32:8
+tests/errors/modify_structs.rig:30:8: error: 'Box' refused T = string: no strings in a box
+        x: Box(string);
+           ^
+tests/errors/modify_structs.rig:31:10: error: 'Box' refused T = string: no strings in a box
+        y := Box(string).{"a"};
+             ^

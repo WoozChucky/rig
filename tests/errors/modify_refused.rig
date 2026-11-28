@@ -1,0 +1,73 @@
+// #modify blocks that refuse an instance, or fail (issue #228, spec 7.12).
+// A block runs once for each set of bindings its uses give. When it gives
+// false, each use with those bindings is refused, with its message when it
+// gave one, and the use's chain: sum's string, twice from main and once
+// from wrap's instance, its block run once; only's bool, with no message.
+// A refusal names the set given as an instance's bindings are written:
+// ring's two, say's string with its quote escaped, Two's pointer and count,
+// and en's enum member. When it fails while it runs, the failure is said
+// once for each set given, at the #modify, with its frames, the outermost
+// the block's own, then the instance those bindings would have made, and
+// that use's chain: bad's int, given twice, then its bool, then its
+// float32, from wrap_bad's instance, and deep's, in inner, which mid calls,
+// which the block calls, innermost first. Nothing more is said at those
+// uses. A result that can't be baked fails the run too, said in #modify's
+// words: neg's string, whose count it makes negative, and quiet's message.
+
+sum :: (values: []$T) -> T #modify { return T != string, "sum needs numbers"; } {
+    t: T;
+    for values { t += it; }
+    return t;
+}
+
+only :: (v: $T) #modify { return T == int; } { }
+
+wrap :: (v: $T) { sum(string.["c"]); }
+
+bad :: (v: $T) #modify {
+    a: [2]int;
+    i := 5;
+    a[i] = 1;
+    return true;
+} { }
+
+wrap_bad :: (v: $T) { bad(v); }
+
+neg :: ($S: string) -> string #modify { S.count = -1; return true; } { return S; }
+
+quiet :: (v: $T) #modify {
+    m := "abc";
+    m.count = -2;
+    return false, m;
+} { }
+
+ring :: ($N: int, $T: Type) #modify { return N > 0, "need a count"; } { }
+say :: ($S: string) #modify { return S == ""; } { }
+Two :: struct (A: Type, N: int) #modify { return N != 3, "no"; } { a: A; }
+E :: enum { X; Y; }
+en :: ($M: E) #modify { return M == .X; } { }
+
+inner :: (i: int) -> int { a: [2]int; return a[i]; }
+mid :: () -> int { return inner(5); }
+deep :: (v: $T) #modify {
+    n := mid();
+    return true;
+} { }
+
+main :: () {
+    sum(string.["a"]);
+    sum(string.["b"]);
+    only(true);
+    wrap(1);
+    bad(1);
+    bad(1);
+    bad(true);
+    wrap_bad(cast(float32) 2.5);
+    neg("x");
+    quiet(1);
+    ring(0, int);
+    say("a\"b");
+    t: Two(*u8, 3);
+    en(E.Y);
+    deep(1);
+}
