@@ -15870,6 +15870,7 @@ TEST(modify_block_mistakes) {
                           "needs numbers\";";
     const char *variable = "'T' is a variable of type 'Type', not a type; type_info(T) describes it, as in "
                            "type_info(T).size";
+    const char *run_local = "#run can't use 'T': it's a local, which doesn't exist while compiling";
     struct Case {
         const char *block;  // the block's code, before its `return true;` unless `returns`
         bool returns;
@@ -15905,6 +15906,10 @@ TEST(modify_block_mistakes) {
         // is no value.
         {"t := #run int;", false, 41, "'int' is a type, not a value"},
         {"K :: #run int;", false, 41, "'int' is a type, not a value"},
+        // It runs before the block does, so the block's variables don't
+        // exist yet: no type of T is written there either.
+        {"s := #run type_info(T).size;", false, 51, run_local},
+        {"s := #run size_of(T);", false, 49, run_local},
     };
     const char *calls[] = {"a: []int; f(a); f(a);", ""};
     for (const Case &k : cases) {

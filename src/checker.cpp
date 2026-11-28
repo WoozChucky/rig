@@ -335,6 +335,15 @@ static Type *resolve_type_name(Checker *c, Ast_Type *written, bool behind_pointe
         // branch below says so, and records the note, which check()
         // withdraws at its end when the constant has no type and its own
         // declaration said a mistake (withdraw_repeated_not_a_type).
+    } else if (decl->kind == AST_VAR && decl->type == &type_type && !c->modify) {
+        // The same variable outside the block's own code: in a #run's
+        // operand in the block (check_run.cpp's check_run sets Checker.modify
+        // aside), which runs before the block does, while the variable is
+        // one of the block's locals, which doesn't exist yet. Said as the
+        // #run says a local in it (check_run.cpp's uses_no_locals).
+        diag_error(c->diag, written->pos,
+                   "#run can't use '" STR_FMT "': it's a local, which doesn't exist while compiling",
+                   STR_ARG(written->name));
     } else if (decl->kind == AST_VAR && decl->type == &type_type) {
         // A #modify block's variable of type Type (spec 7.12) holds a type
         // only when the block runs: no type is written of it while
