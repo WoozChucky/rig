@@ -345,9 +345,10 @@
 //   names it (proc_index_of: a call, a procedure value, a global's
 //   relocation), and its body joins `waiting`; a global is made the first
 //   time a body uses it (address_of). ir_lower_run lowers the run's own
-//   procedure, then the waiting bodies, first in, first out, each of which
-//   may queue more: a run's procedure comes with everything it can call,
-//   and a procedure two runs reach is lowered once, its globals shared.
+//   procedure, and ir_lower_modify a #modify block's, then the waiting
+//   bodies (lower_waiting), first in, first out, each of which may queue
+//   more: a run's procedure comes with everything it can call, and a
+//   procedure two runs reach is lowered once, its globals shared.
 // - The helpers come first, whole: __rig_bounds_failed (index 0),
 //   __rig_string_equal (index 1) and __rig_no_case (index 2), made by
 //   ir_lowering_new, so none waits on checks lowered later. The bounds
@@ -557,7 +558,8 @@ struct Lowering {
     // it, rather than the whole program up front.
     bool on_demand;
     Array<s32> waiting;         // on demand: procedures declared whose bodies wait to be lowered,
-                                // first in, first out (ir_lower_run)
+                                // first in, first out (lower_waiting, after ir_lower_run's or
+                                // ir_lower_modify's own procedure)
     s32 run_count;              // the run.N procedures made so far
     // #modify blocks (spec 7.12), on demand: each block's modify.N, made
     // once (ir_lower_modify), and the block whose body is being lowered,

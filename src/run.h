@@ -1,5 +1,6 @@
 // run.h: the compile-time world (issue #115, spec 7.8), where #run's code
-// runs while the program is being compiled. run.cpp says how.
+// and #modify blocks run while the program is being compiled (issue #228,
+// spec 7.12). run.cpp says how.
 
 #pragma once
 
@@ -10,9 +11,9 @@ struct Checker;  // check.h: the checker, whose arena a baked value lives in
 
 // One compile-time world per compilation (spec 7.8): the compile-time
 // module, its on-demand lowering, and the interpreter running it, whose
-// globals every #run shares. Made before check(), kept for the top-level
-// runs, freed before the program is lowered. Its parts are made the first
-// time a #run, or a #modify block, runs.
+// globals every #run and #modify block shares. Made before check(), kept
+// for the top-level runs, freed before the program is lowered. Its parts
+// are made the first time a #run, or a #modify block, runs.
 struct Compile_Time;
 
 // A world for the program whose files d holds: their paths are what a
@@ -61,7 +62,7 @@ void compile_time_run_top_level(Compile_Time *ct, Ast_File *file);
 // The time the world's #runs have taken so far, in nanoseconds, for rig
 // build's report (spec 10.1): expression and top-level runs alike, and
 // #modify blocks' (spec 7.12), each from making the world's parts (the
-// first time) and lowering what it reaches to its end on the interpreter. No run happens inside another today; if one
-// did, it would count only as part of the outer one's. 0 for a world that
-// ran nothing.
+// first time) and lowering what it reaches to its end on the interpreter.
+// No run happens inside another today; if one did, it would count only as
+// part of the outer one's. 0 for a world that ran nothing.
 s64 compile_time_nanoseconds(Compile_Time *ct);

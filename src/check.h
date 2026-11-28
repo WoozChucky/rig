@@ -28,8 +28,8 @@ struct Modify_Check {
 struct Checker {
     Arena *arena;
     Diagnostics *diag;
-    Compile_Time *world;         // where expression #runs run (run.h): check()'s caller's, or one of
-                                 // check()'s own
+    Compile_Time *world;         // where expression #runs and #modify blocks run (run.h): check()'s
+                                 // caller's, or one of check()'s own
     Table<Ast *> top_level;      // every procedure, global variable, top-level constant, struct and
                                  // enum, by name: visible everywhere (Ast_Proc, Ast_Var, Ast_Const,
                                  // Ast_Struct, Ast_Enum); and the predeclared names, put first
@@ -310,7 +310,10 @@ Type *check_expression(Checker *c, Ast *e);
 // gives null. A literal without its type written, .{...} or .[...], has type
 // type_untyped_literal, its values not yet checked, and a member without its
 // enum, .FREE, type_untyped_member: where it meets a type, check_convert
-// completes it, and where it meets none, check_default_type reports it.
+// completes it, and where it meets none, check_default_type reports it. In
+// a #modify block (Checker.modify, spec 7.12), a written type there is a
+// value of type Type: check_type_value checks it, and its type is
+// type_type.
 Type *check_value(Checker *c, Ast *e);
 
 // What a call calls, as its messages name it: the procedure's name, the
@@ -556,8 +559,9 @@ bool reach_modify(Checker *c, Ast_Modify *modify);
 // are (spec 7.12): each type laid out, and what its description reaches
 // checked, so the block's run can describe them. True when nothing there
 // has an error; false after one, said by the walk, at `at` for its own
-// messages: a struct still being laid out is a circle, as type_info(T) of
-// it in a #run is.
+// messages. A struct still being laid out is a circle through its layout,
+// which led to the use that runs the block: said at that use, as a use of
+// the generic in its own #modify (checker.cpp's say_circle).
 bool reach_descriptions(Checker *c, Position at, Array<Type *> types);
 
 // check_generic.cpp

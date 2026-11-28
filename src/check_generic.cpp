@@ -10,13 +10,17 @@
 // 3.23; checker.h's "Generic structs"): a generic struct's own check, and
 // its instances, one per set of arguments, program-wide, each a copy of
 // its tree with its parameters bound, laid out as any struct: found in
-// their cache, bound, named and chained as the procedures' are. The checks
-// here that only look at each name in a written type or an expression, the
-// signature's, the inference's, the parameters' and the body's, go through
-// that type or expression with one walk (walk_names), each saying what it
-// does at a name in an action of its own; match_type and add_written_type,
-// which pair a pattern with a type or write one out, walk the type
-// themselves.
+// their cache, bound, named and chained as the procedures' are. And #modify
+// (spec 7.12; checker.h's "#modify"): a generic's block, checked once as
+// its own code (check_modify, check_generic_modify), and run between the
+// bindings a use gives and finding their instance, once for each set given
+// (modify_bindings), which decides the bindings the instance is found or
+// made with, or refuses them. The checks here that only look at each name
+// in a written type or an expression, the signature's, the inference's, the
+// parameters' and the body's, go through that type or expression with one
+// walk (walk_names), each saying what it does at a name in an action of its
+// own; match_type and add_written_type, which pair a pattern with a type or
+// write one out, walk the type themselves.
 
 #include "check.h"
 

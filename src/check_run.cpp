@@ -6,8 +6,9 @@
 // (checker.cpp's check_reached_body), and stops at the first error it finds
 // there. An error already in that code was said where it is, and the walk
 // says nothing more about it. What the walk finds itself it says: a call of
-// main or a circle through a body at the #run, a circle through a struct at
-// the struct, a body nested too deeply at its name.
+// main or a circle through a body at the #run (or the #modify, below), a
+// circle through a struct at the struct, a body nested too deeply at its
+// name.
 //
 // The walk is conservative: it follows every name lowering can follow
 // (calls, procedure values, constants and their data, globals' values, a
@@ -24,12 +25,17 @@
 // described with a member whose value is unknown.
 //
 // A #modify block (spec 7.12) runs while compiling too: what it reaches is
-// walked as a block #run's is (reach_modify), once, by its check.
+// walked as a block #run's is (reach_modify), once, by its check. A block
+// that describes types has the types it is given walked too, for their
+// descriptions (reach_descriptions), before each run, so once for each set
+// of bindings given: there a type still being laid out is found, its
+// layout being what led to the use that runs the block.
 
 #include "check.h"
 
 // What a #run reaches, being walked (reach_run), or a #modify block (spec
-// 7.12, reach_modify): a worklist, depth first in source order, of the
+// 7.12, reach_modify), or the types given to one that describes them
+// (reach_descriptions): a worklist, depth first in source order, of the
 // nodes and types still to look at.
 struct Reach {
     Checker *c;

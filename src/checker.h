@@ -1271,16 +1271,15 @@
 //   size_of, type_info and a type value of it are "'Type' only names types
 //   while compiling; a *Type_Info describes one at run time", at the type
 //   (checker.cpp's resolve_written), but a #modify block's local (below).
-// - Only == and != and a $T: Type parameter's argument take type values
-//   for now, outside a #modify block (below). For == and !=
-//   (check_type_comparison), with either operand naming a type, both must
-//   ("'==' compares a type only with a type, as in T == int", at the
-//   operator), and the result is a constant bool, 1 for == when they're
-//   the same type (one Type *), for != when they aren't: `int == s64` is
-//   false, `float == float32` true, so `#if` decides on one and a constant
-//   may be one (in a #modify block, one with a variable of type Type is no
-//   constant, below). A $T: Type's argument is
-//   checked as a type value when it names a type (check_expr.cpp's
+// - Only == and != and a $T: Type parameter's argument take type values for
+//   now, outside a #modify block (below). When either operand of == or !=
+//   names a type (check_type_comparison), both must ("'==' compares a type
+//   only with a type, as in T == int", at the operator), and the result is
+//   a constant bool, 1 for == when they're the same type (one Type *), for
+//   != when they aren't: `int == s64` is false, `float == float32` true, so
+//   `#if` decides on one and a constant may be one (in a #modify block, one
+//   with a variable of type Type is no constant, below). A $T: Type's
+//   argument naming a type is checked as a type value (check_expr.cpp's
 //   check_generic_call). Anywhere else a type is "'Vec2' is a type, not a
 //   value" as ever, at a name (`*Vec2` at Vec2), and "'[]int' is a type,
 //   not a value" at an Ast_Type_Value's start, its type named as messages
@@ -1681,21 +1680,22 @@
 //   its body declares them in its scope (checker.cpp's check_body), so a
 //   local can't take their names there. Its body is checked with
 //   check_reached_body, then what it reaches walked (check_run.cpp's
-//   reach_modify), so a body it calls has no errors before it runs; a
-//   call of main there is "main is where the program starts; #modify
-//   can't call it", at the #modify. Any mistake sets Ast_Modify.had_errors
-//   and the generic's had_errors: it makes no instance, and its uses say
-//   nothing more. A procedure's other parameters
-//   aren't in its scope: no call's arguments exist when it runs. A use of
-//   the generic from the block, or from code it reaches, finds the check
-//   under way: "'sum' can't be used in its own #modify, which decides its
-//   instances", at the use, the block's mistake; so does the walk that
-//   finds a body under way since before the check began, which led to the
-//   use (checker.cpp's check_reached_body). A use while a top-level #if's
-//   condition is decided is refused, for now: "a top-level #if's condition
-//   can't run code while compiling, for now", at the use, and no instance.
-//   It doesn't check the block, whose names may be declared in a top-level
-//   #if: a later use or the bodies pass does.
+//   reach_modify), so a body it calls has no errors before it runs; a call
+//   of main there is "main is where the program starts; #modify can't call
+//   it", at the #modify. Any mistake sets Ast_Modify.had_errors and the
+//   generic's had_errors: it makes no instance, and its uses say nothing
+//   more. A procedure's other parameters aren't in its scope: no call's
+//   arguments exist when it runs. A use of the generic from the block, or
+//   from code it reaches, finds the check under way: "'sum' can't be used
+//   in its own #modify, which decides its instances", at the use, the
+//   block's mistake. So does a declaration or a body under way since before
+//   the check began, found under way again: it led to the use, and the
+//   circle runs through it (checker.cpp's say_circle), whichever was
+//   checked first. A use while a top-level #if's condition is decided is
+//   refused, for now: "a top-level #if's condition can't run code while
+//   compiling, for now", at the use, and no instance. It doesn't check the
+//   block, whose names may be declared in a top-level #if: a later use or
+//   the bodies pass does.
 // - Checker.modify is set while the block's own body is checked, and set
 //   aside with the scopes, so a procedure it calls, or a declaration worked
 //   out inside it, is checked as anywhere; and for a #run's operand
@@ -1734,9 +1734,10 @@
 //   - `return b;` gives an empty message: check_return appends a string ""
 //     at the return, so the return holds two values from then on; any other
 //     count is "a #modify block returns a bool, and may add a message, as in
-//     return T != string, \"sum needs numbers\";", at the 'return'; a block
-//     whose end is reached is "'#modify' must return a bool on every path,
-//     and this one reaches its end", at its '}'.
+//     return T != string, \"sum needs numbers\";", at the 'return', and so
+//     is one value that is a call with several results, which would drop
+//     the message; a block whose end is reached is "'#modify' must return a
+//     bool on every path, and this one reaches its end", at its '}'.
 // - What a later stage may rely on: only a #modify block's code has nodes
 //   of type Type that aren't a constant comparison's operands: a read of a
 //   variable of type Type, or a written type (type_value). The walk takes
@@ -1745,12 +1746,12 @@
 //   comparison of types as a leaf too, its operands never looked at.
 // - The block runs (check_generic.cpp's modify_bindings) between the
 //   bindings a generic procedure's call infers and finding its instance
-//   (check_instance), or the arguments a generic struct's written type
-//   binds and finding its (check_struct_instance), once for each set of
-//   bindings given, while checking, rig check too, before the instance's
-//   signature is checked or its fields laid out: its check first, then
-//   its cache (Ast_Modify.runs, the generic's, program-wide), a
-//   Modify_Run per set given, compared as instances are (same_binding), so
+//   (check_instance), or between the arguments a generic struct's written
+//   type binds and finding that instance (check_struct_instance), once for
+//   each set of bindings given, while checking, rig check too, before the
+//   instance's signature is checked or its fields laid out: its check
+//   first, then its cache (Ast_Modify.runs, the generic's, program-wide), a
+//   Modify_Run per set given, compared as instances are (same_bindings), so
 //   a set already given, by any use anywhere, runs nothing. A new set runs
 //   in the compile-time world, as a #run does (run.cpp's
 //   compile_time_modify), the checker's chain starting with the line of
@@ -1774,13 +1775,15 @@
 //   laid out; any other holds each as its Type *, and nothing is described
 //   or laid out for it. Either way == and != compare handles. So a struct
 //   whose layout is under way may be given to a block that only compares,
-//   Node :: struct { w: Wrap(Node); }, and laid out as without it; given
-//   to one that describes types, it is the usual "'Node' is defined in
-//   terms of itself", followed by the would-be instance's line. A type
-//   whose layout, for that walk, uses the instance being decided, Wrap(int)
-//   with a field *Box(Wrap(int)) given to Box's block, finds its run under
-//   way: "'Box' can't be used in its own #modify, which decides its
-//   instances", at that use, with its chain; the run fails, said no more.
+//   Node :: struct { w: Wrap(Node); }, and laid out as without it. Given to
+//   one that describes types, its layout, under way since before the run,
+//   is found under way again: it led to the use whose run needs it, said
+//   at that use, "'Wrap' can't be used in its own #modify, which decides
+//   its instances" (checker.cpp's say_circle). A type whose layout, for
+//   that walk, uses the instance being decided, Wrap(int) with a field
+//   *Box(Wrap(int)) given to Box's block, finds its run under way, and is
+//   said the same way, at that use, with its chain; the run fails, said no
+//   more.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

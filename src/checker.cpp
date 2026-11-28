@@ -4464,9 +4464,10 @@ bool check(Ast_File *file, Arena *a, Diagnostics *d, Compile_Time *world) {
     // broken entry has none: the parser gave up on it. A generic procedure's
     // body is checked only as its instances' (spec 7.11): in its turn its
     // names are walked (check_generic_names), unless an instance's body
-    // checked earlier had them walked first. A generic's #modify block (spec
-    // 7.12), a generic struct's too, is checked in its turn here, unless a
-    // use checked it first (check_generic_modify).
+    // checked earlier had them walked first. A generic procedure's #modify
+    // block (spec 7.12) is checked in its turn here, and then a generic
+    // struct's, in a loop of their own over the top level after every
+    // procedure, each unless a use checked it first (check_generic_modify).
     for (s64 i = 0; i < file->procs.count; i++) {
         Ast_Proc *proc = file->procs[i];
         if (proc->is_broken) continue;

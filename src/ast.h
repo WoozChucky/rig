@@ -199,6 +199,7 @@ enum Ast_Resolve : u8 {
 
 struct Ast_Instance;
 struct Ast_Modify;
+struct Modify_Run;
 struct Ast_Var;
 
 // A procedure: a declaration, or the procedure a top-level #run { ... } runs
@@ -291,7 +292,6 @@ struct Ast_Proc : Ast {
 // are the generic's type and constant parameters, made by its check
 // (check_generic.cpp's check_modify), which is once: as the generic's own
 // code, with no chain, called or not.
-struct Modify_Run;
 struct Ast_Modify {
     Position pos;              // its '#modify'
     Ast_Proc *proc;            // the block as a procedure named "#modify", at the directive: no parameters,
@@ -1169,17 +1169,15 @@ Token_Kind compound_operator(Token_Kind op);
 // An array's count prints as written: (array (name N) int) for [N]int.
 // A struct prints as (struct Vec2 (x float32) (y float32)), each field's
 // type as written ((x float) for x: float), a generic one with its
-// parameters first, (struct Map (params (K Type) (V Type)) (keys
-// (resizable K))), and its #modify block after them, (struct Box (params
-// (T Type)) (modify (block ...)) (v T)). An instance of one prints as
-// (instance Map string (ptr u8)), each argument as a type prints or as an
-// expression does: (instance Ring int (binary + (int 4) (int 1))). An enum
-// prints as
+// parameters first, (struct Map (params (K Type) (V Type)) (keys (resizable
+// K))), and its #modify block after them, (struct Box (params (T Type))
+// (modify (block ...)) (v T)). An instance of one prints as (instance Map
+// string (ptr u8)), each argument as a type prints or as an expression
+// does: (instance Ring int (binary + (int 4) (int 1))). An enum prints as
 // (enum Small u8 (A) (B (int 5))), its integer type as written or _ for
-// none, each member with its value when it has one (a written one, or
-// the number the checker gave it); an enum_flags as
-// (enum_flags Look _ (VISIBLE) ...). A member without its enum, .FREE,
-// prints as (dot FREE).
+// none, each member with its value when it has one (a written one, or the
+// number the checker gave it); an enum_flags as (enum_flags Look _
+// (VISIBLE) ...). A member without its enum, .FREE, prints as (dot FREE).
 // #run e prints as (run (call f)) for #run f(), in an expression, a
 // statement or at the top level alike; a top-level #run { ... } as
 // (run (block ...)).
