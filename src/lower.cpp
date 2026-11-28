@@ -493,6 +493,8 @@ struct Lowering {
     // something needs it (type_info_global) and filled by a worklist
     // (describe_type), so a chain or a cycle of types needs no recursion.
     Table<s32> type_infos;                  // each type's description's index, by pointer_key of its Type
+    Array<Type *> described_types;          // the other way: each global's type, by the global's index, null
+                                            // for one that's no description (ir_lowering_described)
     Array<Pending_Description> describing;  // made, waiting to be filled, first in first out
     s64 described;                          // describing's next to fill
     s32 type_info_count;                    // the type_info.N made so far
@@ -4114,6 +4116,8 @@ static s32 type_info_global(Lowering *l, Type *t) {
     String name = string_printf(l->arena, "type_info.%d", l->type_info_count++);
     s32 global = add_type_info_global(l, name, type_info_size(type_info_tag(t)), {}, {});
     table_put(&l->type_infos, string_copy(l->arena, key), global);
+    while (l->described_types.count <= global) array_add(&l->described_types, (Type *)nullptr);
+    l->described_types[global] = t;
     // The one filling it is the call that found the queue empty: describing
     // counts the one being filled until it's done.
     bool outermost = l->described == l->describing.count;
@@ -5260,6 +5264,7 @@ static void release_lowering(Lowering *l) {
     table_free(&l->constant_index);
     table_free(&l->used_foreign);
     table_free(&l->type_infos);
+    array_free(&l->described_types);
     table_free(&l->modify_procs);
     array_free(&l->describing);
     array_free(&l->pending_constants);
@@ -5533,17 +5538,7 @@ s32 ir_lowering_type_info(Lowering *l, Type *t) {
 }
 
 Type *ir_lowering_described(Lowering *l, s32 global) {
-    // Few descriptions are asked for so: each type_infos entry is looked
-    // at, the type read back from its key, the pointer's bytes.
-    for (s64 i = 0; i < l->type_infos.capacity; i++) {
-        Table_Slot<s32> *slot = &l->type_infos.slots[i];
-        if (!slot->used || slot->value != global) continue;
-        Type *t = nullptr;
-        RIG_ASSERT(slot->key.count == (s64)sizeof t);
-        memcpy(&t, slot->key.data, sizeof t);
-        return t;
-    }
-    return nullptr;
+    return global >= 0 && global < l->described_types.count ? l->described_types[global] : nullptr;
 }
 
 Ast_Proc *ir_lowering_source(Lowering *l, s32 proc) {
