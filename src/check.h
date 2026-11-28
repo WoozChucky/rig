@@ -16,13 +16,14 @@
 // declarations were under way then. A declaration under way that the
 // block's code, or a type given to it, reaches again, one of those, is one
 // that use is in: the circle runs through the use (checker.cpp's
-// say_circle).
+// say_circle), which is said once, however many of them it reaches.
 struct Modify_Check {
     String name;          // its generic's
     Position at;          // the use that asked for the check or the run
     String context;       // the use's chain (Diagnostics.context)
     s64 resolving;        // c->resolving.count when it started
     Modify_Check *outer;  // the check or run under way around it, if any
+    bool said;            // say_circle has said the use: a circle through it
 };
 
 struct Checker {

@@ -1712,7 +1712,7 @@ bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Arra
         return false;
     }
     modify->resolve = RESOLVE_UNDER_WAY;
-    Modify_Check check = {name, at, c->diag->context, c->resolving.count, c->modify_check};
+    Modify_Check check = {name, at, c->diag->context, c->resolving.count, c->modify_check, false};
     c->modify_check = &check;
     // The generic's own code, in no instance: its mistakes are said with no
     // chain, whichever use asked for the check first.
@@ -1820,7 +1820,7 @@ static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<G
         String outer = c->diag->context;
         String line = chain_line(c, name, bindings_text(c->arena, run->given), of_struct, used_at);
         c->diag->context = string_printf(c->arena, STR_FMT STR_FMT, STR_ARG(line), STR_ARG(outer));
-        Modify_Check running = {name, at, outer, c->resolving.count, c->modify_check};
+        Modify_Check running = {name, at, outer, c->resolving.count, c->modify_check, false};
         c->modify_check = &running;
         run->running = true;
         run->ran = compile_time_modify(c->world, c, modify, &run->result, &run->accepted, &run->message);

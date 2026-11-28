@@ -1140,13 +1140,17 @@ static Modify_Check *modify_in_circle(Checker *c, Ast *decl) {
 // chain, as it is when the block's check or run comes first and the use
 // finds it under way (check_generic.cpp's check_modify and
 // modify_bindings): so which of them is checked first doesn't change what
-// is said.
+// is said. It's said once (Modify_Check.said): a block that reads both
+// `A :: B;` and `B :: size_of(Box(int));` finds each under way, and both
+// circles run through the one use.
 static void say_circle(Checker *c, Ast *decl, String name, Position at) {
     Modify_Check *asked = modify_in_circle(c, decl);
     if (!asked) {
         diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
         return;
     }
+    if (asked->said) return;
+    asked->said = true;
     String context = c->diag->context;
     c->diag->context = asked->context;
     report_used_in_own_modify(c, asked->name, asked->at);

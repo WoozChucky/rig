@@ -16504,6 +16504,51 @@ TEST(modify_own_use_through_a_declaration) {
             CHECK_EQ(box->instances.count, 0);
         }
     }
+    // A block that reads two declarations under way, the first needing the
+    // second, whose use asked for the check, finds each in a circle through
+    // that one use: said once, whichever the block reads first, with the
+    // declarations first or the block's check first, asked for by a global
+    // before both. Two constants, two globals and two structs whose sizes
+    // the block takes. (With the check first, the first global's value is
+    // the second, which has no value known while compiling, as anywhere.)
+    struct Pair {
+        const char *generic;         // its declaration, %s%s the block's two reads
+        const char *decls;           // the two declarations, the second's use of it at line 2
+        const char *first, *second;  // the block's reads
+        const char *column;          // of the use
+        const char *unknown;         // said beyond the use with the check first, if anything
+    };
+    const char *box = "Box :: struct (T: Type) #modify { %s%sreturn true; } { v: T; }";
+    const char *list = "List :: struct (T: Type) #modify { %s%sreturn true; } { v: int; }";
+    const Pair pairs[] = {
+        {box, "A :: B;\nB :: size_of(Box(int));", "x := B; ", "y := A; ", "14", ""},
+        {box, "gA: int = gB;\ngB: int = size_of(Box(int));", "x := gB; ", "y := gA; ", "19",
+         "2:11: a global's value must be known while compiling, for now\n"},
+        {list, "Outer :: struct { i: Inner; }\nInner :: struct { l: List(int); }", "a := size_of(Inner); ",
+         "b := size_of(Outer); ", "22", ""},
+    };
+    for (const Pair &k : pairs) {
+        const char *name = k.generic == box ? "Box" : "List";
+        for (s64 swapped = 0; swapped < 2; swapped++) {
+            const char *generic = string_cstr(
+                &a, string_printf(&a, k.generic, swapped ? k.second : k.first, swapped ? k.first : k.second));
+            for (s64 asked = 0; asked < 2; asked++) {
+                const char *ask = asked ? string_cstr(&a, string_printf(&a, "g: %s(bool);\n", name)) : "";
+                const char *text =
+                    string_cstr(&a, string_printf(&a, "%s%s\n%s\nmain :: () { }\n", ask, k.decls, generic));
+                const char *said = string_cstr(&a, string_printf(&a,
+                                                                 "%s%d:%s: '%s' can't be used in its own #modify, "
+                                                                 "which decides its instances\n",
+                                                                 asked ? k.unknown : "", (int)(2 + asked), k.column,
+                                                                 name));
+                Ast_File *file = nullptr;
+                CHECK_STR(check_with_preload(&a, text, &file), said);
+                Ast_Struct *generic_struct = (Ast_Struct *)top_level_named(file, name);
+                CHECK(generic_struct->modify->had_errors);
+                CHECK_EQ(generic_struct->instances.count, 0);
+            }
+        }
+    }
     const char *circles[] = {"Box :: struct (T: Type) #modify { y := A; return true; } { v: T; }\nA :: B;\nB :: A;\n",
                              "A :: B;\nB :: A;\nBox :: struct (T: Type) #modify { y := A; return true; } { v: T; }\n"};
     for (s64 i = 0; i < 2; i++) {
