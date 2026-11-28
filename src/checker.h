@@ -1776,7 +1776,11 @@
 //   whose layout is under way may be given to a block that only compares,
 //   Node :: struct { w: Wrap(Node); }, and laid out as without it; given
 //   to one that describes types, it is the usual "'Node' is defined in
-//   terms of itself", followed by the would-be instance's line.
+//   terms of itself", followed by the would-be instance's line. A type
+//   whose layout, for that walk, uses the instance being decided, Wrap(int)
+//   with a field *Box(Wrap(int)) given to Box's block, finds its run under
+//   way: "'Box' can't be used in its own #modify, which decides its
+//   instances", at that use, with its chain; the run fails, said no more.
 //
 // The program.
 // - #foreign's only library is libc, the C runtime every program links.

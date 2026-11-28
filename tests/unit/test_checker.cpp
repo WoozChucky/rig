@@ -16271,6 +16271,20 @@ TEST(modify_changes_the_instance_a_call_makes) {
         CHECK_STR(pick->instances[1]->name, "pick(T = float32)");
     }
     CHECK_STR(type_of_main_local(&a, file, "q"), "int");
+    // A block that describes types compares them as handles too, its
+    // written types the descriptions its variable holds: u8 is made int,
+    // int is kept, and bool refused.
+    CHECK_STR(check_with_preload(&a,
+                                 "pk :: (v: $T) #modify { i := type_info(T); if T == u8 { T = int; } "
+                                 "return T == int, \"only int\"; } { }\n"
+                                 "main :: () { pk(cast(u8) 1); pk(2); pk(true); }\n",
+                                 &file),
+              "2:37: 'pk' refused T = bool: only int\n");
+    Ast_Proc *pk = (Ast_Proc *)top_level_named(file, "pk");
+    CHECK(pk->modify->describes);
+    CHECK_EQ(pk->modify->runs.count, 3);
+    CHECK_EQ(pk->instances.count, 1);
+    if (pk->instances.count == 1) CHECK_STR(pk->instances[0]->name, "pk(T = int)");
     // A constant is given as it lies in memory, and read back so: a float32
     // narrowed from the double the constant keeps, a signed integer of one
     // byte, an enum's member and a bool, each changed by the block.
@@ -16521,6 +16535,13 @@ TEST(modify_struct_mistakes) {
     Ast_Struct *bad = (Ast_Struct *)top_level_named(file, "Bad");
     CHECK_EQ(bad->modify->runs.count, 2);
     CHECK_EQ(bad->instances.count, 0);
+    // A field's written type in an instance gives the block that
+    // instance's arguments again (spec 3.23): List(u8) is List(u16), whose
+    // next is a *List(u32), so a *List(u16) doesn't go there.
+    CHECK_STR(check_with_preload(&a, "List :: struct (T: Type) #modify { if T == u8 { T = u16; } "
+                                     "else if T == u16 { T = u32; } return true; } { value: T; next: *List(T); }\n"
+                                     "main :: () { second: List(u8); first: List(u8) = .{1, *second}; }\n"),
+              "2:55: a value of type '*List(u16)' doesn't convert to '*List(u32)' implicitly\n");
     arena_free(&a);
 }
 
@@ -16548,5 +16569,25 @@ TEST(modify_struct_given_a_type_under_way) {
                                             node)),
               "4:1: 'Node' is defined in terms of itself\n"
               "    in 'Wrap' with T = Node, used at test.rig:4:29\n");
+    // Box(Wrap(int)) makes Wrap(int), laid out for the block that describes
+    // it, and its field asks for Box(Wrap(int)), whose block is running: a
+    // use of Box in what its own block reaches, said once at the field with
+    // Wrap(int)'s chain, whether x is a Box(Wrap(int)) or points at one.
+    const char *wraps[][2] = {{"main :: () { x: Box(Wrap(int)); }\n",
+                               "2:32: 'Box' can't be used in its own #modify, which decides its instances\n"
+                               "    in 'Wrap' with T = int, used at test.rig:3:21\n"},
+                              {"main :: () { x: *Box(Wrap(int)); }\n",
+                               "2:32: 'Box' can't be used in its own #modify, which decides its instances\n"
+                               "    in 'Wrap' with T = int, used at test.rig:3:22\n"}};
+    for (s64 i = 0; i < 2; i++) {
+        CHECK_STR(check_with_preload(&a, joined(&a,
+                                                "Box :: struct (T: Type) #modify { return type_info(T).size >= 0; } "
+                                                "{ p: *T; }\n"
+                                                "Wrap :: struct (T: Type) { b: *Box(Wrap(T)); v: T; }\n",
+                                                wraps[i][0]),
+                                     &file),
+                  wraps[i][1]);
+        CHECK_EQ(((Ast_Struct *)top_level_named(file, "Box"))->instances.count, 0);
+    }
     arena_free(&a);
 }

@@ -1774,9 +1774,12 @@ void check_generic_modify(Checker *c, Ast *generic) {
 //    (Diagnostics.context) starts with the line of the instance the given
 //    bindings would make, "    in 'sum' with T = string, called at
 //    PATH:L:C", so a failure there names them. The run joins the cache
-//    before it starts: a use that would run it again while it runs, which
-//    only a circle the walk of a type's description says can make, finds
-//    it unfinished, and makes no instance.
+//    before it starts, so a use that would run it again while it runs
+//    finds it running: one in the code a type's description reaches, as
+//    the type is laid out before the block runs (a Wrap(int) whose field
+//    is a *Box(Wrap(int)), given to Box's block), asks for an instance the
+//    block is deciding. Said at the use as one inside the block is, with
+//    its chain, so the layout fails, and the run with it: false.
 // 3. A run that failed was said once, as it ran: false, and nothing more
 //    is said, here or at any later use given those bindings.
 // 4. A run that refused is said at each use that gives those bindings,
@@ -1803,8 +1806,13 @@ static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<G
         String outer = c->diag->context;
         String line = chain_line(c, name, bindings_text(c->arena, run->given), of_struct, used_at);
         c->diag->context = string_printf(c->arena, STR_FMT STR_FMT, STR_ARG(line), STR_ARG(outer));
+        run->running = true;
         run->ran = compile_time_modify(c->world, c, modify, &run->result, &run->accepted, &run->message);
+        run->running = false;
         c->diag->context = outer;
+    } else if (run->running) {
+        report_used_in_own_modify(c, name, at);
+        return false;
     }
     if (!run->ran) return false;
     if (!run->accepted) {

@@ -6,17 +6,17 @@
 // float32; ring makes a count below 1 one, so ring(0, int) is a [1]int;
 // say makes an empty string "none". These blocks count their runs in a
 // global of the compile-time world, which a top-level #run prints (the
-// .build.out): 5, one for each set given, widen's u8 (by a constant's #run
-// first; then main's call, a #loaded file's procedure, twice's instance
-// and the top-level #run that prints find it) and u16 (by the #loaded
-// file's other procedure), sum's float32, ring's N = 0, T = int and say's
-// S = "". No block has code in the
-// program, whose own count stays 0. keep saves the string it's given in a
-// global, which a constant's #run compares and a top-level one prints
-// after its block has returned: the string's bytes live as long as the
-// world. shout
-// writes through the string it's given, its own copy: G, the constant
-// given, stays "xyz". The same compiled and interpreted.
+// .build.out): 6, one for each set given, widen's u8 (by a constant's #run
+// first; then main's call, a #loaded file's procedure and twice's instance
+// find it), u16 (by the #loaded file's other procedure) and s8 (by the
+// top-level #run that prints, whose code is checked after the bodies, so
+// the block runs from there), sum's float32, ring's N = 0, T = int and
+// say's S = "". No block has code in the program, whose own count stays 0.
+// keep saves the string it's given in a global, which a constant's #run
+// compares and a top-level one prints after its block has returned: the
+// string's bytes live as long as the world. shout writes through the
+// string it's given, its own copy: G, the constant given, stays "xyz". The
+// same compiled and interpreted.
 #import "Basic";
 #load "load/modify.rig";
 
@@ -85,7 +85,7 @@ keep_and_compare :: () -> bool {
     return kept == "abcdefghijklmnopqrstuvwxyz0123456789";
 }
 
-#run { print("{}\n", modify_runs); }
+#run { print("{} {}\n", widen(cast(s8) 5), modify_runs); }
 
 #run { print("at the top level: '{}'\n", kept); }
 
