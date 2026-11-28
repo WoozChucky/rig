@@ -1531,16 +1531,24 @@ static bool same_binding(Ast *made, Generic_Binding *b) {
     return constant->constant == b->value->constant;
 }
 
+// Whether bindings `made`, an instance's or a #modify run's (make_bindings),
+// bind what `bindings` would, binding by binding (same_binding): the one
+// comparison an instance's cache and a #modify block's both use, so they
+// agree on which sets are the same.
+static bool same_bindings(Array<Ast *> made, Array<Generic_Binding> bindings) {
+    for (s64 k = 0; k < bindings.count; k++) {
+        if (!same_binding(made[k], &bindings[k])) return false;
+    }
+    return true;
+}
+
 // The instance whose bindings are `bindings` in `cache`, a generic's
 // instances (Ast_Proc.instances, Ast_Struct.instances), made already, or
 // null: compared binding by binding, a type by its Type * (every type
-// exists once), a constant by its type and value (same_binding).
+// exists once), a constant by its type and value (same_bindings).
 static Ast_Instance *find_instance(Array<Ast_Instance *> cache, Array<Generic_Binding> bindings) {
     for (s64 i = 0; i < cache.count; i++) {
-        Ast_Instance *inst = cache[i];
-        bool same = true;
-        for (s64 k = 0; k < bindings.count && same; k++) same = same_binding(inst->bindings[k], &bindings[k]);
-        if (same) return inst;
+        if (same_bindings(cache[i]->bindings, bindings)) return cache[i];
     }
     return nullptr;
 }
@@ -1769,7 +1777,7 @@ void check_generic_modify(Checker *c, Ast *generic) {
 //    or from code it reaches: each said by check_modify.
 // 2. The block's cache (Ast_Modify.runs), the generic's, program-wide: a
 //    run given the same bindings, compared as find_instance compares an
-//    instance's (same_binding). With none, the bindings given are made
+//    instance's (same_bindings). With none, the bindings given are made
 //    (make_bindings), the cache's key, and the block runs for them
 //    (run.cpp's compile_time_modify). While it runs, the checker's chain
 //    (Diagnostics.context) starts with the line of the instance the given
@@ -1798,10 +1806,7 @@ static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<G
     Array<Generic_Binding> &given = *bindings;
     Modify_Run *run = nullptr;
     for (s64 i = 0; i < modify->runs.count && !run; i++) {
-        Modify_Run *cached = modify->runs[i];
-        bool same = true;
-        for (s64 k = 0; k < given.count && same; k++) same = same_binding(cached->given[k], &given[k]);
-        if (same) run = cached;
+        if (same_bindings(modify->runs[i]->given, given)) run = modify->runs[i];
     }
     if (!run) {
         run = arena_new<Modify_Run>(c->arena);

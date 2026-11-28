@@ -141,7 +141,7 @@ struct Generic_Binding {
 // the block's cache (Ast_Modify.runs).
 struct Modify_Run {
     Array<Ast *> given;             // the bindings given, as make_bindings made them, compared by
-                                    // same_binding
+                                    // same_bindings
     bool running;                   // it's running: a use that finds it so is the block's own
     bool ran;                       // it ran to its return; false while it runs, and after a failure,
                                     // said once
