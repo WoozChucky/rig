@@ -15910,6 +15910,11 @@ TEST(modify_block_mistakes) {
         // exist yet: no type of T is written there either.
         {"s := #run type_info(T).size;", false, 51, run_local},
         {"s := #run size_of(T);", false, 49, run_local},
+        // Nor is there a T to compare with a type, nor a local holding one.
+        {"k := #run (T == int);", false, 42, run_local},
+        {"k := #run (int != T);", false, 49, run_local},
+        {"t := u8; k := #run (t == int);", false, 51,
+         "#run can't use 't': it's a local, which doesn't exist while compiling"},
     };
     const char *calls[] = {"a: []int; f(a); f(a);", ""};
     for (const Case &k : cases) {
@@ -15922,6 +15927,11 @@ TEST(modify_block_mistakes) {
                       string_cstr(&a, string_printf(&a, "1:%d: %s\n", k.col, k.message)));
         }
     }
+    // Two of them compared there are each said.
+    CHECK_STR(check_with_preload(&a, "f :: (values: []$T) #modify { t := u8; k := #run (t == T); return true; } { }\n"
+                                     "main :: () { }\n"),
+              "1:51: #run can't use 't': it's a local, which doesn't exist while compiling\n"
+              "1:56: #run can't use 'T': it's a local, which doesn't exist while compiling\n");
     // An inner block's declaration may hide a variable, as anywhere.
     CHECK_STR(check_with_preload(&a, "f :: (values: []$T) #modify { { T := 1; T = 2; } return true; } { }\n"
                                      "main :: () { a: []int; f(a); }\n"),

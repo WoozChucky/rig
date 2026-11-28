@@ -2605,6 +2605,19 @@ static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
     return nullptr;
 }
 
+// Whether e, an operand of a type comparison in a #run's operand in a
+// #modify block (spec 7.12), names one of the block's variables of type
+// Type, which don't exist while the #run runs (check_type_comparison):
+// said when it does.
+static bool refuse_run_type_local(Checker *c, Ast *e) {
+    if (c->modify || e->kind != AST_NAME || e->type != &type_type) return false;
+    Ast_Name *name = (Ast_Name *)e;
+    if (!name->decl || name->decl->kind != AST_VAR) return false;
+    diag_error(c->diag, name->pos, "#run can't use '" STR_FMT "': it's a local, which doesn't exist while compiling",
+               STR_ARG(name->name));
+    return true;
+}
+
 // == or != with an operand that names a type (spec 5.20): the other must
 // name one too, and the two are compared while compiling, equal when
 // they're the same type (every type exists once, so when their Type *s
@@ -2620,11 +2633,20 @@ static Type *refuse_type_value(Checker *c, Ast_Type_Value *value) {
 // In a #modify block (spec 7.12) a value of type Type, a variable's, is a
 // type too, known only when the block runs: a comparison with one is a
 // bool worked out then, no constant, its operand_type Type. Only two
-// written types still compare while compiling.
+// written types still compare while compiling. In a #run's operand in the
+// block (check_run.cpp's check_run sets Checker.modify aside), which runs
+// before the block does, such a variable is one of the block's locals, and
+// doesn't exist yet: `#run (T == int)` is "#run can't use 'T': it's a
+// local, which doesn't exist while compiling", at the name, as the #run
+// says a local in it (check_run.cpp's uses_no_locals), not a value
+// compared with a type (refuse_run_type_local).
 static Type *check_type_comparison(Checker *c, Ast_Binary *b, bool left_names, bool right_names) {
     Type *left = left_names ? check_type_value(c, b->left) : check_value(c, b->left);
     Type *right = right_names ? check_type_value(c, b->right) : check_value(c, b->right);
     if (!left || !right) return nullptr;
+    bool left_local = !left_names && refuse_run_type_local(c, b->left);
+    bool right_local = !right_names && refuse_run_type_local(c, b->right);
+    if (left_local || right_local) return nullptr;
     bool left_type = left_names || (c->modify && b->left->type == &type_type);
     bool right_type = right_names || (c->modify && b->right->type == &type_type);
     if (!left_type || !right_type) {
@@ -2639,12 +2661,24 @@ static Type *check_type_comparison(Checker *c, Ast_Binary *b, bool left_names, b
     return &type_bool;
 }
 
-// Whether e, in a #modify block (spec 7.12), names a variable of type Type:
-// one of the block's variables, or a local holding a type. Looks only, as
-// expr_names_type does.
+// Whether e names a variable of type Type, which only a #modify block (spec
+// 7.12) has: one of the block's variables, or a local holding a type. Looks
+// only, as expr_names_type does. In a #run's operand in the block, it names
+// one that doesn't exist yet (check_type_comparison says so); there, and
+// anywhere else outside the block's own code, only the scopes are looked
+// in, where such a variable would be, so a global isn't worked out here.
 static bool names_type_variable(Checker *c, Ast *e) {
-    if (!c->modify || e->kind != AST_NAME) return false;
-    Ast *decl = check_lookup(c, ((Ast_Name *)e)->name, nullptr);
+    if (e->kind != AST_NAME) return false;
+    String name = ((Ast_Name *)e)->name;
+    Ast *decl = nullptr;
+    if (c->modify) {
+        decl = check_lookup(c, name, nullptr);
+    } else {
+        for (s64 i = c->scopes.count - 1; i >= 0 && !decl; i--) {
+            Ast **found = table_get(&c->scopes[i], name);
+            if (found) decl = *found;
+        }
+    }
     return decl && decl->kind == AST_VAR && decl->type == &type_type;
 }
 
