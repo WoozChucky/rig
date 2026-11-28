@@ -2311,9 +2311,10 @@ static const char *const MODIFY_RETURNS =
 // return holds both values from here on. Any other count of values is "a
 // #modify block returns a bool, and may add a message, as in return T !=
 // string, \"sum needs numbers\";", at the 'return'. So is one value that
-// is a call with several results, `return verdict(T);`: it is one value,
-// as above, so its message would be dropped, where a procedure with two
-// results says it was given 1. That value is checked first, to know.
+// is a call with several results, `return verdict(T);`, or a #run of one,
+// `return #run verdict(true);`: it is one value, as above, so its message
+// would be dropped, where a procedure with two results says it was given 1.
+// That value is checked first, to know.
 static void check_return(Checker *c, Ast_Return *ret) {
     if (c->deferring) {
         diag_error(c->diag, ret->pos, "can't return from a deferred statement");
@@ -2325,7 +2326,9 @@ static void check_return(Checker *c, Ast_Return *ret) {
     if (proc->modify_of && ret->values.count == 1) {
         Ast *value = ret->values[0];
         Type *t = check_value(c, value);
-        if (t && value->kind == AST_CALL && call_result_count((Ast_Call *)value) > 1) {
+        Ast *called = value;  // the expression whose result it is: a #run's, its operand's
+        while (called->kind == AST_RUN && ((Ast_Run *)called)->operand) called = ((Ast_Run *)called)->operand;
+        if (t && called->kind == AST_CALL && call_result_count((Ast_Call *)called) > 1) {
             diag_error(c->diag, ret->pos, "%s", MODIFY_RETURNS);
             return;
         }

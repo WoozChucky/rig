@@ -15933,6 +15933,11 @@ TEST(modify_block_mistakes) {
                                      "f :: (v: $T) #modify { return verdict(T != string); } { }\n"
                                      "main :: () { f(1); f(\"s\"); }\n"),
               string_cstr(&a, string_printf(&a, "2:24: %s\n", returns)));
+    // So is a #run of one: it too is one value, its first result.
+    CHECK_STR(check_with_preload(&a, "verdict :: (ok: bool) -> bool, string { return ok, \"nope\"; }\n"
+                                     "f :: (v: $T) #modify { return #run verdict(false); } { }\n"
+                                     "main :: () { f(1); f(\"s\"); }\n"),
+              string_cstr(&a, string_printf(&a, "2:24: %s\n", returns)));
     CHECK_STR(check_with_preload(&a, "fine :: (ok: bool) -> bool { return ok; }\n"
                                      "f :: (v: $T) #modify { return fine(T != string); } { }\n"
                                      "main :: () { f(1); }\n"),
