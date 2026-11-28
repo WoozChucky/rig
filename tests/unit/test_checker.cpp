@@ -15921,6 +15921,28 @@ TEST(modify_block_mistakes) {
     CHECK_STR(check_with_preload(&a, "f :: (values: []$T) #modify { { T := 1; T = 2; } return true; } { }\n"
                                      "main :: () { a: []int; f(a); }\n"),
               "");
+    // A call with two results is one value in a return, its first, so the
+    // block would drop the message: refused, as a procedure with two
+    // results refuses it. A call with one result is the bool.
+    CHECK_STR(check_with_preload(&a, "verdict :: (ok: bool) -> bool, string { return ok, \"nope\"; }\n"
+                                     "f :: (v: $T) #modify { return verdict(T != string); } { }\n"
+                                     "main :: () { f(1); f(\"s\"); }\n"),
+              string_cstr(&a, string_printf(&a, "2:24: %s\n", returns)));
+    CHECK_STR(check_with_preload(&a, "fine :: (ok: bool) -> bool { return ok; }\n"
+                                     "f :: (v: $T) #modify { return fine(T != string); } { }\n"
+                                     "main :: () { f(1); }\n"),
+              "");
+    {
+        // A return of one value gets its message here, an empty string
+        // whose bytes are somewhere, so lowering copies none from nowhere.
+        Ast_File *file = nullptr;
+        CHECK_STR(check_with_preload(&a, "f :: (v: $T) #modify { return true; } { }\nmain :: () { f(1); }\n", &file),
+                  "");
+        Ast_Return *ret = (Ast_Return *)((Ast_Proc *)top_level_named(file, "f"))->modify->proc->body->statements[0];
+        CHECK_EQ(ret->values.count, 2);
+        Ast_String *none = (Ast_String *)ret->values[1];
+        CHECK(none->value.count == 0 && none->value.data != nullptr);
+    }
     arena_free(&a);
 }
 

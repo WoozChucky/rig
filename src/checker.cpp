@@ -2261,6 +2261,24 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
     }
 }
 
+// The values of a return refused, each checked for its own mistakes alone.
+// A written type is a value in a #modify block (check_value's rule), so
+// `return int, "a", 1;` there, or a deferred `return int;`, says only the
+// return's mistake.
+static void check_refused_return_values(Checker *c, Ast_Return *ret) {
+    for (s64 i = 0; i < ret->values.count; i++) {
+        Ast *value = ret->values[i];
+        if (c->modify && expr_names_type(c, value)) {
+            check_type_value(c, value);
+        } else {
+            check_expression(c, value);
+        }
+    }
+}
+
+static const char *const MODIFY_RETURNS =
+    "a #modify block returns a bool, and may add a message, as in return T != string, \"sum needs numbers\";";
+
 // return; return e; return a, b; against what the procedure returns: one
 // value per result, each converting to its result's type. Another number
 // of values is reported at the 'return', after the values' own mistakes
@@ -2279,23 +2297,10 @@ static void check_assign(Checker *c, Ast_Assign *assign) {
 // b;` gives an empty one, a string "" made here at the return, so the
 // return holds both values from here on. Any other count of values is "a
 // #modify block returns a bool, and may add a message, as in return T !=
-// string, \"sum needs numbers\";", at the 'return'.
-//
-// The values of a return refused, each checked for its own mistakes alone.
-// A written type is a value in a #modify block (check_value's rule), so
-// `return int, "a", 1;` there, or a deferred `return int;`, says only the
-// return's mistake.
-static void check_refused_return_values(Checker *c, Ast_Return *ret) {
-    for (s64 i = 0; i < ret->values.count; i++) {
-        Ast *value = ret->values[i];
-        if (c->modify && expr_names_type(c, value)) {
-            check_type_value(c, value);
-        } else {
-            check_expression(c, value);
-        }
-    }
-}
-
+// string, \"sum needs numbers\";", at the 'return'. So is one value that
+// is a call with several results, `return verdict(T);`: it is one value,
+// as above, so its message would be dropped, where a procedure with two
+// results says it was given 1. That value is checked first, to know.
 static void check_return(Checker *c, Ast_Return *ret) {
     if (c->deferring) {
         diag_error(c->diag, ret->pos, "can't return from a deferred statement");
@@ -2303,20 +2308,29 @@ static void check_return(Checker *c, Ast_Return *ret) {
         return;
     }
     Ast_Proc *proc = c->proc;
+    s64 checked = 0;  // values checked here already, from the first
     if (proc->modify_of && ret->values.count == 1) {
+        Ast *value = ret->values[0];
+        Type *t = check_value(c, value);
+        if (t && value->kind == AST_CALL && call_result_count((Ast_Call *)value) > 1) {
+            diag_error(c->diag, ret->pos, "%s", MODIFY_RETURNS);
+            return;
+        }
+        Type *result = proc->results[0]->type;
+        if (t && !check_convert(c, value, result)) report_no_conversion(c, value, result);
+        checked = 1;
         Ast_String *none = ast_new<Ast_String>(c->arena, AST_STRING, ret->pos);
+        none->value = str("");
         array_add(&ret->values, (Ast *)none);
     }
     if (proc->modify_of && ret->values.count != 2) {
         check_refused_return_values(c, ret);
-        diag_error(c->diag, ret->pos,
-                   "a #modify block returns a bool, and may add a message, as in return T != string, \"sum needs "
-                   "numbers\";");
+        diag_error(c->diag, ret->pos, "%s", MODIFY_RETURNS);
         return;
     }
     s64 want = proc->results.count, given = ret->values.count;
     if (want == given) {
-        for (s64 i = 0; i < given; i++) {
+        for (s64 i = checked; i < given; i++) {
             Ast *value = ret->values[i];
             Type *result = proc->results[i]->type;
             if (check_value(c, value) && !check_convert(c, value, result)) report_no_conversion(c, value, result);

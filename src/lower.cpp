@@ -830,7 +830,7 @@ static s32 add_bytes(Lowering *l, String bytes) {
     g.name = string_printf(l->arena, "str.%d", l->string_count++);
     g.type = IR_VOID;
     u8 *copy = (u8 *)arena_alloc(l->arena, bytes.count + 1, 1);
-    memcpy(copy, bytes.data, (size_t)bytes.count);  // arena memory is zeroed: the last byte is 0
+    if (bytes.count) memcpy(copy, bytes.data, (size_t)bytes.count);  // arena memory is zeroed: the last byte is 0
     g.bytes = {copy, bytes.count + 1};
     array_add(&l->module->globals, g);
     return (s32)(l->module->globals.count - 1);
