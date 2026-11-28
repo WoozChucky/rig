@@ -145,23 +145,23 @@
 // given, but after its errors), a failed top-level #run's error after the
 // runs' output, and after a later run's exit(), when stdout and stderr are
 // one pipe (run_output_order_test), rig check's output of a constant's #run
-// before its diagnostics, in one pipe (check_run_output_test), a .build/ or
-// an object file rig can't write, a workspace's .build/ that it can't make,
-// said after what the workspace's #run printed when both are in one pipe
-// (workspace_unwritable_test), rig check (alone, and with --stdin-for a
-// file it doesn't load), rig build and bin/unit-tests --interpret of
-// tests/run/hello.rig by copies of rig and bin/unit-tests in
-// .build/tests/no-preload/bin, with no modules/ beside them or above: each
-// says there's no module 'Preload', alone on stderr (not that the program
-// doesn't load the --stdin-for file), exit 1, and the build makes nothing,
-// and rig check by such a copy of a main file that isn't there says that
-// file can't be read instead (no_preload_test), rig build of
-// tests/run/hello.rig by a copy of rig in .build/tests/no-runtime/bin with
-// Preload beside it but not the linker nor Rig's runtime: it names the
-// missing linker and says how to get it back, then that linking failed,
-// exit 1, and makes no program (no_runtime_test), the command line's
-// mistakes, and rig version's output, by its shape (version_test: it names
-// the commit rig was built from).
+// and of a #modify block before its diagnostics, in one pipe
+// (check_run_output_test), a .build/ or an object file rig can't write, a
+// workspace's .build/ that it can't make, said after what the workspace's
+// #run printed when both are in one pipe (workspace_unwritable_test), rig
+// check (alone, and with --stdin-for a file it doesn't load), rig build and
+// bin/unit-tests --interpret of tests/run/hello.rig by copies of rig and
+// bin/unit-tests in .build/tests/no-preload/bin, with no modules/ beside
+// them or above: each says there's no module 'Preload', alone on stderr
+// (not that the program doesn't load the --stdin-for file), exit 1, and the
+// build makes nothing, and rig check by such a copy of a main file that
+// isn't there says that file can't be read instead (no_preload_test), rig
+// build of tests/run/hello.rig by a copy of rig in
+// .build/tests/no-runtime/bin with Preload beside it but not the linker nor
+// Rig's runtime: it names the missing linker and says how to get it back,
+// then that linking failed, exit 1, and makes no program (no_runtime_test),
+// the command line's mistakes, and rig version's output, by its shape
+// (version_test: it names the commit rig was built from).
 //
 // Then rig check on every program of tests/run and tests/errors (not
 // tests/build's), from a file and from stdin under the file's name, a loaded
@@ -2881,17 +2881,22 @@ static bool run_check_for(Arena *a, String rig, String main, String file, String
 }
 
 // rig check of a program whose constant's #run prints a line while it's
-// checked, and which has an error elsewhere: what the run printed is rig
-// check's stdout, alone, and with stdout and stderr in one pipe it comes
-// first, then the diagnostic, which rig prints once the check is done. The
+// checked, or, `modify`, whose generic's #modify block does (spec 7.12),
+// and which has an error elsewhere: what the run printed is rig check's
+// stdout, alone, and with stdout and stderr in one pipe it comes first,
+// then the diagnostic, which rig prints once the check is done. The
 // program is written here, in .build/tests, as a tests/errors program
 // mustn't print.
-static String check_run_output_test(Arena *a, String rig) {
+static String check_run_output_test(Arena *a, String rig, bool modify) {
     String source = str(".build/tests/check_run_output.rig");
-    String text = str("puts :: (s: *u8) -> s32 #foreign libc;\n"
-                      "say :: () -> int { puts(\"while checking\"); return 1; }\n"
-                      "N :: #run say();\n"
-                      "main :: () { x : int = \"text\"; }\n");
+    String text = modify ? str("puts :: (s: *u8) -> s32 #foreign libc;\n"
+                               "f :: (v: $T) #modify { puts(\"while checking\"); return true; } { }\n"
+                               "g :: () { f(1); }\n"
+                               "main :: () { x : int = \"text\"; }\n")
+                         : str("puts :: (s: *u8) -> s32 #foreign libc;\n"
+                               "say :: () -> int { puts(\"while checking\"); return 1; }\n"
+                               "N :: #run say();\n"
+                               "main :: () { x : int = \"text\"; }\n");
     if (!os_write_file(source, text)) return string_printf(a, "couldn't write " STR_FMT, STR_ARG(source));
     String line = str("while checking\n");
     String expected = string_printf(a,
@@ -4181,7 +4186,9 @@ int main(int argc, char **argv) {
     report("a top-level #run's exit() after a failed one, the errors after the runs' output, in one pipe",
            run_output_order_test(&a, rig, true), &passed, &failed);
     report("rig check prints what a constant's #run prints, before the diagnostics, in one pipe",
-           check_run_output_test(&a, rig), &passed, &failed);
+           check_run_output_test(&a, rig, false), &passed, &failed);
+    report("rig check prints what a #modify block prints, before the diagnostics, in one pipe",
+           check_run_output_test(&a, rig, true), &passed, &failed);
     report("rig build where .build is a file", unwritable_test(&a, rig, false), &passed, &failed);
     report("rig build where the object file's name is a directory", unwritable_test(&a, rig, true), &passed, &failed);
     report("a workspace's #run output before its .build that can't be made, both in one pipe",

@@ -1,37 +1,56 @@
-tests/errors/modify_refused.rig:22:19: error: 'sum' refused T = string: sum needs numbers
+tests/errors/modify_refused.rig:25:19: error: 'sum' refused T = string: sum needs numbers
     wrap :: (v: $T) { sum(string.["c"]); }
                       ^
-    in 'wrap' with T = int, called at tests/errors/modify_refused.rig:45:5
-tests/errors/modify_refused.rig:24:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    in 'wrap' with T = int, called at tests/errors/modify_refused.rig:61:5
+tests/errors/modify_refused.rig:27:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
     bad :: (v: $T) #modify {
                    ^
-    in #modify (tests/errors/modify_refused.rig:27:6)
-    in 'bad' with T = int, called at tests/errors/modify_refused.rig:46:5
-tests/errors/modify_refused.rig:24:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    in #modify (tests/errors/modify_refused.rig:30:6)
+    in 'bad' with T = int, called at tests/errors/modify_refused.rig:62:5
+tests/errors/modify_refused.rig:27:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
     bad :: (v: $T) #modify {
                    ^
-    in #modify (tests/errors/modify_refused.rig:27:6)
-    in 'bad' with T = bool, called at tests/errors/modify_refused.rig:48:5
-tests/errors/modify_refused.rig:24:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    in #modify (tests/errors/modify_refused.rig:30:6)
+    in 'bad' with T = bool, called at tests/errors/modify_refused.rig:64:5
+tests/errors/modify_refused.rig:27:16: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
     bad :: (v: $T) #modify {
                    ^
-    in #modify (tests/errors/modify_refused.rig:27:6)
-    in 'bad' with T = float32, called at tests/errors/modify_refused.rig:31:23
-    in 'wrap_bad' with T = float32, called at tests/errors/modify_refused.rig:49:5
-tests/errors/modify_refused.rig:33:31: error: #modify failed: its result holds a string with a negative count
+    in #modify (tests/errors/modify_refused.rig:30:6)
+    in 'bad' with T = float32, called at tests/errors/modify_refused.rig:34:23
+    in 'wrap_bad' with T = float32, called at tests/errors/modify_refused.rig:65:5
+tests/errors/modify_refused.rig:36:31: error: #modify failed: its result holds a string with a negative count
     neg :: ($S: string) -> string #modify { S.count = -1; return true; } { return S; }
                                   ^
-    in 'neg' with S = "x", called at tests/errors/modify_refused.rig:50:5
-tests/errors/modify_refused.rig:35:18: error: #modify failed: its result holds a string with a negative count
+    in 'neg' with S = "x", called at tests/errors/modify_refused.rig:66:5
+tests/errors/modify_refused.rig:38:18: error: #modify failed: its result holds a string with a negative count
     quiet :: (v: $T) #modify {
                      ^
-    in 'quiet' with T = int, called at tests/errors/modify_refused.rig:51:5
-tests/errors/modify_refused.rig:42:5: error: 'sum' refused T = string: sum needs numbers
+    in 'quiet' with T = int, called at tests/errors/modify_refused.rig:67:5
+tests/errors/modify_refused.rig:52:17: error: #modify failed: runtime error: index 5 is out of bounds (count 2)
+    deep :: (v: $T) #modify {
+                    ^
+    in inner (tests/errors/modify_refused.rig:50:47)
+    in mid (tests/errors/modify_refused.rig:51:20)
+    in #modify (tests/errors/modify_refused.rig:53:5)
+    in 'deep' with T = int, called at tests/errors/modify_refused.rig:72:5
+tests/errors/modify_refused.rig:58:5: error: 'sum' refused T = string: sum needs numbers
         sum(string.["a"]);
         ^
-tests/errors/modify_refused.rig:43:5: error: 'sum' refused T = string: sum needs numbers
+tests/errors/modify_refused.rig:59:5: error: 'sum' refused T = string: sum needs numbers
         sum(string.["b"]);
         ^
-tests/errors/modify_refused.rig:44:5: error: 'only' refused T = bool
+tests/errors/modify_refused.rig:60:5: error: 'only' refused T = bool
         only(true);
+        ^
+tests/errors/modify_refused.rig:68:5: error: 'ring' refused N = 0, T = int: need a count
+        ring(0, int);
+        ^
+tests/errors/modify_refused.rig:69:5: error: 'say' refused S = "a\"b"
+        say("a\"b");
+        ^
+tests/errors/modify_refused.rig:70:8: error: 'Two' refused A = *u8, N = 3: no
+        t: Two(*u8, 3);
+           ^
+tests/errors/modify_refused.rig:71:5: error: 'en' refused M = E.Y
+        en(E.Y);
         ^

@@ -16307,6 +16307,20 @@ TEST(modify_changes_the_instance_a_call_makes) {
         CHECK_STR(pick->instances[1]->name, "pick(T = float32)");
     }
     CHECK_STR(type_of_main_local(&a, file, "q"), "int");
+    // A generic struct's instance written where a value goes is a Type
+    // value too, which a local may hold and give the variable: f(int)
+    // makes f(T = Pair(int, int)).
+    CHECK_STR(check_with_preload(&a,
+                                 "Pair :: struct (A: Type, B: Type) { a: A; b: B; }\n"
+                                 "f :: ($T: Type) -> T #modify { x: Type = Pair(int, int); T = x; return true; } "
+                                 "{ r: T; return r; }\n"
+                                 "main :: () { p := f(int); }\n",
+                                 &file),
+              "");
+    Ast_Proc *f = (Ast_Proc *)top_level_named(file, "f");
+    CHECK_EQ(f->instances.count, 1);
+    if (f->instances.count == 1) CHECK_STR(f->instances[0]->name, "f(T = Pair(int, int))");
+    CHECK_STR(type_of_main_local(&a, file, "p"), "Pair(int, int)");
     // A block that describes types compares them as handles too, its
     // written types the descriptions its variable holds: u8 is made int,
     // int is kept, and bool refused.
