@@ -1692,14 +1692,15 @@ bool check_modify(Checker *c, Ast_Modify *modify, String name, Position at, Arra
     // Under way: a use from inside the block, or from code it reaches, asks
     // for its own generic's instance, which the block decides. Said at the
     // use, so the check under way has an error: the generic's. (A use in a
-    // body already under way when the check began, that the block reaches
-    // again, is found by the walk instead: check_reached_body.)
+    // declaration already under way when the check began, that the block
+    // reaches again, is found where that declaration is found under way
+    // instead: checker.cpp's say_circle.)
     if (modify->resolve == RESOLVE_UNDER_WAY) {
         report_used_in_own_modify(c, name, at);
         return false;
     }
     modify->resolve = RESOLVE_UNDER_WAY;
-    Modify_Check check = {name, at, c->resolving.count, c->modify_check};
+    Modify_Check check = {name, at, c->diag->context, c->resolving.count, c->modify_check};
     c->modify_check = &check;
     // The generic's own code, in no instance: its mistakes are said with no
     // chain, whichever use asked for the check first.
@@ -1779,7 +1780,11 @@ void check_generic_modify(Checker *c, Ast *generic) {
 //    the type is laid out before the block runs (a Wrap(int) whose field
 //    is a *Box(Wrap(int)), given to Box's block), asks for an instance the
 //    block is deciding. Said at the use as one inside the block is, with
-//    its chain, so the layout fails, and the run with it: false.
+//    its chain, so the layout fails, and the run with it: false. A type
+//    given while its layout is under way, the layout whose use asked for
+//    the run, is the same circle the other way round, found where the
+//    layout is found under way: said at the use all the same (a
+//    Modify_Check for the run; checker.cpp's say_circle).
 // 3. A run that failed was said once, as it ran: false, and nothing more
 //    is said, here or at any later use given those bindings.
 // 4. A run that refused is said at each use that gives those bindings,
@@ -1806,9 +1811,12 @@ static bool modify_bindings(Checker *c, Ast_Modify *modify, String name, Array<G
         String outer = c->diag->context;
         String line = chain_line(c, name, bindings_text(c->arena, run->given), of_struct, used_at);
         c->diag->context = string_printf(c->arena, STR_FMT STR_FMT, STR_ARG(line), STR_ARG(outer));
+        Modify_Check running = {name, at, outer, c->resolving.count, c->modify_check};
+        c->modify_check = &running;
         run->running = true;
         run->ran = compile_time_modify(c->world, c, modify, &run->result, &run->accepted, &run->message);
         run->running = false;
+        c->modify_check = running.outer;
         c->diag->context = outer;
     } else if (run->running) {
         report_used_in_own_modify(c, name, at);

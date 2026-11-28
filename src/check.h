@@ -10,16 +10,19 @@
 #include "checker.h"
 #include "run.h"
 
-// A #modify block's check under way (spec 7.12, check_generic.cpp's
-// check_modify), on the stack while it lasts: whose it is, the use that
-// asked for it, and how many declarations were under way then. A body under
-// way that its check reaches again, one of those, is the one that use is
-// in (checker.cpp's check_reached_body).
+// A #modify block's check or run under way (spec 7.12, check_generic.cpp's
+// check_modify and modify_bindings), on the stack while it lasts: whose it
+// is, the use that asked for it, with that use's chain, and how many
+// declarations were under way then. A declaration under way that the
+// block's code, or a type given to it, reaches again, one of those, is one
+// that use is in: the circle runs through the use (checker.cpp's
+// say_circle).
 struct Modify_Check {
     String name;          // its generic's
-    Position at;          // the use that asked for the check
+    Position at;          // the use that asked for the check or the run
+    String context;       // the use's chain (Diagnostics.context)
     s64 resolving;        // c->resolving.count when it started
-    Modify_Check *outer;  // the check under way around it, if any
+    Modify_Check *outer;  // the check or run under way around it, if any
 };
 
 struct Checker {
@@ -113,8 +116,9 @@ struct Checker {
                                  // aside with the scopes (checker.cpp's leave_scopes), so a procedure the
                                  // block calls, or a declaration worked out inside it, is checked with it
                                  // null; and by check_run, so a #run's operand in the block is too
-    Modify_Check *modify_check;  // the innermost #modify block's check under way (check_generic.cpp's
-                                 // check_modify), each around it its `outer`; null for none
+    Modify_Check *modify_check;  // the innermost #modify block's check or run under way
+                                 // (check_generic.cpp's check_modify and modify_bindings), each around
+                                 // it its `outer`; null for none
 };
 
 // A type or constant parameter of a generic procedure (spec 7.11), $T or
@@ -255,8 +259,9 @@ bool has_params_after_dots(Ast_Proc *proc);
 
 // The body of procedure proc, needed by the #run at `at`: checked now if it
 // isn't yet (checker.cpp's check_body). A body found under way is a circle:
-// "'f' is defined in terms of itself" at `at`, once (a body already in one,
-// RESOLVE_CYCLE, says nothing more), and mark_circle from the body's entry.
+// "'f' is defined in terms of itself" at `at`, or a use of a generic in its
+// own #modify (say_circle), once (a body already in one, RESOLVE_CYCLE,
+// says nothing more), and mark_circle from the body's entry.
 // True when the body is done and neither it nor the signature had errors; a
 // foreign or #compiler procedure has no body (its signature's errors
 // count); a broken one is false, and so is one nested too deeply to check

@@ -1110,6 +1110,40 @@ static void mark_circle(Checker *c, Ast *decl) {
     for (; i < c->resolving.count; i++) *resolve_state(c->resolving[i]) = RESOLVE_CYCLE;
 }
 
+// The #modify block's check or run under way (Checker.modify_check) that
+// began after decl, found under way, went on c->resolving: the outermost
+// one, the first a use asked for; null when none did.
+static Modify_Check *modify_in_circle(Checker *c, Ast *decl) {
+    s64 i = c->resolving.count - 1;
+    while (c->resolving[i] != decl) i--;
+    Modify_Check *asked = nullptr;
+    for (Modify_Check *m = c->modify_check; m && m->resolving > i; m = m->outer) asked = m;
+    return asked;
+}
+
+// The first circle through decl, found under way, said: "'A' is defined in
+// terms of itself", at `at`, `name` decl's. But a circle through a #modify
+// block's check or run that began after decl (modify_in_circle) runs
+// through the use of the generic that asked for it (spec 7.12): the
+// block's code, or a type given to it, reaches its own generic's use, and
+// decl is only on the way. That is said as such, "'Box' can't be used in
+// its own #modify, which decides its instances", at the use, with its
+// chain, as it is when the block's check or run comes first and the use
+// finds it under way (check_generic.cpp's check_modify and
+// modify_bindings): so which of them is checked first doesn't change what
+// is said.
+static void say_circle(Checker *c, Ast *decl, String name, Position at) {
+    Modify_Check *asked = modify_in_circle(c, decl);
+    if (!asked) {
+        diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+        return;
+    }
+    String context = c->diag->context;
+    c->diag->context = asked->context;
+    report_used_in_own_modify(c, asked->name, asked->at);
+    c->diag->context = context;
+}
+
 // A limit of the compiler (spec 6.1, MAX_DEPTH). A declaration worked out
 // where it's first needed is worked out inside the one that needs it, on
 // the stack: the checker recurses from a global's value into the constant
@@ -1173,14 +1207,15 @@ static bool open_declaration(Checker *c, Ast *decl, String name, s32 levels, s32
 // A value that needs itself, directly (`C :: C;`) or through others
 // (`A :: B; B :: A;`), would make that endless. The resolve state breaks
 // the circle: a use that finds the declaration still under way reports
-// "'A' is defined in terms of itself", at its name, once. Every
-// declaration in the circle, from A to the one whose value used it (the
-// end of c->resolving), is then marked RESOLVE_CYCLE, and gives no type
-// once done, so nothing more is said about any of them: not that a value
-// isn't known while compiling (a global with a written type, `a : int = b;
-// b : int = a;`, would otherwise keep it, and the value using it would be a
-// typed value that isn't a constant), and not by the globals that use one,
-// in the circle or out of it.
+// "'A' is defined in terms of itself", at its name, once (or a use of a
+// generic in its own #modify, when the circle runs through one:
+// say_circle). Every declaration in the circle, from A to the one whose
+// value used it (the end of c->resolving), is then marked RESOLVE_CYCLE,
+// and gives no type once done, so nothing more is said about any of them:
+// not that a value isn't known while compiling (a global with a written
+// type, `a : int = b; b : int = a;`, would otherwise keep it, and the value
+// using it would be a typed value that isn't a constant), and not by the
+// globals that use one, in the circle or out of it.
 //
 // A declaration can be in more than one circle. In `a : int = c + b;
 // b : int = a; c : int = a;`, a -> c -> a closes first, while a's value is
@@ -1213,7 +1248,7 @@ static void resolve_global(Checker *c, Ast *decl) {
         // (already RESOLVE_CYCLE) is the same tangle, said once.
         if (*state == RESOLVE_UNDER_WAY) {
             String name = decl->kind == AST_VAR ? ((Ast_Var *)decl)->name : ((Ast_Const *)decl)->name;
-            diag_error(c->diag, decl->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(name));
+            say_circle(c, decl, name, decl->pos);
         }
         mark_circle(c, decl);
         return;
@@ -1421,9 +1456,7 @@ static void check_enum_members(Checker *c, Ast_Enum *e) {
 static bool resolve_enum(Checker *c, Ast_Enum *e) {
     if (e->resolve == RESOLVE_DONE) return true;
     if (e->resolve == RESOLVE_UNDER_WAY || e->resolve == RESOLVE_CYCLE) {
-        if (e->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, e->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(e->name));
-        }
+        if (e->resolve == RESOLVE_UNDER_WAY) say_circle(c, e, e->name, e->pos);
         mark_circle(c, e);
         return false;
     }
@@ -1814,8 +1847,8 @@ static Type *resolve_struct(Checker *c, Ast_Struct *s) {
     // as instance_may_be_laid_out checked it.
     if (s->resolve == RESOLVE_DONE) return s->declared;
     if (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE) {
-        if (s->resolve == RESOLVE_UNDER_WAY && circle_through_a_value(c, s)) {
-            diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
+        if (s->resolve == RESOLVE_UNDER_WAY && (circle_through_a_value(c, s) || modify_in_circle(c, s))) {
+            say_circle(c, s, s->name, s->pos);
         } else if (s->resolve == RESOLVE_UNDER_WAY) {
             diag_error(c->diag, s->pos,
                        "'" STR_FMT "' contains itself; it can hold a pointer to itself, *" STR_FMT, STR_ARG(s->name),
@@ -1877,9 +1910,7 @@ static void make_late_field(Checker *c, Ast_Struct *s, s64 i) {
     Ast_Field *field = s->fields[i];
     if (field->resolve == RESOLVE_DONE) return;
     if (field->resolve == RESOLVE_UNDER_WAY || field->resolve == RESOLVE_CYCLE) {
-        if (field->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, field->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(field->name));
-        }
+        if (field->resolve == RESOLVE_UNDER_WAY) say_circle(c, field, field->name, field->pos);
         mark_circle(c, field);
         return;
     }
@@ -1930,9 +1961,7 @@ bool check_finished_layout(Checker *c, Type *t) {
     Ast_Struct *s = t->decl;
     RIG_ASSERT(!s || s->name.count || s->resolve == RESOLVE_DONE);
     if (s && (s->resolve == RESOLVE_UNDER_WAY || s->resolve == RESOLVE_CYCLE)) {
-        if (s->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
-        }
+        if (s->resolve == RESOLVE_UNDER_WAY) say_circle(c, s, s->name, s->pos);
         mark_circle(c, s);
         return false;
     }
@@ -1967,9 +1996,7 @@ bool check_member_under_way(Checker *c, Type *t, String name) {
     Ast_Struct *s = t->decl;
     if (!s || (s->resolve != RESOLVE_UNDER_WAY && s->resolve != RESOLVE_CYCLE)) return false;
     if (!held_under_way(s, name)) return false;
-    if (s->resolve == RESOLVE_UNDER_WAY) {
-        diag_error(c->diag, s->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(s->name));
-    }
+    if (s->resolve == RESOLVE_UNDER_WAY) say_circle(c, s, s->name, s->pos);
     mark_circle(c, s);
     return true;
 }
@@ -3244,25 +3271,13 @@ static void check_body(Checker *c, Ast_Proc *proc) {
 // for that check (spec 7.12): the circle runs through the use, and the
 // block's code reaches its own generic's. That is said as such, "'sum'
 // can't be used in its own #modify, which decides its instances", at the
-// use, as it is when the block is checked before the body. The circle is
-// marked all the same.
+// use, as it is when the block is checked before the body (say_circle).
+// The circle is marked all the same.
 bool check_reached_body(Checker *c, Ast_Proc *proc, Position at) {
     if (proc->is_broken) return false;
     if (!proc->body) return !proc->had_errors;  // a foreign procedure, C's code, or a #compiler one
     if (proc->body_resolve == RESOLVE_UNDER_WAY || proc->body_resolve == RESOLVE_CYCLE) {
-        if (proc->body_resolve == RESOLVE_UNDER_WAY) {
-            // The outermost check that began after the body: the first one
-            // its use asked for.
-            s64 body = c->resolving.count - 1;
-            while (c->resolving[body] != (Ast *)proc->body) body--;
-            Modify_Check *asked = nullptr;
-            for (Modify_Check *m = c->modify_check; m && m->resolving > body; m = m->outer) asked = m;
-            if (asked) {
-                report_used_in_own_modify(c, asked->name, asked->at);
-            } else {
-                diag_error(c->diag, at, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
-            }
-        }
+        if (proc->body_resolve == RESOLVE_UNDER_WAY) say_circle(c, proc->body, proc->name, at);
         mark_circle(c, proc->body);
         return false;
     }
@@ -3728,9 +3743,7 @@ static void check_signature(Checker *c, Ast_Proc *proc, s32 base) {
 static bool resolve_signature(Checker *c, Ast_Proc *proc) {
     if (proc->is_broken || proc->resolve == RESOLVE_DONE) return true;
     if (proc->resolve == RESOLVE_UNDER_WAY || proc->resolve == RESOLVE_CYCLE) {
-        if (proc->resolve == RESOLVE_UNDER_WAY) {
-            diag_error(c->diag, proc->pos, "'" STR_FMT "' is defined in terms of itself", STR_ARG(proc->name));
-        }
+        if (proc->resolve == RESOLVE_UNDER_WAY) say_circle(c, proc, proc->name, proc->pos);
         mark_circle(c, proc);
         return false;
     }

@@ -16060,19 +16060,23 @@ TEST(modify_variables_of_constants_and_structs) {
 TEST(modify_describes_types_only_through_type_info_of_a_variable) {
     // A block that takes type_info of a Type value describes types: a
     // written type in it is held as its description, which the walk lays
-    // out, so comparing T with a struct whose layout needs the block's
-    // check is that struct's circle, said once. A block that only compares
-    // holds types as handles, and lays nothing out.
+    // out, so comparing T with a struct whose layout uses the block's
+    // generic is a use of List in what its own block reaches, said once, at
+    // the use, whether Node's layout or the block's check comes first. A
+    // block that only compares holds types as handles, and lays nothing out.
     Arena a = arena_make();
     Ast_File *file = nullptr;
-    CHECK_STR(check_with_preload(&a,
-                                 "Node :: struct { l: List(int); }\n"
-                                 "List :: struct (T: Type) #modify { x := type_info(T); return T != Node; } "
-                                 "{ v: int; }\n"
-                                 "main :: () { }\n",
-                                 &file),
-              "1:1: 'Node' is defined in terms of itself\n");
-    CHECK(((Ast_Struct *)top_level_named(file, "List"))->modify->describes);
+    const char *list = "List :: struct (T: Type) #modify { x := type_info(T); return T != Node; } { v: int; }\n"
+                       "main :: () { }\n";
+    const char *firsts[] = {"", "g: List(u8);\n"};
+    for (const char *first : firsts) {
+        CHECK_STR(check_with_preload(&a, joined(&a, first, "Node :: struct { l: List(int); }\n", list), &file),
+                  string_cstr(&a, string_printf(&a,
+                                                "%d:21: 'List' can't be used in its own #modify, which decides its "
+                                                "instances\n",
+                                                *first ? 2 : 1)));
+        CHECK(((Ast_Struct *)top_level_named(file, "List"))->modify->describes);
+    }
     CHECK_STR(check_with_preload(&a,
                                  "Node :: struct { l: List(int); }\n"
                                  "List :: struct (T: Type) #modify { return T != Node; } { v: int; }\n"
@@ -16424,6 +16428,50 @@ TEST(modify_cannot_use_its_own_generic) {
     arena_free(&a);
 }
 
+TEST(modify_own_use_through_a_declaration) {
+    // A declaration under way when its use of Box asks for the block's
+    // check, which reaches that declaration again, is a use of Box in what
+    // its own block reaches: said once, at the use, whether the declaration
+    // or the block's check comes first (a use of Box before both). Through
+    // an alias, a global the block reads, and a late field of a struct the
+    // block describes. A circle of the block's own, which doesn't run
+    // through the use, is said as a circle anywhere is.
+    Arena a = arena_make();
+    const char *own = "'Box' can't be used in its own #modify, which decides its instances";
+    struct Case {
+        const char *box;     // Box's declaration
+        const char *decl;    // the declaration under way, after it
+        const char *column;  // of Box's use in it
+    };
+    const Case cases[] = {
+        {"Box :: struct (T: Type) #modify { b: BI; return true; } { v: T; }", "BI :: Box(int);", "7"},
+        {"Box :: struct (T: Type) #modify { y := gx.v; return true; } { v: T; }", "gx: Box(u8);", "5"},
+        {"Box :: struct (T: Type) #modify { s := type_info(T).size; if T == u8 { T = Holder; } return true; } "
+         "{ v: T; }",
+         "Holder :: struct { b: *Box(u8); n: int; }", "24"},
+    };
+    // The declaration first, then the block's check first, asked for by a
+    // global before both.
+    const char *orders[] = {"%s\n%s\nmain :: () { x: Box(int); }\n", "g: Box(bool);\n%s\n%s\nmain :: () { }\n"};
+    for (const Case &k : cases) {
+        for (s64 i = 0; i < 2; i++) {
+            Ast_File *file = nullptr;
+            CHECK_STR(check_with_preload(&a, string_cstr(&a, string_printf(&a, orders[i], k.box, k.decl)), &file),
+                      string_cstr(&a, string_printf(&a, "%d:%s: %s\n", (int)(2 + i), k.column, own)));
+            Ast_Struct *box = (Ast_Struct *)top_level_named(file, "Box");
+            CHECK(box->modify->had_errors);
+            CHECK_EQ(box->instances.count, 0);
+        }
+    }
+    const char *circles[] = {"Box :: struct (T: Type) #modify { y := A; return true; } { v: T; }\nA :: B;\nB :: A;\n",
+                             "A :: B;\nB :: A;\nBox :: struct (T: Type) #modify { y := A; return true; } { v: T; }\n"};
+    for (s64 i = 0; i < 2; i++) {
+        CHECK_STR(check_with_preload(&a, joined(&a, circles[i], "main :: () { x: Box(int); }\n")),
+                  string_cstr(&a, string_printf(&a, "%d:1: 'A' is defined in terms of itself\n", (int)(i ? 1 : 2))));
+    }
+    arena_free(&a);
+}
+
 TEST(modify_runs_wherever_it_is_needed) {
     // A block runs where an instance is first asked for: in a constant's
     // #run, and in a body that the walk of a #run's reach checks, both in
@@ -16576,9 +16624,9 @@ TEST(modify_struct_given_a_type_under_way) {
     // whose layout is under way may be given to it: Node holds a Wrap(Node)
     // and points at a Box(Node), and is laid out as without the blocks. A
     // block that describes its type lays the type out first, which a Node
-    // being laid out can't be: a circle, said once, followed by the line of
-    // the instance whose block needed the layout, as a circle through an
-    // instance's fields is.
+    // being laid out can't be: Node's layout uses Wrap(Node), the instance
+    // the block is deciding, said once at that use, whether Node's layout
+    // or a global's Wrap(Node) asks for the run first.
     Arena a = arena_make();
     Ast_File *file = nullptr;
     const char *node = "Node :: struct { v: int; w: Wrap(Node); next: *Box(Node); }\n"
@@ -16589,12 +16637,11 @@ TEST(modify_struct_given_a_type_under_way) {
               "");
     Type *laid_out = ((Ast_Struct *)top_level_named(file, "Node"))->declared;
     CHECK(laid_out && laid_out->size == 24);
-    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS,
-                                            "Wrap :: struct (T: Type) #modify { return type_info(T).size >= 0; } "
-                                            "{ p: *T; }\n",
-                                            node)),
-              "4:1: 'Node' is defined in terms of itself\n"
-              "    in 'Wrap' with T = Node, used at test.rig:4:29\n");
+    const char *describing = "Wrap :: struct (T: Type) #modify { return type_info(T).size >= 0; } { p: *T; }\n";
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS, describing, node)),
+              "4:29: 'Wrap' can't be used in its own #modify, which decides its instances\n");
+    CHECK_STR(check_with_preload(&a, joined(&a, MODIFY_STRUCTS, describing, joined(&a, "g: Wrap(Node);\n", node))),
+              "5:29: 'Wrap' can't be used in its own #modify, which decides its instances\n");
     // Box(Wrap(int)) makes Wrap(int), laid out for the block that describes
     // it, and its field asks for Box(Wrap(int)), whose block is running: a
     // use of Box in what its own block reaches, said once at the field with
